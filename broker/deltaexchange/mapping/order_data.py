@@ -446,9 +446,10 @@ def map_position_data(position_data):
             position["lastTradedPrice"] = 0.0
             position["marketValue"] = 0.0
 
-            # Realised PnL (unrealised requires mark price from quotes step)
+            # Total PnL = realised + unrealised (both returned by /v2/positions/margined)
             realised = float(position.get("realized_pnl") or 0)
-            position["pnlAbsolute"] = realised
+            unrealised = float(position.get("unrealized_pnl") or 0)
+            position["pnlAbsolute"] = realised + unrealised
 
             # Contract value: look up from master contract cache using the resolved canonical symbol.
             # Delta Exchange v2 API removed nested product payloads from positions responses,
@@ -467,7 +468,7 @@ def map_position_data(position_data):
 
             logger.debug(
                 f"Mapped position: {position['tradingSymbol']} size={net_qty} "
-                f"entry={position['avgCostPrice']} realised_pnl={realised}"
+                f"entry={position['avgCostPrice']} realised={realised} unrealised={unrealised} total_pnl={realised + unrealised}"
             )
 
             processed_positions.append(position)
