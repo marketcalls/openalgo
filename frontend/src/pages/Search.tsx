@@ -1,6 +1,7 @@
 import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Search as SearchIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { copyToClipboard } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -110,15 +111,13 @@ export default function Search() {
     }
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard
-      .writeText(text)
-      .then(() => {
-        showToast.success('Symbol copied to clipboard', 'clipboard')
-      })
-      .catch(() => {
-        showToast.error('Failed to copy symbol', 'clipboard')
-      })
+  const copyText = async (text: string) => {
+    try {
+      await copyToClipboard(text)
+      showToast.success('Symbol copied to clipboard', 'clipboard')
+    } catch {
+      showToast.error('Failed to copy symbol', 'clipboard')
+    }
   }
 
   const handleSort = (key: SortKey) => {
@@ -248,7 +247,7 @@ export default function Search() {
                             variant="ghost"
                             size="icon"
                             className="h-6 w-6 opacity-60 hover:opacity-100"
-                            onClick={() => copyToClipboard(row.symbol)}
+                            onClick={() => copyText(row.symbol)}
                             title="Copy symbol"
                           >
                             <Copy className="h-3 w-3" />

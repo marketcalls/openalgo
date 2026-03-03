@@ -4,6 +4,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { copyToClipboard as copyText } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import {
   AlertCircle,
@@ -167,8 +168,8 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     },
   })
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text)
+  const copyToClipboard = async (text: string, label: string) => {
+    await copyText(text)
     showToast.success(`${label} copied to clipboard`, 'clipboard')
   }
 

@@ -4,6 +4,7 @@
 import { useCallback, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { copyToClipboard as copyText } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import { X, Trash2, Settings2, Info, Copy, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
@@ -164,7 +165,7 @@ export function ConfigPanel() {
 
   const handleDelete = useCallback(() => { if (selectedNodeId) deleteNode(selectedNodeId) }, [selectedNodeId, deleteNode])
   const handleClose = useCallback(() => { selectNode(null) }, [selectNode])
-  const copyToClipboard = (text: string, label: string) => { navigator.clipboard.writeText(text); showToast.success(`${label} copied`) }
+  const copyToClipboard = async (text: string, label: string) => { await copyText(text); showToast.success(`${label} copied`) }
 
   if (!selectedNode) {
     return (
