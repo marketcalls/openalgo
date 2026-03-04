@@ -1,4 +1,5 @@
 from flask import Blueprint
+from utils.config import get_api_rate_limit
 from flask_restx import Api
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")

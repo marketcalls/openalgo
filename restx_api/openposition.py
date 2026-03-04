@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -13,7 +14,7 @@ from restx_api.account_schema import OpenPositionSchema
 from services.openposition_service import emit_analyzer_error, get_open_position
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("openposition", description="Open Position API")
 
 # Initialize logger

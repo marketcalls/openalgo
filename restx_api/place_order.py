@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource, fields

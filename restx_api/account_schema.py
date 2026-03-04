@@ -1,4 +1,5 @@
 from marshmallow import INCLUDE, Schema, fields, validate
+from utils.config import get_api_rate_limit
 
 
 class FundsSchema(Schema):

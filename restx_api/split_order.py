@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -12,7 +13,7 @@ from restx_api.schemas import SplitOrderSchema
 from services.split_order_service import emit_analyzer_error, split_order
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("split_order", description="Split Order API")
 
 # Initialize logger

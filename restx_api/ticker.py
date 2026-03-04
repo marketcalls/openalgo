@@ -1,4 +1,5 @@
 import importlib
+from utils.config import get_api_rate_limit
 import os
 from datetime import UTC, datetime, timedelta, timezone, date
 
@@ -18,7 +19,7 @@ from types import ModuleType
 
 
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("ticker", description="Stock Ticker Data API")
 
 # Initialize logger

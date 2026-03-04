@@ -32,3 +32,8 @@ def get_login_rate_limit_hour() -> str:
 def get_host_server() -> str:
     """Get host server URL from HOST_SERVER environment variable."""
     return os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
+
+
+def get_api_rate_limit() -> str:
+    """Get API rate limit from API_RATE_LIMIT environment variable."""
+    return os.getenv("API_RATE_LIMIT", "10 per second")

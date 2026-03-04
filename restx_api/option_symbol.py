@@ -1,4 +1,5 @@
 """
+from utils.config import get_api_rate_limit
 Option Symbol API Endpoint
 
 POST /api/v1/optionsymbol
@@ -48,7 +49,7 @@ logger = get_logger(__name__)
 api = Namespace("optionsymbol", description="Get Option Symbol based on Underlying and Offset")
 
 # Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 
 
 @api.route("/", strict_slashes=False)

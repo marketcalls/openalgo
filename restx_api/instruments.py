@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 
 from flask import Response, jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -23,7 +24,7 @@ class CSVResponse(Response):
         self._json = value
 
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("instruments", description="Instruments/Symbols download API")
 
 # Initialize logger

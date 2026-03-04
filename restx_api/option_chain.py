@@ -1,4 +1,5 @@
 """
+from utils.config import get_api_rate_limit
 Option Chain API Endpoint
 
 POST /api/v1/optionchain
@@ -77,7 +78,7 @@ logger = get_logger(__name__)
 api = Namespace("optionchain", description="Get Option Chain with Real-time Quotes")
 
 # Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 
 
 @api.route("/", strict_slashes=False)

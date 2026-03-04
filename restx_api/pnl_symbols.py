@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -11,7 +12,7 @@ from utils.logging import get_logger
 
 from .account_schema import PnlSymbolsSchema
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("pnl", description="P&L Analysis API")
 
 # Initialize logger

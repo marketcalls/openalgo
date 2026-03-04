@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -10,7 +11,7 @@ from utils.logging import get_logger
 
 from .data_schemas import MultiQuotesSchema
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("multiquotes", description="Real-time Multiple Quotes API")
 
 # Initialize logger
