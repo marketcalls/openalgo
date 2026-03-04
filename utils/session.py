@@ -10,8 +10,18 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def is_session_expiry_disabled():
+    """Check if session expiry is disabled (e.g., for crypto brokers with 24/7 markets)"""
+    return os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true"
+
+
 def get_session_expiry_time():
     """Get session expiry time set to 3 AM IST next day"""
+    # Skip expiry for crypto brokers (24/7 markets)
+    if is_session_expiry_disabled():
+        logger.debug("Session expiry disabled (crypto broker / 24/7 market)")
+        return timedelta(days=365)
+
     now_utc = datetime.now(pytz.timezone("UTC"))
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
 
@@ -48,6 +58,11 @@ def is_session_valid():
     if "login_time" not in session:
         logger.debug("Session invalid: 'login_time' not in session")
         return False
+
+    # Skip expiry check for crypto brokers (24/7 markets)
+    if is_session_expiry_disabled():
+        logger.debug("Session expiry disabled (crypto broker / 24/7 market)")
+        return True
 
     now_utc = datetime.now(pytz.timezone("UTC"))
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
