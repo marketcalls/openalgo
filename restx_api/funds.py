@@ -1,4 +1,3 @@
-import os
 import traceback
 
 from flask import jsonify, make_response, request
@@ -11,8 +10,8 @@ from services.funds_service import get_funds
 from utils.logging import get_logger
 
 from .account_schema import FundsSchema
+from restx_api.config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("funds", description="Account Funds API")
 
 # Initialize logger

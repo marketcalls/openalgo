@@ -58,7 +58,6 @@ Strike Labels (different for CE and PE):
     - Strike ABOVE ATM: CE is OTM, PE is ITM
 """
 
-import os
 
 from flask import request
 from flask_restx import Namespace, Resource
@@ -69,6 +68,7 @@ from services.option_chain_service import get_option_chain
 from utils.logging import get_logger
 
 from .data_schemas import OptionChainSchema
+from restx_api.config import API_RATE_LIMIT
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -77,7 +77,6 @@ logger = get_logger(__name__)
 api = Namespace("optionchain", description="Get Option Chain with Real-time Quotes")
 
 # Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
 @api.route("/", strict_slashes=False)
