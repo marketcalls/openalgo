@@ -295,18 +295,20 @@ def create_app():
                 app.config["WTF_CSRF_TIME_LIMIT"] = csrf_time_limit_int
             else:
                 logger.warning(
-                    "CSRF_TIME_LIMIT=%d is out of valid range (300-86400 seconds). Using default.",
+                    "CSRF_TIME_LIMIT=%d is out of valid range (300-86400 seconds). "
+                    "Disabling CSRF token expiry (no time limit).",
                     csrf_time_limit_int,
                 )
-                app.config["WTF_CSRF_TIME_LIMIT"] = None
+                app.config["WTF_CSRF_TIME_LIMIT"] = None  # None = no expiry
         except ValueError:
             logger.warning(
-                "CSRF_TIME_LIMIT='%s' is not a valid integer. Using default.",
+                "CSRF_TIME_LIMIT='%s' is not a valid integer. "
+                "Disabling CSRF token expiry (no time limit).",
                 csrf_time_limit,
             )
-            app.config["WTF_CSRF_TIME_LIMIT"] = None
+            app.config["WTF_CSRF_TIME_LIMIT"] = None  # None = no expiry
     else:
-        app.config["WTF_CSRF_TIME_LIMIT"] = None  # No time limit if empty
+        app.config["WTF_CSRF_TIME_LIMIT"] = None  # No time limit if not set
 
     # Register RESTx API blueprint first
     # Register React frontend blueprint FIRST for migrated routes
