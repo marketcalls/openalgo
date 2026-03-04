@@ -37,6 +37,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { onModeChange } from "@/stores/themeStore";
 import type { Holding, HoldingsStats } from "@/types/trading";
 import { ErrorBoundary } from "@/components/error-boundary/ErrorBoundary";
+import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 
 function formatPercent(value: number): string {
@@ -273,9 +274,13 @@ export default function Holdings() {
             <CardHeader className="pb-2">
               <CardDescription>Total Holding Value</CardDescription>
               <CardTitle className="text-2xl text-primary">
-                {enhancedStats
-                  ? formatCurrency(enhancedStats.totalholdingvalue)
-                  : "---"}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-24" />
+                ) : enhancedStats ? (
+                  formatCurrency(enhancedStats.totalholdingvalue)
+                ) : (
+                  "---"
+                )}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -283,9 +288,13 @@ export default function Holdings() {
             <CardHeader className="pb-2">
               <CardDescription>Total Investment Value</CardDescription>
               <CardTitle className="text-2xl">
-                {enhancedStats
-                  ? formatCurrency(enhancedStats.totalinvvalue)
-                  : "---"}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-24" />
+                ) : enhancedStats ? (
+                  formatCurrency(enhancedStats.totalinvvalue)
+                ) : (
+                  "---"
+                )}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -326,9 +335,13 @@ export default function Holdings() {
                     : "text-red-600",
                 )}
               >
-                {enhancedStats
-                  ? formatPercent(enhancedStats.totalpnlpercentage)
-                  : "---"}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-16" />
+                ) : enhancedStats ? (
+                  formatPercent(enhancedStats.totalpnlpercentage)
+                ) : (
+                  "---"
+                )}
               </CardTitle>
             </CardHeader>
           </Card>

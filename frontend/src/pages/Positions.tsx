@@ -71,6 +71,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { onModeChange } from "@/stores/themeStore";
 import type { Position } from "@/types/trading";
 import { ErrorBoundary } from "@/components/error-boundary/ErrorBoundary";
+import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 
 const STORAGE_KEY = "openalgo_positions_prefs";
@@ -903,14 +904,16 @@ export default function Positions() {
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Open Positions</CardDescription>
-              <CardTitle className="text-2xl">{stats.total}</CardTitle>
+              <CardTitle className="text-2xl">
+                {isLoading ? <Skeleton className="h-6 w-12" /> : stats.total}
+              </CardTitle>
             </CardHeader>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Long</CardDescription>
               <CardTitle className="text-2xl text-green-600">
-                {stats.long}
+                {isLoading ? <Skeleton className="h-6 w-12" /> : stats.long}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -918,7 +921,7 @@ export default function Positions() {
             <CardHeader className="pb-2">
               <CardDescription>Short</CardDescription>
               <CardTitle className="text-2xl text-red-600">
-                {stats.short}
+                {isLoading ? <Skeleton className="h-6 w-12" /> : stats.short}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -931,7 +934,11 @@ export default function Positions() {
                   isProfit(stats.totalPnl) ? "text-green-600" : "text-red-600",
                 )}
               >
-                {formatCurrency(stats.totalPnl)}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-24" />
+                ) : (
+                  formatCurrency(stats.totalPnl)
+                )}
               </CardTitle>
             </CardHeader>
           </Card>

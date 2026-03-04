@@ -59,6 +59,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { onModeChange } from "@/stores/themeStore";
 import type { Order, OrderStats } from "@/types/trading";
 import { ErrorBoundary } from "@/components/error-boundary/ErrorBoundary";
+import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 
 function formatTime(timestamp: string): string {
@@ -478,7 +479,11 @@ export default function OrderBook() {
             <CardHeader className="pb-2">
               <CardDescription>Buy Orders</CardDescription>
               <CardTitle className="text-2xl text-green-600">
-                {stats?.total_buy_orders ?? 0}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-12" />
+                ) : (
+                  (stats?.total_buy_orders ?? 0)
+                )}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -486,7 +491,11 @@ export default function OrderBook() {
             <CardHeader className="pb-2">
               <CardDescription>Sell Orders</CardDescription>
               <CardTitle className="text-2xl text-red-600">
-                {stats?.total_sell_orders ?? 0}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-12" />
+                ) : (
+                  (stats?.total_sell_orders ?? 0)
+                )}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -494,7 +503,11 @@ export default function OrderBook() {
             <CardHeader className="pb-2">
               <CardDescription>Completed</CardDescription>
               <CardTitle className="text-2xl">
-                {stats?.total_completed_orders ?? 0}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-12" />
+                ) : (
+                  (stats?.total_completed_orders ?? 0)
+                )}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -502,7 +515,11 @@ export default function OrderBook() {
             <CardHeader className="pb-2">
               <CardDescription>Open</CardDescription>
               <CardTitle className="text-2xl text-blue-600">
-                {stats?.total_open_orders ?? 0}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-12" />
+                ) : (
+                  (stats?.total_open_orders ?? 0)
+                )}
               </CardTitle>
             </CardHeader>
           </Card>
@@ -510,7 +527,11 @@ export default function OrderBook() {
             <CardHeader className="pb-2">
               <CardDescription>Rejected</CardDescription>
               <CardTitle className="text-2xl text-red-600">
-                {stats?.total_rejected_orders ?? 0}
+                {isLoading ? (
+                  <Skeleton className="h-6 w-12" />
+                ) : (
+                  (stats?.total_rejected_orders ?? 0)
+                )}
               </CardTitle>
             </CardHeader>
           </Card>
