@@ -40,7 +40,6 @@ class Ping(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.error(f"Unexpected error in ping endpoint: {e}")
-            traceback.print_exc()
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )

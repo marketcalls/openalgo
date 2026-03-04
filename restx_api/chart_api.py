@@ -48,7 +48,6 @@ class ChartPreferencesResource(Resource):
 
         except Exception as e:
             logger.error(f"Unexpected error in chart GET endpoint: {e}")
-            traceback.print_exc()
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )
@@ -90,7 +89,6 @@ class ChartPreferencesResource(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.error(f"Unexpected error in chart POST endpoint: {e}")
-            traceback.print_exc()
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )
