@@ -850,59 +850,6 @@ class BrokerData:
             # full change amount (since previous day OI always = 0).
             df["oi"] = 0
 
-            # For intraday data, ensure we have data from market open (9:15 AM)
-            if timeframe != "D" and not df.empty:
-                from datetime import datetime, time, timedelta
-
-                import pytz
-
-                ist = pytz.timezone("Asia/Kolkata")
-
-                # Get the date from the first timestamp
-                first_timestamp = pd.to_datetime(df["timestamp"].iloc[0], unit="s")
-                first_timestamp = first_timestamp.tz_localize("UTC").tz_convert(ist)
-
-                # Create market open time for that date
-                market_date = first_timestamp.date()
-                market_open = ist.localize(datetime.combine(market_date, time(9, 15)))
-                market_open_ts = int(market_open.timestamp())
-
-                # If first data point is after 9:15 AM, pad with data from 9:15 AM
-                if df["timestamp"].iloc[0] > market_open_ts:
-                    logger.info(
-                        "Padding data from market open (9:15 AM) to first available data point"
-                    )
-
-                    # Get the first available price as reference
-                    first_price = df["open"].iloc[0]
-
-                    # Create timestamps from 9:15 AM to first data point (1-minute intervals)
-                    current_ts = market_open_ts
-                    padding_data = []
-
-                    while current_ts < df["timestamp"].iloc[0]:
-                        padding_data.append(
-                            {
-                                "timestamp": current_ts,
-                                "open": first_price,
-                                "high": first_price,
-                                "low": first_price,
-                                "close": first_price,
-                                "volume": 0,
-                                "oi": 0,
-                            }
-                        )
-                        current_ts += 60  # Add 1 minute
-
-                    if padding_data:
-                        # Create DataFrame from padding data
-                        padding_df = pd.DataFrame(padding_data)
-                        # Concatenate with original data
-                        df = pd.concat([padding_df, df], ignore_index=True)
-                        # Re-sort by timestamp
-                        df = df.sort_values("timestamp").reset_index(drop=True)
-                        logger.info(f"Added {len(padding_data)} data points from market open")
-
             # Return columns in the order matching Angel broker format
             df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
 

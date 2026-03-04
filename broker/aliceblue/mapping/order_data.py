@@ -317,7 +317,14 @@ def map_trade_data(trade_data):
 
             # Check if a symbol was found; if so, update the trading_symbol in the current trade
             if symbol:
-                trade["Tsym"] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                mapped_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                # Keep original symbol if mapping returns None (e.g., NFO symbols)
+                if mapped_symbol is not None:
+                    trade["Tsym"] = mapped_symbol
+                else:
+                    logger.warning(
+                        f"Symbol mapping returned None for {symbol} on {exchange}. Keeping original symbol."
+                    )
             else:
                 logger.info(
                     f"{symbol} and exchange {exchange} not found. Keeping original trading symbol."
@@ -349,6 +356,27 @@ def transform_tradebook_data(tradebook_data):
         else:
             action = trantype
 
+        # Parse Filltime which can be:
+        #   - Full datetime: '04-03-2026 15:21:01' (DD-MM-YYYY HH:MM:SS)
+        #   - Time only: '15:21:01' (HH:MM:SS)
+        filltime_raw = trade.get("Filltime", "")
+        timestamp = ""
+        if filltime_raw:
+            try:
+                from datetime import datetime as _dt
+                # Try full datetime format: DD-MM-YYYY HH:MM:SS
+                parsed = _dt.strptime(filltime_raw, "%d-%m-%Y %H:%M:%S")
+                timestamp = parsed.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                try:
+                    # Try time-only format: HH:MM:SS (prepend today's date)
+                    parsed = _dt.strptime(filltime_raw, "%H:%M:%S")
+                    timestamp = f"{date.today()} {filltime_raw}"
+                except ValueError:
+                    # Fallback: use as-is
+                    logger.warning(f"Could not parse Filltime: {filltime_raw}")
+                    timestamp = filltime_raw
+
         transformed_trade = {
             "symbol": trade.get("Tsym"),
             "exchange": trade.get("Exchange", ""),
@@ -358,7 +386,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": average_price,
             "trade_value": quantity * average_price,
             "orderid": trade.get("Nstordno", ""),
-            "timestamp": f"{date.today()} {trade.get('Filltime', '')}" if trade.get("Filltime") else "",
+            "timestamp": timestamp,
         }
         transformed_data.append(transformed_trade)
     return transformed_data
