@@ -34,6 +34,9 @@ async function fetchCSRFToken(): Promise<string> {
   return data.csrf_token
 }
 
+// Crypto exchanges operate 24/7 - no holidays or weekends
+const CRYPTO_EXCHANGES = new Set(['CRYPTO'])
+
 export function useMarketStatus() {
   const [state, setState] = useState<MarketStatusState>({
     timings: [],
@@ -83,6 +86,9 @@ export function useMarketStatus() {
   // Check if today is a holiday for a specific exchange
   const isHolidayForExchange = useCallback(
     (exchange: string): boolean => {
+      // Crypto exchanges have no holidays
+      if (CRYPTO_EXCHANGES.has(exchange)) return false
+
       const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
       const todayHoliday = state.holidays.find((h) => h.date === today)
 
@@ -108,6 +114,9 @@ export function useMarketStatus() {
   // Check if market is currently open for a specific exchange
   const isMarketOpen = useCallback(
     (exchange: string): boolean => {
+      // Crypto exchanges are always open (24/7)
+      if (CRYPTO_EXCHANGES.has(exchange)) return true
+
       // First check if it's a holiday
       if (isHolidayForExchange(exchange)) {
         return false
@@ -138,6 +147,9 @@ export function useMarketStatus() {
   // Get market status for display
   const getMarketStatus = useCallback(
     (exchange: string): 'open' | 'closed' | 'pre-market' | 'post-market' => {
+      // Crypto exchanges are always open (24/7)
+      if (CRYPTO_EXCHANGES.has(exchange)) return 'open'
+
       if (isHolidayForExchange(exchange)) {
         return 'closed'
       }
