@@ -49,10 +49,11 @@ docker-run.bat status     # Check status
 
 ## Data Persistence
 
-All data is stored locally in the script directory:
+All data is stored locally in the script directory (by both `docker-run` scripts and `docker-compose`):
 - `db/` - SQLite databases
 - `strategies/` - Python strategy scripts
 - `log/` - Application and strategy logs
+- `keys/` - API keys and certificates
 - `.env` - Configuration file
 
 ## Documentation
