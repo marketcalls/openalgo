@@ -40,7 +40,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(parent_dir, ".env"))
 
 # Database path
-HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
+HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_URL", "db/historify.duckdb")
 
 
 def get_db_path():
