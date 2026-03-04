@@ -4,8 +4,8 @@ from tokenize import Token
 
 import httpx
 
-from broker.fivepaisaxts.baseurl import INTERACTIVE_URL
-from broker.fivepaisaxts.mapping.transform_data import (
+from broker.rmoney.baseurl import INTERACTIVE_URL
+from broker.rmoney.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
     transform_data,
