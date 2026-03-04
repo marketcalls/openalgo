@@ -520,6 +520,10 @@ export default function Positions() {
   };
 
   const exportToCSV = () => {
+    if (filteredPositions.length === 0) {
+      showToast.error("No data to export", "system");
+      return;
+    }
     const headers = [
       "Symbol",
       "Exchange",
@@ -548,8 +552,8 @@ export default function Positions() {
     a.href = url;
     a.download = `positions_${new Date().toISOString().split("T")[0]}.csv`;
     a.click();
-    // Revoke the object URL to free memory
     URL.revokeObjectURL(url);
+    showToast.success("Downloaded positions.csv", "clipboard");
   };
 
   const isProfit = (value: number) => value >= 0;

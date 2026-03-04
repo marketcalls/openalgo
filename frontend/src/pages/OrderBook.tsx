@@ -289,6 +289,10 @@ export default function OrderBook() {
   };
 
   const exportToCSV = () => {
+    if (orders.length === 0) {
+      showToast.error("No data to export", "system");
+      return;
+    }
     const headers = [
       "Symbol",
       "Exchange",
@@ -323,6 +327,7 @@ export default function OrderBook() {
     a.href = url;
     a.download = `orderbook_${new Date().toISOString().split("T")[0]}.csv`;
     a.click();
+    showToast.success("Downloaded orders.csv", "clipboard");
   };
 
   const openOrders = orders.filter((o) => o.order_status === "open");

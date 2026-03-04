@@ -9,6 +9,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { showToast } from "@/utils/toast";
 import { tradingApi } from "@/api/trading";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -163,6 +164,10 @@ export default function Holdings() {
   }, [fetchHoldings]);
 
   const exportToCSV = () => {
+    if (enhancedHoldings.length === 0) {
+      showToast.error("No data to export", "system");
+      return;
+    }
     const headers = [
       "Symbol",
       "Exchange",
@@ -193,6 +198,7 @@ export default function Holdings() {
     a.click();
     // Revoke the object URL to free memory
     URL.revokeObjectURL(url);
+    showToast.success("Downloaded holdings.csv", "clipboard");
   };
 
   const isProfit = (value: number) => value >= 0;
