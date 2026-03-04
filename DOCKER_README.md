@@ -56,6 +56,11 @@ All data is stored locally in the script directory (by both `docker-run` scripts
 - `keys/` - API keys and certificates
 - `.env` - Configuration file
 
+> **Upgrading from older docker-compose?**
+> If you previously used named volumes (`openalgo_db`, etc.), run the migration script before starting:
+> - **Windows:** `install/migrate-volumes.bat`
+> - **macOS/Linux:** `bash install/migrate-volumes.sh`
+
 ## Documentation
 
 - **Full Docs**: https://docs.openalgo.in
