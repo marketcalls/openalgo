@@ -61,6 +61,12 @@ import type { Order, OrderStats } from "@/types/trading";
 import { ErrorBoundary } from "@/components/error-boundary/ErrorBoundary";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 function formatTime(timestamp: string): string {
   try {
@@ -654,26 +660,46 @@ export default function OrderBook() {
                           </TableCell>
                           <TableCell>
                             {canCancel && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => handleCancelOrder(order.orderid)}
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={() =>
+                                        handleCancelOrder(order.orderid)
+                                      }
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Cancel order</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                             )}
                           </TableCell>
                           <TableCell>
                             {canCancel && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-blue-500 hover:text-blue-600"
-                                onClick={() => openModifyDialog(order)}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-blue-500 hover:text-blue-600"
+                                      onClick={() => openModifyDialog(order)}
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Modify order</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                             )}
                           </TableCell>
                         </TableRow>

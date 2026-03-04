@@ -73,6 +73,12 @@ import type { Position } from "@/types/trading";
 import { ErrorBoundary } from "@/components/error-boundary/ErrorBoundary";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const STORAGE_KEY = "openalgo_positions_prefs";
 
@@ -1145,16 +1151,25 @@ export default function Positions() {
                                   {calculatePnlPercent(position).toFixed(2)}%
                                 </TableCell>
                                 <TableCell className="w-[60px] text-right">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                    onClick={() =>
-                                      handleClosePosition(position)
-                                    }
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </Button>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                          onClick={() =>
+                                            handleClosePosition(position)
+                                          }
+                                        >
+                                          <X className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Close position</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
                                 </TableCell>
                               </TableRow>
                             ))}
