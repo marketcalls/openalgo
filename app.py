@@ -270,6 +270,8 @@ def create_app():
     # CSRF configuration from environment variables
     csrf_enabled = os.getenv("CSRF_ENABLED", "TRUE").upper() == "TRUE"
     app.config["WTF_CSRF_ENABLED"] = csrf_enabled
+    if not csrf_enabled:
+        logger.warning("CSRF protection is disabled. This is not recommended for production environments.")
 
     # Configure CSRF cookie security to match session cookie
     csrf_cookie_name = os.getenv("CSRF_COOKIE_NAME", "csrf_token")
@@ -284,13 +286,25 @@ def create_app():
     if USE_HTTPS:
         app.config["WTF_CSRF_COOKIE_NAME"] = f"__Secure-{csrf_cookie_name}"
 
-    # Parse CSRF time limit from environment
+    # Parse CSRF time limit from environment (valid range: 300-86400 seconds)
     csrf_time_limit = os.getenv("CSRF_TIME_LIMIT", "").strip()
     if csrf_time_limit:
         try:
-            app.config["WTF_CSRF_TIME_LIMIT"] = int(csrf_time_limit)
+            csrf_time_limit_int = int(csrf_time_limit)
+            if 300 <= csrf_time_limit_int <= 86400:
+                app.config["WTF_CSRF_TIME_LIMIT"] = csrf_time_limit_int
+            else:
+                logger.warning(
+                    "CSRF_TIME_LIMIT=%d is out of valid range (300-86400 seconds). Using default.",
+                    csrf_time_limit_int,
+                )
+                app.config["WTF_CSRF_TIME_LIMIT"] = None
         except ValueError:
-            app.config["WTF_CSRF_TIME_LIMIT"] = None  # Default to no limit if invalid
+            logger.warning(
+                "CSRF_TIME_LIMIT='%s' is not a valid integer. Using default.",
+                csrf_time_limit,
+            )
+            app.config["WTF_CSRF_TIME_LIMIT"] = None
     else:
         app.config["WTF_CSRF_TIME_LIMIT"] = None  # No time limit if empty
 
