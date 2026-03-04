@@ -40,7 +40,7 @@ REM XTS Brokers that require market data credentials
 set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom
 
 REM Valid brokers list
-set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha
+set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha
 
 REM Banner
 echo.
@@ -157,7 +157,7 @@ echo   ========================================
 echo.
 echo   Valid brokers:
 echo   fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,
-echo   definedge, dhan, dhan_sandbox, firstock, flattrade, fyers,
+echo   definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,
 echo   groww, ibulls, iifl, indmoney, jainamxts, kotak, motilal,
 echo   mstock, nubra, paytm, pocketful, samco, shoonya, tradejini,
 echo   upstox, wisdom, zebu, zerodha
