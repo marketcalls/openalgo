@@ -321,6 +321,7 @@ def create_subprocess_args():
 #   - 4GB container (3 strategies): STRATEGY_MEMORY_LIMIT_MB=512
 #   - 8GB+ container: STRATEGY_MEMORY_LIMIT_MB=1024 (default)
 STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'))
+STRATEGY_NOFILE_LIMIT = int(os.environ.get('STRATEGY_NOFILE_LIMIT', '4096'))
 STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
 
 
@@ -357,7 +358,7 @@ def set_resource_limits():
 
         # Limit number of open files - prevents file descriptor exhaustion
         try:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+            resource.setrlimit(resource.RLIMIT_NOFILE, (STRATEGY_NOFILE_LIMIT, STRATEGY_NOFILE_LIMIT))
         except (OSError, ValueError) as e:
             logger.debug(f"Could not set file descriptor limit: {e}")
 
