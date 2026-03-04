@@ -11,9 +11,13 @@ const NSE_INDEX_SYMBOLS = new Set([
 const BSE_INDEX_SYMBOLS = new Set(['SENSEX', 'BANKEX', 'SENSEX50'])
 
 function getUnderlyingExchange(symbol: string, optionExchange: string): string {
+  const normalizedExchange = optionExchange.toUpperCase()
   if (NSE_INDEX_SYMBOLS.has(symbol)) return 'NSE_INDEX'
   if (BSE_INDEX_SYMBOLS.has(symbol)) return 'BSE_INDEX'
-  return optionExchange === 'BFO' ? 'BSE' : 'NSE'
+  if (normalizedExchange === 'CRYPTO') return 'CRYPTO'
+  if (normalizedExchange === 'BFO') return 'BSE'
+  if (normalizedExchange === 'NFO') return 'NSE'
+  return normalizedExchange
 }
 
 // Round price to nearest tick size (e.g., 0.05 for options)

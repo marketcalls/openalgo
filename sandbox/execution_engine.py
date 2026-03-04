@@ -25,6 +25,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.auth_db import get_auth_token_broker
 from database.sandbox_db import SandboxOrders, SandboxPositions, SandboxTrades, db_session
+from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager, reconcile_margin, validate_margin_consistency
 from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
@@ -430,8 +431,10 @@ class ExecutionEngine:
                 elif final_quantity == 0:
                     # Position closed completely
                     # Calculate realized P&L
+                    _sym_cv_info = get_symbol_info(order.symbol, order.exchange)
+                    _cv = float(_sym_cv_info.contract_value) if _sym_cv_info and _sym_cv_info.contract_value else 1.0
                     realized_pnl = self._calculate_realized_pnl(
-                        old_quantity, position.average_price, abs(new_quantity), execution_price
+                        old_quantity, position.average_price, abs(new_quantity), execution_price, contract_value=_cv
                     )
 
                     # Release the EXACT margin that was stored in the position
@@ -506,8 +509,10 @@ class ExecutionEngine:
                     reduced_quantity = min(abs(old_quantity), abs(new_quantity))
 
                     # Calculate realized P&L for reduced portion
+                    _sym_cv_info = get_symbol_info(order.symbol, order.exchange)
+                    _cv = float(_sym_cv_info.contract_value) if _sym_cv_info and _sym_cv_info.contract_value else 1.0
                     realized_pnl = self._calculate_realized_pnl(
-                        old_quantity, position.average_price, reduced_quantity, execution_price
+                        old_quantity, position.average_price, reduced_quantity, execution_price, contract_value=_cv
                     )
 
                     # Add realized P&L to accumulated realized P&L (all-time)
@@ -607,19 +612,20 @@ class ExecutionEngine:
             logger.exception(f"Error updating position for order {order.orderid}: {e}")
             raise
 
-    def _calculate_realized_pnl(self, old_quantity, avg_price, close_quantity, close_price):
-        """Calculate realized P&L for closed positions"""
+    def _calculate_realized_pnl(self, old_quantity, avg_price, close_quantity, close_price, contract_value=1.0):
+        """Calculate realized P&L for closed positions, multiplied by contract_value (e.g. 0.01 for ETHUSD.P)."""
         try:
             avg_price = Decimal(str(avg_price))
             close_price = Decimal(str(close_price))
             close_quantity = Decimal(str(close_quantity))
+            cv = Decimal(str(contract_value))
 
             if old_quantity > 0:
                 # Long position closed
-                pnl = (close_price - avg_price) * close_quantity
+                pnl = (close_price - avg_price) * close_quantity * cv
             else:
                 # Short position closed
-                pnl = (avg_price - close_price) * close_quantity
+                pnl = (avg_price - close_price) * close_quantity * cv
 
             return pnl
 

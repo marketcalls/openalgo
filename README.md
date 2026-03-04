@@ -41,6 +41,7 @@ Beyond execution, OpenAlgo empowers traders to completely own their trading infr
 - AngelOne
 - Compositedge
 - Definedge
+- Delta Exchange
 - Dhan (Live + Sandbox)
 - Firstock
 - Flattrade

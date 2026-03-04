@@ -1,3 +1,5 @@
+import time
+
 from openalgo import api
 
 # Initialize client
@@ -8,33 +10,38 @@ client = api(
 
 # -------------------------------------------------------
 # Get available expiry dates for NIFTY
+# Note: strike_count is NOT a valid parameter for expiry()
+#       it belongs to optionchain() only.
 # -------------------------------------------------------
+t0 = time.perf_counter()
 expiry_result = client.expiry(
-    symbol="NIFTY", exchange="NFO", instrumenttype="options", strike_count=20
+    symbol="NIFTY", exchange="NFO", instrumenttype="options"
 )
+expiry_elapsed = time.perf_counter() - t0
 
 if expiry_result["status"] == "success":
-    print("Available NIFTY Expiries:")
+    print(f"Available NIFTY Expiries: (fetched in {expiry_elapsed:.3f}s)")
     for exp in expiry_result["data"]:
         print(f"  {exp}")
 else:
     print("Failed to fetch expiries :", expiry_result.get("message"))
 
-# -------------------------------------------------------
-# Get option chain (5 strikes around ATM)
-# -------------------------------------------------------
-chain = client.optionchain(
-    underlying="NIFTY", exchange="NSE_INDEX", expiry_date="30DEC25", strike_count=5
-)
+print()
 
-print("\nNIFTY Option Chain (5 strikes around ATM):")
+# -------------------------------------------------------
+# Get option chain (strikes around ATM)
+# -------------------------------------------------------
+t1 = time.perf_counter()
+chain = client.optionchain(
+    underlying="NIFTY", exchange="NSE_INDEX", expiry_date="10MAR26", strike_count=15
+)
+chain_elapsed = time.perf_counter() - t1
+
+print(f"NIFTY Option Chain fetched in {chain_elapsed:.3f}s")
 print("-" * 50)
-print(chain)
-print("-" * 50)
-print("Strike  | CE LTP (Label) | PE LTP (Label)")
 
 if chain["status"] == "success":
-    print(f"\nUnderlying LTP: {chain['underlying_ltp']}")
+    print(f"Underlying LTP: {chain['underlying_ltp']}")
     print(f"ATM Strike: {chain['atm_strike']}")
 
     print("\nStrike  | CE LTP (Label) | PE LTP (Label)")
@@ -51,3 +58,14 @@ if chain["status"] == "success":
         )
 else:
     print("Failed to fetch option chain :", chain.get("message"))
+
+# -------------------------------------------------------
+# Summary
+# -------------------------------------------------------
+total_elapsed = expiry_elapsed + chain_elapsed
+print()
+print("=" * 50)
+print(f"  Expiry fetch : {expiry_elapsed:.3f}s")
+print(f"  Chain fetch  : {chain_elapsed:.3f}s")
+print(f"  Total        : {total_elapsed:.3f}s")
+print("=" * 50)

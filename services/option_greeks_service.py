@@ -11,6 +11,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
 
 # py_vollib is lazy-loaded inside calculate_greeks() and check_pyvollib_availability()
@@ -106,6 +107,9 @@ def parse_option_symbol(
         opt_type: CE or PE
     """
     try:
+        # CRYPTO canonical format (BTC28FEB2580000CE) uses the same
+        # Indian F&O-style symbology as NFO/MCX — the regex below handles both.
+
         # Pattern: SYMBOL + DD + MMM + YY + STRIKE + CE/PE
         # Strike can have decimal point for currencies
         match = re.match(r"([A-Z]+)(\d{2})([A-Z]{3})(\d{2})([\d.]+)(CE|PE)", symbol.upper())
@@ -205,6 +209,10 @@ def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
     # Commodity options
     if base_symbol in COMMODITY_SYMBOLS or options_exchange == "MCX":
         return "MCX"
+
+    # Crypto options — underlying is on the same exchange
+    if options_exchange.upper() in CRYPTO_EXCHANGES:
+        return options_exchange.upper()
 
     # Default to NSE for equity options
     return "NSE"
