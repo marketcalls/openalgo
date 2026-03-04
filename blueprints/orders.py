@@ -770,8 +770,9 @@ def cancel_order_ui():
             api_key = get_api_key_for_tradingview(login_username)
 
         # Call the service with appropriate parameters
+        variety = data.get("variety", "regular")
         success, response_data, status_code = cancel_order(
-            orderid=orderid, api_key=api_key, auth_token=auth_token, broker=broker_name
+            orderid=orderid, api_key=api_key, auth_token=auth_token, broker=broker_name, variety=variety
         )
 
         return jsonify(response_data), status_code
@@ -824,6 +825,7 @@ def modify_order_ui():
             "quantity": data.get("quantity"),
             "disclosed_quantity": data.get("disclosed_quantity", 0),
             "trigger_price": data.get("trigger_price", 0),
+            "variety": data.get("variety", "regular"),
         }
 
         # Call the service with appropriate parameters

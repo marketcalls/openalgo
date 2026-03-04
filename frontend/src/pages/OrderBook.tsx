@@ -94,7 +94,10 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
   complete: { icon: CheckCircle2, color: 'text-green-500', label: 'complete' },
   rejected: { icon: XCircle, color: 'text-red-500', label: 'rejected' },
   cancelled: { icon: XCircle, color: 'text-gray-500', label: 'cancelled' },
+  'cancelled amo': { icon: XCircle, color: 'text-gray-500', label: 'cancelled amo' },
   open: { icon: Clock, color: 'text-blue-500', label: 'open' },
+  'amo req received': { icon: Clock, color: 'text-blue-500', label: 'amo req received' },
+  'modify amo req received': { icon: Clock, color: 'text-blue-500', label: 'modify amo req received' },
 }
 
 export default function OrderBook() {
@@ -121,6 +124,7 @@ export default function OrderBook() {
     trigger_price: 0,
     pricetype: 'MARKET' as string,
     product: 'MIS' as string,
+    variety: 'regular' as string,
   })
 
   // Filter orders based on status
@@ -186,9 +190,9 @@ export default function OrderBook() {
     return () => unsubscribe()
   }, [fetchOrders])
 
-  const handleCancelOrder = async (orderid: string) => {
+  const handleCancelOrder = async (orderid: string, variety?: string) => {
     try {
-      const response = await tradingApi.cancelOrder(orderid)
+      const response = await tradingApi.cancelOrder(orderid, variety)
       if (response.status === 'success') {
         showToast.success(`Order cancelled: ${orderid}`, 'orders')
         setTimeout(() => fetchOrders(true), 1000)
@@ -229,6 +233,7 @@ export default function OrderBook() {
       trigger_price: order.trigger_price,
       pricetype: order.pricetype,
       product: order.product,
+      variety: order.variety ?? 'regular',
     })
     setQuotes(null)
     setModifyDialogOpen(true)
@@ -262,6 +267,7 @@ export default function OrderBook() {
         price: modifyForm.price,
         quantity: modifyForm.quantity,
         trigger_price: modifyForm.trigger_price,
+        variety: modifyForm.variety,
       })
       if (response.status === 'success') {
         showToast.success(`Order modified: ${modifyingOrder.orderid}`, 'orders')
@@ -314,7 +320,7 @@ export default function OrderBook() {
     a.click()
   }
 
-  const openOrders = orders.filter((o) => o.order_status === 'open')
+  const openOrders = orders.filter((o) => o.order_status === 'open' || o.order_status === 'amo req received' || o.order_status === 'modify amo req received')
 
   const FilterChip = ({ status, label }: { status: string; label: string }) => (
     <Button
@@ -531,7 +537,7 @@ export default function OrderBook() {
                   {filteredOrders.map((order, index) => {
                     const status = statusConfig[order.order_status] || statusConfig.open
                     const StatusIcon = status.icon
-                    const canCancel = order.order_status === 'open'
+                    const canCancel = order.order_status === 'open' || order.order_status === 'amo req received' || order.order_status === 'modify amo req received'
 
                     return (
                       <TableRow key={`${order.orderid}-${index}`}>
@@ -576,7 +582,7 @@ export default function OrderBook() {
                               variant="ghost"
                               size="icon"
                               className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                              onClick={() => handleCancelOrder(order.orderid)}
+                              onClick={() => handleCancelOrder(order.orderid, order.variety)}
                             >
                               <X className="h-4 w-4" />
                             </Button>
