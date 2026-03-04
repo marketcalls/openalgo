@@ -1,5 +1,4 @@
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -27,20 +26,29 @@ class Intervals(Resource):
     def post(self):
         """Get supported intervals for the broker"""
         try:
+            # Get request data
+            data = request.json
+            if data is None:
+                msg = {"status": "error", "message": "Request body must be JSON"}
+                return make_response(jsonify(msg), 400)
+
             # Validate request data
-            intervals_data = intervals_schema.load(request.json)
+            intervals_data = intervals_schema.load(data)
 
             api_key = intervals_data["apikey"]
 
             # Call the service function to get intervals data with API key
-            success, response_data, status_code = get_intervals(api_key=api_key)
+            success, response_data, status_code = get_intervals(
+                api_key=api_key
+            )
 
             return make_response(jsonify(response_data), status_code)
 
         except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
+            return make_response(
+                jsonify({"status": "error", "message": err.messages}), 400
+            )
         except Exception as e:
             logger.exception(f"Unexpected error in intervals endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+            msg = {"status": "error", "message": "Internal server error"}
+            return make_response(jsonify(msg), 500)
