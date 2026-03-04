@@ -28,7 +28,7 @@ class Intervals(Resource):
         """Get supported intervals for the broker"""
         try:
             # Check if request body is valid JSON
-            data = request.json
+            data = request.get_json(silent=True)
             if data is None:
                 return make_response(
                     jsonify(

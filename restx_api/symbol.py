@@ -27,7 +27,7 @@ class Symbol(Resource):
         """Get symbol information for a given symbol and exchange"""
         try:
             # Check if request body is valid JSON
-            data = request.json
+            data = request.get_json(silent=True)
             if data is None:
                 return make_response(
                     jsonify(
