@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from functools import wraps
 from typing import Any
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # WSGI types
 WSGIEnviron = dict[str, Any]
 StartResponse = Callable[..., Any]
-WSGIApp = Callable[[WSGIEnviron, StartResponse], list[bytes]]
+WSGIApp = Callable[[WSGIEnviron, StartResponse], Iterable[bytes]]
 
 
 class SecurityMiddleware:
@@ -38,7 +38,7 @@ class SecurityMiddleware:
 
     def __call__(
         self, environ: WSGIEnviron, start_response: StartResponse
-    ) -> list[bytes]:
+    ) -> Iterable[bytes]:
         """Process an incoming WSGI request.
 
         Checks the client IP against the ban list. Banned IPs receive a
