@@ -773,10 +773,17 @@ def is_trading_day() -> bool:
     Check if today is a valid trading day (not weekend, not holiday).
     Uses the market calendar service for accurate holiday detection.
 
+    When DISABLE_SESSION_EXPIRY is set to 'true' (crypto broker instances),
+    every day is a trading day since crypto markets operate 24/7.
+
     Returns:
         True if today is a trading day, False otherwise
     """
     try:
+        # Crypto broker instances run 24/7
+        if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
+            return True
+
         today = datetime.now(IST).date()
 
         # Check using market calendar service (includes weekend check)
@@ -810,6 +817,9 @@ def get_market_status() -> dict:
     """
     Get detailed market status with reason for being closed.
 
+    When DISABLE_SESSION_EXPIRY is set to 'true' (crypto broker instances),
+    always returns open since crypto markets operate 24/7.
+
     Returns:
         dict with:
         - is_open: bool
@@ -818,6 +828,10 @@ def get_market_status() -> dict:
         - next_open: str (when market opens next, if closed)
     """
     try:
+        # Crypto broker instances run 24/7
+        if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
+            return {"is_open": True, "reason": None, "message": "Market is open (24/7 crypto)"}
+
         now = datetime.now(IST)
         today = now.date()
 
