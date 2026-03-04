@@ -99,8 +99,8 @@ def get_gex_data(
                             greeks = greeks_resp.get("greeks", {})
                             ce_gamma = greeks.get("gamma", 0) or 0
                             ce_gex = ce_gamma * ce_oi * current_lotsize
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate greeks for CE {ce.get('symbol')}: {e}")
 
             # Process PE
             if pe and pe.get("symbol"):
@@ -122,8 +122,8 @@ def get_gex_data(
                             greeks = greeks_resp.get("greeks", {})
                             pe_gamma = greeks.get("gamma", 0) or 0
                             pe_gex = pe_gamma * pe_oi * current_lotsize
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate greeks for PE {pe.get('symbol')}: {e}")
 
             net_gex = ce_gex - pe_gex
 
