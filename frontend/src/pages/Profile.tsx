@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { copyToClipboard } from '@/utils/clipboard'
 import { showToast, toast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -725,15 +726,13 @@ export default function ProfilePage() {
     showToast.success('Theme reset to default', 'system')
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard
-      .writeText(text)
-      .then(() => {
-        showToast.success('Copied to clipboard', 'clipboard')
-      })
-      .catch(() => {
-        showToast.error('Failed to copy', 'clipboard')
-      })
+  const copyText = async (text: string) => {
+    try {
+      await copyToClipboard(text)
+      showToast.success('Copied to clipboard', 'clipboard')
+    } catch {
+      showToast.error('Failed to copy', 'clipboard')
+    }
   }
 
   const strength = getPasswordStrength()
@@ -2198,7 +2197,7 @@ export default function ProfilePage() {
                       <Button
                         size="icon"
                         variant="outline"
-                        onClick={() => copyToClipboard(profileData.totp_secret!)}
+                        onClick={() => copyText(profileData.totp_secret!)}
                       >
                         <Copy className="h-4 w-4" />
                       </Button>

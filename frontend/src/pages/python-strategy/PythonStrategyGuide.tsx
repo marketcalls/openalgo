@@ -18,6 +18,7 @@ import {
   Terminal,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { copyToClipboard as copyText } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -134,8 +135,8 @@ if __name__ == "__main__":
     main()
 `
 
-const copyToClipboard = (text: string) => {
-  navigator.clipboard.writeText(text)
+const copyToClipboard = async (text: string) => {
+  await copyText(text)
   showToast.success('Copied to clipboard', 'clipboard')
 }
 
