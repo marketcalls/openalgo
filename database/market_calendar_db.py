@@ -1054,22 +1054,27 @@ def is_market_open(exchange: str = None) -> bool:
         now = datetime.now(IST)
         today = now.date()
 
-        # Check if it's a holiday/weekend
-        if is_market_holiday(today, exchange):
-            return False
-
         # Get current time in milliseconds from midnight
         current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
 
         if exchange:
+            # Check if it's a holiday/weekend for this specific exchange
+            if is_market_holiday(today, exchange):
+                return False
             # Check specific exchange
             timing = get_market_timing(exchange)
             if not timing:
                 return False
             return timing["start_offset"] <= current_ms <= timing["end_offset"]
         else:
-            # Check if ANY exchange is open
+            # Check if ANY exchange is open (check each individually)
             for exch in SUPPORTED_EXCHANGES:
+                # Crypto exchanges are always open
+                if exch in CRYPTO_EXCHANGES:
+                    return True
+                # Skip non-crypto exchanges on holidays/weekends
+                if is_market_holiday(today, exch):
+                    continue
                 timing = get_market_timing(exch)
                 if timing and timing["start_offset"] <= current_ms <= timing["end_offset"]:
                     return True

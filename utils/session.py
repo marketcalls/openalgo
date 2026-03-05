@@ -11,7 +11,13 @@ logger = get_logger(__name__)
 
 
 def is_session_expiry_disabled():
-    """Check if session expiry is disabled (e.g., for crypto brokers with 24/7 markets)"""
+    """Check if session expiry is disabled (e.g., for crypto brokers with 24/7 markets).
+
+    Note: Each OpenAlgo instance serves a single broker, so this env var is
+    instance-scoped — it only affects the broker configured for this instance,
+    not all brokers globally.  The install script sets it automatically when
+    a crypto broker (e.g. deltaexchange) is selected.
+    """
     return os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true"
 
 
