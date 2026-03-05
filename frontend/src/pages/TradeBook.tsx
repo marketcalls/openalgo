@@ -1,9 +1,23 @@
-import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { tradingApi } from '@/api/trading'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Download,
+  Loader2,
+  RefreshCw,
+  Settings2,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { showToast } from "@/utils/toast";
+import { tradingApi } from "@/api/trading";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -12,8 +26,8 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog'
-import { Label } from '@/components/ui/label'
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -21,127 +35,145 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
-import { useAuthStore } from '@/stores/authStore'
-import { onModeChange } from '@/stores/themeStore'
-import type { Trade } from '@/types/trading'
+} from "@/components/ui/table";
+import { cn, makeFormatCurrency, sanitizeCSV } from "@/lib/utils";
+import { useAuthStore } from "@/stores/authStore";
+import { onModeChange } from "@/stores/themeStore";
+import type { Trade } from "@/types/trading";
 
 interface FilterState {
-  action: string[]
-  exchange: string[]
-  product: string[]
+  action: string[];
+  exchange: string[];
+  product: string[];
 }
 
 function formatTime(timestamp: string): string {
   try {
-    return new Date(timestamp).toLocaleTimeString('en-IN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
+    return new Date(timestamp).toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
   } catch {
-    return timestamp
+    return timestamp;
   }
 }
 
 export default function TradeBook() {
-  const { apiKey, user } = useAuthStore()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
-  const [trades, setTrades] = useState<Trade[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { apiKey, user } = useAuthStore();
+  const formatCurrency = useMemo(
+    () => makeFormatCurrency(user?.broker),
+    [user?.broker],
+  );
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Filter state
   const [filters, setFilters] = useState<FilterState>({
     action: [],
     exchange: [],
     product: [],
-  })
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Filter trades
   const filteredTrades = useMemo(() => {
     return trades.filter((trade) => {
-      if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
-      if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
-      if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
-      return true
-    })
-  }, [trades, filters])
+      if (filters.action.length > 0 && !filters.action.includes(trade.action))
+        return false;
+      if (
+        filters.exchange.length > 0 &&
+        !filters.exchange.includes(trade.exchange)
+      )
+        return false;
+      if (
+        filters.product.length > 0 &&
+        !filters.product.includes(trade.product)
+      )
+        return false;
+      return true;
+    });
+  }, [trades, filters]);
 
   const hasActiveFilters =
-    filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0
+    filters.action.length > 0 ||
+    filters.exchange.length > 0 ||
+    filters.product.length > 0;
 
   const toggleFilter = (type: keyof FilterState, value: string) => {
     setFilters((prev) => {
-      const arr = prev[type]
-      const index = arr.indexOf(value)
+      const arr = prev[type];
+      const index = arr.indexOf(value);
       if (index > -1) {
-        return { ...prev, [type]: arr.filter((v) => v !== value) }
+        return { ...prev, [type]: arr.filter((v) => v !== value) };
       }
-      return { ...prev, [type]: [...arr, value] }
-    })
-  }
+      return { ...prev, [type]: [...arr, value] };
+    });
+  };
 
   const clearFilters = () => {
-    setFilters({ action: [], exchange: [], product: [] })
-  }
+    setFilters({ action: [], exchange: [], product: [] });
+  };
 
   const fetchTrades = useCallback(
     async (showRefresh = false) => {
       if (!apiKey) {
-        setIsLoading(false)
-        return
+        setIsLoading(false);
+        return;
       }
 
-      if (showRefresh) setIsRefreshing(true)
+      if (showRefresh) setIsRefreshing(true);
 
       try {
-        const response = await tradingApi.getTrades(apiKey)
-        if (response.status === 'success' && response.data) {
-          setTrades(response.data)
-          setError(null)
+        const response = await tradingApi.getTrades(apiKey);
+        if (response.status === "success" && response.data) {
+          setTrades(response.data);
+          setError(null);
         } else {
-          setError(response.message || 'Failed to fetch trades')
+          setError(response.message || "Failed to fetch trades");
         }
       } catch {
-        setError('Failed to fetch trades')
+        setError("Failed to fetch trades");
       } finally {
-        setIsLoading(false)
-        setIsRefreshing(false)
+        setIsLoading(false);
+        setIsRefreshing(false);
       }
     },
-    [apiKey]
-  )
+    [apiKey],
+  );
 
   useEffect(() => {
-    fetchTrades()
-    const interval = setInterval(() => fetchTrades(), 10000)
-    return () => clearInterval(interval)
-  }, [fetchTrades])
+    fetchTrades();
+    const interval = setInterval(() => fetchTrades(), 10000);
+    return () => clearInterval(interval);
+  }, [fetchTrades]);
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
     const unsubscribe = onModeChange(() => {
-      fetchTrades()
-    })
-    return () => unsubscribe()
-  }, [fetchTrades])
+      fetchTrades();
+    });
+    return () => unsubscribe();
+  }, [fetchTrades]);
 
   const exportToCSV = () => {
+    if (trades.length === 0) {
+      showToast.error("No data to export", "system");
+      return;
+    }
     const headers = [
-      'Symbol',
-      'Exchange',
-      'Product',
-      'Action',
-      'Qty',
-      'Price',
-      'Trade Value',
-      'Order ID',
-      'Time',
-    ]
+      "Symbol",
+      "Exchange",
+      "Product",
+      "Action",
+      "Qty",
+      "Price",
+      "Trade Value",
+      "Order ID",
+      "Time",
+    ];
     const rows = trades.map((t) => [
       sanitizeCSV(t.symbol),
       sanitizeCSV(t.exchange),
@@ -152,44 +184,45 @@ export default function TradeBook() {
       sanitizeCSV(t.trade_value),
       sanitizeCSV(t.orderid),
       sanitizeCSV(t.timestamp),
-    ])
+    ]);
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `tradebook_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
-  }
+    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tradebook_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    showToast.success("Downloaded trades.csv", "clipboard");
+  };
 
   const stats = {
     total: filteredTrades.length,
-    buyTrades: filteredTrades.filter((t) => t.action === 'BUY').length,
-    sellTrades: filteredTrades.filter((t) => t.action === 'SELL').length,
-  }
+    buyTrades: filteredTrades.filter((t) => t.action === "BUY").length,
+    sellTrades: filteredTrades.filter((t) => t.action === "SELL").length,
+  };
 
   const FilterChip = ({
     type,
     value,
     label,
   }: {
-    type: keyof FilterState
-    value: string
-    label: string
+    type: keyof FilterState;
+    value: string;
+    label: string;
   }) => (
     <Button
-      variant={filters[type].includes(value) ? 'default' : 'outline'}
+      variant={filters[type].includes(value) ? "default" : "outline"}
       size="sm"
       className={cn(
-        'rounded-full',
-        filters[type].includes(value) && 'bg-pink-500 hover:bg-pink-600'
+        "rounded-full",
+        filters[type].includes(value) && "bg-pink-500 hover:bg-pink-600",
       )}
       onClick={() => toggleFilter(type, value)}
     >
       {label}
     </Button>
-  )
+  );
 
   return (
     <div className="space-y-6">
@@ -204,7 +237,7 @@ export default function TradeBook() {
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
               <Button
-                variant={hasActiveFilters ? 'default' : 'outline'}
+                variant={hasActiveFilters ? "default" : "outline"}
                 size="sm"
                 className="relative"
               >
@@ -218,7 +251,9 @@ export default function TradeBook() {
             <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Trade Filters</DialogTitle>
-                <DialogDescription>Filter trades by action, exchange, or product</DialogDescription>
+                <DialogDescription>
+                  Filter trades by action, exchange, or product
+                </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-6 py-4">
@@ -276,7 +311,9 @@ export default function TradeBook() {
             onClick={() => fetchTrades(true)}
             disabled={isRefreshing}
           >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
+            <RefreshCw
+              className={cn("h-4 w-4 mr-2", isRefreshing && "animate-spin")}
+            />
             Refresh
           </Button>
           <Button variant="outline" size="sm" onClick={exportToCSV}>
@@ -364,7 +401,9 @@ export default function TradeBook() {
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
           ) : error ? (
-            <div className="text-center py-12 text-muted-foreground">{error}</div>
+            <div className="text-center py-12 text-muted-foreground">
+              {error}
+            </div>
           ) : filteredTrades.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {hasActiveFilters ? (
@@ -375,7 +414,7 @@ export default function TradeBook() {
                   </Button>
                 </div>
               ) : (
-                'No trades today'
+                "No trades today"
               )}
             </div>
           ) : (
@@ -397,7 +436,9 @@ export default function TradeBook() {
                 <TableBody>
                   {filteredTrades.map((trade, index) => (
                     <TableRow key={`${trade.orderid}-${index}`}>
-                      <TableCell className="font-medium">{trade.symbol}</TableCell>
+                      <TableCell className="font-medium">
+                        {trade.symbol}
+                      </TableCell>
                       <TableCell>
                         <Badge variant="outline">{trade.exchange}</Badge>
                       </TableCell>
@@ -406,10 +447,15 @@ export default function TradeBook() {
                       </TableCell>
                       <TableCell>
                         <Badge
-                          variant={trade.action === 'BUY' ? 'default' : 'destructive'}
-                          className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
+                          variant={
+                            trade.action === "BUY" ? "default" : "destructive"
+                          }
+                          className={cn(
+                            "gap-1",
+                            trade.action === "BUY" ? "bg-green-500" : "",
+                          )}
                         >
-                          {trade.action === 'BUY' ? (
+                          {trade.action === "BUY" ? (
                             <TrendingUp className="h-3 w-3" />
                           ) : (
                             <TrendingDown className="h-3 w-3" />
@@ -417,14 +463,18 @@ export default function TradeBook() {
                           {trade.action}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        {trade.quantity}
+                      </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatCurrency(trade.average_price)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatCurrency(trade.trade_value)}
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {trade.orderid}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {formatTime(trade.timestamp)}
                       </TableCell>
@@ -437,5 +487,5 @@ export default function TradeBook() {
         </CardContent>
       </Card>
     </div>
-  )
+  );
 }

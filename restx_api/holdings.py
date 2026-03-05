@@ -1,4 +1,3 @@
-import os
 import traceback
 
 from flask import jsonify, make_response, request
@@ -10,8 +9,8 @@ from services.holdings_service import get_holdings
 from utils.logging import get_logger
 
 from .account_schema import HoldingsSchema
+from restx_api.config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("holdings", description="Holdings API")
 
 # Initialize logger
