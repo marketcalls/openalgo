@@ -131,10 +131,11 @@ is_xts_broker() {
 }
 
 # Function to check if broker is crypto based (24/7 markets, no auto-logout)
+# Uses space-delimited boundary matching for exact broker ID checks
 is_crypto_broker() {
     local broker=$1
-    local crypto_brokers="deltaexchange"
-    if [[ $crypto_brokers == *"$broker"* ]]; then
+    local crypto_brokers=" deltaexchange "
+    if [[ $crypto_brokers == *" $broker "* ]]; then
         return 0
     else
         return 1

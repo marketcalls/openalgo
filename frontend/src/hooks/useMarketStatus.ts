@@ -138,6 +138,9 @@ export function useMarketStatus() {
   // Check if any market is open (useful for deciding whether to connect WebSocket)
   const isAnyMarketOpen = useCallback((): boolean => {
     return state.timings.some((timing) => {
+      // Crypto exchanges are always open (24/7)
+      if (CRYPTO_EXCHANGES.has(timing.exchange)) return true
+
       const now = Date.now()
       const isWithinHours = now >= timing.start_time && now <= timing.end_time
       return isWithinHours && !isHolidayForExchange(timing.exchange)
