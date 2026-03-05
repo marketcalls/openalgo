@@ -130,6 +130,18 @@ is_xts_broker() {
     fi
 }
 
+# Function to check if broker is crypto based (24/7 markets, no auto-logout)
+# Uses space-delimited boundary matching for exact broker ID checks
+is_crypto_broker() {
+    local broker=$1
+    local crypto_brokers=" deltaexchange "
+    if [[ $crypto_brokers == *" $broker "* ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # Function to check and handle existing files/directories
 handle_existing() {
     local path=$1
@@ -393,6 +405,14 @@ if is_xts_broker "$BROKER_NAME"; then
         log_message "Error: Market data API credentials are required for XTS-based brokers" "$RED"
         exit 1
     fi
+fi
+
+# Check if the broker is crypto-based and disable auto-logout
+DISABLE_SESSION_EXPIRY="false"
+if is_crypto_broker "$BROKER_NAME"; then
+    log_message "\nThis broker ($BROKER_NAME) operates on 24/7 crypto markets." "$YELLOW"
+    log_message "Auto-logout (session expiry at 3 AM IST) will be disabled." "$GREEN"
+    DISABLE_SESSION_EXPIRY="true"
 fi
 
 # Generate random keys
@@ -687,6 +707,12 @@ sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$DOMAIN'|g" $OPENALGO_P
 sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
 sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
+
+# Disable session expiry for crypto brokers (24/7 markets)
+if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
+    sudo sed -i "s|DISABLE_SESSION_EXPIRY = 'false'|DISABLE_SESSION_EXPIRY = 'true'|g" $OPENALGO_PATH/.env
+    log_message "Session auto-logout disabled for crypto broker" "$GREEN"
+fi
 
 # Update WebSocket URL for production
 sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
@@ -1086,6 +1112,11 @@ log_message "Socket File: $SOCKET_FILE" "$BLUE"
 log_message "Service Name: $SERVICE_NAME" "$BLUE"
 log_message "Nginx Config: $NGINX_CONFIG_FILE" "$BLUE"
 log_message "SSL: Enabled with Let's Encrypt" "$BLUE"
+if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
+    log_message "Auto-Logout: Disabled (24/7 crypto market)" "$BLUE"
+else
+    log_message "Auto-Logout: Enabled (3 AM IST daily)" "$BLUE"
+fi
 log_message "Installation Log: $LOG_FILE" "$BLUE"
 
 log_message "\nNext Steps:" "$YELLOW"
