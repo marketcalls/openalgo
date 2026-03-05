@@ -2,6 +2,8 @@ import re
 
 from marshmallow import Schema, ValidationError, fields, validate
 
+from utils.constants import VALID_EXCHANGES
+
 
 # Custom validator for date or timestamp string
 def validate_date_or_timestamp(data):
@@ -38,12 +40,12 @@ def validate_option_offset(data):
 class QuotesSchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)  # Single symbol
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
 
 
 class SymbolExchangePair(Schema):
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
 
 
 class MultiQuotesSchema(Schema):
@@ -56,7 +58,7 @@ class MultiQuotesSchema(Schema):
 class HistorySchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
     interval = fields.Str(
         required=True,
         validate=validate.OneOf(
@@ -101,7 +103,7 @@ class HistorySchema(Schema):
 class DepthSchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
 
 
 class IntervalsSchema(Schema):
@@ -111,7 +113,7 @@ class IntervalsSchema(Schema):
 class SymbolSchema(Schema):
     apikey = fields.Str(required=True)  # API Key for authentication
     symbol = fields.Str(required=True)  # Symbol code (e.g., RELIANCE)
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
 
 
 class TickerSchema(Schema):
@@ -136,7 +138,7 @@ class TickerSchema(Schema):
 class SearchSchema(Schema):
     apikey = fields.Str(required=True)  # API Key for authentication
     query = fields.Str(required=True)  # Search query/symbol name
-    exchange = fields.Str(required=False)  # Optional exchange filter (e.g., NSE, BSE)
+    exchange = fields.Str(required=False, validate=validate.OneOf(VALID_EXCHANGES))  # Optional exchange filter (e.g., NSE, BSE)
 
 
 class ExpirySchema(Schema):
@@ -156,7 +158,7 @@ class OptionSymbolSchema(Schema):
         required=False, allow_none=True
     )  # DEPRECATED: Strategy name (optional, will be removed in future versions)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, RELIANCE, NIFTY28OCT25FUT)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, NFO)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, NFO)
     expiry_date = fields.Str(
         required=False
     )  # Expiry date in DDMMMYY format (e.g., 28OCT25). Optional if underlying includes expiry
@@ -198,9 +200,7 @@ class InstrumentsSchema(Schema):
     apikey = fields.Str(required=True)  # API Key for authentication
     exchange = fields.Str(
         required=False,
-        validate=validate.OneOf(
-            ["NSE", "BSE", "NFO", "BFO", "BCD", "CDS", "MCX", "NSE_INDEX", "BSE_INDEX"]
-        ),
+        validate=validate.OneOf(VALID_EXCHANGES),
     )  # Optional exchange filter
     format = fields.Str(
         required=False, validate=validate.OneOf(["json", "csv"])
@@ -211,7 +211,7 @@ class OptionChainSchema(Schema):
     apikey = fields.Str(required=True)  # API Key for authentication
     underlying = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(
-        required=True
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
     )  # Exchange (NSE_INDEX, NSE, NFO, BSE_INDEX, BSE, BFO, MCX, CDS)
     expiry_date = fields.Str(
         required=True
