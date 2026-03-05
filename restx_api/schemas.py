@@ -1,10 +1,12 @@
 from marshmallow import Schema, fields, validate
 
+from utils.constants import VALID_EXCHANGES
+
 
 class OrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(
@@ -33,7 +35,7 @@ class OrderSchema(Schema):
 class SmartOrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(
@@ -61,7 +63,7 @@ class SmartOrderSchema(Schema):
 class ModifyOrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     orderid = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
@@ -102,7 +104,7 @@ class CancelAllOrderSchema(Schema):
 
 
 class BasketOrderItemSchema(Schema):
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(
@@ -136,7 +138,7 @@ class BasketOrderSchema(Schema):
 class SplitOrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(
@@ -170,7 +172,7 @@ class OptionsOrderSchema(Schema):
     underlying = fields.Str(
         required=True
     )  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE, or NIFTY28NOV24FUT)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE, NFO, BFO)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE, NFO, BFO)
     expiry_date = fields.Str(
         required=False
     )  # Optional if underlying includes expiry (DDMMMYY format)
@@ -253,7 +255,7 @@ class OptionsMultiOrderSchema(Schema):
     apikey = fields.Str(required=True)
     strategy = fields.Str(required=True)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(
         required=False
     )  # Optional if underlying includes expiry (DDMMMYY format)
@@ -272,7 +274,7 @@ class SyntheticFutureSchema(Schema):
 
     apikey = fields.Str(required=True)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28OCT25)
 
 
@@ -286,7 +288,7 @@ class MarginPositionSchema(Schema):
         ),
     )
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NSE", "BSE", "NFO", "BFO", "CDS", "MCX"])
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
     )
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Str(required=True)  # String to match API contract, validated in service layer
