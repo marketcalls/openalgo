@@ -4,7 +4,7 @@ from utils.constants import VALID_EXCHANGES
 
 
 class OrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
@@ -33,7 +33,7 @@ class OrderSchema(Schema):
 
 
 class SmartOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
@@ -61,7 +61,7 @@ class SmartOrderSchema(Schema):
 
 
 class ModifyOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
@@ -88,18 +88,18 @@ class ModifyOrderSchema(Schema):
 
 
 class CancelOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     orderid = fields.Str(required=True)
 
 
 class ClosePositionSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
 
 
 class CancelAllOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
 
 
@@ -128,7 +128,7 @@ class BasketOrderItemSchema(Schema):
 
 
 class BasketOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     orders = fields.List(
         fields.Nested(BasketOrderItemSchema), required=True
@@ -136,7 +136,7 @@ class BasketOrderSchema(Schema):
 
 
 class SplitOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
@@ -167,7 +167,7 @@ class SplitOrderSchema(Schema):
 
 
 class OptionsOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     underlying = fields.Str(
         required=True
@@ -252,7 +252,7 @@ class OptionsMultiOrderLegSchema(Schema):
 class OptionsMultiOrderSchema(Schema):
     """Schema for options multi-order with multiple legs sharing common underlying"""
 
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
@@ -272,7 +272,7 @@ class OptionsMultiOrderSchema(Schema):
 class SyntheticFutureSchema(Schema):
     """Schema for synthetic future calculation"""
 
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28OCT25)
@@ -304,7 +304,7 @@ class MarginCalculatorSchema(Schema):
     """Schema for margin calculator request"""
 
     apikey = fields.Str(
-        required=True, validate=validate.Length(min=1, error="API key is required.")
+        required=True, validate=validate.Length(min=1, max=256, error="API key is required.")
     )
     positions = fields.List(
         fields.Nested(MarginPositionSchema),
