@@ -438,6 +438,10 @@ def bulk_export():
         end_date = data.get("end_date")
         split_by = data.get("split_by", "symbol")  # For ZIP: 'symbol' or 'none'
         compression = data.get("compression", "zstd")  # For Parquet
+        # Validate compression against allowlist to prevent SQL injection
+        VALID_COMPRESSIONS = ["zstd", "snappy", "gzip", "none"]
+        if compression not in VALID_COMPRESSIONS:
+            compression = "zstd"
 
         # Validate intervals parameter using parse_interval for dynamic validation
         from database.historify_db import parse_interval
