@@ -357,16 +357,24 @@ def transform_holdings_data(holdings_data):
     transformed_data = []
     for holdings in holdings_data:
         pnl = round(holdings.get("pl", 0.0), 2)
+        cost_price = holdings.get("costPrice", 0.0)
+        ltp = holdings.get("ltp", 0)
+
+        # Handle zero cost price to avoid division by zero
+        if cost_price and cost_price != 0:
+            pnlpercent = round((ltp - cost_price) / cost_price * 100, 2)
+        else:
+            pnlpercent = 0.0
 
         transformed_position = {
             "symbol": holdings.get("symbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": holdings.get("quantity", 0),
             "product": holdings.get("holdingType", ""),
+            "average_price": round(float(cost_price), 2),
+            "ltp": round(float(ltp), 2),
             "pnl": pnl,
-            "pnlpercent": (holdings.get("ltp", 0) - holdings.get("costPrice", 0.0))
-            / holdings.get("costPrice", 0.0)
-            * 100,
+            "pnlpercent": pnlpercent,
         }
         transformed_data.append(transformed_position)
     return transformed_data
