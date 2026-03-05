@@ -68,7 +68,8 @@ interface MonitorConfig {
     exchange: 'NFO' | 'BFO' | 'CDS' | 'MCX'
     underlying: string
     expiry: string
-    strikeCount: number
+    minOtmStrike: number  // 0-50: start from this OTM strike index (0 = first OTM from ATM)
+    maxOtmStrike: number  // 0-50: fetch and show up to this OTM strike index (always > minOtmStrike)
     // Shared thresholds (used when filtersLinked = true)
     distanceThreshold: number
     premiumThreshold: number
@@ -103,6 +104,7 @@ interface StrikeStatus {
     currentIv: number
     spikePercent: number
     optionRefPrice: number
+    optionRefTime: number | null  // epoch ms of the reference tick (null for OPEN/PREV_CLOSE which are day-level)
     lastTickTime: number
     isDistancePass: boolean
     isPremiumPass: boolean
@@ -198,7 +200,8 @@ const DEFAULT_CONFIG: MonitorConfig = {
     exchange: 'NFO',
     underlying: 'NIFTY',
     expiry: '',
-    strikeCount: 10,
+    minOtmStrike: 0,
+    maxOtmStrike: 10,
     distanceThreshold: 500,
     premiumThreshold: 5,
     ivThreshold: 30,
@@ -264,6 +267,7 @@ export default function OptionSpikeMonitor() {
         persistedSession?.marginFetchedAt ?? null
     )
     const [isFetchingMargin, setIsFetchingMargin] = useState(false)
+    const [isFetchingIv, setIsFetchingIv] = useState(false)
 
     // Helper: get the effective threshold for a given type and field
     const getThreshold = useCallback((type: 'CE' | 'PE', field: 'distance' | 'premium' | 'iv' | 'spike') => {
@@ -312,7 +316,6 @@ export default function OptionSpikeMonitor() {
     }, [greeksData])
     const [ivSummary, setIvSummary] = useState<IvSummary | null>(null)
     const [tickTimes, setTickTimes] = useState<Record<string, number>>({})
-    const [isFetchingIv, setIsFetchingIv] = useState(false)
     // True while seedTickBuffers() is running (only relevant for LAST_X_MIN mode)
     const [isSeeding, setIsSeeding] = useState(false)
     const ivRetryTimeoutRef = useRef<number | null>(null)
@@ -323,6 +326,11 @@ export default function OptionSpikeMonitor() {
     // without any further API calls. Max window = 30 min to keep memory tiny.
     const TICK_BUFFER_MAX_MS = 30 * 60 * 1000  // 30 min
     const tickBuffers = useRef<Map<string, Tick[]>>(new Map())
+
+    // Reference price buffer: symbol → { open, prevClose }
+    // Populated at start via /history API so OPEN and PREV_CLOSE spike modes work
+    // reliably across all brokers (some brokers return 0 for ohlc fields in multiquotes).
+    const refPriceBuffer = useRef<Map<string, { open: number; prevClose: number }>>(new Map())
 
     // Binary-search helper: find the last tick at or before targetMs.
     // Returns undefined if the buffer is empty or all ticks are after targetMs.
@@ -438,6 +446,9 @@ export default function OptionSpikeMonitor() {
 
     // Seed the tick buffer with historical 1-min candles so LAST_X_MIN works immediately
     // on start (before X minutes of live ticks have accumulated).
+    // Also populates refPriceBuffer with today's open and yesterday's close for
+    // OPEN / PREV_CLOSE spike modes — more reliable than multiquotes ohlc fields
+    // which some brokers return as 0.
     // All symbols are fetched in parallel (Promise.all) — no serial loop.
     // After seeding, live WebSocket ticks keep the buffer current automatically.
     const seedTickBuffers = useCallback(async (symbols: { symbol: string; exchange: string }[]) => {
@@ -445,8 +456,11 @@ export default function OptionSpikeMonitor() {
 
         setIsSeeding(true)
         const now = Date.now()
-        const startDate = new Date(now - TICK_BUFFER_MAX_MS).toISOString().slice(0, 10)
-        const endDate = new Date(now).toISOString().slice(0, 10)
+        const today = new Date(now).toISOString().slice(0, 10)
+        // Fetch 2 days of 1m candles: today + yesterday (for prev_close)
+        const twoDaysAgo = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        // Window for ring-buffer eviction (unchanged)
+        const ringCutoff = now - TICK_BUFFER_MAX_MS
 
         await Promise.all(symbols.map(async (item) => {
             try {
@@ -455,28 +469,56 @@ export default function OptionSpikeMonitor() {
                     symbol: item.symbol,
                     exchange: item.exchange,
                     interval: '1m',
-                    start_date: startDate,
-                    end_date: endDate,
+                    start_date: twoDaysAgo,
+                    end_date: today,
                     source: 'api'
                 })
 
                 if (response.data.status === 'success' && response.data.data?.length) {
-                    const candles: Tick[] = response.data.data.map((c: any) => ({
-                        t: new Date(c.timestamp ?? c.date ?? c.time).getTime(),
-                        p: Number(c.close ?? c.c ?? c.last_price ?? 0),
-                    })).filter((tick: Tick) => tick.p > 0)
+                    const parseTs = (rawTs: string): number => {
+                        // History API returns timestamps as "YYYY-MM-DD HH:MM:SS" (space-separated).
+                        // new Date() on that format returns Invalid Date in some browsers because
+                        // the spec only requires ISO 8601 ("T"-separated). Replace space with "T"
+                        // so parsing is reliable cross-browser.
+                        return new Date(rawTs.includes('T') ? rawTs : rawTs.replace(' ', 'T')).getTime()
+                    }
+
+                    const allCandles = response.data.data.map((c: any) => {
+                        const rawTs = String(c.timestamp ?? c.date ?? c.time ?? '')
+                        return {
+                            t: parseTs(rawTs),
+                            p: Number(c.close ?? c.c ?? c.last_price ?? 0),
+                            o: Number(c.open ?? c.o ?? 0),
+                            dateStr: rawTs.slice(0, 10), // "YYYY-MM-DD"
+                        }
+                    }).filter((c: any) => c.p > 0 && !isNaN(c.t))
+
+                    // ── Populate refPriceBuffer ───────────────────────────────
+                    // Today's open = open of the very first 1m candle of today
+                    const todayCandles = allCandles.filter((c: any) => c.dateStr === today)
+                    const prevCandles = allCandles.filter((c: any) => c.dateStr < today)
+
+                    const todayOpen = todayCandles.length > 0 ? todayCandles[0].o : 0
+                    // prev_close = close of the last candle before today
+                    const prevClose = prevCandles.length > 0 ? prevCandles[prevCandles.length - 1].p : 0
+
+                    if (todayOpen > 0 || prevClose > 0) {
+                        refPriceBuffer.current.set(item.symbol, { open: todayOpen, prevClose })
+                    }
+
+                    // ── Populate ring-buffer (LAST_X_MIN mode) ───────────────
+                    const todayTicks: Tick[] = todayCandles.map((c: any) => ({ t: c.t, p: c.p }))
 
                     // Merge into buffer (seed entries behind live ticks)
                     const existing = tickBuffers.current.get(item.symbol) ?? []
                     const existingTimes = new Set(existing.map(e => e.t))
                     const merged = [
-                        ...candles.filter(c => !existingTimes.has(c.t)),
+                        ...todayTicks.filter(c => !existingTimes.has(c.t)),
                         ...existing,
                     ].sort((a, b) => a.t - b.t)
 
                     // Evict entries older than max window
-                    const cutoff = Date.now() - TICK_BUFFER_MAX_MS
-                    tickBuffers.current.set(item.symbol, merged.filter(e => e.t >= cutoff))
+                    tickBuffers.current.set(item.symbol, merged.filter(e => e.t >= ringCutoff))
                 }
             } catch (error) {
                 console.error('[OptionSpikeMonitor] Failed to seed tick buffer', item.symbol, error)
@@ -719,7 +761,7 @@ export default function OptionSpikeMonitor() {
                 config.underlying,
                 config.exchange,
                 expiryFormatted,
-                config.strikeCount
+                config.maxOtmStrike
             )
 
             if (chainResponse && chainResponse.chain) {
@@ -736,25 +778,36 @@ export default function OptionSpikeMonitor() {
                 const atm = chainResponse.atm_strike
                 const strikes: MonitoredStrike[] = []
 
-                chainResponse.chain.forEach(s => {
-                    // CE OTM: Strike > ATM
-                    if (s.strike > atm && s.ce) {
-                        strikes.push({
-                            symbol: s.ce.symbol,
-                            type: 'CE',
-                            strike: s.strike,
-                            baseSymbol: config.underlying
-                        })
-                    }
-                    // PE OTM: Strike < ATM
-                    if (s.strike < atm && s.pe) {
-                        strikes.push({
-                            symbol: s.pe.symbol,
-                            type: 'PE',
-                            strike: s.strike,
-                            baseSymbol: config.underlying
-                        })
-                    }
+                // Collect OTM strikes sorted by distance from ATM (closest first)
+                // CE OTM: Strike > ATM, sorted ascending (closest to ATM first)
+                const ceStrikes = chainResponse.chain
+                    .filter(s => s.strike > atm && s.ce)
+                    .sort((a, b) => a.strike - b.strike)
+
+                // PE OTM: Strike < ATM, sorted descending (closest to ATM first)
+                const peStrikes = chainResponse.chain
+                    .filter(s => s.strike < atm && s.pe)
+                    .sort((a, b) => b.strike - a.strike)
+
+                // Apply min/max OTM index filter:
+                // minOtmStrike=0 means start from index 0 (first OTM strike from ATM)
+                // maxOtmStrike=10 means include up to but not including index 10
+                const { minOtmStrike, maxOtmStrike } = config
+                ceStrikes.slice(minOtmStrike, maxOtmStrike).forEach(s => {
+                    strikes.push({
+                        symbol: s.ce!.symbol,
+                        type: 'CE',
+                        strike: s.strike,
+                        baseSymbol: config.underlying
+                    })
+                })
+                peStrikes.slice(minOtmStrike, maxOtmStrike).forEach(s => {
+                    strikes.push({
+                        symbol: s.pe!.symbol,
+                        type: 'PE',
+                        strike: s.strike,
+                        baseSymbol: config.underlying
+                    })
                 })
 
                 setMonitoredStrikes(strikes)
@@ -765,18 +818,17 @@ export default function OptionSpikeMonitor() {
                 setMarginFetchedAt(null)
                 setTickTimes({})
                 tickBuffers.current.clear()
+                refPriceBuffer.current.clear()
 
                 // Start Monitoring
                 setIsMonitoring(true)
 
-                // Always seed the underlying spot buffer (for spot trend indicator)
-                // + option strike buffers when in LAST_X_MIN mode
+                // Always seed ALL option strike buffers (for refPriceBuffer used in OPEN/PREV_CLOSE)
+                // + underlying spot buffer (for spot trend indicator)
                 const underlyingSymbol = { symbol: config.underlying, exchange: getUnderlyingExchange(config.exchange) }
                 const historySymbols = [
                     underlyingSymbol,
-                    ...(config.spikeReference === 'LAST_X_MIN'
-                        ? strikes.map(strike => ({ symbol: strike.symbol, exchange: config.exchange }))
-                        : [])
+                    ...strikes.map(strike => ({ symbol: strike.symbol, exchange: config.exchange }))
                 ]
                 seedTickBuffers(historySymbols)
 
@@ -880,20 +932,41 @@ export default function OptionSpikeMonitor() {
             const chainItem = optionChain.chain.find(i => i.strike === s.strike)
             const optionData = s.type === 'CE' ? chainItem?.ce : chainItem?.pe
 
+            // refPriceBuffer is seeded from /history at start — more reliable than
+            // multiquotes ohlc fields which some brokers return as 0.
+            const refBuf = refPriceBuffer.current.get(s.symbol)
+
             let optionRefPrice = 0
-            if (spikeReference === 'OPEN') optionRefPrice = optionData?.open ?? 0
-            else if (spikeReference === 'PREV_CLOSE') optionRefPrice = optionData?.prev_close ?? 0
-            else {
+            let optionRefTime: number | null = null
+            if (spikeReference === 'OPEN') {
+                // Prefer history-derived open; fall back to option chain quote
+                optionRefPrice = (refBuf?.open ?? 0) > 0
+                    ? refBuf!.open
+                    : (optionData?.open ?? 0)
+                // No specific tick time for day-level OPEN
+            } else if (spikeReference === 'PREV_CLOSE') {
+                // Prefer history-derived prev_close; fall back to option chain quote
+                optionRefPrice = (refBuf?.prevClose ?? 0) > 0
+                    ? refBuf!.prevClose
+                    : (optionData?.prev_close ?? 0)
+                // No specific tick time for day-level PREV_CLOSE
+            } else {
                 // LAST_X_MIN: look up price from X minutes ago in the local tick buffer.
                 const buf = tickBuffers.current.get(s.symbol)
                 if (buf) {
                     const targetMs = Date.now() - config.lastXMinutes * 60 * 1000
                     const tick = findTickBefore(buf, targetMs)
-                    if (tick) optionRefPrice = tick.p
+                    if (tick) {
+                        optionRefPrice = tick.p
+                        optionRefTime = tick.t  // capture actual timestamp of the reference tick
+                    }
                 }
             }
 
-            // If Ref Price is still 0 (e.g. no trade today), use Prev Close
+            // If Ref Price is still 0 (e.g. no trade today), cascade through fallbacks:
+            // history open → history prev_close → chain prev_close
+            if (optionRefPrice === 0) optionRefPrice = (refBuf?.open ?? 0) > 0 ? refBuf!.open : 0
+            if (optionRefPrice === 0) optionRefPrice = (refBuf?.prevClose ?? 0) > 0 ? refBuf!.prevClose : 0
             if (optionRefPrice === 0) optionRefPrice = optionData?.prev_close ?? 0
 
             const spikePercent = optionRefPrice > 0 ? ((ltp - optionRefPrice) / optionRefPrice) * 100 : 0
@@ -916,6 +989,7 @@ export default function OptionSpikeMonitor() {
                 currentIv: currentIv ?? 0,
                 spikePercent,
                 optionRefPrice,
+                optionRefTime,
                 lastTickTime: lastTick,
                 isDistancePass,
                 isPremiumPass,
@@ -938,7 +1012,10 @@ export default function OptionSpikeMonitor() {
                 }
                 return a.strike - b.strike
             })
-    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail, config.lastXMinutes, getThreshold, findTickBefore])
+    // isSeeding is included so the useMemo re-runs once seedTickBuffers() finishes and
+    // refPriceBuffer / tickBuffers (both refs) have been populated. Without this, the
+    // memoised rows would never see the seeded data because ref mutations don't trigger renders.
+    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail, config.lastXMinutes, getThreshold, findTickBefore, isSeeding])
 
     // Spot trend: compare current spot LTP vs the price X minutes ago from the tick buffer.
     // Works for any spikeReference mode since we always seed the underlying buffer on start.
@@ -1207,31 +1284,62 @@ export default function OptionSpikeMonitor() {
                             </div>
 
                             <div className="space-y-2">
-                                <Label>Expiry & Strikes</Label>
-                                <div className="flex gap-2">
-                                    <Select
-                                        value={selectedExpiry}
-                                        onValueChange={(v) => {
-                                            setSelectedExpiry(v)
-                                            setConfig(p => ({ ...p, expiry: v }))
-                                        }}
-                                    >
-                                        <SelectTrigger className="flex-1">
-                                            <SelectValue placeholder="Expiry" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {expiries.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
-                                        </SelectContent>
-                                    </Select>
-                                    <Select value={String(config.strikeCount)} onValueChange={(v) => setConfig(p => ({ ...p, strikeCount: Number(v) }))}>
-                                        <SelectTrigger className="w-24">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {[5, 10, 15, 20, 25].map(n => <SelectItem key={n} value={String(n)}>{n} str</SelectItem>)}
-                                        </SelectContent>
-                                    </Select>
+                                <Label>Expiry & OTM Range</Label>
+                                <Select
+                                    value={selectedExpiry}
+                                    onValueChange={(v) => {
+                                        setSelectedExpiry(v)
+                                        setConfig(p => ({ ...p, expiry: v }))
+                                    }}
+                                >
+                                    <SelectTrigger className="w-full">
+                                        <SelectValue placeholder="Expiry" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {expiries.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                                <div className="flex gap-2 items-end">
+                                    <div className="flex-1 space-y-1">
+                                        <span className="text-xs text-muted-foreground">Min OTM Strike</span>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            max={49}
+                                            value={config.minOtmStrike}
+                                            onChange={e => {
+                                                const val = Math.min(49, Math.max(0, Number(e.target.value)))
+                                                setConfig(p => ({
+                                                    ...p,
+                                                    minOtmStrike: val,
+                                                    // Ensure maxOtmStrike stays > minOtmStrike
+                                                    maxOtmStrike: p.maxOtmStrike <= val ? val + 1 : p.maxOtmStrike
+                                                }))
+                                            }}
+                                        />
+                                    </div>
+                                    <div className="flex-1 space-y-1">
+                                        <span className="text-xs text-muted-foreground">Max OTM Strike</span>
+                                        <Input
+                                            type="number"
+                                            min={1}
+                                            max={50}
+                                            value={config.maxOtmStrike}
+                                            onChange={e => {
+                                                const val = Math.min(50, Math.max(1, Number(e.target.value)))
+                                                setConfig(p => ({
+                                                    ...p,
+                                                    maxOtmStrike: val,
+                                                    // Ensure minOtmStrike stays < maxOtmStrike
+                                                    minOtmStrike: p.minOtmStrike >= val ? val - 1 : p.minOtmStrike
+                                                }))
+                                            }}
+                                        />
+                                    </div>
                                 </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Showing strikes {config.minOtmStrike}–{config.maxOtmStrike} OTM ({config.maxOtmStrike - config.minOtmStrike} per side)
+                                </p>
                             </div>
 
                             <div className="space-y-2 lg:col-span-2">
@@ -1591,6 +1699,16 @@ export default function OptionSpikeMonitor() {
                                             <RefreshCw className={cn("mr-1 h-3 w-3", isFetchingMargin && "animate-spin")} />
                                             {isFetchingMargin ? 'Fetching...' : 'Refresh Margin'}
                                         </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 text-xs"
+                                            disabled={isFetchingIv || monitoredStrikes.length === 0}
+                                            onClick={() => fetchIvData()}
+                                        >
+                                            <RefreshCw className={cn("mr-1 h-3 w-3", isFetchingIv && "animate-spin")} />
+                                            {isFetchingIv ? 'Fetching...' : 'Refresh Theta'}
+                                        </Button>
                                     </div>
                                 </div>
 
@@ -1918,15 +2036,36 @@ export default function OptionSpikeMonitor() {
                                                     <Tooltip>
                                                         <TooltipTrigger asChild>
                                                             <span className="cursor-default">
-                                                                {isSeeding && config.spikeReference === 'LAST_X_MIN'
-                                                                    ? <span className="text-muted-foreground animate-pulse">—</span>
+                                                                {(isSeeding || row.currentPremium === 0 || row.optionRefPrice === 0)
+                                                                    ? <span className="text-muted-foreground animate-pulse">…</span>
                                                                     : `${row.spikePercent.toFixed(1)}%`
                                                                 }
                                                             </span>
                                                         </TooltipTrigger>
-                                                        <TooltipContent side="left" className="text-xs">
-                                                            <p className="font-medium text-muted-foreground mb-0.5">Ref ({resolveReferenceLabel()})</p>
-                                                            <p className="font-semibold">₹{row.optionRefPrice.toFixed(2)}</p>
+                                                        <TooltipContent side="left" className="text-xs space-y-1 min-w-[160px]">
+                                                            {(isSeeding || row.optionRefPrice === 0) ? (
+                                                                <p className="text-muted-foreground">Loading reference price…</p>
+                                                            ) : (
+                                                                <>
+                                                                    <p className="font-medium text-muted-foreground">
+                                                                        {spikeReference === 'LAST_X_MIN'
+                                                                            ? `Ref: ${config.lastXMinutes}min ago`
+                                                                            : `Ref: ${resolveReferenceLabel()}`
+                                                                        }
+                                                                    </p>
+                                                                    <p className="font-semibold text-sm">₹{row.optionRefPrice.toFixed(2)}</p>
+                                                                    {row.optionRefTime !== null && (
+                                                                        <p className="text-muted-foreground text-[10px]">
+                                                                            @ {new Date(row.optionRefTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                                                                        </p>
+                                                                    )}
+                                                                    {row.currentPremium > 0 && (
+                                                                        <p className="text-muted-foreground text-[10px]">
+                                                                            Now: ₹{row.currentPremium.toFixed(2)}
+                                                                        </p>
+                                                                    )}
+                                                                </>
+                                                            )}
                                                         </TooltipContent>
                                                     </Tooltip>
                                                 </TooltipProvider>

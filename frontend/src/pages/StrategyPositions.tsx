@@ -176,10 +176,23 @@ function formatCurrency(value: number | null | undefined): string {
   return value < 0 ? `-${formatted}` : formatted
 }
 
+// Resolve a value that may be a plain number OR a {source, parsedValue} object
+// (the Python strategy persists some numeric fields in that wrapped format).
+function resolveNum(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') return value
+  if (typeof value === 'object' && 'parsedValue' in (value as object)) {
+    const pv = (value as { parsedValue: unknown }).parsedValue
+    return typeof pv === 'number' ? pv : null
+  }
+  return null
+}
+
 // Format price
-function formatPrice(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '—'
-  return value.toFixed(2)
+function formatPrice(value: unknown): string {
+  const num = resolveNum(value)
+  if (num === null) return '—'
+  return num.toFixed(2)
 }
 
 function computePlannedEntryPrice(leg: LegState): number | null {
@@ -281,28 +294,41 @@ function sumTradeHistoryPnl(trades: TradeHistoryRecord[] | null | undefined): nu
   return trades.reduce((sum, t) => sum + (t.pnl || 0), 0)
 }
 
-// Compute consolidated stats for a DONE leg from trade history
-function getDoneLegStats(legKey: string, tradeHistory: TradeHistoryRecord[] | null | undefined) {
+// Compute consolidated stats for a DONE leg from trade history.
+// Falls back to the leg object itself when no trade_history records exist
+// (this happens when trade_history was lost due to the stale in-memory
+// overwrite bug — the legs dict is always the ground truth for entry data).
+function getDoneLegStats(
+  legKey: string,
+  tradeHistory: TradeHistoryRecord[] | null | undefined,
+  leg?: LegState,
+) {
   const legTrades = (tradeHistory ?? []).filter((t) => t.leg_key === legKey)
   if (legTrades.length === 0) {
+    // No trade_history records — fall back to leg data for what we have.
+    // exit_price is not stored on the leg object so it remains unknown.
     return {
-      avgEntryPrice: null, avgExitPrice: null,
-      firstEntryTime: null, lastExitTime: null,
-      slHits: 0, targetHits: 0, totalBrokerage: 0,
+      avgEntryPrice: leg ? resolveNum(leg.entry_price) : null,
+      avgExitPrice: null,
+      firstEntryTime: leg?.entry_time ?? null,
+      lastExitTime: null,
+      slHits: 0,
+      targetHits: 0,
+      totalBrokerage: resolveNum(leg?.total_brokerage) ?? 0,
     }
   }
 
   // Qty-weighted average entry price: Σ(entry_price × qty) / Σ(qty)
   const totalEntryQty = legTrades.reduce((sum, t) => sum + (t.quantity ?? 0), 0)
   const avgEntryPrice = totalEntryQty > 0
-    ? legTrades.reduce((sum, t) => sum + (t.entry_price ?? 0) * (t.quantity ?? 0), 0) / totalEntryQty
+    ? legTrades.reduce((sum, t) => sum + (resolveNum(t.entry_price) ?? 0) * (t.quantity ?? 0), 0) / totalEntryQty
     : null
 
   // Qty-weighted average exit price (only trades with a valid exit_price)
-  const exitTrades = legTrades.filter((t) => t.exit_price !== null && t.exit_price !== undefined)
+  const exitTrades = legTrades.filter((t) => resolveNum(t.exit_price) !== null)
   const totalExitQty = exitTrades.reduce((sum, t) => sum + (t.quantity ?? 0), 0)
   const avgExitPrice = totalExitQty > 0
-    ? exitTrades.reduce((sum, t) => sum + (t.exit_price! * (t.quantity ?? 0)), 0) / totalExitQty
+    ? exitTrades.reduce((sum, t) => sum + (resolveNum(t.exit_price)! * (t.quantity ?? 0)), 0) / totalExitQty
     : null
 
   // First entry time: min(entry_time)
@@ -322,7 +348,7 @@ function getDoneLegStats(legKey: string, tradeHistory: TradeHistoryRecord[] | nu
   const targetHits = legTrades.filter((t) => t.exit_type === 'TARGET_HIT').length
 
   // Total brokerage cost
-  const totalBrokerage = legTrades.reduce((sum, t) => sum + (t.total_brokerage ?? 0), 0)
+  const totalBrokerage = legTrades.reduce((sum, t) => sum + (resolveNum(t.total_brokerage) ?? 0), 0)
 
   return { avgEntryPrice, avgExitPrice, firstEntryTime, lastExitTime, slHits, targetHits, totalBrokerage }
 }
@@ -483,14 +509,12 @@ function CurrentPositionsTable({
   onRefresh,
   liveLtpByLegKey,
   onExitLeg,
-  tradeHistory,
 }: {
   legs: Record<string, LegState> | null | undefined
   instanceId: string
   onRefresh: () => void
   liveLtpByLegKey?: Record<string, number | undefined>
   onExitLeg: (legKey: string, leg: LegState) => void
-  tradeHistory?: TradeHistoryRecord[] | null
 }) {
   if (!legs) {
     return <p className="text-muted-foreground text-sm py-4">No positions found</p>
@@ -507,8 +531,6 @@ function CurrentPositionsTable({
   const pendingPlannedPositions = legEntries.filter(([_, leg]) =>
     ['IDLE', 'PENDING_ENTRY', 'EXITED_WAITING_REENTRY', 'EXITED_WAITING_REEXECUTE'].includes(leg.status)
   )
-
-  const donePositions = legEntries.filter(([_, leg]) => leg.status === 'DONE')
 
   if (legEntries.length === 0) {
     return <p className="text-muted-foreground text-sm py-4">No positions found</p>
@@ -725,87 +747,98 @@ function CurrentPositionsTable({
         </div>
       )}
 
-      {/* Done Legs */}
-      {donePositions.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-            <CircleDot className="h-4 w-4 text-gray-500" />
-            Done Legs ({donePositions.length})
-          </h4>
-          <div className="rounded-md border overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Leg</TableHead>
-                  <TableHead>Symbol</TableHead>
-                  <TableHead>Side</TableHead>
-                  <TableHead className="text-right">Qty</TableHead>
-                  <TableHead className="text-right">Avg Entry</TableHead>
-                  <TableHead className="text-right">Avg Exit</TableHead>
-                  <TableHead className="text-right">First Entry</TableHead>
-                  <TableHead className="text-right">Last Exit</TableHead>
-                  <TableHead className="text-right">SL Hits</TableHead>
-                  <TableHead className="text-right">Target Hits</TableHead>
-                  <TableHead className="text-right">Brokerage</TableHead>
-                  <TableHead className="text-right">Total P&L</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {donePositions.map(([legKey, leg]) => {
-                  const stats = getDoneLegStats(legKey, tradeHistory)
-                  return (
-                  <TableRow key={legKey}>
-                    <TableCell className="font-medium">
-                      <div className="flex flex-col">
-                        <span>{leg.leg_pair_name || legKey}</span>
-                        {leg.is_main_leg && (
-                          <span className="text-xs text-muted-foreground">Main</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{leg.symbol}</TableCell>
-                    <TableCell>
-                      {leg.side ? (
-                        <Badge variant={leg.side === 'SELL' ? 'destructive' : 'default'}>
-                          {leg.side}
-                        </Badge>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
+    </div>
+  )
+}
+
+// Done Legs Table (standalone — used in the Done Legs tab)
+function DoneLegsTable({
+  legs,
+  tradeHistory,
+}: {
+  legs: Record<string, LegState> | null | undefined
+  tradeHistory?: TradeHistoryRecord[] | null
+}) {
+  const donePositions = Object.entries(legs ?? {}).filter(([_, leg]) => leg.status === 'DONE')
+
+  if (donePositions.length === 0) {
+    return <p className="text-muted-foreground text-sm py-4">No done legs</p>
+  }
+
+  return (
+    <div className="rounded-md border overflow-x-auto">
+      <div className="max-h-[50vh] overflow-y-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Leg</TableHead>
+              <TableHead>Symbol</TableHead>
+              <TableHead>Side</TableHead>
+              <TableHead className="text-right">Qty</TableHead>
+              <TableHead className="text-right">Avg Entry</TableHead>
+              <TableHead className="text-right">Avg Exit</TableHead>
+              <TableHead className="text-right">First Entry</TableHead>
+              <TableHead className="text-right">Last Exit</TableHead>
+              <TableHead className="text-right">SL Hits</TableHead>
+              <TableHead className="text-right">Target Hits</TableHead>
+              <TableHead className="text-right">Brokerage</TableHead>
+              <TableHead className="text-right">Total P&L</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {donePositions.map(([legKey, leg]) => {
+              const stats = getDoneLegStats(legKey, tradeHistory, leg)
+              return (
+                <TableRow key={legKey}>
+                  <TableCell className="font-medium">
+                    <div className="flex flex-col">
+                      <span>{leg.leg_pair_name || legKey}</span>
+                      {leg.is_main_leg && (
+                        <span className="text-xs text-muted-foreground">Main</span>
                       )}
-                    </TableCell>
-                    <TableCell className="text-right">{leg.quantity}</TableCell>
-                    <TableCell className="text-right">{formatPrice(stats.avgEntryPrice)}</TableCell>
-                    <TableCell className="text-right">{formatPrice(stats.avgExitPrice)}</TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">{formatTime(stats.firstEntryTime)}</TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">{formatTime(stats.lastExitTime)}</TableCell>
-                    <TableCell className="text-right">
-                      {stats.slHits > 0
-                        ? <span className="text-red-500 font-medium">{stats.slHits}</span>
-                        : <span className="text-muted-foreground">—</span>}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {stats.targetHits > 0
-                        ? <span className="text-green-500 font-medium">{stats.targetHits}</span>
-                        : <span className="text-muted-foreground">—</span>}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {stats.totalBrokerage > 0
-                        ? <span className="text-red-500 text-sm">−{formatCurrency(stats.totalBrokerage)}</span>
-                        : <span className="text-muted-foreground">—</span>}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end">
-                        <PnLDisplay value={leg.total_pnl ?? leg.realized_pnl} />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{leg.symbol}</TableCell>
+                  <TableCell>
+                    {leg.side ? (
+                      <Badge variant={leg.side === 'SELL' ? 'destructive' : 'default'}>
+                        {leg.side}
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">{leg.quantity}</TableCell>
+                  <TableCell className="text-right">{formatPrice(stats.avgEntryPrice)}</TableCell>
+                  <TableCell className="text-right">{formatPrice(stats.avgExitPrice)}</TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">{formatTime(stats.firstEntryTime)}</TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">{formatTime(stats.lastExitTime)}</TableCell>
+                  <TableCell className="text-right">
+                    {stats.slHits > 0
+                      ? <span className="text-red-500 font-medium">{stats.slHits}</span>
+                      : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {stats.targetHits > 0
+                      ? <span className="text-green-500 font-medium">{stats.targetHits}</span>
+                      : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {stats.totalBrokerage > 0
+                      ? <span className="text-red-500 text-sm">−{formatCurrency(stats.totalBrokerage)}</span>
+                      : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end">
+                      <PnLDisplay value={resolveNum(leg.total_pnl) ?? resolveNum(leg.realized_pnl)} />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   )
 }
@@ -929,10 +962,19 @@ function StrategyTabs({
 }) {
   const [activeTab, setActiveTab] = useState('positions')
 
+  const doneLegsCount = Object.values(strategy.legs ?? {}).filter((leg) => leg.status === 'DONE').length
+
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab}>
       <TabsList className="mb-3">
         <TabsTrigger value="positions">📊 Positions</TabsTrigger>
+        <TabsTrigger value="done-legs">
+          ✅ Done Legs{doneLegsCount > 0 && (
+            <span className="ml-1.5 rounded-full bg-gray-500 px-1.5 py-0.5 text-xs text-white leading-none">
+              {doneLegsCount}
+            </span>
+          )}
+        </TabsTrigger>
         <TabsTrigger value="trade-history">📜 Trade History</TabsTrigger>
         <TabsTrigger value="pnl-curve">📈 P&L Curve</TabsTrigger>
       </TabsList>
@@ -944,6 +986,12 @@ function StrategyTabs({
           onRefresh={onRefresh}
           liveLtpByLegKey={liveLtpByLegKey}
           onExitLeg={(legKey, leg) => onExitLeg(strategy.instance_id, legKey, leg)}
+        />
+      </TabsContent>
+
+      <TabsContent value="done-legs">
+        <DoneLegsTable
+          legs={strategy.legs}
           tradeHistory={strategy.trade_history}
         />
       </TabsContent>
