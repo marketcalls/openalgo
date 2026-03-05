@@ -1,5 +1,4 @@
 import importlib
-import os
 from datetime import UTC, datetime, timedelta, timezone, date
 
 import pandas as pd
@@ -15,10 +14,10 @@ from utils.logging import get_logger
 from .data_schemas import TickerSchema
 
 from types import ModuleType
+from restx_api.config import API_RATE_LIMIT
 
 
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("ticker", description="Stock Ticker Data API")
 
 # Initialize logger

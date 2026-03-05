@@ -1,4 +1,3 @@
-import os
 import traceback
 
 from flask import jsonify, make_response, request
@@ -10,8 +9,8 @@ from services.chart_service import get_chart_preferences, update_chart_preferenc
 from utils.logging import get_logger
 
 from .account_schema import ChartSchema
+from restx_api.config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("chart", description="Chart Preferences and Cloud Workspace Sync")
 
 # Initialize logger
