@@ -1,4 +1,3 @@
-import os
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -9,8 +8,8 @@ from services.market_calendar_service import get_timings
 from utils.logging import get_logger
 
 from .data_schemas import MarketTimingsSchema
+from restx_api.config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("market/timings", description="Market Timings API")
 
 # Initialize logger
