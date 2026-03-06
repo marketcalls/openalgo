@@ -50,6 +50,8 @@ export default function PythonStrategyIndex() {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [strategyToDelete, setStrategyToDelete] = useState<PythonStrategy | null>(null)
+  const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false)
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false)
   const [currentTime, setCurrentTime] = useState(new Date())
 
   const fetchData = async (silent = false) => {
@@ -178,6 +180,35 @@ export default function PythonStrategyIndex() {
     }
   }
 
+  const handleDeleteAll = async () => {
+    const deletable = strategies.filter((s) => s.status !== 'running')
+    if (deletable.length === 0) return
+    setDeleteAllLoading(true)
+    let successCount = 0
+    let failCount = 0
+    for (const strategy of deletable) {
+      try {
+        const response = await pythonStrategyApi.deleteStrategy(strategy.id)
+        if (response.status === 'success') {
+          successCount++
+        } else {
+          failCount++
+        }
+      } catch {
+        failCount++
+      }
+    }
+    setDeleteAllLoading(false)
+    setDeleteAllDialogOpen(false)
+    if (successCount > 0) {
+      showToast.success(`Deleted ${successCount} strateg${successCount > 1 ? 'ies' : 'y'}`, 'pythonStrategy')
+    }
+    if (failCount > 0) {
+      showToast.error(`Failed to delete ${failCount} strateg${failCount > 1 ? 'ies' : 'y'}`, 'pythonStrategy')
+    }
+    fetchData()
+  }
+
   const handleExport = async (strategy: PythonStrategy) => {
     try {
       const blob = await pythonStrategyApi.exportStrategy(strategy.id)
@@ -277,6 +308,17 @@ export default function PythonStrategyIndex() {
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
+          {strategies.filter((s) => s.status !== 'running').length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-red-500 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
+              onClick={() => setDeleteAllDialogOpen(true)}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete All
+            </Button>
+          )}
           <Button onClick={() => navigate('/python/new')}>
             <Plus className="h-4 w-4 mr-2" />
             Add Strategy
@@ -574,6 +616,34 @@ export default function PythonStrategyIndex() {
             </Button>
             <Button variant="destructive" onClick={handleDelete}>
               Delete Strategy
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete All Dialog */}
+      <Dialog open={deleteAllDialogOpen} onOpenChange={setDeleteAllDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete All Strategies</DialogTitle>
+            <DialogDescription>
+              This will permanently delete all{' '}
+              {strategies.filter((s) => s.status !== 'running').length} non-running{' '}
+              strateg{strategies.filter((s) => s.status !== 'running').length === 1 ? 'y' : 'ies'}{' '}
+              and their associated logs. Running strategies will not be affected. This action cannot
+              be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteAllDialogOpen(false)}
+              disabled={deleteAllLoading}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteAll} disabled={deleteAllLoading}>
+              {deleteAllLoading ? 'Deleting...' : 'Delete All'}
             </Button>
           </DialogFooter>
         </DialogContent>

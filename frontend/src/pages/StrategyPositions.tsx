@@ -1417,6 +1417,8 @@ export default function StrategyPositions() {
   }>({ open: false, instanceId: '', strategyName: '' })
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false)
+  const [isDeletingAll, setIsDeletingAll] = useState(false)
 
   // Exit dialog state
   const [exitDialog, setExitDialog] = useState<{
@@ -1525,6 +1527,31 @@ export default function StrategyPositions() {
   }
 
   const isDeleteConfirmValid = deleteConfirmText === deleteDialog.strategyName
+
+  const handleDeleteAll = async () => {
+    setIsDeletingAll(true)
+    let successCount = 0
+    let failCount = 0
+    for (const strategy of strategies) {
+      try {
+        await deleteStrategyState(strategy.instance_id)
+        successCount++
+      } catch (error) {
+        console.error('Error deleting strategy:', error)
+        failCount++
+      }
+    }
+    setIsDeletingAll(false)
+    setDeleteAllDialogOpen(false)
+    if (successCount > 0) {
+      toast.success(`Deleted ${successCount} strateg${successCount > 1 ? 'ies' : 'y'} successfully`)
+    }
+    if (failCount > 0) {
+      toast.error(`Failed to delete ${failCount} strateg${failCount > 1 ? 'ies' : 'y'}`)
+    }
+    setStrategies([])
+    fetchData(false)
+  }
 
   const handleExitRequest = (instanceId: string, legKey: string, leg: LegState) => {
     setExitDialog({ open: true, instanceId, legKey, leg })
@@ -2002,6 +2029,17 @@ export default function StrategyPositions() {
                 <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
+              {strategies.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-500 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
+                  onClick={() => setDeleteAllDialogOpen(true)}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete All
+                </Button>
+              )}
             </div>
 
             <p className="text-[11px] text-muted-foreground">
@@ -2405,6 +2443,30 @@ export default function StrategyPositions() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete All Confirmation Dialog */}
+      <AlertDialog open={deleteAllDialogOpen} onOpenChange={(open) => {
+        if (!isDeletingAll) setDeleteAllDialogOpen(open)
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete All Strategy States?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete all {strategies.length} strateg{strategies.length === 1 ? 'y' : 'ies'} state{strategies.length === 1 ? '' : 's'}, including all position data and trade history. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingAll}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteAll}
+              disabled={isDeletingAll}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+            >
+              {isDeletingAll ? 'Deleting...' : 'Delete All'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
