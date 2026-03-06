@@ -216,12 +216,14 @@ def get_smart_download_status():
 
         # Add smart download recommendation
         should_download, reason = should_download_master_contract(broker)
-        cutoff_hour, cutoff_minute = get_master_contract_cutoff()
+        cutoff_hour, cutoff_minute, tz = get_master_contract_cutoff(broker)
+        import pytz
+        tz_label = "UTC" if tz is pytz.utc else "IST"
         status_data["smart_download"] = {
             "should_download": should_download,
             "reason": reason,
             "cutoff_time": f"{cutoff_hour:02d}:{cutoff_minute:02d}",
-            "cutoff_timezone": "IST"
+            "cutoff_timezone": tz_label
         }
 
         return jsonify(status_data), 200

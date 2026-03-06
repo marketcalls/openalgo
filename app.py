@@ -3,18 +3,119 @@ from utils.env_check import load_and_check_env_variables  # Import the environme
 
 load_and_check_env_variables()
 
-import mimetypes
+import os
 import re
 import sys
+
+# Print startup banner EARLY (before heavy imports) so user sees immediate feedback
+if __name__ == "__main__":
+    from utils.version import get_version as _get_version_early
+
+    _host_ip = os.getenv("FLASK_HOST_IP", "127.0.0.1")
+    _port = int(os.getenv("FLASK_PORT", 5000))
+    _ws_port = int(os.getenv("WEBSOCKET_PORT", 8765))
+    _debug = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
+    _is_reloader_parent = _debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+
+    if not _is_reloader_parent:
+        _display_ip = _host_ip
+        if _host_ip == "0.0.0.0":
+            import socket as _sock
+            try:
+                _s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+                _s.connect(("8.8.8.8", 80))
+                _display_ip = _s.getsockname()[0]
+                _s.close()
+            except Exception:
+                _display_ip = "127.0.0.1"
+
+        _version = _get_version_early()
+        _web_url = f"http://{_display_ip}:{_port}"
+        _ws_url = f"ws://{_display_ip}:{_ws_port}"
+        _docs_url = "https://docs.openalgo.in"
+
+        GREEN = "\033[92m"
+        CYAN = "\033[96m"
+        MAGENTA = "\033[95m"
+        WHITE = "\033[97m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+        DIM = "\033[2m"
+        B = CYAN
+
+        _slogan = "Your Personal Algo Trading Platform"
+        MIN_WIDTH = 54
+        _ansi_escape = re.compile(r"\x1B\[[0-9;]*m")
+
+        def _vlen(text):
+            return len(_ansi_escape.sub("", text))
+
+        _title = f" OpenAlgo v{_version} "
+        _samples = [
+            "", _slogan,
+            f"{WHITE}{BOLD}Endpoints{RESET}",
+            f"{WHITE}Web App{RESET}    {CYAN}{_web_url}{RESET}",
+            f"{WHITE}WebSocket{RESET}  {MAGENTA}{_ws_url}{RESET}",
+            f"{WHITE}Docs{RESET}       {YELLOW}{_docs_url}{RESET}",
+            f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}",
+        ]
+        _inner_target = max(MIN_WIDTH - 4, max((_vlen(t) for t in _samples), default=0))
+        W = max(_inner_target + 4, len(_title) + 5)
+
+        _encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            "\u256d\u256e\u2570\u256f\u2502\u2500".encode(_encoding)
+            TL, TR, BL, BR = "\u256d", "\u256e", "\u2570", "\u256f"
+            H, V = "\u2500", "\u2502"
+        except Exception:
+            TL, TR, BL, BR = "+", "+", "+", "+"
+            H, V = "-", "|"
+
+        def _mkline(text=""):
+            inner = W - 4
+            padding = max(inner - _vlen(text), 0)
+            return f"{B}{V}{RESET} {text}{' ' * padding} {B}{V}{RESET}"
+
+        _inner_w = W - 4
+        _sl = max((_inner_w - _vlen(_slogan)) // 2, 0)
+        _sr = max(_inner_w - _vlen(_slogan) - _sl, 0)
+        _top_dashes = max(0, W - 5 - len(_title))
+
+        # Build entire banner as one string and print in one shot
+        _banner = "\n".join([
+            "",
+            f"{B}{TL}{H * 3}{GREEN}{BOLD}{_title}{RESET}{B}{H * _top_dashes}{TR}{RESET}",
+            _mkline(),
+            f"{B}{V}{RESET} {' ' * _sl}{DIM}{_slogan}{RESET}{' ' * _sr} {B}{V}{RESET}",
+            _mkline(),
+            _mkline(f"{WHITE}{BOLD}Endpoints{RESET}"),
+            _mkline(f"{WHITE}Web App{RESET}    {CYAN}{_web_url}{RESET}"),
+            _mkline(f"{WHITE}WebSocket{RESET}  {MAGENTA}{_ws_url}{RESET}"),
+            _mkline(f"{WHITE}Docs{RESET}       {YELLOW}{_docs_url}{RESET}"),
+            _mkline(),
+            _mkline(f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}"),
+            _mkline(),
+            f"{B}{BL}{H * (W - 2)}{BR}{RESET}",
+            "",
+        ])
+        print(_banner, flush=True)
+
+        # Clean up temporary variables
+        del _get_version_early, _host_ip, _port, _ws_port, _debug, _display_ip
+        del _version, _web_url, _ws_url, _docs_url, _slogan, _samples
+        del _inner_target, _encoding, _inner_w, _sl, _sr, _top_dashes
+        del _banner, _title, _ansi_escape, _vlen, _mkline
+        del GREEN, CYAN, MAGENTA, WHITE, YELLOW, RESET, BOLD, DIM, B
+        del MIN_WIDTH, W, TL, TR, BL, BR, H, V
+
+import mimetypes
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("application/json", ".json")
 mimetypes.add_type("application/font-woff", ".woff")
 mimetypes.add_type("application/font-woff2", ".woff2")
-
-# Initialize logging EARLY to suppress verbose startup logs
-import os
 
 from flask import Flask, session
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
@@ -281,69 +382,24 @@ def create_app():
         # NOTE: Python strategy scheduler is initialized in setup_environment()
         # AFTER database tables are created, to avoid "no such table" errors on fresh install
 
-        # Auto-start Telegram bot if it was active (non-blocking)
-        try:
-            import sys
+        # NOTE: Telegram bot auto-start moved to background init thread
+        # (after DB tables are created) to avoid "no such table" on fresh install
 
-            bot_config = get_bot_config()
-            if bot_config.get("is_active") and bot_config.get("bot_token"):
-                logger.debug("Auto-starting Telegram bot (background)...")
+    @app.before_request
+    def wait_for_db_ready():
+        """Block requests until background database initialization completes."""
+        from flask import request
 
-                # Check if we're in eventlet environment
-                if "eventlet" in sys.modules:
-                    logger.debug(
-                        "Eventlet detected during auto-start - using synchronous initialization"
-                    )
-                    # Use synchronous initialization for eventlet
-                    success, message = telegram_bot_service.initialize_bot_sync(
-                        token=bot_config["bot_token"]
-                    )
-                    if success:
-                        success, message = telegram_bot_service.start_bot()
-                        if success:
-                            logger.debug(f"Telegram bot auto-started successfully: {message}")
-                        else:
-                            logger.error(f"Failed to auto-start Telegram bot: {message}")
-                    else:
-                        logger.error(f"Failed to initialize Telegram bot: {message}")
-                else:
-                    # Initialize and start bot in background thread (non-blocking)
-                    import asyncio
-                    import threading
+        # Static assets don't need DB
+        if (
+            request.path.startswith("/static/")
+            or request.path.startswith("/assets/")
+        ):
+            return
 
-                    def init_and_start_bot():
-                        try:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                success, message = loop.run_until_complete(
-                                    telegram_bot_service.initialize_bot(
-                                        token=bot_config["bot_token"]
-                                    )
-                                )
-                            finally:
-                                loop.close()
-
-                            if success:
-                                success, message = telegram_bot_service.start_bot()
-                                if success:
-                                    logger.debug(
-                                        f"Telegram bot auto-started successfully: {message}"
-                                    )
-                                else:
-                                    logger.error(f"Failed to auto-start Telegram bot: {message}")
-                            else:
-                                logger.error(f"Failed to initialize Telegram bot: {message}")
-                        except Exception as e:
-                            logger.error(f"Error in Telegram bot background startup: {e}")
-
-                    # Start in background - don't wait for completion
-                    thread = threading.Thread(target=init_and_start_bot, daemon=True)
-                    thread.start()
-                    logger.debug("Telegram bot initialization started in background")
-
-        except Exception as e:
-            logger.error(f"Error auto-starting Telegram bot: {str(e)}")
+        # Wait up to 30s for DB init (typically ~3.5s)
+        if hasattr(app, "db_ready") and not app.db_ready.is_set():
+            app.db_ready.wait(timeout=30)
 
     @app.before_request
     def check_session_expiry():
@@ -478,78 +534,8 @@ def create_app():
 
 def setup_environment(app):
     with app.app_context():
-        # load broker plugins
+        # load broker plugins (lazy - no actual imports until login)
         app.broker_auth_functions = load_broker_auth_functions()
-
-        # Initialize all databases in parallel for faster startup
-        import time
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        from database.chart_prefs_db import ensure_chart_prefs_tables_exists
-        from database.market_calendar_db import ensure_market_calendar_tables_exists
-        from database.qty_freeze_db import ensure_qty_freeze_tables_exists
-
-        db_init_functions = [
-            ("Auth DB", ensure_auth_tables_exists),
-            ("User DB", ensure_user_tables_exists),
-            ("Master Contract DB", ensure_master_contract_tables_exists),
-            ("API Log DB", ensure_api_log_tables_exists),
-            ("Analyzer DB", ensure_analyzer_tables_exists),
-            ("Settings DB", ensure_settings_tables_exists),
-            ("Chartink DB", ensure_chartink_tables_exists),
-            ("Traffic Logs DB", ensure_traffic_logs_exists),
-            ("Latency DB", ensure_latency_tables_exists),
-            ("Strategy DB", ensure_strategy_tables_exists),
-            ("Sandbox DB", ensure_sandbox_tables_exists),
-            ("Action Center DB", ensure_action_center_tables_exists),
-            ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
-            ("Market Calendar DB", ensure_market_calendar_tables_exists),
-            ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
-            ("Historify DB", ensure_historify_tables_exists),
-            ("Flow DB", ensure_flow_tables_exists),
-        ]
-
-        db_init_start = time.time()
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            # Submit all database initialization tasks
-            futures = {executor.submit(func): name for name, func in db_init_functions}
-
-            # Wait for all to complete
-            for future in as_completed(futures):
-                db_name = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f"Failed to initialize {db_name}: {e}")
-
-        db_init_time = (time.time() - db_init_start) * 1000
-        logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
-
-        # Initialize Python strategy scheduler (registers cron jobs for scheduled strategies)
-        # This must be AFTER database initialization to avoid "no such table" errors
-        try:
-            init_python_strategy()
-            logger.debug("Python strategy scheduler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Python strategy scheduler: {e}")
-
-        # Initialize Flow scheduler
-        try:
-            from services.flow_scheduler_service import init_flow_scheduler
-
-            init_flow_scheduler()
-            logger.debug("Flow scheduler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Flow scheduler: {e}")
-
-        # Initialize Historify scheduler
-        try:
-            from services.historify_scheduler_service import init_historify_scheduler
-
-            init_historify_scheduler(socketio=socketio)
-            logger.debug("Historify scheduler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Historify scheduler: {e}")
 
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
@@ -558,90 +544,206 @@ def setup_environment(app):
 
     setup_ngrok_handlers()
 
+    # Run database init + schedulers in background thread
+    # Tables already exist after first run; this is a safety check
+    import threading
+
+    # Event to signal when DB init is complete (cache restoration waits on this)
+    app.db_ready = threading.Event()
+
+    def _init_databases_and_schedulers():
+        with app.app_context():
+            import time
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            from database.chart_prefs_db import ensure_chart_prefs_tables_exists
+            from database.market_calendar_db import ensure_market_calendar_tables_exists
+            from database.qty_freeze_db import ensure_qty_freeze_tables_exists
+
+            db_init_functions = [
+                ("Auth DB", ensure_auth_tables_exists),
+                ("User DB", ensure_user_tables_exists),
+                ("Master Contract DB", ensure_master_contract_tables_exists),
+                ("API Log DB", ensure_api_log_tables_exists),
+                ("Analyzer DB", ensure_analyzer_tables_exists),
+                ("Settings DB", ensure_settings_tables_exists),
+                ("Chartink DB", ensure_chartink_tables_exists),
+                ("Traffic Logs DB", ensure_traffic_logs_exists),
+                ("Latency DB", ensure_latency_tables_exists),
+                ("Strategy DB", ensure_strategy_tables_exists),
+                ("Sandbox DB", ensure_sandbox_tables_exists),
+                ("Action Center DB", ensure_action_center_tables_exists),
+                ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
+                ("Market Calendar DB", ensure_market_calendar_tables_exists),
+                ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
+                ("Historify DB", ensure_historify_tables_exists),
+                ("Flow DB", ensure_flow_tables_exists),
+            ]
+
+            db_init_start = time.time()
+            with ThreadPoolExecutor(max_workers=15) as executor:
+                futures = {executor.submit(func): name for name, func in db_init_functions}
+                for future in as_completed(futures):
+                    db_name = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Failed to initialize {db_name}: {e}")
+
+            db_init_time = (time.time() - db_init_start) * 1000
+            logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
+
+            # Signal that DB tables are ready (unblocks cache restoration)
+            app.db_ready.set()
+
+            # Initialize schedulers AFTER database initialization
+            try:
+                init_python_strategy()
+                logger.debug("Python strategy scheduler initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Python strategy scheduler: {e}")
+
+            try:
+                from services.flow_scheduler_service import init_flow_scheduler
+
+                init_flow_scheduler()
+                logger.debug("Flow scheduler initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Flow scheduler: {e}")
+
+            try:
+                from services.historify_scheduler_service import init_historify_scheduler
+
+                init_historify_scheduler(socketio=socketio)
+                logger.debug("Historify scheduler initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Historify scheduler: {e}")
+
+            # Auto-start analyzer mode services (depends on DB being ready)
+            try:
+                from database.settings_db import get_analyze_mode
+
+                if get_analyze_mode():
+                    from sandbox.execution_thread import start_execution_engine
+                    from sandbox.squareoff_thread import start_squareoff_scheduler
+
+                    def start_engine():
+                        success, message = start_execution_engine()
+                        return ("execution_engine", success, message)
+
+                    def start_scheduler():
+                        success, message = start_squareoff_scheduler()
+                        return ("squareoff_scheduler", success, message)
+
+                    def run_catchup():
+                        from sandbox.position_manager import catchup_missed_settlements
+                        catchup_missed_settlements()
+                        return ("catchup_settlement", True, "Completed")
+
+                    with ThreadPoolExecutor(max_workers=3) as executor:
+                        futures = [
+                            executor.submit(start_engine),
+                            executor.submit(start_scheduler),
+                            executor.submit(run_catchup),
+                        ]
+                        for future in as_completed(futures):
+                            try:
+                                service_name, success, message = future.result()
+                                if service_name == "execution_engine":
+                                    if success:
+                                        logger.debug("Execution engine auto-started (Analyzer mode is ON)")
+                                    else:
+                                        logger.warning(f"Failed to auto-start execution engine: {message}")
+                                elif service_name == "squareoff_scheduler":
+                                    if success:
+                                        logger.debug("Square-off scheduler auto-started (Analyzer mode is ON)")
+                                    else:
+                                        logger.warning(f"Failed to auto-start square-off scheduler: {message}")
+                                elif service_name == "catchup_settlement":
+                                    logger.debug("Catch-up settlement check completed on startup")
+                            except Exception as e:
+                                logger.error(f"Error starting service: {e}")
+            except Exception as e:
+                logger.error(f"Error checking analyzer mode on startup: {e}")
+
+            # Auto-start Telegram bot if it was active (after DB tables exist)
+            try:
+                import sys
+
+                bot_config = get_bot_config()
+                if bot_config.get("is_active") and bot_config.get("bot_token"):
+                    logger.debug("Auto-starting Telegram bot (background)...")
+
+                    if "eventlet" in sys.modules:
+                        success, message = telegram_bot_service.initialize_bot_sync(
+                            token=bot_config["bot_token"]
+                        )
+                        if success:
+                            success, message = telegram_bot_service.start_bot()
+                            if success:
+                                logger.debug(f"Telegram bot auto-started successfully: {message}")
+                            else:
+                                logger.error(f"Failed to auto-start Telegram bot: {message}")
+                        else:
+                            logger.error(f"Failed to initialize Telegram bot: {message}")
+                    else:
+                        import asyncio
+
+                        try:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                success, message = loop.run_until_complete(
+                                    telegram_bot_service.initialize_bot(
+                                        token=bot_config["bot_token"]
+                                    )
+                                )
+                            finally:
+                                loop.close()
+
+                            if success:
+                                success, message = telegram_bot_service.start_bot()
+                                if success:
+                                    logger.debug(f"Telegram bot auto-started successfully: {message}")
+                                else:
+                                    logger.error(f"Failed to auto-start Telegram bot: {message}")
+                            else:
+                                logger.error(f"Failed to initialize Telegram bot: {message}")
+                        except Exception as e:
+                            logger.error(f"Error in Telegram bot startup: {e}")
+            except Exception as e:
+                logger.error(f"Error auto-starting Telegram bot: {e}")
+
+    threading.Thread(target=_init_databases_and_schedulers, daemon=True).start()
+
 
 app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
 
-# Restore caches from database on startup (enables restart without re-login)
-with app.app_context():
-    try:
-        from database.cache_restoration import restore_all_caches
+# Restore caches from database in background (not needed until first trade/lookup)
+import threading
 
-        cache_result = restore_all_caches()
+def _restore_caches_background():
+    # Wait for DB tables to be created before querying
+    app.db_ready.wait()
+    with app.app_context():
+        try:
+            from database.cache_restoration import restore_all_caches
 
-        if cache_result["success"]:
-            symbol_count = cache_result["symbol_cache"].get("symbols_loaded", 0)
-            auth_count = cache_result["auth_cache"].get("tokens_loaded", 0)
-            if symbol_count > 0 or auth_count > 0:
-                logger.debug(f"Cache restoration: {symbol_count} symbols, {auth_count} auth tokens")
-    except Exception as e:
-        logger.debug(f"Cache restoration skipped: {e}")
+            cache_result = restore_all_caches()
 
-# Auto-start execution engine and squareoff scheduler if in analyzer mode (parallel startup)
-with app.app_context():
-    try:
-        import time
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+            if cache_result["success"]:
+                symbol_count = cache_result["symbol_cache"].get("symbols_loaded", 0)
+                auth_count = cache_result["auth_cache"].get("tokens_loaded", 0)
+                if symbol_count > 0 or auth_count > 0:
+                    logger.debug(f"Cache restoration: {symbol_count} symbols, {auth_count} auth tokens")
+        except Exception as e:
+            logger.debug(f"Cache restoration skipped: {e}")
 
-        from database.settings_db import get_analyze_mode
-        from sandbox.execution_thread import start_execution_engine
-        from sandbox.squareoff_thread import start_squareoff_scheduler
+threading.Thread(target=_restore_caches_background, daemon=True).start()
 
-        if get_analyze_mode():
-            # Define service startup functions for parallel execution
-            def start_engine():
-                success, message = start_execution_engine()
-                return ("execution_engine", success, message)
-
-            def start_scheduler():
-                success, message = start_squareoff_scheduler()
-                return ("squareoff_scheduler", success, message)
-
-            def run_catchup():
-                from sandbox.position_manager import catchup_missed_settlements
-
-                catchup_missed_settlements()
-                return ("catchup_settlement", True, "Completed")
-
-            # Start all services in parallel
-            startup_start = time.time()
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                # Submit all tasks
-                futures = [
-                    executor.submit(start_engine),
-                    executor.submit(start_scheduler),
-                    executor.submit(run_catchup),
-                ]
-
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    try:
-                        service_name, success, message = future.result()
-                        if service_name == "execution_engine":
-                            if success:
-                                logger.debug("Execution engine auto-started (Analyzer mode is ON)")
-                            else:
-                                logger.warning(f"Failed to auto-start execution engine: {message}")
-                        elif service_name == "squareoff_scheduler":
-                            if success:
-                                logger.debug(
-                                    "Square-off scheduler auto-started (Analyzer mode is ON)"
-                                )
-                            else:
-                                logger.warning(
-                                    f"Failed to auto-start square-off scheduler: {message}"
-                                )
-                        elif service_name == "catchup_settlement":
-                            logger.debug("Catch-up settlement check completed on startup")
-                    except Exception as e:
-                        logger.error(f"Error starting service: {e}")
-
-            startup_time = (time.time() - startup_start) * 1000
-            logger.debug(f"Services started in parallel ({startup_time:.0f}ms)")
-    except Exception as e:
-        logger.error(f"Error checking analyzer mode on startup: {e}")
 
 # Database session cleanup (teardown handler)
 @app.teardown_appcontext
@@ -696,146 +798,21 @@ else:
 
 # Start Flask development server with SocketIO support if directly executed
 if __name__ == "__main__":
-    # Get environment variables
-    host_ip = os.getenv("FLASK_HOST_IP", "127.0.0.1")  # Default to '127.0.0.1' if not set
-    port = int(os.getenv("FLASK_PORT", 5000))  # Default to 5000 if not set
-    ws_port = int(os.getenv("WEBSOCKET_PORT", 8765))  # WebSocket port
-    debug = os.getenv("FLASK_DEBUG", "False").lower() in (
-        "true",
-        "1",
-        "t",
-    )  # Default to False if not set
+    host_ip = os.getenv("FLASK_HOST_IP", "127.0.0.1")
+    port = int(os.getenv("FLASK_PORT", 5000))
+    debug = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
 
     # Start ngrok tunnel if enabled
-    # Only start in the Flask child process when debug mode is on (prevents duplicate sessions)
-    # In debug mode, werkzeug spawns a parent (reloader) and child (app) process
-    # WERKZEUG_RUN_MAIN is set to 'true' only in the child process
-    ngrok_url = None
     should_start_ngrok = True
     if debug:
-        # In debug mode, only start ngrok in the child process
         should_start_ngrok = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
 
     if should_start_ngrok and os.getenv("NGROK_ALLOW", "FALSE").upper() == "TRUE":
         from utils.ngrok_manager import start_ngrok_tunnel
 
-        ngrok_url = start_ngrok_tunnel(port)
+        start_ngrok_tunnel(port)
 
-    # Clean startup banner
-    import socket
-
-    # Determine display IP for banner
-    display_ip = host_ip
-    if host_ip == "0.0.0.0":
-        # Get local network IP for display
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            display_ip = s.getsockname()[0]
-            s.close()
-        except:
-            display_ip = "127.0.0.1"
-
-    # Print startup banner
-    version = get_version()
-    web_url = f"http://{display_ip}:{port}"
-    ws_url = f"ws://{display_ip}:{ws_port}"
-    docs_url = "https://docs.openalgo.in"
-
-    # Use ngrok URL if tunnel was established
-    host_server = ngrok_url if ngrok_url else ""
-
-    # Only print banner in Flask child process (avoids duplicate with debug reloader)
-    # In debug mode, werkzeug spawns parent (reloader) and child (app) process
-    # WERKZEUG_RUN_MAIN is 'true' only in the child process
-    is_reloader_parent = debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
-
-    if not is_reloader_parent:
-        # ANSI color codes
-        GREEN = "\033[92m"
-        CYAN = "\033[96m"
-        MAGENTA = "\033[95m"
-        WHITE = "\033[97m"
-        YELLOW = "\033[93m"
-        RESET = "\033[0m"
-        BOLD = "\033[1m"
-        DIM = "\033[2m"
-
-        # Border color
-        B = CYAN
-
-        slogan = "Your Personal Algo Trading Platform"
-
-        MIN_WIDTH = 54
-        ansi_escape = re.compile(r"\x1B\[[0-9;]*m")
-
-        def visible_len(text: str) -> int:
-            return len(ansi_escape.sub("", text))
-
-        title = f" OpenAlgo v{version} "
-
-        content_samples = [
-            "",
-            slogan,
-            f"{WHITE}{BOLD}Endpoints{RESET}",
-            f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}",
-            f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}",
-            f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}",
-            f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}",
-        ]
-        # Add Host URL to samples if ngrok is enabled (for width calculation)
-        if host_server:
-            content_samples.insert(5, f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}")
-
-        inner_target = max(
-            MIN_WIDTH - 4, max((visible_len(text) for text in content_samples), default=0)
-        )
-        W = max(inner_target + 4, len(title) + 5)
-
-        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-        try:
-            "╭╮╰╯│─".encode(encoding)
-            TL, TR, BL, BR = "╭", "╮", "╰", "╯"
-            H, V = "─", "│"
-        except Exception:
-            TL, TR, BL, BR = "+", "+", "+", "+"
-            H, V = "-", "|"
-
-        # Helper to create a padded line
-        def mkline(text=""):
-            inner = W - 4  # subtract 2 borders + 2 spaces
-            text_len = visible_len(text)
-            padding = max(inner - text_len, 0)
-            return f"{B}{V}{RESET} {text}{' ' * padding} {B}{V}{RESET}"
-
-        # Build banner
-        top_dashes = max(0, W - 5 - len(title))  # ensures non-negative padding around the title
-
-        print()
-        print(f"{B}{TL}{H * 3}{GREEN}{BOLD}{title}{RESET}{B}{H * top_dashes}{TR}{RESET}")
-        print(mkline())
-
-        # Centered slogan
-        inner_w = W - 4
-        text_len = visible_len(slogan)
-        sl = max((inner_w - text_len) // 2, 0)
-        sr = max(inner_w - text_len - sl, 0)
-        print(f"{B}{V}{RESET} {' ' * sl}{DIM}{slogan}{RESET}{' ' * sr} {B}{V}{RESET}")
-
-        print(mkline())
-        print(mkline(f"{WHITE}{BOLD}Endpoints{RESET}"))
-        print(mkline(f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}"))
-        print(mkline(f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}"))
-        if host_server:
-            print(mkline(f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}"))
-        print(mkline(f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}"))
-        print(mkline())
-        print(mkline(f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}"))
-        print(mkline())
-        print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
-        print()
-
-    # Exclude strategies and logs directories from reloader to prevent crashes when editing strategy files
+    # Exclude strategies and logs directories from reloader
     reloader_options = {
         "exclude_patterns": [
             "*/strategies/*",

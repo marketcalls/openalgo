@@ -17,25 +17,19 @@ from services.option_greeks_service import (
     parse_option_symbol,
 )
 from services.option_symbol_service import (
+    construct_crypto_option_symbol,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
     get_option_exchange,
 )
+from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_quotes
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
-# Import py_vollib for Black-76 IV and Greeks calculation
-try:
-    from py_vollib.black.greeks.analytical import delta as black_delta
-    from py_vollib.black.greeks.analytical import gamma as black_gamma
-    from py_vollib.black.greeks.analytical import theta as black_theta
-    from py_vollib.black.greeks.analytical import vega as black_vega
-    from py_vollib.black.implied_volatility import implied_volatility as black_iv
-
-    PYVOLLIB_AVAILABLE = True
-except ImportError:
-    PYVOLLIB_AVAILABLE = False
+# py_vollib is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data()
+# to avoid loading scipy/numba/llvmlite at startup
 
 logger = get_logger(__name__)
 
@@ -92,6 +86,9 @@ def _get_quote_exchange(base_symbol, underlying_exchange):
         return "BSE_INDEX"
     if underlying_exchange.upper() in ("NFO", "BFO"):
         return "NSE" if underlying_exchange.upper() == "NFO" else "BSE"
+    # Crypto options — underlying is on the same exchange
+    if underlying_exchange.upper() in CRYPTO_EXCHANGES:
+        return underlying_exchange.upper()
     return underlying_exchange.upper()
 
 
@@ -154,7 +151,9 @@ def get_iv_chart_data(
     Returns:
         Tuple of (success, response_dict, status_code)
     """
-    if not PYVOLLIB_AVAILABLE:
+    try:
+        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
+    except ImportError:
         return (
             False,
             {
@@ -180,10 +179,24 @@ def get_iv_chart_data(
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
+        # CRYPTO: look up the canonical perpetual symbol from DB (e.g. BTC → BTCUSD.P)
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            _perp = fno_search_symbols(
+                underlying=base_symbol, exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            underlying_quote_symbol = _perp[0]["symbol"]
+        else:
+            underlying_quote_symbol = base_symbol
 
         # Step 2: Get underlying LTP to resolve ATM strike
         success, quote_response, status_code = get_quotes(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )
@@ -213,8 +226,9 @@ def get_iv_chart_data(
         if atm_strike is None:
             return False, {"status": "error", "message": "Could not determine ATM strike"}, 400
 
-        ce_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "CE")
-        pe_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "PE")
+        _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
+        ce_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "CE")
+        pe_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "PE")
 
         # Step 4: Parse option symbols to get expiry datetime
         _, expiry_dt, strike, _ = parse_option_symbol(ce_symbol, options_exchange)
@@ -228,7 +242,7 @@ def get_iv_chart_data(
         underlying_history_exchange = quote_exchange
         # For index symbols like NIFTY on NSE_INDEX, the history service needs the right exchange
         success_u, resp_u, _ = get_history(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=underlying_history_exchange,
             interval=interval,
             start_date=start_date_str,
@@ -358,6 +372,12 @@ def _calculate_iv_series(df_option, df_underlying, strike, expiry_dt, flag, inte
     Returns:
         List of dicts with time (unix seconds), iv, option_price, underlying_price
     """
+    from py_vollib.black.greeks.analytical import delta as black_delta
+    from py_vollib.black.greeks.analytical import gamma as black_gamma
+    from py_vollib.black.greeks.analytical import theta as black_theta
+    from py_vollib.black.greeks.analytical import vega as black_vega
+    from py_vollib.black.implied_volatility import implied_volatility as black_iv
+
     iv_data = []
 
     # Align on common timestamps using inner join
@@ -437,10 +457,24 @@ def get_default_symbols(underlying, exchange, expiry_date, api_key):
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            _perp = fno_search_symbols(
+                underlying=base_symbol, exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            underlying_quote_symbol = _perp[0]["symbol"]
+        else:
+            underlying_quote_symbol = base_symbol
+        _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
 
         # Get underlying LTP
         success, quote_response, status_code = get_quotes(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )
@@ -462,8 +496,8 @@ def get_default_symbols(underlying, exchange, expiry_date, api_key):
         if atm_strike is None:
             return False, {"status": "error", "message": "Could not determine ATM strike"}, 400
 
-        ce_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "CE")
-        pe_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "PE")
+        ce_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "CE")
+        pe_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "PE")
 
         return (
             True,

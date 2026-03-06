@@ -22,7 +22,7 @@ import {
   Zap,
   ZapOff,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
+import { cn, makeFormatCurrency } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', { credentials: 'include' })
@@ -219,6 +220,8 @@ interface WebSocketTestProps {
 }
 
 export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
+  const { user } = useAuthStore()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   // Connection state - INDEPENDENT WebSocket (not shared with MarketDataManager)
   // This page needs its own connection for testing/debugging purposes
   const [isConnected, setIsConnected] = useState(false)
@@ -1002,7 +1005,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                           LTP
                         </div>
                         <div className="text-3xl font-bold font-mono tracking-tight">
-                          {hasLtp ? `₹${formatPrice(symbolData.data.ltp!)}` : '---'}
+                          {hasLtp ? formatCurrency(symbolData.data.ltp!) : '---'}
                         </div>
                       </div>
                       {hasLtp && (

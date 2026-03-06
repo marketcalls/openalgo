@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { cn, sanitizeCSV } from '@/lib/utils'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Trade } from '@/types/trading'
@@ -31,12 +31,6 @@ interface FilterState {
   action: string[]
   exchange: string[]
   product: string[]
-}
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    minimumFractionDigits: 2,
-  }).format(value)
 }
 
 function formatTime(timestamp: string): string {
@@ -52,7 +46,8 @@ function formatTime(timestamp: string): string {
 }
 
 export default function TradeBook() {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [trades, setTrades] = useState<Trade[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)

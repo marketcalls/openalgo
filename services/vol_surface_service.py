@@ -10,12 +10,15 @@ from typing import Any
 
 from services.option_greeks_service import calculate_greeks, parse_option_symbol
 from services.option_symbol_service import (
+    construct_crypto_option_symbol,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
     get_option_exchange,
 )
+from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_multiquotes, get_quotes
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -43,6 +46,9 @@ def _get_quote_exchange(base_symbol: str, exchange: str) -> str:
         return "BSE_INDEX"
     if exchange.upper() in ("NFO", "BFO"):
         return "NSE" if exchange.upper() == "NFO" else "BSE"
+    # Crypto options — underlying is on the same exchange
+    if exchange.upper() in CRYPTO_EXCHANGES:
+        return exchange.upper()
     return exchange.upper()
 
 
@@ -73,10 +79,26 @@ def get_vol_surface_data(
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
+        # CRYPTO: look up the canonical perpetual symbol from DB (e.g. BTC → BTCUSD.P)
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            _perp = fno_search_symbols(
+                underlying=base_symbol, exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            underlying_quote_symbol = _perp[0]["symbol"]
+        else:
+            underlying_quote_symbol = base_symbol
+        # Symbol builder: CRYPTO canonical format vs Indian FNO suffix format
+        _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
 
         # Step 1: Fetch underlying LTP once
         success, quote_response, status_code = get_quotes(
-            symbol=base_symbol, exchange=quote_exchange, api_key=api_key
+            symbol=underlying_quote_symbol, exchange=quote_exchange, api_key=api_key
         )
         if not success:
             return False, {
@@ -138,11 +160,11 @@ def get_vol_surface_data(
             for strike in common_strikes:
                 if strike >= atm_strike:
                     # Use CE for ATM and above
-                    sym = construct_option_symbol(base_symbol, expiry, strike, "CE")
+                    sym = _build_sym(base_symbol, expiry, strike, "CE")
                     opt_type = "CE"
                 else:
                     # Use PE below ATM
-                    sym = construct_option_symbol(base_symbol, expiry, strike, "PE")
+                    sym = _build_sym(base_symbol, expiry, strike, "PE")
                     opt_type = "PE"
 
                 symbols_to_fetch.append({"symbol": sym, "exchange": options_exchange})
@@ -165,9 +187,9 @@ def get_vol_surface_data(
             iv_row = []
             for strike in common_strikes:
                 if strike >= atm_strike:
-                    sym = construct_option_symbol(base_symbol, expiry, strike, "CE")
+                    sym = _build_sym(base_symbol, expiry, strike, "CE")
                 else:
-                    sym = construct_option_symbol(base_symbol, expiry, strike, "PE")
+                    sym = _build_sym(base_symbol, expiry, strike, "PE")
 
                 option_ltp = quotes_map.get(sym, 0)
 
@@ -194,7 +216,7 @@ def get_vol_surface_data(
 
             # Compute DTE from parsed symbol
             try:
-                test_sym = construct_option_symbol(base_symbol, expiry, common_strikes[0], "CE")
+                test_sym = _build_sym(base_symbol, expiry, common_strikes[0], "CE")
                 _, expiry_dt, _, _ = parse_option_symbol(test_sym, options_exchange)
                 from datetime import datetime
                 dte = max(0, (expiry_dt - datetime.now()).total_seconds() / 86400)

@@ -21,6 +21,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 
+from utils.constants import CRYPTO_EXCHANGES, EXCHANGE_CRYPTO
 from utils.logging import get_logger
 
 # IST Timezone
@@ -47,7 +48,7 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 # Supported exchanges
-SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "BCD", "CDS"]
+SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "BCD", "CDS", "CRYPTO"]
 
 # Holiday types
 HOLIDAY_TYPES = ["TRADING_HOLIDAY", "SETTLEMENT_HOLIDAY", "SPECIAL_SESSION"]
@@ -61,6 +62,7 @@ DEFAULT_MARKET_TIMINGS = {
     "CDS": {"start_offset": 32400000, "end_offset": 61200000},  # 09:00 - 17:00
     "BCD": {"start_offset": 32400000, "end_offset": 61200000},  # 09:00 - 17:00
     "MCX": {"start_offset": 32400000, "end_offset": 86100000},  # 09:00 - 23:55
+    "CRYPTO": {"start_offset": 0, "end_offset": 86399000},  # 00:00 - 23:59:59 (24/7)
 }
 
 
@@ -640,9 +642,24 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
         return _timings_cache[cache_key]
 
     # Check if it's a weekend first (doesn't require database)
+    # Crypto exchanges operate 24/7, so always include them
     if query_date.weekday() >= 5:
-        _timings_cache[cache_key] = []
-        return []
+        midnight_ist = datetime.combine(query_date, datetime.min.time())
+        midnight_epoch = int(midnight_ist.timestamp() * 1000)
+        timing_offsets = _get_timing_offsets()
+        crypto_timings = []
+        for exch in CRYPTO_EXCHANGES:
+            timings = timing_offsets.get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
+            if timings:
+                crypto_timings.append(
+                    {
+                        "exchange": exch,
+                        "start_time": midnight_epoch + timings["start_offset"],
+                        "end_time": midnight_epoch + timings["end_offset"],
+                    }
+                )
+        _timings_cache[cache_key] = crypto_timings
+        return crypto_timings
 
     try:
         # Calculate midnight timestamp for the date in IST
@@ -744,6 +761,10 @@ def is_market_holiday(query_date: date, exchange: str = None) -> bool:
         True if it's a holiday (or weekend), False otherwise
     """
     try:
+        # Crypto exchanges operate 24/7 - no holidays or weekends
+        if exchange and exchange.upper() in CRYPTO_EXCHANGES:
+            return False
+
         # Check for special session FIRST (before weekend check)
         # This allows special sessions like Budget Day or Muhurat Trading on weekends
         holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
@@ -1026,25 +1047,34 @@ def is_market_open(exchange: str = None) -> bool:
         True if market is open, False otherwise
     """
     try:
+        # Crypto exchanges are always open (24/7)
+        if exchange and exchange.upper() in CRYPTO_EXCHANGES:
+            return True
+
         now = datetime.now(IST)
         today = now.date()
-
-        # Check if it's a holiday/weekend
-        if is_market_holiday(today, exchange):
-            return False
 
         # Get current time in milliseconds from midnight
         current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
 
         if exchange:
+            # Check if it's a holiday/weekend for this specific exchange
+            if is_market_holiday(today, exchange):
+                return False
             # Check specific exchange
             timing = get_market_timing(exchange)
             if not timing:
                 return False
             return timing["start_offset"] <= current_ms <= timing["end_offset"]
         else:
-            # Check if ANY exchange is open
+            # Check if ANY exchange is open (check each individually)
             for exch in SUPPORTED_EXCHANGES:
+                # Crypto exchanges are always open
+                if exch in CRYPTO_EXCHANGES:
+                    return True
+                # Skip non-crypto exchanges on holidays/weekends
+                if is_market_holiday(today, exch):
+                    continue
                 timing = get_market_timing(exch)
                 if timing and timing["start_offset"] <= current_ms <= timing["end_offset"]:
                     return True
@@ -1082,9 +1112,13 @@ def get_market_hours_status() -> dict[str, Any]:
         for exch in SUPPORTED_EXCHANGES:
             timing = get_market_timing(exch)
             if timing:
-                is_open = (
-                    is_trading and timing["start_offset"] <= current_ms <= timing["end_offset"]
-                )
+                # Crypto exchanges are always open (24/7)
+                if exch in CRYPTO_EXCHANGES:
+                    is_open = True
+                else:
+                    is_open = (
+                        is_trading and timing["start_offset"] <= current_ms <= timing["end_offset"]
+                    )
                 if is_open:
                     any_open = True
 
