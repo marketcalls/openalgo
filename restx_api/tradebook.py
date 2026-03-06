@@ -9,7 +9,7 @@ from services.tradebook_service import get_tradebook
 from utils.logging import get_logger
 
 from .account_schema import TradebookSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 
 api = Namespace("tradebook", description="Trade Book API")
