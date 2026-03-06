@@ -36,14 +36,24 @@ class DeltaModeMapper:
 
     # OpenAlgo mode → Delta WS channel name
     MODE_CHANNELS = {
-        1: "v2/ticker",    # LTP mode
-        2: "v2/ticker",    # Quote mode (also uses ticker; provides bid/ask/OI)
-        3: "l2_orderbook", # Depth mode
+        1: "v2/ticker",       # LTP mode
+        2: "candlestick_1m",  # Quote mode — candle-level OHLCV (~500ms updates)
+        3: "l2_orderbook",    # Depth mode
+    }
+
+    # Channels that need a silent v2/ticker companion for OI / bid / ask / daily open
+    COMPANION_CHANNELS = {
+        "candlestick_1m": "v2/ticker",
     }
 
     @staticmethod
     def get_channel(mode: int) -> str:
         return DeltaModeMapper.MODE_CHANNELS.get(mode, "v2/ticker")
+
+    @staticmethod
+    def get_companion_channel(primary_channel: str) -> str | None:
+        """Return the companion channel name, or None if no companion is needed."""
+        return DeltaModeMapper.COMPANION_CHANNELS.get(primary_channel)
 
     @staticmethod
     def get_mode_str(mode: int) -> str:

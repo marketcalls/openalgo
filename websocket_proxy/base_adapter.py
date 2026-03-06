@@ -4,6 +4,7 @@ import random
 import socket
 import threading
 from abc import ABC, abstractmethod
+from typing import Any
 
 import zmq
 
@@ -248,7 +249,7 @@ class BaseBrokerWebSocketAdapter(ABC):
         pass
 
     @abstractmethod
-    def subscribe(self, symbol, exchange, mode=2, depth_level=5):
+    def subscribe(self, symbol, exchange, mode=2, depth_level=5) -> dict[str, Any]:
         """
         Subscribe to market data with the specified mode and depth level
 
@@ -264,7 +265,7 @@ class BaseBrokerWebSocketAdapter(ABC):
         pass
 
     @abstractmethod
-    def unsubscribe(self, symbol, exchange, mode=2):
+    def unsubscribe(self, symbol, exchange, mode=2) -> dict[str, Any]:
         """
         Unsubscribe from market data
 
