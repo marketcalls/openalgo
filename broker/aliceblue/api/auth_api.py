@@ -12,6 +12,22 @@ logger = get_logger(__name__)
 
 
 def authenticate_broker(userid, encKey):
+    """
+    Authenticate with AliceBlue broker API and establish a session.
+
+    This function performs the authentication required by AliceBlue V2 API,
+    generating a SHA-256 checksum from the user ID, API secret, and encryption key,
+    and exchanging it for a valid session ID.
+
+    Args:
+        userid (str): The AliceBlue client ID or user ID.
+        encKey (str): The encryption key received from the initial login redirect.
+
+    Returns:
+        tuple: A tuple containing:
+            - str or None: The session ID if authentication is successful, else None.
+            - str or None: Error message if authentication fails, else None.
+    """
     try:
         # Fetching the necessary credentials from environment variables
         BROKER_API_KEY = os.environ.get("BROKER_API_KEY")
