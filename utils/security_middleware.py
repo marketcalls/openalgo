@@ -1,21 +1,43 @@
 import logging
 from functools import wraps
+from typing import Any, Callable, TypeVar
 
-from flask import abort, jsonify, request
+from flask import Flask, abort, jsonify, request
 
 from database.traffic_db import Error404Tracker, IPBan, logs_session
 from utils.ip_helper import get_real_ip, get_real_ip_from_environ
 
 logger = logging.getLogger(__name__)
 
+F = TypeVar('F', bound=Callable[..., Any])
+
 
 class SecurityMiddleware:
-    """Middleware to check for banned IPs and handle security"""
-
-    def __init__(self, app):
+    """WSGI middleware that checks if the client IP is banned before processing requests.
+    
+    This middleware wraps the Flask application and intercepts incoming requests
+    to check against the banned IP list. If an IP is banned, a 403 response
+    is returned without invoking the application.
+    """
+    
+    def __init__(self, app: Flask) -> None:
+        """Initialize middleware with the WSGI application.
+        
+        Args:
+            app: The Flask application to wrap.
+        """
         self.app = app
 
-    def __call__(self, environ, start_response):
+    def __call__(self, environ: dict[str, Any], start_response: Callable) -> list[bytes]:
+        """Check IP ban status and either block or forward the request.
+        
+        Args:
+            environ: WSGI environment dictionary containing request information.
+            start_response: WSGI callable to set response status and headers.
+            
+        Returns:
+            List of bytes containing the response body.
+        """
         # Get real client IP (handles proxies)
         client_ip = get_real_ip_from_environ(environ)
 
@@ -37,11 +59,22 @@ class SecurityMiddleware:
         return self.app(environ, start_response)
 
 
-def check_ip_ban(f):
-    """Decorator to check if IP is banned before processing request"""
-
+def check_ip_ban(f: F) -> F:
+    """Decorator that returns 403 if the client IP is banned.
+    
+    This decorator checks if the client's IP address is in the banned list
+    before executing the decorated function. If the IP is banned, a 403
+    response is returned.
+    
+    Args:
+        f: The function to decorate.
+        
+    Returns:
+        The decorated function with IP ban checking.
+    """
+    
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
         client_ip = get_real_ip()
 
         if IPBan.is_ip_banned(client_ip):
@@ -50,11 +83,15 @@ def check_ip_ban(f):
 
         return f(*args, **kwargs)
 
-    return decorated_function
+    return decorated_function  # type: ignore[return-value]
 
 
-def init_security_middleware(app):
-    """Initialize security middleware"""
+def init_security_middleware(app: Flask) -> None:
+    """Initialize and register security middleware with the Flask application.
+    
+    Args:
+        app: The Flask application instance.
+    """
     # Wrap the WSGI app with security middleware
     app.wsgi_app = SecurityMiddleware(app.wsgi_app)
 
@@ -65,7 +102,7 @@ def init_security_middleware(app):
 
     # Register 403 error handler for banned IPs
     @app.errorhandler(403)
-    def handle_403(e):
+    def handle_403(e: Exception) -> tuple[dict[str, str], int]:
         return jsonify({"error": "Access Denied"}), 403
 
     logger.debug("Security middleware initialized")
