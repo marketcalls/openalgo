@@ -10,7 +10,7 @@ from limiter import limiter
 from restx_api.schemas import MarginCalculatorSchema
 from services.margin_service import calculate_margin
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("margin", description="Margin Calculator API")
 
