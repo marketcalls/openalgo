@@ -1,13 +1,16 @@
 import {
+  BarChart2,
   ChevronDown,
   ChevronRight,
   CircleDot,
+  ExternalLink,
   RefreshCw,
   Trash2,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -2029,6 +2032,13 @@ export default function StrategyPositions() {
                 <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
+              <Link to="/strategy-dashboard">
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  <BarChart2 className="h-4 w-4" />
+                  Eagle Eye
+                  <ExternalLink className="h-3 w-3 opacity-60" />
+                </Button>
+              </Link>
               {strategies.length > 0 && (
                 <Button
                   variant="outline"
