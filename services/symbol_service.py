@@ -1,7 +1,7 @@
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
-from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy.exc import NoResultFound
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
@@ -47,7 +47,7 @@ def get_symbol_info_with_auth(
         # Get freeze quantity
         from database.qty_freeze_db import get_freeze_qty_for_option
 
-        freeze_qty = get_freeze_qty_for_option(result.symbol, result.exchange)
+        freeze_qty = get_freeze_qty_for_option(str(result.symbol), str(result.exchange))
 
         # Transform the SymToken object to a dictionary
         symbol_info = {
@@ -61,6 +61,7 @@ def get_symbol_info_with_auth(
             "expiry": result.expiry,
             "strike": result.strike,
             "lotsize": result.lotsize,
+            "contract_value": result.contract_value if result.contract_value is not None else 1.0,
             "instrumenttype": result.instrumenttype,
             "tick_size": result.tick_size,
             "freeze_qty": freeze_qty,
