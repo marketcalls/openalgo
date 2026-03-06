@@ -9,7 +9,7 @@ from database.auth_db import get_auth_token_broker
 from limiter import limiter
 from services.funds_service import get_funds
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from .config import API_RATE_LIMIT
 
 from .account_schema import FundsSchema
 
