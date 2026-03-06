@@ -42,15 +42,15 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
-    [[ $valid_brokers == *"$broker"* ]]
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
 # Function to check if broker is XTS based
 is_xts_broker() {
     local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
-    [[ $xts_brokers == *"$broker"* ]]
+    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
+    [[ ",$xts_brokers," == *",$broker,"* ]]
 }
 
 # Start installation
@@ -116,7 +116,7 @@ while true; do
     echo "fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, deltaexchange,"
     echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, ibulls, iifl,"
     echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
-    echo "samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha,"
+    echo "rmoney, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha,"
     echo ""
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
