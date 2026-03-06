@@ -158,7 +158,10 @@ const legStatusColors: Record<LegStatus, string> = {
 // Exit type colors
 const exitTypeColors: Record<ExitType, string> = {
   SL_HIT: 'bg-red-500',
+  FIXED_SL: 'bg-red-500',
+  TRAIL_SL: 'bg-orange-500',
   TARGET_HIT: 'bg-green-500',
+  TARGET: 'bg-green-500',
   HEDGE_SL_EXIT: 'bg-red-400',
   HEDGE_TARGET_EXIT: 'bg-green-400',
   STRATEGY_DONE: 'bg-gray-500',
@@ -347,8 +350,8 @@ function getDoneLegStats(
     : null
 
   // SL hits and Target hits counts
-  const slHits = legTrades.filter((t) => t.exit_type === 'SL_HIT').length
-  const targetHits = legTrades.filter((t) => t.exit_type === 'TARGET_HIT').length
+  const slHits = legTrades.filter((t) => t.exit_type === 'SL_HIT' || t.exit_type === 'FIXED_SL' || t.exit_type === 'TRAIL_SL').length
+  const targetHits = legTrades.filter((t) => t.exit_type === 'TARGET_HIT' || t.exit_type === 'TARGET').length
 
   // Total brokerage cost
   const totalBrokerage = legTrades.reduce((sum, t) => sum + (resolveNum(t.total_brokerage) ?? 0), 0)
@@ -966,11 +969,19 @@ function StrategyTabs({
   const [activeTab, setActiveTab] = useState('positions')
 
   const doneLegsCount = Object.values(strategy.legs ?? {}).filter((leg) => leg.status === 'DONE').length
+  const positionsCount = Object.values(strategy.legs ?? {}).filter((leg) => leg.status !== 'DONE').length
+  const tradeHistoryCount = strategy.trade_history?.length ?? 0
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab}>
       <TabsList className="mb-3">
-        <TabsTrigger value="positions">📊 Positions</TabsTrigger>
+        <TabsTrigger value="positions">
+          📊 Positions{positionsCount > 0 && (
+            <span className="ml-1.5 rounded-full bg-gray-500 px-1.5 py-0.5 text-xs text-white leading-none">
+              {positionsCount}
+            </span>
+          )}
+        </TabsTrigger>
         <TabsTrigger value="done-legs">
           ✅ Done Legs{doneLegsCount > 0 && (
             <span className="ml-1.5 rounded-full bg-gray-500 px-1.5 py-0.5 text-xs text-white leading-none">
@@ -978,7 +989,13 @@ function StrategyTabs({
             </span>
           )}
         </TabsTrigger>
-        <TabsTrigger value="trade-history">📜 Trade History</TabsTrigger>
+        <TabsTrigger value="trade-history">
+          📜 Trade History{tradeHistoryCount > 0 && (
+            <span className="ml-1.5 rounded-full bg-gray-500 px-1.5 py-0.5 text-xs text-white leading-none">
+              {tradeHistoryCount}
+            </span>
+          )}
+        </TabsTrigger>
         <TabsTrigger value="pnl-curve">📈 P&L Curve</TabsTrigger>
       </TabsList>
 

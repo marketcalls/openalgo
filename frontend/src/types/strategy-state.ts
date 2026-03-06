@@ -100,7 +100,10 @@ export interface LegState {
 
 export type ExitType =
   | 'SL_HIT'
+  | 'FIXED_SL'
+  | 'TRAIL_SL'
   | 'TARGET_HIT'
+  | 'TARGET'
   | 'HEDGE_SL_EXIT'
   | 'HEDGE_TARGET_EXIT'
   | 'STRATEGY_DONE'

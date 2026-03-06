@@ -222,8 +222,8 @@ function computeMetrics(s: StrategyState): StrategyMetrics {
   // Win rate is only meaningful for CLOSED trades (exit_price is not null)
   const closedTrades = history.filter(t => t.exit_price !== null)
   const closedTradeCount = closedTrades.length
-  const slHits = history.filter(t => t.exit_type === 'SL_HIT').length
-  const targetHits = history.filter(t => t.exit_type === 'TARGET_HIT').length
+  const slHits = history.filter(t => t.exit_type === 'SL_HIT' || t.exit_type === 'FIXED_SL' || t.exit_type === 'TRAIL_SL').length
+  const targetHits = history.filter(t => t.exit_type === 'TARGET_HIT' || t.exit_type === 'TARGET').length
   const profitTrades = closedTrades.filter(t => (t.pnl ?? 0) > 0).length
   const winRate = closedTradeCount > 0 ? (profitTrades / closedTradeCount) * 100 : null
 
@@ -710,7 +710,10 @@ export default function StrategyDashboard() {
 
   const exitTypeColor: Record<string, string> = {
     SL_HIT: 'text-red-500',
+    FIXED_SL: 'text-red-500',
+    TRAIL_SL: 'text-orange-400',
     TARGET_HIT: 'text-emerald-500',
+    TARGET: 'text-emerald-500',
     MANUAL_EXIT: 'text-purple-400',
     STRATEGY_DONE: 'text-muted-foreground',
     AUTO_BUYBACK: 'text-blue-400',
