@@ -10,7 +10,7 @@ from services.ping_service import get_ping
 from utils.logging import get_logger
 
 from .account_schema import PingSchema
-from config import API_RATE_LIMIT
+from .config import API_RATE_LIMIT
 
 api = Namespace("ping", description="Ping API to check connectivity and authentication")
 
