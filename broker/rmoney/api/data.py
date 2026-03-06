@@ -448,8 +448,33 @@ class BrokerData:
                 error_msg = (
                     response.get("description", "Unknown error") if response else "No response"
                 )
-                logger.error(f"Error fetching multiquotes: {error_msg}")
-                raise Exception(f"Error from RMoney API: {error_msg}")
+
+                # Check if token expired and retry with refreshed token
+                if "Invalid Token" in error_msg:
+                    logger.info("Feed token expired in multiquotes, attempting to refresh...")
+                    if self._refresh_feed_token():
+                        # Retry the request with new token (only once)
+                        response = get_api_response(
+                            "/instruments/quotes",
+                            self.auth_token,
+                            method="POST",
+                            payload=payload,
+                            feed_token=self.feed_token,
+                        )
+                        if response and response.get("type") == "success":
+                            logger.info("Multiquotes retry with refreshed token succeeded")
+                        else:
+                            retry_error = (
+                                response.get("description", "Unknown error") if response else "No response"
+                            )
+                            logger.error(f"Multiquotes retry also failed: {retry_error}")
+                            raise Exception(f"Error from RMoney API after token refresh: {retry_error}")
+                    else:
+                        logger.error("Failed to refresh feed token for multiquotes")
+                        raise Exception(f"Error from RMoney API: {error_msg}")
+                else:
+                    logger.error(f"Error fetching multiquotes: {error_msg}")
+                    raise Exception(f"Error from RMoney API: {error_msg}")
 
             # Parse response
             list_quotes = response.get("result", {}).get("listQuotes", [])
@@ -478,14 +503,16 @@ class BrokerData:
                         "exchange": original["exchange"],
                         "data": {
                             "ask": touchline.get("AskInfo", {}).get("Price", 0),
+                            "ask_qty": touchline.get("AskInfo", {}).get("Size", 0),
                             "bid": touchline.get("BidInfo", {}).get("Price", 0),
+                            "bid_qty": touchline.get("BidInfo", {}).get("Size", 0),
                             "high": touchline.get("High", 0),
                             "low": touchline.get("Low", 0),
                             "ltp": touchline.get("LastTradedPrice", 0),
                             "open": touchline.get("Open", 0),
                             "prev_close": touchline.get("Close", 0),
                             "volume": touchline.get("TotalTradedQuantity", 0),
-                            "oi": 0,  # OI requires separate API call (1510), set default
+                            "oi": 0,  # Will be populated from 1510 call below
                         },
                     }
                     results.append(result_item)
@@ -493,6 +520,53 @@ class BrokerData:
                 except Exception as e:
                     logger.warning(f"Error parsing quote data: {str(e)}")
                     continue
+
+            # Fetch OI data (xtsMessageCode 1510) for the same instruments
+            try:
+                oi_payload = {
+                    "instruments": instruments,
+                    "xtsMessageCode": 1510,
+                    "publishFormat": "JSON",
+                }
+
+                oi_response = get_api_response(
+                    "/instruments/quotes",
+                    self.auth_token,
+                    method="POST",
+                    payload=oi_payload,
+                    feed_token=self.feed_token,
+                )
+
+                if oi_response and oi_response.get("type") == "success":
+                    oi_list_quotes = oi_response.get("result", {}).get("listQuotes", [])
+                    # Build OI lookup by instrument key
+                    oi_map = {}
+                    for raw_oi in oi_list_quotes:
+                        try:
+                            oi_data = json.loads(raw_oi) if isinstance(raw_oi, str) else raw_oi
+                            oi_key = f"{oi_data.get('ExchangeSegment')}_{oi_data.get('ExchangeInstrumentID')}"
+                            oi_value = oi_data.get("OpenInterest", 0)
+                            oi_map[oi_key] = oi_value
+                        except Exception:
+                            continue
+
+                    # Merge OI into results
+                    if oi_map:
+                        for result_item in results:
+                            sym = result_item["symbol"]
+                            exc = result_item["exchange"]
+                            # Find the instrument key for this symbol
+                            for ikey, iinfo in symbol_map.items():
+                                if iinfo["symbol"] == sym and iinfo["exchange"] == exc:
+                                    oi_val = oi_map.get(ikey, 0)
+                                    if oi_val:
+                                        result_item["data"]["oi"] = oi_val
+                                    break
+                        logger.debug(f"Merged OI data for {len(oi_map)} instruments")
+                else:
+                    logger.debug("OI fetch returned no data (code 1510)")
+            except Exception as e:
+                logger.warning(f"Non-fatal: Failed to fetch OI data in multiquotes: {e}")
 
         except Exception as e:
             logger.error(f"Error in _process_multiquotes_batch: {str(e)}")
@@ -599,10 +673,36 @@ class BrokerData:
                 )
 
                 if not response or response.get("type") != "success":
+                    error_msg = response.get("description", "Unknown error") if response else "No response"
                     logger.error(f"API Response: {response}")
-                    raise Exception(
-                        f"Error from RMoney API: {response.get('description', 'Unknown error')}"
-                    )
+
+                    # Check if token expired and retry with refreshed token
+                    if "Invalid Token" in str(error_msg):
+                        logger.info("Feed token expired in get_history, attempting to refresh...")
+                        if self._refresh_feed_token():
+                            # Retry with refreshed token (only once)
+                            response = get_api_response(
+                                "/instruments/ohlc",
+                                self.auth_token,
+                                method="GET",
+                                feed_token=self.feed_token,
+                                params=params,
+                            )
+                            if response and response.get("type") == "success":
+                                logger.info("History retry with refreshed token succeeded")
+                            else:
+                                retry_error = (
+                                    response.get("description", "Unknown error") if response else "No response"
+                                )
+                                logger.error(f"History retry also failed: {retry_error}")
+                                raise Exception(
+                                    f"Error from RMoney API after token refresh: {retry_error}"
+                                )
+                        else:
+                            logger.error("Failed to refresh feed token for history")
+                            raise Exception(f"Error from RMoney API: {error_msg}")
+                    else:
+                        raise Exception(f"Error from RMoney API: {error_msg}")
 
                 # Parse dataResponse (pipe-delimited string)
                 raw_data = response.get("result", {}).get("dataReponse", "")
