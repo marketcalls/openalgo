@@ -84,8 +84,8 @@ def calculate_margin_api(positions, auth):
         return response, standardized_response
 
     except Exception as e:
-        logger.error(f"Error calling RMoney margin API: {e}")
-        error_response = {"status": "error", "message": f"Failed to calculate margin: {str(e)}"}
+        logger.error(f"Error calling RMoney margin API: {e}", exc_info=True)
+        error_response = {"status": "error", "message": "Failed to calculate margin"}
 
         class MockResponse:
             status_code = 500

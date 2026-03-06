@@ -190,7 +190,7 @@ class BrokerData:
                 )
 
                 # Check if token expired and retry with refreshed token
-                if retry_on_invalid_token and "Invalid Token" in error_msg:
+                if retry_on_invalid_token and "Invalid Token" in str(error_msg):
                     logger.info("Feed token expired, attempting to refresh...")
                     if self._refresh_feed_token():
                         # Retry the request with new token (only once)
@@ -450,7 +450,7 @@ class BrokerData:
                 )
 
                 # Check if token expired and retry with refreshed token
-                if "Invalid Token" in error_msg:
+                if "Invalid Token" in str(error_msg):
                     logger.info("Feed token expired in multiquotes, attempting to refresh...")
                     if self._refresh_feed_token():
                         # Retry the request with new token (only once)
