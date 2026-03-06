@@ -1,0 +1,143 @@
+# Git workflow Makefile for OpenAlgo
+# Usage: make -f Makefile.git <target>
+#
+# Workflow:
+#   Local dev work happens on 'dev' branch
+#   Upstream = original marketcalls/openalgo repo
+#   Origin   = your fork
+
+UPSTREAM_URL ?= https://github.com/marketcalls/openalgo.git
+MAIN_BRANCH  := main
+DEV_BRANCH   := dev
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Setup
+# ──────────────────────────────────────────────────────────────────────────────
+
+## Add the upstream remote (run once after cloning)
+setup-upstream:
+	@if git remote get-url upstream > /dev/null 2>&1; then \
+		echo "upstream already configured: $$(git remote get-url upstream)"; \
+	else \
+		git remote add upstream $(UPSTREAM_URL); \
+		echo "Added upstream -> $(UPSTREAM_URL)"; \
+	fi
+	@git remote -v
+
+## Show all configured remotes
+remotes:
+	@git remote -v
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Sync with upstream
+# ──────────────────────────────────────────────────────────────────────────────
+
+## Fetch latest from upstream (no merge)
+fetch:
+	git fetch upstream
+
+## Sync local main with upstream/main, then rebase dev on top of main
+sync: fetch
+	@echo "--- Updating local $(MAIN_BRANCH) from upstream ---"
+	git checkout $(MAIN_BRANCH)
+	git merge --ff-only upstream/$(MAIN_BRANCH)
+	@echo "--- Rebasing $(DEV_BRANCH) on top of $(MAIN_BRANCH) ---"
+	git checkout $(DEV_BRANCH)
+	git rebase $(MAIN_BRANCH)
+	@echo "Done. You are now on '$(DEV_BRANCH)'."
+
+## Sync and push updated main to your fork
+sync-push: sync
+	git checkout $(MAIN_BRANCH)
+	git push origin $(MAIN_BRANCH)
+	git checkout $(DEV_BRANCH)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Dev branch operations
+# ──────────────────────────────────────────────────────────────────────────────
+
+## Switch to dev branch
+dev:
+	git checkout $(DEV_BRANCH)
+
+## Show current branch and status
+status:
+	@echo "Branch: $$(git rev-parse --abbrev-ref HEAD)"
+	@git status -sb
+
+## Stage all changes and commit (usage: make commit MSG="your message")
+commit:
+	@test -n "$(MSG)" || (echo "Usage: make -f Makefile.git commit MSG=\"your message\"" && exit 1)
+	git add -A
+	git commit -m "$(MSG)"
+
+## Push dev branch to your fork
+push:
+	git push origin $(DEV_BRANCH)
+
+## Pull latest dev branch from your fork
+pull:
+	git pull origin $(DEV_BRANCH)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Feature branches
+# ──────────────────────────────────────────────────────────────────────────────
+
+## Create a new feature branch off dev (usage: make feature NAME=my-feature)
+feature:
+	@test -n "$(NAME)" || (echo "Usage: make -f Makefile.git feature NAME=my-feature" && exit 1)
+	git checkout $(DEV_BRANCH)
+	git checkout -b $(NAME)
+	@echo "Created and switched to branch '$(NAME)'"
+
+## Push current feature branch to origin
+push-feature:
+	git push -u origin $$(git rev-parse --abbrev-ref HEAD)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stash helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+## Stash current uncommitted changes
+stash:
+	git stash push -m "wip: $$(date '+%Y-%m-%d %H:%M')"
+
+## Pop the most recent stash
+stash-pop:
+	git stash pop
+
+## List all stashes
+stash-list:
+	git stash list
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Log / inspection
+# ──────────────────────────────────────────────────────────────────────────────
+
+## Pretty one-line log (last 20 commits)
+log:
+	git log --oneline --graph --decorate -20
+
+## Show divergence between dev and upstream/main
+diff-upstream:
+	git fetch upstream
+	git log upstream/$(MAIN_BRANCH)..$(DEV_BRANCH) --oneline
+
+## Show files changed in dev vs upstream/main
+diff-files:
+	git fetch upstream
+	git diff --name-status upstream/$(MAIN_BRANCH)...$(DEV_BRANCH)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Help
+# ──────────────────────────────────────────────────────────────────────────────
+
+help:
+	@echo ""
+	@echo "Git workflow targets (use: make -f Makefile.git <target>)"
+	@echo ""
+	@grep -E '^##' Makefile.git | sed 's/## /  /'
+	@echo ""
+
+.PHONY: setup-upstream remotes fetch sync sync-push dev status commit push pull \
+        feature push-feature stash stash-pop stash-list log diff-upstream diff-files help
