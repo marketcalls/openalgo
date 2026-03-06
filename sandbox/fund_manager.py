@@ -35,22 +35,9 @@ from database.sandbox_db import (
 )
 from database.token_db import get_symbol_info
 from utils.logging import get_logger
+from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
-
-
-def is_option(symbol, exchange):
-    """Check if symbol is an option based on exchange and symbol suffix"""
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
-        return symbol.endswith("CE") or symbol.endswith("PE")
-    return False
-
-
-def is_future(symbol, exchange):
-    """Check if symbol is a future based on exchange and symbol suffix"""
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
-        return symbol.endswith("FUT")
-    return False
 
 
 class FundManager:

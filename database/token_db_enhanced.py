@@ -12,12 +12,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 
+from utils.constants import CRYPTO_EXCHANGES, FNO_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-# FNO exchanges that have derivatives
-FNO_EXCHANGES = {"NFO", "BFO", "MCX", "CDS"}
 
 # Regex pattern to extract underlying from OpenAlgo symbol format
 # Format: [BaseSymbol][DDMMMYY][StrikePrice][CE/PE] or [BaseSymbol][DDMMMYY]FUT
@@ -29,24 +27,54 @@ _UNDERLYING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Regex to extract underlying from canonical CRYPTO symbols that follow the
+# Indian F&O-style format (no dashes): BTC28FEB2580000CE / BTC28FEB25FUT
+# The underlying is the run of leading alpha characters before the first digit.
+# Perpetuals (BTCUSDT) have no embedded digit — handled separately via suffix stripping.
+# Anchored to expiry date pattern (DDMMMYY) so numeric-prefix underlyings like
+# 1INCH28FEB25FUT are handled correctly. Non-greedy capture stops at first DDMMMYY match.
+_CRYPTO_UNDERLYING_PATTERN = re.compile(
+    r"^([A-Z0-9]+?)(?=\d{2}[A-Z]{3}\d{2})",
+    re.IGNORECASE,
+)
+
 
 def extract_underlying_from_symbol(symbol: str, exchange: str) -> str | None:
     """
     Extract underlying name from OpenAlgo symbol format.
 
     OpenAlgo symbol formats:
-    - Futures: [BaseSymbol][DDMMMYY]FUT (e.g., BANKNIFTY24APR24FUT -> BANKNIFTY)
-    - Options: [BaseSymbol][DDMMMYY][Strike][CE/PE] (e.g., NIFTY28MAR2420800CE -> NIFTY)
+    - Indian FNO / CRYPTO options+futures:
+        [BaseSymbol][DDMMMYY][Strike][CE/PE]  e.g. NIFTY28MAR2420800CE  → NIFTY
+        [BaseSymbol][DDMMMYY]FUT              e.g. BTC28FEB25FUT         → BTC
+      Underlying = leading alpha characters before the first digit.
+    - CRYPTO perpetuals: BTCUSDT / ETHUSDT
+      Underlying = strip trailing USDT or USD quote-currency suffix.
 
     Args:
         symbol: OpenAlgo formatted symbol
-        exchange: Exchange code (NFO, BFO, MCX, CDS, etc.)
+        exchange: Exchange code (NFO, BFO, MCX, CDS, CRYPTO, etc.)
 
     Returns:
         Underlying name or None if not extractable
     """
     if not symbol or exchange not in FNO_EXCHANGES:
         return None
+
+    if exchange in CRYPTO_EXCHANGES:
+        upper = symbol.upper()
+        # FUT / CE / PE canonical: underlying is leading alpha-nums before DDMMMYY expiry
+        # e.g. BTC28FEB2580000CE → BTC,  1INCH28FEB25FUT → 1INCH
+        m = _CRYPTO_UNDERLYING_PATTERN.match(upper)
+        if m:
+            return m.group(1)
+        # Perpetual canonical: BTCUSD.P / BTC_INR.P — strip .P then quote-currency suffix
+        if upper.endswith(".P"):
+            upper = upper[:-2]
+        for suffix in ("USDT", "USD", "_INR", "INR"):
+            if upper.endswith(suffix) and len(upper) > len(suffix):
+                return upper[: -len(suffix)]
+        return upper  # fallback — return whole symbol
 
     match = _UNDERLYING_PATTERN.match(symbol.upper())
     if match:
@@ -104,6 +132,7 @@ class SymbolData:
     instrumenttype: str | None = None
     tick_size: float | None = None
     underlying: str | None = None  # Extracted from OpenAlgo symbol format for F&O
+    contract_value: float | None = None  # Contract multiplier (e.g. 0.001 for BTCUSD.P)
 
 
 class BrokerSymbolCache:
@@ -183,6 +212,7 @@ class BrokerSymbolCache:
                     instrumenttype=sym.instrumenttype,
                     tick_size=sym.tick_size,
                     underlying=underlying,
+                    contract_value=getattr(sym, 'contract_value', None),
                 )
 
                 # Store in primary dict
@@ -201,8 +231,11 @@ class BrokerSymbolCache:
                     # Use extracted underlying for index (more reliable than broker's name field)
                     if underlying:
                         self.expiries_by_exchange_underlying[(sym.exchange, underlying)].add(sym.expiry)
-                # Use extracted underlying for underlyings index
-                if underlying:
+                # Use extracted underlying for underlyings index.
+                # Only track underlyings that have options (CE/PE) — perpetuals, futures,
+                # spreads, etc. should not appear in the option-chain/IV-chart dropdown.
+                sym_upper = sym.symbol.upper()
+                if underlying and (sym_upper.endswith("CE") or sym_upper.endswith("PE")):
                     self.underlyings_by_exchange[sym.exchange].add(underlying)
 
             # Update cache metadata
@@ -504,7 +537,12 @@ class BrokerSymbolCache:
             if expiry_stripped and symbol_data.expiry != expiry_stripped:
                 continue
 
-            # Instrument type filter (based on symbol suffix)
+            # Instrument type filter.
+            # All exchanges (including CRYPTO) use canonical suffix conventions:
+            #   CE      → symbol ends with "CE"  (e.g. BTC28FEB2580000CE)
+            #   PE      → symbol ends with "PE"  (e.g. BTC28FEB2580000PE)
+            #   FUT     → symbol ends with "FUT" (e.g. BTC28FEB25FUT)
+            #   PERPFUT → stored instrumenttype field (e.g. BTCUSD.P)
             if inst_type:
                 symbol_upper = symbol_data.symbol.upper()
                 if inst_type == "FUT" and not symbol_upper.endswith("FUT"):
@@ -512,6 +550,11 @@ class BrokerSymbolCache:
                 elif inst_type == "CE" and not symbol_upper.endswith("CE"):
                     continue
                 elif inst_type == "PE" and not symbol_upper.endswith("PE"):
+                    continue
+                elif inst_type == "PERPFUT" and (
+                    not symbol_data.instrumenttype
+                    or symbol_data.instrumenttype.upper() != "PERPFUT"
+                ):
                     continue
 
             # Strike range filter
@@ -985,6 +1028,7 @@ def fno_search_symbols(
                 "instrumenttype": s.instrumenttype,
                 "tick_size": s.tick_size,
                 "underlying": s.underlying,
+                "contract_value": s.contract_value,
                 "freeze_qty": get_freeze_qty_for_option(s.symbol, s.exchange),
             }
             for s in results
