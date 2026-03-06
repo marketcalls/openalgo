@@ -12,7 +12,7 @@ from limiter import limiter
 from restx_api.account_schema import OrderStatusSchema
 from services.orderstatus_service import emit_analyzer_error, get_order_status
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("orderstatus", description="Order Status API")
 
