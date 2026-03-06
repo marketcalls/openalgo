@@ -851,6 +851,7 @@ def get_symbol_info_dbquery(symbol: str, exchange: str) -> SymbolData | None:
                 lotsize=sym_token.lotsize,
                 instrumenttype=sym_token.instrumenttype,
                 tick_size=sym_token.tick_size,
+                contract_value=getattr(sym_token, 'contract_value', None),
             )
         else:
             return None
