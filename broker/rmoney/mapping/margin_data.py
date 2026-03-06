@@ -8,6 +8,14 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _safe_float(value, field_name, default=0.0):
+    try:
+        return float(value if value is not None else default)
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid RMoney margin field {field_name}: {value!r}. Using {default}.")
+        return float(default)
+
+
 def transform_margin_positions(positions):
     """
     Transform OpenAlgo margin position format to RMoney XTS margin API format.
@@ -120,9 +128,11 @@ def parse_margin_response(response_data):
             "message": "No margin details in response",
         }
 
-    margin_required = float(brokerage_details.get("MarginRequired", 0))
-    margin_available = float(brokerage_details.get("MarginAvailable", 0))
-    margin_shortfall = float(brokerage_details.get("MarginShortfall", 0))
+    margin_required = _safe_float(brokerage_details.get("MarginRequired", 0), "MarginRequired")
+    margin_available = _safe_float(brokerage_details.get("MarginAvailable", 0), "MarginAvailable")
+    margin_shortfall = _safe_float(
+        brokerage_details.get("MarginShortfall", 0), "MarginShortfall"
+    )
     is_valid = brokerage_details.get("IsValid", False)
     error_message = brokerage_details.get("ErrorMessage", "")
 

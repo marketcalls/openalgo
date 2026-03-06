@@ -48,7 +48,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
     logger.info(f"RMoney API Response [{endpoint}] Status: {response.status_code}")
-    logger.info(f"RMoney API Response [{endpoint}] Content: {response.text}")
+    logger.debug(f"RMoney API Response [{endpoint}] Content: {response.text}")
     return response.json()
 
 

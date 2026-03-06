@@ -62,7 +62,9 @@ def map_exchange(exchange):
         "BFO": "BSEFO",
         "CDS": "NSECD",
     }
-    return exchange_mapping.get(exchange, "NSECM")
+    if exchange not in exchange_mapping:
+        raise ValueError(f"Unsupported exchange: {exchange}")
+    return exchange_mapping[exchange]
 
 
 def map_exchange_numeric(exchange):
@@ -88,7 +90,9 @@ def map_exchange_numeric(exchange):
         "BFO": 12,     # BSEFO
         "MCX": 51,     # MCXFO
     }
-    return exchange_numeric_mapping.get(exchange, 1)  # Default to NSECM
+    if exchange not in exchange_numeric_mapping:
+        raise ValueError(f"Unsupported exchange: {exchange}")
+    return exchange_numeric_mapping[exchange]
 
 
 def map_order_type(pricetype):

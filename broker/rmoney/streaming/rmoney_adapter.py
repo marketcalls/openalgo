@@ -91,6 +91,10 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
+        if not api_key or not api_secret:
+            self.logger.error("Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET credentials")
+            raise ValueError("Missing RMoney XTS API credentials")
+
         self.logger.info(f"Using API Key: {api_key[:10]}... for RMoney XTS connection")
 
         # Create RMoney XTS WebSocket client with API credentials
