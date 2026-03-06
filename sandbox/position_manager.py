@@ -269,6 +269,7 @@ class PositionManager:
         from decimal import Decimal
 
         symbol = position.symbol
+        exchange = position.exchange
         quantity = position.quantity
         avg_price = Decimal(str(position.average_price))
         margin_blocked = Decimal(str(position.margin_blocked or 0))
@@ -291,13 +292,14 @@ class PositionManager:
                 settlement_price = avg_price
                 logger.info(f"Future {symbol} expired - settling at avg price: {settlement_price}")
 
-        # Calculate realized P&L for this closure
+        # Calculate realized P&L for this closure (apply contract_value for crypto perpetuals)
+        cv = self._get_contract_value(symbol, exchange)
         if quantity > 0:
-            # Long position: P&L = (settlement - avg) * qty
-            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+            # Long position: P&L = (settlement - avg) * qty * contract_value
+            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * cv
         else:
-            # Short position: P&L = (avg - settlement) * abs(qty)
-            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+            # Short position: P&L = (avg - settlement) * abs(qty) * contract_value
+            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity))) * cv
 
         # Get accumulated realized P&L from position
         accumulated_realized = Decimal(str(position.accumulated_realized_pnl or 0))
@@ -1042,7 +1044,6 @@ class PositionManager:
             import os
             from datetime import date, datetime
 
-            from database import db
             from database.sandbox_db import SandboxHoldings
 
             # Get session expiry time from config
@@ -1068,7 +1069,7 @@ class PositionManager:
                     # Update position to closed
                     position.quantity = 0
                     position.pnl = float(position.realized_pnl)
-                    db.session.commit()
+                    db_session.commit()
 
                     logger.info(f"Auto squared-off MIS position: {position.symbol} qty: {quantity}")
 
@@ -1098,12 +1099,12 @@ class PositionManager:
                             average_price=position.average_price,
                             settlement_date=date.today(),
                         )
-                        db.session.add(holdings)
+                        db_session.add(holdings)
 
                     # Clear the CNC position
                     position.quantity = 0
                     position.pnl = float(position.realized_pnl)
-                    db.session.commit()
+                    db_session.commit()
 
                     logger.debug(
                         f"Moved CNC position to holdings: {position.symbol} qty: {position.quantity}"
@@ -1119,7 +1120,7 @@ class PositionManager:
 
         except Exception as e:
             logger.exception(f"Error in EOD settlement: {e}")
-            db.session.rollback()
+            db_session.rollback()
             return (
                 False,
                 {
@@ -1291,11 +1292,13 @@ def cleanup_expired_contracts():
                                 settlement_price = avg_price
                             logger.info(f"Future {symbol} expired - settling at {settlement_price}")
 
-                        # Calculate realized P&L
+                        # Calculate realized P&L (apply contract_value for crypto perpetuals)
+                        _sym_info = get_symbol_info(symbol, position.exchange)
+                        cv = Decimal(str(_sym_info.contract_value)) if _sym_info and _sym_info.contract_value else Decimal("1")
                         if quantity > 0:
-                            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+                            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * cv
                         else:
-                            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+                            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity))) * cv
 
                         accumulated_realized = Decimal(str(position.accumulated_realized_pnl or 0))
                         total_realized_pnl = accumulated_realized + close_pnl
@@ -1326,7 +1329,8 @@ def cleanup_expired_contracts():
                         # This hides expired contracts from current session
                         from sqlalchemy import text
 
-                        hide_date = datetime.combine(expiry_date, datetime.min.time())
+                        pos_expiry = get_contract_expiry(symbol, position.exchange)
+                        hide_date = datetime.combine(pos_expiry, datetime.min.time()) if pos_expiry else datetime.now(pytz.timezone('Asia/Kolkata'))
                         db_session.execute(
                             text(
                                 "UPDATE sandbox_positions SET updated_at = :hide_date WHERE id = :pos_id"

@@ -110,13 +110,13 @@ def enhanced_search_symbols(query: str, exchange: str = None) -> list[SymToken]:
 
 
 def fno_search_symbols_db(
-    query: str = None,
-    exchange: str = None,
-    expiry: str = None,
-    instrumenttype: str = None,  # "FUT", "CE", or "PE"
-    strike_min: float = None,
-    strike_max: float = None,
-    underlying: str = None,
+    query: str | None = None,
+    exchange: str | None = None,
+    expiry: str | None = None,
+    instrumenttype: str | None = None,  # "FUT", "CE", or "PE"
+    strike_min: float | None = None,
+    strike_max: float | None = None,
+    underlying: str | None = None,
     limit: int = 500,
 ) -> list[dict]:
     """
@@ -262,7 +262,7 @@ def fno_search_symbols_db(
         return []
 
 
-def get_distinct_expiries(exchange: str = None, underlying: str = None) -> list[str]:
+def get_distinct_expiries(exchange: str | None = None, underlying: str | None = None) -> list[str]:
     """
     Get distinct expiry dates for FNO symbols.
 
@@ -311,7 +311,7 @@ def get_distinct_expiries(exchange: str = None, underlying: str = None) -> list[
         return []
 
 
-def get_distinct_underlyings(exchange: str = None) -> list[str]:
+def get_distinct_underlyings(exchange: str | None = None) -> list[str]:
     """
     Get distinct underlying names for FNO symbols.
 
