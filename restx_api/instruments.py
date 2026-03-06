@@ -1,4 +1,3 @@
-import os
 
 from flask import Response, jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -9,6 +8,7 @@ from services.instruments_service import get_instruments
 from utils.logging import get_logger
 
 from .data_schemas import InstrumentsSchema
+from restx_api.config import API_RATE_LIMIT
 
 
 class CSVResponse(Response):
@@ -23,7 +23,6 @@ class CSVResponse(Response):
         self._json = value
 
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("instruments", description="Instruments/Symbols download API")
 
 # Initialize logger

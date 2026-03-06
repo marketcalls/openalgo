@@ -1,4 +1,3 @@
-import os
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -10,11 +9,11 @@ from services.option_greeks_service import get_multi_option_greeks
 from utils.logging import get_logger
 
 from .data_schemas import MultiOptionGreeksSchema
+from restx_api.config import API_RATE_LIMIT
 
 logger = get_logger(__name__)
 
 # Rate limit for multi option greeks API (same as multiquotes)
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 api = Namespace("multioptiongreeks", description="Batch Option Greeks API")
 

@@ -31,7 +31,6 @@ Response (Error):
 }
 """
 
-import os
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -41,6 +40,7 @@ from limiter import limiter
 from restx_api.schemas import SyntheticFutureSchema
 from services.synthetic_future_service import calculate_synthetic_future
 from utils.logging import get_logger
+from restx_api.config import API_RATE_LIMIT
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -49,7 +49,6 @@ logger = get_logger(__name__)
 api = Namespace("syntheticfuture", description="Calculate Synthetic Future Price")
 
 # Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
 @api.route("/", strict_slashes=False)
