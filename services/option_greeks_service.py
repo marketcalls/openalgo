@@ -66,19 +66,39 @@ def _black76_iv(
     price: float, F: float, K: float, r: float, T: float, flag: str
 ) -> float:
     """Implied volatility via Brent's method.  Same arg order as py_vollib.
-    
-    Raises ValueError with 'convergence' keyword on failure to match 
-    py_vollib error handling expectations.
+
+    Raises ValueError whose message lets the caller distinguish:
+      - 'below intrinsic'  → price is below theoretical minimum (deep ITM)
+      - 'exceeds theoretical maximum' → price above max Black-76 value (bad data)
+      - 'convergence' → generic iteration / other failure
     """
+    def _obj(sigma: float) -> float:
+        return _black76_price(F, K, T, r, sigma, flag) - price
+
     try:
-        def _obj(sigma: float) -> float:
-            return _black76_price(F, K, T, r, sigma, flag) - price
         # brentq returns scalar root when full_output=False (default)
         root: float = brentq(_obj, 1e-6, 50.0, xtol=1e-12, maxiter=200)  # type: ignore
         return float(root)
     except (ValueError, RuntimeError) as e:
-        # Normalize scipy errors to match py_vollib error handling patterns
-        # Original error: "f(a) and f(b) must have different signs" or maxiter
+        # Diagnose *why* brentq failed so the caller can react appropriately.
+        try:
+            low_residual = _obj(1e-6)
+            high_residual = _obj(50.0)
+        except Exception:
+            # Pricing itself blew up (e.g. log of negative) — generic error
+            raise ValueError(f"IV convergence failed: {e}") from e
+
+        if low_residual > 0 and high_residual > 0:
+            # Theoretical price > market price at all vols → price below intrinsic
+            raise ValueError(
+                "Option price is below intrinsic value — IV not calculable"
+            ) from e
+        if low_residual < 0 and high_residual < 0:
+            # Theoretical price < market price at all vols → impossibly high price
+            raise ValueError(
+                "Option price exceeds theoretical maximum — IV not calculable"
+            ) from e
+        # Mixed signs but brentq still failed (maxiter, tolerance, etc.)
         raise ValueError(f"IV convergence failed: {e}") from e
 
 
@@ -491,8 +511,6 @@ def calculate_greeks(
                 "intrinsic" in error_msg.lower()
                 or "below" in error_msg.lower()
                 or "convergence" in error_msg.lower()
-                or "bracket" in error_msg.lower()
-                or "different signs" in error_msg.lower()
             ):
                 logger.info(
                     "IV calculation failed - returning theoretical Greeks for deep ITM option"
