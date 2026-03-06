@@ -21,6 +21,18 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
+    """
+    Make an API request to the Dhan broker.
+
+    Args:
+        endpoint (str): The specific API endpoint to call.
+        auth (str): The access token for authentication.
+        method (str, optional): HTTP method to use ('GET', 'POST', etc.). Defaults to "GET".
+        payload (dict or str, optional): The JSON payload for the request. Defaults to "".
+
+    Returns:
+        tuple: A namedtuple with 'status' (HTTP status code) and 'text' (response text).
+    """
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
 
@@ -78,22 +90,70 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
 
 def get_order_book(auth):
+    """
+    Retrieve the current day's order book.
+
+    Args:
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: A namedtuple representing the HTTP response, and the response text/JSON.
+    """
     return get_api_response("/v2/orders", auth)
 
 
 def get_trade_book(auth):
+    """
+    Retrieve the trading book (list of executed trades).
+
+    Args:
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: A namedtuple representing the HTTP response, and the response text/JSON.
+    """
     return get_api_response("/v2/trades", auth)
 
 
 def get_positions(auth):
+    """
+    Retrieve the current open positions.
+
+    Args:
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: A namedtuple representing the HTTP response, and the response text/JSON.
+    """
     return get_api_response("/v2/positions", auth)
 
 
 def get_holdings(auth):
+    """
+    Retrieve the current holdings (long-term portfolio).
+
+    Args:
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: A namedtuple representing the HTTP response, and the response text/JSON.
+    """
     return get_api_response("/v2/holdings", auth)
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
+    """
+    Find an open position for a specific symbol, exchange, and product.
+
+    Args:
+        tradingsymbol (str): The trading symbol to search for.
+        exchange (str): The exchange the symbol trades on.
+        product (str): The product type (e.g., MIS, NRML, CNC).
+        auth (str): The user's access token.
+
+    Returns:
+        dict or None: The matching position dictionary, or None if not found.
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
@@ -125,6 +185,16 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
 
 def place_order_api(data, auth):
+    """
+    Place a new regular order on Dhan.
+
+    Args:
+        data (dict): Standard openalgo order data dictionary containing order details.
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: HTTP Response object, deserialized response dictionary, and the order ID if successful.
+    """
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
 
@@ -191,6 +261,18 @@ def place_order_api(data, auth):
 
 
 def place_smartorder_api(data, auth):
+    """
+    Place a smart order, altering the side to close an existing open position first.
+
+    If a position exists opposite to the requested action, it reverses the side.
+
+    Args:
+        data (dict): Standard openalgo order data dictionary containing order details.
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: HTTP Response object, deserialized response dictionary, and the order ID if successful.
+    """
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     # If no API call is made in this function then res will return None
@@ -266,6 +348,18 @@ def place_smartorder_api(data, auth):
 
 
 def close_all_positions(current_api_key, auth):
+    """
+    Close out all open and active positions for this user.
+
+    Fetches open positions and generates reverse orders for each non-zero position.
+
+    Args:
+        current_api_key (str): The mapped OpenAlgo API Key associated with the user.
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: Always returns (None, None).
+    """
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
@@ -318,6 +412,16 @@ def close_all_positions(current_api_key, auth):
 
 
 def cancel_order(orderid, auth):
+    """
+    Cancel an existing open order.
+
+    Args:
+        orderid (str): The specific broker internal order ID to cancel.
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: A namedtuple representing the HTTP response, and the response text/JSON.
+    """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
 
@@ -356,6 +460,16 @@ def cancel_order(orderid, auth):
 
 
 def modify_order(data, auth):
+    """
+    Modify an existing open order's parameters (like price or quantity).
+
+    Args:
+        data (dict): The dictionary containing modification details, including order ID.
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: HTTP Response object, deserialized response dictionary, and the order ID if successful.
+    """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
@@ -403,6 +517,16 @@ def modify_order(data, auth):
 
 
 def cancel_all_orders_api(data, auth):
+    """
+    Cancel all open/pending orders for the user.
+
+    Args:
+        data (dict): Ignored parameter; left for interface consistency.
+        auth (str): The user's access token.
+
+    Returns:
+        tuple: Always returns (None, None).
+    """
     # Get the order book
     AUTH_TOKEN = auth
     order_book_response = get_order_book(AUTH_TOKEN)
