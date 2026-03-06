@@ -77,6 +77,7 @@ const PythonStrategyLogs = lazy(() => import('@/pages/python-strategy/PythonStra
 const SchedulePythonStrategy = lazy(() => import('@/pages/python-strategy/SchedulePythonStrategy'))
 const PythonStrategyGuide = lazy(() => import('@/pages/python-strategy/PythonStrategyGuide'))
 const StrategyPositions = lazy(() => import('@/pages/StrategyPositions'))
+const StrategyDashboard = lazy(() => import('@/pages/StrategyDashboard'))
 
 // Chartink pages
 const ChartinkIndex = lazy(() => import('@/pages/chartink/ChartinkIndex'))
@@ -181,6 +182,7 @@ function App() {
                 <Route path="/python/:strategyId/schedule" element={<SchedulePythonStrategy />} />
                 <Route path="/python/guide" element={<PythonStrategyGuide />} />
                 <Route path="/strategy-positions" element={<StrategyPositions />} />
+                <Route path="/strategy-dashboard" element={<StrategyDashboard />} />
                 {/* Phase 6: Chartink Strategies */}
                 <Route path="/chartink" element={<ChartinkIndex />} />
                 <Route path="/chartink/new" element={<NewChartinkStrategy />} />
