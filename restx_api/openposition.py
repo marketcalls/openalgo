@@ -12,7 +12,7 @@ from limiter import limiter
 from restx_api.account_schema import OpenPositionSchema
 from services.openposition_service import emit_analyzer_error, get_open_position
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("openposition", description="Open Position API")
 
