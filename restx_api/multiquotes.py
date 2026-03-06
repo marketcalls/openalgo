@@ -9,8 +9,8 @@ from services.quotes_service import get_multiquotes
 from utils.logging import get_logger
 
 from .data_schemas import MultiQuotesSchema
+from config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("multiquotes", description="Real-time Multiple Quotes API")
 
 # Initialize logger

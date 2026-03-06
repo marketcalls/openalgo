@@ -11,8 +11,8 @@ from limiter import limiter
 from restx_api.schemas import ClosePositionSchema
 from services.close_position_service import close_position, emit_analyzer_error
 from utils.logging import get_logger
+from config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("close_position", description="Close Position API")
 
 # Initialize logger

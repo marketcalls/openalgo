@@ -68,6 +68,8 @@ from limiter import limiter
 from services.option_chain_service import get_option_chain
 from utils.logging import get_logger
 
+# Get rate limit from environment
+from config import API_RATE_LIMIT
 from .data_schemas import OptionChainSchema
 
 # Initialize logger
@@ -76,8 +78,7 @@ logger = get_logger(__name__)
 # Create namespace
 api = Namespace("optionchain", description="Get Option Chain with Real-time Quotes")
 
-# Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+
 
 
 @api.route("/", strict_slashes=False)

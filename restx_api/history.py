@@ -10,8 +10,8 @@ from services.history_service import get_history
 from utils.logging import get_logger
 
 from .data_schemas import HistorySchema
+from config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("history", description="Historical Data API")
 
 # Initialize logger
