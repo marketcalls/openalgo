@@ -49,11 +49,13 @@ docker-run.bat status     # Check status
 
 ## Data Persistence
 
-All data is stored locally in the script directory:
-- `db/` - SQLite databases
-- `strategies/` - Python strategy scripts
-- `log/` - Application and strategy logs
-- `.env` - Configuration file
+All data is stored locally in the script directory using host volume mappings configured in `docker-compose.yaml`:
+- `./db:/app/db` - SQLite databases
+- `./strategies:/app/strategies` - Python strategy scripts
+- `./log:/app/log` - Application and strategy logs
+- `./keys:/app/keys` - API keys and certificates
+- `./tmp:/app/tmp` - Temporary directory for numba/scipy cache
+- `./.env:/app/.env:ro` - Configuration file (read-only mapping)
 
 ## Documentation
 
