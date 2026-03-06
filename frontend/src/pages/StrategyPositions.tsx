@@ -3,7 +3,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDot,
-  ExternalLink,
   RefreshCw,
   Trash2,
   TrendingDown,
@@ -2053,7 +2052,7 @@ export default function StrategyPositions() {
                 <Button variant="outline" size="sm" className="gap-1.5">
                   <BarChart2 className="h-4 w-4" />
                   Eagle Eye
-                  <ExternalLink className="h-3 w-3 opacity-60" />
+                  <ChevronRight className="h-3 w-3 opacity-60" />
                 </Button>
               </Link>
               {strategies.length > 0 && (

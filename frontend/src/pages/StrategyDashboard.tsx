@@ -94,11 +94,8 @@ function formatTime(iso: string | null | undefined, timeOnly = false): string {
 function formatSmartTime(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)
-  const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
-  const todayStart = new Date(nowIST.getFullYear(), nowIST.getMonth(), nowIST.getDate())
-  const entryIST = new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
-  const entryStart = new Date(entryIST.getFullYear(), entryIST.getMonth(), entryIST.getDate())
-  const isToday = todayStart.getTime() === entryStart.getTime()
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' })
+  const isToday = formatter.format(d) === formatter.format(new Date())
   if (isToday) {
     return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
   }
@@ -234,10 +231,14 @@ function computeMetrics(s: StrategyState): StrategyMetrics {
 
   // Max Drawdown: largest peak-to-trough drop in cumulative closed-trade P&L
   let maxDrawdown = 0
-  if (history.length >= 1) {
+  const sortedClosedTrades = history
+    .filter(t => t.exit_price !== null)
+    .sort((a, b) => (a.exit_time ?? '').localeCompare(b.exit_time ?? ''))
+
+  if (sortedClosedTrades.length >= 1) {
     let peak = 0
     let cumPnL = 0
-    for (const t of history) {
+    for (const t of sortedClosedTrades) {
       cumPnL += t.pnl ?? 0
       if (cumPnL > peak) peak = cumPnL
       const dd = peak - cumPnL
@@ -315,18 +316,19 @@ function useSortable<T>(items: T[]) {
   const [sortDir, setSortDir] = useState<SortDir>(null)
 
   const toggle = (key: keyof T) => {
-    setSortKey(prev => {
-      if (prev === key) {
-        setSortDir(d => {
-          if (d === 'asc') return 'desc'
-          if (d === 'desc') { setSortKey(null); return null }
-          return 'asc'
-        })
-        return prev
+    if (sortKey === key) {
+      if (sortDir === 'asc') {
+        setSortDir('desc')
+      } else if (sortDir === 'desc') {
+        setSortKey(null)
+        setSortDir(null)
+      } else {
+        setSortDir('asc')
       }
+    } else {
+      setSortKey(key)
       setSortDir('asc')
-      return key
-    })
+    }
   }
 
   const sorted = useMemo(() => {
@@ -475,14 +477,19 @@ function HealthDot({ health }: { health: Health }) {
  * Open positions are NOT included — a strategy can have 100% win rate
  * on closed trades while still having negative unrealized P&L on open legs.
  */
+function getWinRateColor(pct: number): { text: string; bg: string } {
+  if (pct >= 60) return { text: 'text-emerald-500', bg: 'bg-emerald-500' }
+  if (pct >= 40) return { text: 'text-yellow-500', bg: 'bg-yellow-400' }
+  return { text: 'text-red-500', bg: 'bg-red-500' }
+}
+
 function WinRateBar({ rate, closedCount }: { rate: number | null; closedCount: number }) {
   if (rate === null || closedCount === 0) {
     return <span className="text-muted-foreground text-sm">— <span className="text-[10px]">(no closed trades)</span></span>
   }
   const pct = Math.round(rate)
   const winCount = Math.round((rate / 100) * closedCount)
-  const color = pct >= 60 ? 'bg-emerald-500' : pct >= 40 ? 'bg-yellow-400' : 'bg-red-500'
-  const textColor = pct >= 60 ? 'text-emerald-500' : pct >= 40 ? 'text-yellow-500' : 'text-red-500'
+  const { text: textColor, bg: color } = getWinRateColor(pct)
   return (
     <span
       className="inline-flex items-center gap-1.5"
@@ -696,8 +703,8 @@ export default function StrategyDashboard() {
   const { sorted: sortedTrades, sortKey: tKey, sortDir: tDir, toggle: tToggle } = useSortable(closedTradeRows)
 
   // Reset pages when filter changes
-  useEffect(() => { setLegsPage(0) }, [selectedInstanceId, openLegRows.length])
-  useEffect(() => { setTradesPage(0) }, [selectedInstanceId, closedTradeRows.length])
+  useEffect(() => { setLegsPage(0) }, [selectedInstanceId, openLegRows])
+  useEffect(() => { setTradesPage(0) }, [selectedInstanceId, closedTradeRows])
 
   const pagedLegs = useMemo(
     () => sortedLegs.slice(legsPage * PAGE_SIZE, (legsPage + 1) * PAGE_SIZE),
@@ -824,9 +831,7 @@ export default function StrategyDashboard() {
           icon={Target}
           valueColor={
             portfolio.portfolioWinRate !== null
-              ? portfolio.portfolioWinRate >= 60 ? 'text-emerald-500'
-              : portfolio.portfolioWinRate >= 40 ? 'text-yellow-500'
-              : 'text-red-500'
+              ? getWinRateColor(Math.round(portfolio.portfolioWinRate)).text
               : ''
           }
         />
