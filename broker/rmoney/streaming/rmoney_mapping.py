@@ -1,12 +1,12 @@
 import logging
 
 
-class FivepaisaXTSExchangeMapper:
-    """Maps between OpenAlgo exchange codes and Fivepaisa XTS specific exchange types"""
+class RMoneyExchangeMapper:
+    """Maps between OpenAlgo exchange codes and RMoney XTS specific exchange types"""
 
-    # Exchange type mapping for Fivepaisa XTS broker
-    # Format: {OpenAlgo_Exchange: Fivepaisa_Exchange_Code}
-    # Based on Fivepaisa API documentation:
+    # Exchange type mapping for RMoney XTS broker
+    # Format: {OpenAlgo_Exchange: RMoney_Exchange_Code}
+    # Based on XTS API documentation:
     # "NSECM": 1, "NSEFO": 2, "NSECD": 3, "BSECM": 11, "BSEFO": 12, "MCXFO": 51
     EXCHANGE_TYPES = {
         # NSE Segments
@@ -29,8 +29,8 @@ class FivepaisaXTSExchangeMapper:
         "MCXFO": 51,  # MCX F&O
     }
 
-    # Reverse mapping for converting Fivepaisa exchange codes to OpenAlgo format
-    # Format: {Fivepaisa_Exchange_Code: OpenAlgo_Exchange}
+    # Reverse mapping for converting RMoney exchange codes to OpenAlgo format
+    # Format: {RMoney_Exchange_Code: OpenAlgo_Exchange}
     REVERSE_EXCHANGE_TYPES = {
         1: "NSE",  # NSECM
         2: "NFO",  # NSEFO
@@ -43,13 +43,13 @@ class FivepaisaXTSExchangeMapper:
     @staticmethod
     def get_exchange_type(exchange):
         """
-        Convert OpenAlgo exchange code to Fivepaisa XTS specific exchange type
+        Convert OpenAlgo exchange code to RMoney XTS specific exchange type
 
         Args:
             exchange: Exchange code (e.g., 'NSE', 'BSE', 'NSEFO')
 
         Returns:
-            int: Exchange type code for Fivepaisa XTS API
+            int: Exchange type code for RMoney XTS API
         """
         if exchange is None:
             logging.warning("Exchange is None, defaulting to NSE (1)")
@@ -59,7 +59,7 @@ class FivepaisaXTSExchangeMapper:
         exchange = str(exchange).upper().strip()
 
         # Comprehensive mapping including all possible exchange codes
-        # Mapping based on Fivepaisa API documentation:
+        # Mapping based on XTS API documentation:
         # "NSECM": 1, "NSEFO": 2, "NSECD": 3, "BSECM": 11, "BSEFO": 12, "MCXFO": 51
         all_exchange_mappings = {
             # OpenAlgo standard codes
@@ -92,7 +92,7 @@ class FivepaisaXTSExchangeMapper:
         exchange_code = all_exchange_mappings.get(exchange)
 
         if exchange_code is not None:
-            logging.info(f"Mapped exchange '{exchange}' to code {exchange_code}")
+            logging.debug(f"Mapped exchange '{exchange}' to code {exchange_code}")
             return exchange_code
 
         # If we get here, log a warning and default to NSE
@@ -100,28 +100,28 @@ class FivepaisaXTSExchangeMapper:
         return 1
 
     @staticmethod
-    def get_openalgo_exchange(fivepaisaxts_code):
+    def get_openalgo_exchange(rmoney_code):
         """
-        Convert Fivepaisa XTS exchange code to OpenAlgo exchange code
+        Convert RMoney XTS exchange code to OpenAlgo exchange code
 
         Args:
-            fivepaisaxts_code (int): Fivepaisa exchange code
+            rmoney_code (int): RMoney exchange code
 
         Returns:
             str: OpenAlgo exchange code
         """
-        return FivepaisaXTSExchangeMapper.REVERSE_EXCHANGE_TYPES.get(
-            fivepaisaxts_code, "NSE"
+        return RMoneyExchangeMapper.REVERSE_EXCHANGE_TYPES.get(
+            rmoney_code, "NSE"
         )  # Default to NSE if not found
 
 
-class FivepaisaXTSCapabilityRegistry:
+class RMoneyCapabilityRegistry:
     """
-    Registry of Fivepaisa XTS broker's capabilities including supported exchanges,
+    Registry of RMoney XTS broker's capabilities including supported exchanges,
     subscription modes, and market depth levels
     """
 
-    # Fivepaisa XTS broker capabilities
+    # RMoney XTS broker capabilities
     exchanges = ["NSE", "NFO", "CDS", "BSE", "BFO", "MCX"]
     subscription_modes = [1, 2, 3]  # 1: LTP, 2: Quote, 3: Depth
     depth_support = {
@@ -179,3 +179,8 @@ class FivepaisaXTSCapabilityRegistry:
         if fallbacks:
             return max(fallbacks)
         return 5  # Default to basic depth
+
+
+# Backwards compatibility aliases
+FivepaisaXTSExchangeMapper = RMoneyExchangeMapper
+FivepaisaXTSCapabilityRegistry = RMoneyCapabilityRegistry
