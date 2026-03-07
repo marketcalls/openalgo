@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { onModeChange } from '@/stores/themeStore'
+import { ErrorBoundary } from '@/components/error-boundary/ErrorBoundary'
 
 interface MarginData {
   availablecash: string
@@ -270,6 +271,7 @@ export default function Dashboard() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="space-y-6 md:space-y-12">
       {/* Dashboard Header */}
       <div className="flex flex-col lg:flex-row lg:items-start gap-4">
@@ -470,5 +472,6 @@ export default function Dashboard() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   )
 }
