@@ -1036,18 +1036,13 @@ class FyersHSMWebSocket:
                 finally:
                     self.ws = None
 
-            # Wait for WebSocket thread to finish
-            if self.ws_thread and self.ws_thread.is_alive():
-                try:
-                    self.ws_thread.join(timeout=5)
-                    if self.ws_thread.is_alive():
-                        self.logger.warning("WebSocket thread did not terminate within 5 seconds")
-                    else:
-                        self.logger.debug("WebSocket thread terminated successfully")
-                except Exception as e:
-                    self.logger.error(f"Error waiting for WebSocket thread: {e}")
-                finally:
-                    self.ws_thread = None
+            # WebSocket thread is daemon=True and will be collected automatically.
+            # Do NOT call ws_thread.join() here: when OpenAlgo runs under eventlet
+            # (gunicorn --worker-class eventlet), this greenlet IS the main loop and
+            # join() raises AssertionError('Cannot switch to MAINLOOP from MAINLOOP'),
+            # leaving the thread object alive and leaking ~30-40 MB per disconnect cycle.
+            # Simply release the reference - the OS reclaims resources on process exit.
+            self.ws_thread = None
 
             # Reset connection parameters
             self.hsm_key = None
