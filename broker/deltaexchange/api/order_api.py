@@ -85,8 +85,11 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
                 response = client.request(m, url, headers=headers, content=body)
         except (OSError, ConnectionError, httpx.TransportError) as e:
             # Transient socket / connection errors (e.g. WinError 10035,
-            # ConnectionResetError, httpx pool timeouts).  Retry with backoff.
-            if _attempt < _MAX_RETRIES:
+            # ConnectionResetError, httpx pool timeouts).
+            # ONLY retry GET requests (idempotent). For POST/PUT/DELETE (mutating
+            # operations), a retry after transport error could duplicate the side
+            # effect if the first request succeeded but the response was lost.
+            if method.upper() == "GET" and _attempt < _MAX_RETRIES:
                 wait = (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
                 logger.warning(
                     f"[DeltaExchange] Transient error on {endpoint} "
@@ -104,7 +107,8 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
                     api_secret=api_secret,
                 )
                 continue
-            logger.error(f"[DeltaExchange] Request error after {_MAX_RETRIES} retries: {e}")
+            # For non-GET or retries exhausted, fail immediately
+            logger.error(f"[DeltaExchange] Request error on {method.upper()} {endpoint}: {e}")
             return {"success": False, "error": {"code": "request_error", "message": str(e)}}
         except Exception as e:
             logger.error(f"[DeltaExchange] Request error: {e}")
