@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: openalgo
+  namespace: openalgo
+  labels:
+    app: openalgo
+spec:
+  type: ClusterIP
+  selector:
+    app: openalgo
+  ports:
+  - name: http
+    port: 5000
+    targetPort: 5000
+    protocol: TCP
+  - name: websocket
+    port: 8765
+    targetPort: 8765
+    protocol: TCP
+  sessionAffinity: ClientIP  # Important for WebSocket connections
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
