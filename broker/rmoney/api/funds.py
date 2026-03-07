@@ -26,7 +26,16 @@ def get_margin_data(auth_token):
         and margin_data["result"].get("BalanceList")
         and margin_data["result"]["BalanceList"]
     ):
-        rms_sublimits = margin_data["result"]["BalanceList"][0]["limitObject"]["RMSSubLimits"]
+        # Use the ALL|ALL|ALL balance entry which has the consolidated account balances.
+        # The CASH|NSE|MTF entry (index 0) typically has zeros.
+        balance_list = margin_data["result"]["BalanceList"]
+        balance_entry = balance_list[0]  # default fallback
+        for entry in balance_list:
+            if entry.get("limitHeader") == "ALL|ALL|ALL":
+                balance_entry = entry
+                break
+
+        rms_sublimits = balance_entry["limitObject"]["RMSSubLimits"]
 
         required_keys = [
             "netMarginAvailable",
