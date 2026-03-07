@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -61,8 +62,7 @@ class CancelOrder(Resource):
             return make_response(jsonify(error_response), 400)
 
         except Exception:
-            logger.error("An unexpected error occurred in CancelOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in CancelOrder endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)

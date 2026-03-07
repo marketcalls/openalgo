@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -12,7 +13,7 @@ from restx_api.account_schema import AnalyzerSchema, AnalyzerToggleSchema
 from services.analyzer_service import get_analyzer_status, toggle_analyzer_mode
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("analyzer", description="Analyzer Mode API")
 
 # Initialize logger

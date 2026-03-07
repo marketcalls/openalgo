@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -11,7 +12,7 @@ from utils.logging import get_logger
 
 from .account_schema import ChartSchema
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("chart", description="Chart Preferences and Cloud Workspace Sync")
 
 # Initialize logger
@@ -48,7 +49,6 @@ class ChartPreferencesResource(Resource):
 
         except Exception as e:
             logger.error(f"Unexpected error in chart GET endpoint: {e}")
-            traceback.print_exc()
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )
@@ -90,7 +90,6 @@ class ChartPreferencesResource(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.error(f"Unexpected error in chart POST endpoint: {e}")
-            traceback.print_exc()
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )

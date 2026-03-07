@@ -1,4 +1,5 @@
 import copy
+from utils.config import get_api_rate_limit
 import os
 import traceback
 
@@ -14,7 +15,7 @@ from restx_api.schemas import BasketOrderSchema
 from services.basket_order_service import emit_analyzer_error, place_basket_order
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("basket_order", description="Basket Order API")
 
 # Initialize logger
@@ -54,8 +55,7 @@ class BasketOrder(Resource):
             return make_response(jsonify(response_data), status_code)
 
         except Exception:
-            logger.error("An unexpected error occurred in BasketOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in BasketOrder endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)

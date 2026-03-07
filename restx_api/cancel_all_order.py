@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -12,7 +13,7 @@ from restx_api.schemas import CancelAllOrderSchema
 from services.cancel_all_order_service import cancel_all_orders, emit_analyzer_error
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("cancel_all_order", description="Cancel All Orders API")
 
 # Initialize logger
@@ -62,8 +63,7 @@ class CancelAllOrder(Resource):
             return make_response(jsonify(error_response), 400)
 
         except Exception:
-            logger.error("An unexpected error occurred in CancelAllOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in CancelAllOrder endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)

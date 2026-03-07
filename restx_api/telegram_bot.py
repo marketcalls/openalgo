@@ -1,4 +1,5 @@
 import asyncio
+from utils.config import get_api_rate_limit
 import os
 from concurrent.futures import ThreadPoolExecutor
 

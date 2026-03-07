@@ -1,4 +1,5 @@
 from marshmallow import Schema, fields, validate
+from utils.config import get_api_rate_limit
 
 from utils.constants import VALID_EXCHANGES
 

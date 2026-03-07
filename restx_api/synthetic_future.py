@@ -1,4 +1,5 @@
 """
+from utils.config import get_api_rate_limit
 Synthetic Future API Endpoint
 
 POST /api/v1/syntheticfuture
@@ -49,7 +50,7 @@ logger = get_logger(__name__)
 api = Namespace("syntheticfuture", description="Calculate Synthetic Future Price")
 
 # Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 
 
 @api.route("/", strict_slashes=False)

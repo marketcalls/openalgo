@@ -270,6 +270,9 @@ def create_app():
     # CSRF configuration from environment variables
     csrf_enabled = os.getenv("CSRF_ENABLED", "TRUE").upper() == "TRUE"
     app.config["WTF_CSRF_ENABLED"] = csrf_enabled
+    
+    if not csrf_enabled:
+        logger.warning("CSRF protection is DISABLED. This is not recommended for production.")
 
     # Configure CSRF cookie security to match session cookie
     csrf_cookie_name = os.getenv("CSRF_COOKIE_NAME", "csrf_token")
@@ -288,9 +291,15 @@ def create_app():
     csrf_time_limit = os.getenv("CSRF_TIME_LIMIT", "").strip()
     if csrf_time_limit:
         try:
-            app.config["WTF_CSRF_TIME_LIMIT"] = int(csrf_time_limit)
+            limit = int(csrf_time_limit)
+            if limit < 300:
+                logger.warning(f"CSRF_TIME_LIMIT={limit}s is very short. Minimum recommended: 300s")
+            elif limit > 86400:
+                logger.warning(f"CSRF_TIME_LIMIT={limit}s is very long. Maximum recommended: 86400s")
+            app.config["WTF_CSRF_TIME_LIMIT"] = limit
         except ValueError:
-            app.config["WTF_CSRF_TIME_LIMIT"] = None  # Default to no limit if invalid
+            logger.warning(f"Invalid CSRF_TIME_LIMIT: {csrf_time_limit}. Using default.")
+            app.config["WTF_CSRF_TIME_LIMIT"] = None
     else:
         app.config["WTF_CSRF_TIME_LIMIT"] = None  # No time limit if empty
 

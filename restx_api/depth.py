@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -11,7 +12,7 @@ from utils.logging import get_logger
 
 from .data_schemas import DepthSchema
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("depth", description="Market Depth API")
 
 # Initialize logger
@@ -45,7 +46,6 @@ class Depth(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.error(f"Unexpected error in depth endpoint: {e}")
-            traceback.print_exc()
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )

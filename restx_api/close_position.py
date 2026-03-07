@@ -1,4 +1,5 @@
 import os
+from utils.config import get_api_rate_limit
 import traceback
 
 from flask import jsonify, make_response, request
@@ -12,7 +13,7 @@ from restx_api.schemas import ClosePositionSchema
 from services.close_position_service import close_position, emit_analyzer_error
 from utils.logging import get_logger
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+API_RATE_LIMIT = get_api_rate_limit()
 api = Namespace("close_position", description="Close Position API")
 
 # Initialize logger
@@ -62,8 +63,7 @@ class ClosePosition(Resource):
             return make_response(jsonify(error_response), 400)
 
         except Exception:
-            logger.error("An unexpected error occurred in ClosePosition endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in ClosePosition endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)
