@@ -15,7 +15,15 @@ logger = get_logger(__name__)
 
 
 def test_auth_token(auth_token):
-    """Test if the auth token is valid by making a simple API call to funds endpoint."""
+    """
+    Test if the auth token is valid by making a simple API call to funds endpoint.
+
+    Args:
+        auth_token (str): The specific access token to test.
+
+    Returns:
+        tuple: A boolean indicating success/validity, and an error message (str) if any.
+    """
     api_key = os.getenv("BROKER_API_KEY")
 
     # Get the shared httpx client with connection pooling
@@ -52,7 +60,19 @@ def test_auth_token(auth_token):
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Dhan API using the provided auth token."""
+    """
+    Fetch margin and fund data from Dhan API using the provided auth token.
+
+    Also incorporates realized and unrealized M2M profits by fetching open positions.
+
+    Args:
+        auth_token (str): The valid access token for the Dhan API.
+
+    Returns:
+        dict: Processed margin data containing available cash, collateral, m2munrealized, 
+              m2mrealized, and utiliseddebits. Or an empty dictionary/default zeroed dictionary 
+              upon failure.
+    """
     api_key = os.getenv("BROKER_API_KEY")
 
     # Get the shared httpx client with connection pooling

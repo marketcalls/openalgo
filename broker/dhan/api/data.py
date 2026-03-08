@@ -24,7 +24,12 @@ DHAN_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
 
 
 def _apply_rate_limit():
-    """Apply rate limiting to avoid Dhan API error 805 (too many requests)"""
+    """
+    Apply rate limiting to avoid Dhan API error 805 (too many requests).
+
+    Ensures that consecutive API calls have at least a `DHAN_MIN_REQUEST_INTERVAL`
+    time gap between them using a threading lock.
+    """
     global _last_api_call_time
     sleep_time = 0
 
@@ -43,7 +48,19 @@ def _apply_rate_limit():
 
 
 def get_api_response(endpoint, auth, method="POST", payload="", retry_count=0):
-    """Make API request to Dhan with rate limiting and retry logic"""
+    """
+    Make an API request to Dhan with rate limiting and retry logic.
+
+    Args:
+        endpoint (str): The specific API endpoint to call.
+        auth (str): The authorization token.
+        method (str, optional): HTTP method ('GET' or 'POST'). Defaults to "POST".
+        payload (str or dict, optional): The JSON payload. Defaults to "".
+        retry_count (int, optional): Internal parameter to track retries. Defaults to 0.
+
+    Returns:
+        tuple: A namedtuple with 'status' (HTTP status code) and 'text' (response text).
+    """
     MAX_RETRIES = 3
     RETRY_DELAY = 2.0  # Base delay for exponential backoff
 
@@ -131,7 +148,12 @@ def get_api_response(endpoint, auth, method="POST", payload="", retry_count=0):
 
 class BrokerData:
     def __init__(self, auth_token):
-        """Initialize Dhan data handler with authentication token"""
+        """
+        Initialize the Dhan data handler with an authentication token.
+
+        Args:
+            auth_token (str): The valid access token for the Dhan API.
+        """
         self.auth_token = auth_token
         # Map common timeframe format to Dhan resolutions
         self.timeframe_map = {
@@ -146,7 +168,16 @@ class BrokerData:
         }
 
     def _convert_to_dhan_request(self, symbol, exchange):
-        """Convert symbol and exchange to Dhan format"""
+        """
+        Convert symbol and exchange to Dhan format.
+
+        Args:
+            symbol (str): The OpenAlgo standard symbol.
+            exchange (str): The standard exchange (e.g., 'NSE_INDEX', 'NFO').
+
+        Returns:
+            tuple: The Dhan internal security ID (str) and Dhan exchange segment (str).
+        """
         br_symbol = get_br_symbol(symbol, exchange)
         # Extract security ID and determine exchange segment
         # This needs to be implemented based on your symbol mapping logic
@@ -165,13 +196,31 @@ class BrokerData:
 
         return security_id, exchange_segment
 
-    def _convert_date_to_utc(self, date_str: str) -> str:
-        """Convert IST date to UTC date for API request"""
+    def _convert_date_to_utc(self, date_str: str):
+        """
+        Convert an IST date string to a UTC date string required for API requests.
+
+        Args:
+            date_str (str): Date in 'YYYY-MM-DD' format.
+
+        Returns:
+            str: Identical date string if ignoring specific time, as mapping currently
+                 returns the same string format.
+        """
         # Simply return the date string as the API expects YYYY-MM-DD format
         return date_str
 
-    def _convert_timestamp_to_ist(self, timestamp: int, is_daily: bool = False) -> int:
-        """Convert UTC timestamp to IST timestamp"""
+    def _convert_timestamp_to_ist(self, timestamp: int, is_daily: bool = False):
+        """
+        Convert a UTC timestamp or date format from the API back to IST.
+
+        Args:
+            timestamp (int): The timestamp provided by the Dhan API.
+            is_daily (bool, optional): Whether it is a daily timeframe (custom mapping). Defaults to False.
+
+        Returns:
+            pd.Timestamp: A pandas Timestamp object localized to IST.
+        """
         if is_daily:
             # For daily data, we want to show just the date
             # The Dhan API returns timestamps at UTC midnight
@@ -191,8 +240,17 @@ class BrokerData:
             ist_dt = utc_dt + timedelta(hours=5, minutes=30)
             return int(ist_dt.timestamp())
 
-    def _get_intraday_chunks(self, start_date, end_date) -> list:
-        """Split date range into 90-day chunks for intraday data (Dhan API limit)"""
+    def _get_intraday_chunks(self, start_date, end_date):
+        """
+        Split a date range into chunks <= 90 days to comply with Dhan API limits.
+
+        Args:
+            start_date (datetime): The starting date.
+            end_date (datetime): The ending date.
+
+        Returns:
+            list: A list of (chunk_start, chunk_end) tuple datetimes.
+        """
         # Handle both string and datetime.date objects
         if isinstance(start_date, str):
             start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -212,8 +270,16 @@ class BrokerData:
 
         return chunks
 
-    def _get_exchange_segment(self, exchange: str) -> str:
-        """Get exchange segment based on exchange"""
+    def _get_exchange_segment(self, exchange: str):
+        """
+        Get the specific Dhan exchange segment string based on a standard exchange.
+
+        Args:
+            exchange (str): Standard exchange string.
+
+        Returns:
+            str: The Dhan-specific segment string.
+        """
         exchange_map = {
             "NSE": "NSE_EQ",  # NSE Cash
             "BSE": "BSE_EQ",  # BSE Cash
@@ -227,8 +293,17 @@ class BrokerData:
         }
         return exchange_map.get(exchange)
 
-    def _get_instrument_type(self, exchange: str, symbol: str) -> str:
-        """Get instrument type based on exchange and symbol"""
+    def _get_instrument_type(self, exchange: str, symbol: str):
+        """
+        Get the instrument type based on the exchange and symbol suffix.
+
+        Args:
+            exchange (str): The standard exchange string.
+            symbol (str): The trading symbol.
+
+        Returns:
+            str: The internal product/instrument type string used by Dhan (e.g., 'IDX', 'OPTIDX', 'EQ').
+        """
         # For cash market (NSE, BSE)
         if exchange in ["NSE", "BSE"]:
             return "EQUITY"
@@ -297,8 +372,16 @@ class BrokerData:
 
         raise Exception(f"Unsupported exchange: {exchange}")
 
-    def _is_trading_day(self, date_str) -> bool:
-        """Check if the given date is a trading day (not weekend)"""
+    def _is_trading_day(self, date_str):
+        """
+        Check if the given date is a likely trading day (not a weekend).
+
+        Args:
+            date_str (str or datetime): The date to check (string 'YYYY-MM-DD' or datetime).
+
+        Returns:
+            bool: True if it's a weekday (Monday-Friday), False if weekend.
+        """
         # Handle both string and datetime.date objects
         if isinstance(date_str, str):
             date = datetime.strptime(date_str, "%Y-%m-%d")
@@ -306,8 +389,17 @@ class BrokerData:
             date = datetime.combine(date_str, datetime.min.time())
         return date.weekday() < 5  # 0-4 are Monday to Friday
 
-    def _adjust_dates(self, start_date, end_date) -> tuple:
-        """Adjust dates to nearest trading days"""
+    def _adjust_dates(self, start_date, end_date):
+        """
+        Adjust dates to the nearest trading days if they fall on a weekend.
+
+        Args:
+            start_date (str): Starting date string in 'YYYY-MM-DD'.
+            end_date (str): Ending date string in 'YYYY-MM-DD'.
+
+        Returns:
+            tuple: Adjusted (start_date, end_date) strings.
+        """
         # Handle both string and datetime.date objects
         if isinstance(start_date, str):
             start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -329,13 +421,15 @@ class BrokerData:
 
         return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
-    def _get_intraday_time_range(self, date_str: str) -> tuple:
+    def _get_intraday_time_range(self, date_str: str):
         """
-        Get intraday time range in IST for a given date
+        Get the standard Indian intraday time range in IST for a given date.
+
         Args:
-            date_str: Date string in YYYY-MM-DD format
+            date_str (str): Date string in 'YYYY-MM-DD' format.
+
         Returns:
-            tuple: (start_date, end_date) in YYYY-MM-DD format
+            tuple: (start_time, end_time) formatted strings representing typical market open and close.
         """
         # Simply return the same date for both start and end
         # The API will handle the full day's data automatically
@@ -345,16 +439,15 @@ class BrokerData:
         self, symbol: str, exchange: str, interval: str, start_date, end_date
     ) -> pd.DataFrame:
         """
-        Get historical data for given symbol
+        Get historical candle data for a given symbol.
+
         Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-            interval: Candle interval in common format:
-                     Minutes: 1m, 5m, 15m, 25m
-                     Hours: 1h
-                     Days: D
-            start_date: Start date (YYYY-MM-DD) in IST
-            end_date: End date (YYYY-MM-DD) in IST
+            symbol (str): Trading symbol.
+            exchange (str): Exchange (e.g., 'NSE', 'BSE').
+            interval (str): Candle interval representation (e.g., '1m', '5m', '1D').
+            start_date (str or datetime): Start date for data fetch.
+            end_date (str or datetime): End date for data fetch.
+
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
@@ -636,12 +729,14 @@ class BrokerData:
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol
+        Get real-time quotes for a given symbol.
+
         Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
+            symbol (str): Trading symbol.
+            exchange (str): Exchange (e.g., 'NSE', 'BSE').
+
         Returns:
-            dict: Quote data with required fields
+            dict: Quote data containing fields like ltp, open, high, low, close, bid, ask.
         """
         try:
             security_id = get_token(symbol, exchange)
@@ -736,13 +831,15 @@ class BrokerData:
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols with automatic batching
+        Get real-time quotes for multiple symbols with automatic batching.
+
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys
-                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+            symbols (list of dict): List of dicts with 'symbol' and 'exchange' keys.
+                Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+
         Returns:
-            list: List of quote data for each symbol with format:
-                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+            list of dict: List of quote data for each symbol with format:
+                [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
             BATCH_SIZE = 1000  # Dhan API supports up to 1000 per request
@@ -782,11 +879,13 @@ class BrokerData:
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
-        Process a single batch of symbols (internal method)
+        Process a single batch of symbols (internal method).
+
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 100)
+            symbols (list of dict): List of dicts with 'symbol' and 'exchange' keys (max 100).
+
         Returns:
-            list: List of quote data for the batch
+            list of dict: List of quote data corresponding to the batch.
         """
         # Group symbols by exchange segment and build security ID map
         exchange_securities = {}  # {exchange_segment: [security_id1, security_id2, ...]}
@@ -955,12 +1054,14 @@ class BrokerData:
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol
+        Get market depth (order book) for a given symbol.
+
         Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
+            symbol (str): Trading symbol.
+            exchange (str): Exchange (e.g., 'NSE', 'BSE').
+
         Returns:
-            dict: Market depth data with bids and asks
+            dict: Market depth data detailing current bids, asks, and their quantities.
         """
         try:
             security_id = get_token(symbol, exchange)

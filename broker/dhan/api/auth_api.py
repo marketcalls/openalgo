@@ -14,7 +14,17 @@ AUTH_BASE_URL = "https://auth.dhan.co"
 
 
 def generate_consent(dhan_client_id):
-    """Step 1: Generate consent to initiate login session - requires valid Dhan Client ID"""
+    """
+    Generate consent to initiate login session.
+
+    This is the first step in the Dhan OAuth flow. It requires a valid Dhan Client ID.
+
+    Args:
+        dhan_client_id (str): The client ID provided by Dhan.
+
+    Returns:
+        tuple: A tuple containing the consent app ID (str) if successful, and an error message (str) if failed.
+    """
     try:
         BROKER_API_KEY = os.getenv("BROKER_API_KEY")
         BROKER_API_SECRET = os.getenv("BROKER_API_SECRET")
@@ -72,7 +82,15 @@ def generate_consent(dhan_client_id):
 
 
 def get_login_url(consent_app_id):
-    """Step 2: Get browser login URL"""
+    """
+    Get the authentication URL for the user to log in.
+
+    Args:
+        consent_app_id (str): The consent ID generated in the first step.
+
+    Returns:
+        str: The URL where the user should be redirected to log in and grant access.
+    """
     if not consent_app_id:
         return None
 
@@ -80,7 +98,18 @@ def get_login_url(consent_app_id):
 
 
 def consume_consent(token_id):
-    """Step 3: Consume consent to get access token"""
+    """
+    Consume the consent token to get an access token.
+
+    This is the final step in the OAuth flow, where the consent ID is exchanged for a token.
+
+    Args:
+        token_id (str): The token ID returned after successful login.
+
+    Returns:
+        tuple: A tuple containing the access token (str) and additional data (dict or str depending on status) upon success,
+            or None and an error message if failed.
+    """
     try:
         BROKER_API_KEY = os.getenv("BROKER_API_KEY")
         BROKER_API_SECRET = os.getenv("BROKER_API_SECRET")
@@ -129,7 +158,17 @@ def consume_consent(token_id):
 
 
 def get_direct_access_token(access_token):
-    """Validate a direct access token obtained from Dhan web"""
+    """
+    Validate a direct access token obtained from the Dhan web interface.
+
+    Allows directly passing a generated JWT instead of undergoing the OAuth flow.
+
+    Args:
+        access_token (str): The raw JWT access token.
+
+    Returns:
+        tuple: The access token and None if valid, or None and an error message if invalid.
+    """
     try:
         # Validate the token format (should be a JWT)
         if not access_token or len(access_token) < 50:
@@ -143,7 +182,15 @@ def get_direct_access_token(access_token):
 
 
 def authenticate_broker(code):
-    """Main authentication function - handles direct token or OAuth flow"""
+    """
+    Main authentication function handling either direct token entry or the OAuth flow.
+
+    Args:
+        code (str): The code returned from the OAuth flow or a direct access token string.
+
+    Returns:
+        tuple: Access token (str), user ID/client ID (str), and an error message (str) if failed.
+    """
     try:
         # Check if code is actually a direct access token (for manual entry)
         if code and len(code) > 100:  # Access tokens are typically long JWT strings
