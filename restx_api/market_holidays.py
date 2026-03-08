@@ -9,8 +9,8 @@ from services.market_calendar_service import get_holidays
 from utils.logging import get_logger
 
 from .data_schemas import MarketHolidaysSchema
+from config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("market/holidays", description="Market Holidays API")
 
 # Initialize logger

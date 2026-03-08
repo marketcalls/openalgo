@@ -10,8 +10,8 @@ from services.intervals_service import get_intervals
 from utils.logging import get_logger
 
 from .data_schemas import IntervalsSchema
+from config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("intervals", description="Supported Intervals API")
 
 # Initialize logger

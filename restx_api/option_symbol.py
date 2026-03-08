@@ -38,7 +38,7 @@ from marshmallow import ValidationError
 from limiter import limiter
 from services.option_symbol_service import get_option_symbol
 from utils.logging import get_logger
-
+from config import API_RATE_LIMIT
 from .data_schemas import OptionSymbolSchema
 
 # Initialize logger
@@ -47,8 +47,6 @@ logger = get_logger(__name__)
 # Create namespace
 api = Namespace("optionsymbol", description="Get Option Symbol based on Underlying and Offset")
 
-# Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
 @api.route("/", strict_slashes=False)

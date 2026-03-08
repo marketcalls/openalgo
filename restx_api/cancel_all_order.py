@@ -11,8 +11,8 @@ from limiter import limiter
 from restx_api.schemas import CancelAllOrderSchema
 from services.cancel_all_order_service import cancel_all_orders, emit_analyzer_error
 from utils.logging import get_logger
+from config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("cancel_all_order", description="Cancel All Orders API")
 
 # Initialize logger

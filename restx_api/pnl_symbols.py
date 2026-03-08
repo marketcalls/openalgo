@@ -8,10 +8,10 @@ from marshmallow import ValidationError
 from limiter import limiter
 from services.sandbox_service import is_sandbox_mode, sandbox_get_pnl_symbols
 from utils.logging import get_logger
-
+from .config import API_RATE_LIMIT
 from .account_schema import PnlSymbolsSchema
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+
 api = Namespace("pnl", description="P&L Analysis API")
 
 # Initialize logger

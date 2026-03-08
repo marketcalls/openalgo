@@ -11,8 +11,9 @@ from limiter import limiter
 from restx_api.account_schema import AnalyzerSchema, AnalyzerToggleSchema
 from services.analyzer_service import get_analyzer_status, toggle_analyzer_mode
 from utils.logging import get_logger
+from restx_api.config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+
 api = Namespace("analyzer", description="Analyzer Mode API")
 
 # Initialize logger

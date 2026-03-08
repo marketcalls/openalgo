@@ -8,9 +8,9 @@ from limiter import limiter
 from services.expiry_service import get_expiry_dates
 from utils.logging import get_logger
 
+from config import API_RATE_LIMIT
 from .data_schemas import ExpirySchema
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("expiry", description="Expiry dates API for F&O instruments")
 
 # Initialize logger
