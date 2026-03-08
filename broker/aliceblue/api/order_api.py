@@ -71,10 +71,28 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
 
 
 def get_order_book(auth):
+    """
+    Fetch the order book from AliceBlue API.
+
+    Args:
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        list or dict: The order book data returned by the API, usually a list of orders.
+    """
     return get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchOrderBook", auth)
 
 
 def get_trade_book(auth):
+    """
+    Fetch the trade book from AliceBlue API.
+
+    Args:
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        list or dict: The trade book data returned by the API, usually a list of executed trades.
+    """
     response = get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchTradeBook", auth)
 
     # Log the raw tradebook response from AliceBlue API
@@ -91,6 +109,15 @@ def get_trade_book(auth):
 
 
 def get_positions(auth):
+    """
+    Fetch the net positions from AliceBlue API.
+
+    Args:
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        list or dict: The positions data returned by the API containing net positions.
+    """
     payload = json.dumps({"ret": "NET"})
 
     return get_api_response(
@@ -102,10 +129,34 @@ def get_positions(auth):
 
 
 def get_holdings(auth):
+    """
+    Fetch the holdings from AliceBlue API.
+
+    Args:
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        list or dict: The holdings data returned by the API.
+    """
     return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/holdings", auth)
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
+    """
+    Calculates the open net quantity for a specific instrument.
+
+    Fetches the latest positions and filters for the exact trading symbol,
+    exchange, and product type to determine the open position's net quantity.
+
+    Args:
+        tradingsymbol (str): The trading symbol in OpenAlgo format.
+        exchange (str): The exchange the symbol belongs to (e.g., 'NSE', 'NFO').
+        product (str): The product type (e.g., 'MIS', 'NRML', 'CNC').
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        str: The net open quantity as a string (e.g., '10', '-50', '0').
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
 
@@ -139,7 +190,23 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
 
 def place_order_api(data, auth):
-    """Place an order using the AliceBlue API with shared connection pooling."""
+    """
+    Place an order using the AliceBlue API with shared connection pooling.
+
+    Transforms OpenAlgo standard format into AliceBlue API format and 
+    executes the order placement via POST request.
+
+    Args:
+        data (dict): The standard order dictionary containing symbol, exchange,
+            action, quantity, pricetype, product, and optional price parameters.
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        tuple: A tuple containing:
+            - httpx.Response or mock response: The HTTP response object or customized response containing the HTTP status code.
+            - dict: The JSON response data from the API containing success/failure details.
+            - str or None: The generated order ID (`NOrdNo`) if successful, else None.
+    """
     try:
         # Get the shared httpx client
         client = get_httpx_client()
@@ -196,6 +263,24 @@ def place_order_api(data, auth):
 
 
 def place_smartorder_api(data, auth):
+    """
+    Intelligently adjusts order details to achieve a target net position size.
+
+    Computes the difference between the desired target position ('position_size') 
+    and the current open position, then automatically determines the correct 
+    execution parameters (buy/sell and quantity) to reach the target.
+
+    Args:
+        data (dict): The standard order dictionary including the target `position_size`.
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        tuple: A tuple containing:
+            - httpx.Response or None: The HTTP response of the underlying API call, 
+              or None if no action is needed.
+            - dict: The JSON response dictionary from the underlying API call or a synthetic success message.
+            - str or None: The order ID if placed successfully, else None.
+    """
     AUTH_TOKEN = auth
 
     # If no API call is made in this function then res will return None
@@ -281,6 +366,21 @@ def place_smartorder_api(data, auth):
 
 
 def close_all_positions(current_api_key, auth):
+    """
+    Fetches all open positions and places opposite orders to square them off.
+
+    Automatically resolves multiple outstanding net positions by executing
+    counter (buy/sell) market orders. Skips positions with a net quantity of 0.
+
+    Args:
+        current_api_key (str): The API key of the current OpenAlgo user to associate the logging payload.
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        tuple: A tuple containing:
+            - dict: A dictionary with 'status' and 'message' keys indicating the result.
+            - int: The standard HTTP status code indicating overall success (200).
+    """
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
@@ -338,7 +438,21 @@ def close_all_positions(current_api_key, auth):
 
 
 def cancel_order(orderid, auth):
-    """Cancel an order using the AliceBlue API with shared connection pooling."""
+    """
+    Cancel an existing open order using the AliceBlue API with shared connection pooling.
+
+    Retrieves the order book to identify the trading symbol and exchange for the given 
+    order ID, then sends the cancellation request.
+
+    Args:
+        orderid (str): The unique order ID to be cancelled.
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        tuple: A tuple containing:
+            - dict: Response payload containing 'status' and 'message' (or 'orderid').
+            - int: The HTTP status code indicating success (200) or an error (500/400).
+    """
     try:
         # Get the shared httpx client
         client = get_httpx_client()
@@ -393,7 +507,21 @@ def cancel_order(orderid, auth):
 
 
 def modify_order(data, auth):
-    """Modify an order using the AliceBlue API with shared connection pooling."""
+    """
+    Modify an open order using the AliceBlue API with shared connection pooling.
+
+    Parses OpenAlgo-format modification instructions and maps them to the appropriate 
+    AliceBlue parameter fields (e.g., matching exchange references, updated limits).
+
+    Args:
+        data (dict): Order modification details, including the order ID and the new parameters.
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        tuple: A tuple containing:
+            - dict: Response dict indicating 'status' and either the new 'orderid' or an error 'message'.
+            - int: The HTTP status code indicating success or error status.
+    """
     try:
         # Get the shared httpx client
         client = get_httpx_client()
@@ -435,6 +563,21 @@ def modify_order(data, auth):
 
 
 def cancel_all_orders_api(data, auth):
+    """
+    Cancels all open and trigger-pending orders on the account.
+
+    Retrieves the current order book, filters for operational, actionable orders 
+    ('open' and 'trigger pending'), and performs individual cancel calls for each.
+
+    Args:
+        data (dict): The generic payload object that might contain context/user info.
+        auth (str): The authentication token for the broker session.
+
+    Returns:
+        tuple: A tuple containing:
+            - list: A list of order IDs (strings) that were successfully cancelled.
+            - list: A list of order IDs (strings) that failed to cancel.
+    """
     AUTH_TOKEN = auth
     # Get the order book
     order_book_response = get_order_book(AUTH_TOKEN)
