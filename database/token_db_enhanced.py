@@ -599,6 +599,7 @@ class BrokerSymbolCache:
         primary_term = query_terms[0] if query_terms else None
 
         def sort_key(s):
+            """Sort FNO results by relevance: exact underlying, prefix match, then alphabetical."""
             # Priority 1: Exact match on underlying (e.g., "NIFTY" matches underlying="NIFTY" exactly)
             underlying_exact = (
                 0 if (primary_term and s.underlying and s.underlying == primary_term) else 1
@@ -1085,6 +1086,7 @@ def get_distinct_expiries_cached(
 
         # Sort expiries chronologically
         def parse_expiry(exp_str):
+            """Parse an expiry date string into a datetime for chronological sorting."""
             try:
                 return datetime.strptime(exp_str, "%d-%b-%y")
             except ValueError:
