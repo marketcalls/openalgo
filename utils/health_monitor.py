@@ -39,8 +39,12 @@ HEALTH_SAMPLE_INTERVAL = int(os.getenv("HEALTH_SAMPLE_INTERVAL", "10"))  # secon
 HEALTH_RETENTION_DAYS = int(os.getenv("HEALTH_RETENTION_DAYS", "7"))
 
 # File Descriptor Thresholds
-FD_WARNING_THRESHOLD = int(os.getenv("HEALTH_FD_WARNING_THRESHOLD", "700"))
-FD_CRITICAL_THRESHOLD = int(os.getenv("HEALTH_FD_CRITICAL_THRESHOLD", "900"))
+# Windows has a very high default FD limit (16M); Linux typically 1024-65536.
+# Use platform-appropriate defaults to avoid false alarms on Windows.
+_FD_WARN_DEFAULT = "10000" if os.name == "nt" else "700"
+_FD_CRIT_DEFAULT = "50000" if os.name == "nt" else "900"
+FD_WARNING_THRESHOLD = int(os.getenv("HEALTH_FD_WARNING_THRESHOLD", _FD_WARN_DEFAULT))
+FD_CRITICAL_THRESHOLD = int(os.getenv("HEALTH_FD_CRITICAL_THRESHOLD", _FD_CRIT_DEFAULT))
 
 # Memory Thresholds (MB)
 MEMORY_WARNING_THRESHOLD = int(os.getenv("HEALTH_MEMORY_WARNING_THRESHOLD", "500"))

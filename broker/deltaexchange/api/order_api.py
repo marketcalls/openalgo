@@ -3,6 +3,8 @@ import os
 import random
 import time
 
+import httpx
+
 from broker.deltaexchange.api.baseurl import get_auth_headers, get_url
 from broker.deltaexchange.mapping.transform_data import (
     map_exchange_type,
@@ -60,9 +62,10 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
     client = get_httpx_client()
     logger.debug(f"[DeltaExchange] {method.upper()} {full_url}")
 
-    # Retry up to 3 times on HTTP 429 (rate limit) with exponential backoff + jitter.
-    # The Retry-After header is honoured when present.  On each retry the HMAC
-    # signature is rebuilt with a fresh timestamp.
+    # Retry up to 3 times on HTTP 429 (rate limit) or transient socket/connection
+    # errors with exponential backoff + jitter.  The Retry-After header is honoured
+    # when present.  On each retry the HMAC signature is rebuilt with a fresh
+    # timestamp.
     _MAX_RETRIES = 3
     _RETRY_BASE  = 1.0  # seconds; doubles each attempt
     response = None
@@ -80,6 +83,33 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
                 response = client.request("DELETE", url, headers=headers, content=body)
             else:
                 response = client.request(m, url, headers=headers, content=body)
+        except (OSError, ConnectionError, httpx.TransportError) as e:
+            # Transient socket / connection errors (e.g. WinError 10035,
+            # ConnectionResetError, httpx pool timeouts).
+            # ONLY retry GET requests (idempotent). For POST/PUT/DELETE (mutating
+            # operations), a retry after transport error could duplicate the side
+            # effect if the first request succeeded but the response was lost.
+            if method.upper() == "GET" and _attempt < _MAX_RETRIES:
+                wait = (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
+                logger.warning(
+                    f"[DeltaExchange] Transient error on {endpoint} "
+                    f"(attempt {_attempt + 1}/{_MAX_RETRIES}): {e}. "
+                    f"Retrying in {wait:.1f}s ..."
+                )
+                time.sleep(wait)
+                # Re-sign with a fresh timestamp
+                headers = get_auth_headers(
+                    method=method.upper(),
+                    path=endpoint,
+                    query_string=query_string,
+                    payload=body,
+                    api_key=auth,
+                    api_secret=api_secret,
+                )
+                continue
+            # For non-GET or retries exhausted, fail immediately
+            logger.error(f"[DeltaExchange] Request error on {method.upper()} {endpoint}: {e}")
+            return {"success": False, "error": {"code": "request_error", "message": str(e)}}
         except Exception as e:
             logger.error(f"[DeltaExchange] Request error: {e}")
             return {"success": False, "error": {"code": "request_error", "message": str(e)}}

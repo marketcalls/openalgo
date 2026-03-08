@@ -65,6 +65,7 @@ class DeltaWebSocket:
     MSG_TYPE_SUB       = "subscribe"
     MSG_TYPE_UNSUB     = "unsubscribe"
     CHANNEL_TICKER     = "v2/ticker"
+    CHANNEL_CANDLE_1M  = "candlestick_1m"
     CHANNEL_L2_BOOK    = "l2_orderbook"
     # Private authenticated channels (require auth message to be sent first)
     CHANNEL_ORDERS    = "orders"      # real-time order fill / cancel / modify events
@@ -192,6 +193,13 @@ class DeltaWebSocket:
             self._build_sub_msg(self.CHANNEL_TICKER, symbols),
         )
 
+    def subscribe_candlestick_1m(self, symbols: list[str]) -> None:
+        """Subscribe to candlestick_1m channel for the given symbols."""
+        self._queue_or_send(
+            self._sub_key(self.CHANNEL_CANDLE_1M, symbols),
+            self._build_sub_msg(self.CHANNEL_CANDLE_1M, symbols),
+        )
+
     def subscribe_l2_orderbook(self, symbols: list[str]) -> None:
         """Subscribe to l2_orderbook channel for the given symbols."""
         self._queue_or_send(
@@ -204,6 +212,12 @@ class DeltaWebSocket:
         with self._lock:
             self._active_sub_msgs.pop(key, None)
         self._send(self._build_sub_msg(self.CHANNEL_TICKER, symbols, unsub=True))
+
+    def unsubscribe_candlestick_1m(self, symbols: list[str]) -> None:
+        key = self._sub_key(self.CHANNEL_CANDLE_1M, symbols)
+        with self._lock:
+            self._active_sub_msgs.pop(key, None)
+        self._send(self._build_sub_msg(self.CHANNEL_CANDLE_1M, symbols, unsub=True))
 
     def unsubscribe_l2_orderbook(self, symbols: list[str]) -> None:
         key = self._sub_key(self.CHANNEL_L2_BOOK, symbols)

@@ -3,8 +3,9 @@ delta_adapter.py
 OpenAlgo WebSocket adapter for Delta Exchange.
 
 Channels used:
-  v2/ticker    — real-time OHLCV + mark_price + OI + best bid/ask
-  l2_orderbook — 5-level order book (depth mode)
+  v2/ticker      — real-time mark_price + OI + best bid/ask (LTP mode; companion for Quote mode)
+  candlestick_1m — candle-level OHLCV at ~500ms updates (Quote mode primary)
+  l2_orderbook   — 5-level order book (Depth mode)
 
 Authentication:
   HMAC-SHA256 auth message sent on every (re)connect.
@@ -40,7 +41,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def __init__(self):
         super().__init__()
         self.logger       = logging.getLogger("delta_websocket_adapter")
-        self.ws_client    = None
+        self.ws_client: DeltaWebSocket | None = None
         self.user_id      = None
         self.broker_name  = "deltaexchange"
         self.running      = False
@@ -117,7 +118,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         Modes:
           1 — LTP         → v2/ticker
-          2 — Quote       → v2/ticker  (includes bid/ask/OI)
+          2 — Quote       → candlestick_1m (primary) + v2/ticker (companion)
           3 — Depth       → l2_orderbook
         """
         if not DeltaCapabilityRegistry.supports_mode(mode):
@@ -134,9 +135,13 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         br_symbol = get_br_symbol(symbol, exchange) or symbol
         channel   = DeltaModeMapper.get_channel(mode)
+        companion = DeltaModeMapper.get_companion_channel(channel)
         corr_id   = f"{symbol}_{exchange}_{mode}"
 
         with self._lock:
+            # Check if this is a new subscription or re-subscription
+            is_new_subscription = corr_id not in self.subscriptions
+            
             self.subscriptions[corr_id] = {
                 "symbol":    symbol,
                 "exchange":  exchange,
@@ -145,14 +150,34 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "channel":   channel,
                 "depth_level": depth_level,
             }
+            # Track companion so we know this br_symbol has a silent ticker feed
+            # Use reference counting: increment count if entry exists, else create it
+            # Only modify ref count for NEW subscriptions, not re-subscriptions
+            if companion and is_new_subscription:
+                comp_key = f"_companion_{br_symbol}_{companion}"
+                if comp_key in self.subscriptions:
+                    # Increment reference count for existing companion
+                    self.subscriptions[comp_key]["_ref_count"] = \
+                        self.subscriptions[comp_key].get("_ref_count", 1) + 1
+                else:
+                    # Create new companion entry with ref count = 1
+                    self.subscriptions[comp_key] = {
+                        "symbol":    symbol,
+                        "exchange":  exchange,
+                        "br_symbol": br_symbol,
+                        "mode":      mode,
+                        "channel":   companion,
+                        "_companion": True,  # marker: cache-only, never publish
+                        "_ref_count": 1,     # reference count
+                    }
 
         if self.connected and self.ws_client:
             try:
-                if channel == DeltaWebSocket.CHANNEL_TICKER:
-                    self.ws_client.subscribe_ticker([br_symbol])
-                else:
-                    self.ws_client.subscribe_l2_orderbook([br_symbol])
-                self.logger.info("Subscribed: %s.%s mode=%s channel=%s", symbol, exchange, mode, channel)
+                self._ws_subscribe_channel(channel, br_symbol)
+                if companion:
+                    self._ws_subscribe_channel(companion, br_symbol)
+                self.logger.info("Subscribed: %s.%s mode=%s channel=%s companion=%s",
+                                 symbol, exchange, mode, channel, companion)
             except Exception as exc:
                 self.logger.error("subscribe error %s.%s: %s", symbol, exchange, exc)
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(exc))
@@ -169,8 +194,10 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         channel = DeltaModeMapper.get_channel(mode)
         corr_id = f"{symbol}_{exchange}_{mode}"
 
+        companion = DeltaModeMapper.get_companion_channel(channel)
         should_disconnect      = False
         should_upstream_unsub  = False
+        should_unsub_companion = False
         with self._lock:
             # Read the stored br_symbol that was resolved at subscribe() time
             # before removing the entry.  This guarantees the upstream unsubscribe
@@ -181,15 +208,35 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             stored = self.subscriptions.pop(corr_id, None)
             br_symbol = (stored or {}).get("br_symbol") or symbol
 
+            # Decrement companion reference count; only remove when count reaches zero
+            if companion:
+                comp_key = f"_companion_{br_symbol}_{companion}"
+                comp_entry = self.subscriptions.get(comp_key)
+                if comp_entry:
+                    ref_count = comp_entry.get("_ref_count", 1)
+                    if ref_count <= 1:
+                        # Last reference - remove the companion entry
+                        self.subscriptions.pop(comp_key, None)
+                    else:
+                        # Decrement reference count
+                        comp_entry["_ref_count"] = ref_count - 1
+
             remaining = list(self.subscriptions.values())
 
             # Only send the upstream unsubscribe when no remaining subscription
-            # still needs this br_symbol + channel (e.g. mode 1 and mode 2 both
-            # map to v2/ticker — removing one must not kill the shared stream).
+            # still needs this br_symbol + channel.
             should_upstream_unsub = not any(
                 s.get("br_symbol") == br_symbol and s.get("channel") == channel
                 for s in remaining
             )
+
+            # Only unsub the companion when no remaining subscription uses
+            # that companion channel for this br_symbol.
+            if companion:
+                should_unsub_companion = not any(
+                    s.get("br_symbol") == br_symbol and s.get("channel") == companion
+                    for s in remaining
+                )
 
             # Only drop the LTP cache when no other mode for this symbol/exchange
             # remains (the cache is keyed on symbol_exchange, shared across modes).
@@ -203,12 +250,12 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not remaining:
                 should_disconnect = True
 
-        if self.connected and self.ws_client and should_upstream_unsub:
+        if self.connected and self.ws_client:
             try:
-                if channel == DeltaWebSocket.CHANNEL_TICKER:
-                    self.ws_client.unsubscribe_ticker([br_symbol])
-                else:
-                    self.ws_client.unsubscribe_l2_orderbook([br_symbol])
+                if should_upstream_unsub:
+                    self._ws_unsubscribe_channel(channel, br_symbol)
+                if should_unsub_companion and companion:
+                    self._ws_unsubscribe_channel(companion, br_symbol)
             except Exception as exc:
                 self.logger.error("unsubscribe error %s.%s: %s", symbol, exchange, exc)
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(exc))
@@ -303,7 +350,14 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Normalise once — all subscriptions share the same br_symbol/exchange
             cache_key = f"{subscriptions[0]['symbol']}_{subscriptions[0]['exchange']}"
             if msg_type == "v2/ticker":
+                # Check if ALL matching subscriptions are companion-only.
+                # If so, just update the cache silently — never publish.
+                if all(s.get("_companion") for s in subscriptions):
+                    self._cache_ticker_companion(msg, cache_key)
+                    return
                 base_data = self._normalise_ticker(msg, cache_key)
+            elif msg_type == "candlestick_1m":
+                base_data = self._normalise_candlestick(msg, cache_key)
             elif msg_type == "l2_orderbook":
                 base_data = self._normalise_l2_orderbook(msg, cache_key)
             else:
@@ -312,6 +366,9 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             ts = int(time.time() * 1000)
             for subscription in subscriptions:
+                # Never publish from companion-only entries
+                if subscription.get("_companion"):
+                    continue
                 oa_symbol   = subscription["symbol"]
                 oa_exchange = subscription["exchange"]
                 oa_mode     = subscription["mode"]
@@ -371,7 +428,134 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.publish_market_data(topic, payload)
         self.logger.debug("Private event published: type=%s topic=%s", event_type, topic)
 
+    # ── channel dispatch helpers ───────────────────────────────────────────────
+
+    def _ws_subscribe_channel(self, channel: str, br_symbol: str) -> None:
+        """Dispatch a subscribe call to the correct DeltaWebSocket method."""
+        if not self.ws_client:
+            return
+        if channel == DeltaWebSocket.CHANNEL_TICKER:
+            self.ws_client.subscribe_ticker([br_symbol])
+        elif channel == DeltaWebSocket.CHANNEL_CANDLE_1M:
+            self.ws_client.subscribe_candlestick_1m([br_symbol])
+        elif channel == DeltaWebSocket.CHANNEL_L2_BOOK:
+            self.ws_client.subscribe_l2_orderbook([br_symbol])
+        else:
+            self.logger.warning("Unknown channel for subscribe: %s", channel)
+
+    def _ws_unsubscribe_channel(self, channel: str, br_symbol: str) -> None:
+        """Dispatch an unsubscribe call to the correct DeltaWebSocket method."""
+        if not self.ws_client:
+            return
+        if channel == DeltaWebSocket.CHANNEL_TICKER:
+            self.ws_client.unsubscribe_ticker([br_symbol])
+        elif channel == DeltaWebSocket.CHANNEL_CANDLE_1M:
+            self.ws_client.unsubscribe_candlestick_1m([br_symbol])
+        elif channel == DeltaWebSocket.CHANNEL_L2_BOOK:
+            self.ws_client.unsubscribe_l2_orderbook([br_symbol])
+        else:
+            self.logger.warning("Unknown channel for unsubscribe: %s", channel)
+
     # ── normalisation ─────────────────────────────────────────────────────────
+
+    def _cache_ticker_companion(self, msg: dict, cache_key: str) -> None:
+        """Silently cache OI, bid/ask, and daily open from the companion v2/ticker.
+
+        This is called when v2/ticker arrives for a mode-2 subscription whose
+        primary channel is candlestick_1m.  We store only the fields that
+        candlestick_1m doesn't provide (OI, bid/ask prices, daily open) so
+        _normalise_candlestick can merge them into its output.
+        """
+        def _f(v, d=0.0):
+            try: return float(v) if v is not None else d
+            except: return d
+
+        quotes = msg.get("quotes") or {}
+        companion_data = {}
+        oi_val = _f(msg.get("oi"))
+        if oi_val:
+            companion_data["oi"] = oi_val
+        bid_val = _f(quotes.get("best_bid"))
+        if bid_val:
+            companion_data["bid_price"] = bid_val
+        ask_val = _f(quotes.get("best_ask"))
+        if ask_val:
+            companion_data["ask_price"] = ask_val
+        daily_open = _f(msg.get("open"))
+        if daily_open:
+            companion_data["daily_open"] = daily_open
+
+        if companion_data:
+            with self._lock:
+                if cache_key not in self.last_values:
+                    self.last_values[cache_key] = {}
+                self.last_values[cache_key].update(companion_data)
+            self.logger.debug("Companion ticker cached for %s: %s", cache_key, list(companion_data.keys()))
+
+    def _normalise_candlestick(self, msg: dict, cache_key: str) -> dict:
+        """Map candlestick_1m fields to OpenAlgo market data format.
+
+        candlestick_1m message shape:
+          { "type": "candlestick_1m", "symbol": "BTCUSD",
+            "open": 67000, "high": 67100, "low": 66900, "close": 67050,
+            "volume": 42, "candle_start_time": 1700000000, "resolution": "1m" }
+
+        Field mapping:
+            ltp        ← close     (last traded price = candle close)
+            open       ← open      (candle open, resets each minute)
+            high       ← high      (candle high)
+            low        ← low       (candle low)
+            close      ← close
+            volume     ← volume    (candle volume)
+            oi         ← from companion v2/ticker cache
+            bid_price  ← from companion v2/ticker cache
+            ask_price  ← from companion v2/ticker cache
+        """
+        def _f(v, d=0.0):
+            try: return float(v) if v is not None else d
+            except: return d
+
+        def _i(v, d=0):
+            try: return int(float(v)) if v is not None else d
+            except: return d
+
+        # Read companion-cached values (OI, bid/ask, daily open)
+        with self._lock:
+            cached = self.last_values.get(cache_key, {}).copy()
+
+        ltp = _f(msg.get("close"))
+        daily_open = _f(cached.get("daily_open"))
+
+        result = {
+            "ltp":           ltp,
+            "open":          _f(msg.get("open")),
+            "high":          _f(msg.get("high")),
+            "low":           _f(msg.get("low")),
+            "close":         _f(msg.get("close")),
+            "volume":        _i(msg.get("volume")),
+            "oi":            _f(cached.get("oi", 0)),
+            "bid_price":     _f(cached.get("bid_price", 0)),
+            "ask_price":     _f(cached.get("ask_price", 0)),
+            "bid_qty":       0,
+            "ask_qty":       0,
+            "average_price": 0,
+            "oi_change":     0,
+        }
+
+        # Compute change vs daily open (from companion ticker) if available
+        if daily_open and ltp:
+            result["change"] = round(ltp - daily_open, 4)
+            result["change_percent"] = round(((ltp - daily_open) / daily_open) * 100, 4) if daily_open else 0
+
+        # Update cache with latest candle values
+        with self._lock:
+            if cache_key not in self.last_values:
+                self.last_values[cache_key] = {}
+            for k, v in result.items():
+                if v != 0:
+                    self.last_values[cache_key][k] = v
+
+        return result
 
     def _normalise_ticker(self, msg: dict, cache_key: str) -> dict:
         """
@@ -477,10 +661,12 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         to the same underlying WebSocket channel (v2/ticker).  Returning every
         match ensures each subscriber receives its own publish call.
         """
-        expected_channel = (
-            DeltaWebSocket.CHANNEL_TICKER if msg_type == "v2/ticker"
-            else DeltaWebSocket.CHANNEL_L2_BOOK
-        )
+        _CHANNEL_MAP = {
+            "v2/ticker":      DeltaWebSocket.CHANNEL_TICKER,
+            "candlestick_1m": DeltaWebSocket.CHANNEL_CANDLE_1M,
+            "l2_orderbook":   DeltaWebSocket.CHANNEL_L2_BOOK,
+        }
+        expected_channel = _CHANNEL_MAP.get(msg_type, msg_type)
         with self._lock:
             matched = [
                 sub for sub in self.subscriptions.values()

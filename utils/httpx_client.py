@@ -146,9 +146,9 @@ def _create_http_client() -> httpx.Client:
             http1=True,  # Always enable HTTP/1.1 for compatibility
             timeout=120.0,  # Increased timeout for large historical data requests
             limits=httpx.Limits(
-                max_keepalive_connections=40,  # Increased from 20 for multi-strategy environments
-                max_connections=100,  # Increased from 50 for 10+ concurrent strategies
-                keepalive_expiry=30.0,  # Reduced from 120s to recycle stale connections faster
+                max_keepalive_connections=60,  # Increased for bot + UI + heartbeat concurrency
+                max_connections=200,  # Increased to prevent WinError 10035 under burst traffic
+                keepalive_expiry=60.0,  # Allow longer reuse to reduce reconnection churn
             ),
             # Add verify parameter to handle SSL/TLS issues in standalone mode
             verify=True,  # Can be set to False for debugging SSL issues (not recommended for production)
