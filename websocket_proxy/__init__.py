@@ -81,6 +81,9 @@ from broker.paytm.streaming.paytm_adapter import PaytmWebSocketAdapter
 # Import the pocketful_adapter
 from broker.pocketful.streaming.pocketful_adapter import PocketfulWebSocketAdapter
 
+# Import the rmoney_adapter
+from broker.rmoney.streaming.rmoney_adapter import RMoneyWebSocketAdapter
+
 # Import the samco_adapter
 from broker.samco.streaming.samco_adapter import SamcoWebSocketAdapter
 
@@ -122,6 +125,7 @@ register_adapter("jainamxts", JainamXTSWebSocketAdapter)
 register_adapter("samco", SamcoWebSocketAdapter)
 register_adapter("pocketful", PocketfulWebSocketAdapter)
 register_adapter("nubra", NubraWebSocketAdapter)
+register_adapter("rmoney", RMoneyWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -171,4 +175,5 @@ __all__ = [
     "SamcoWebSocketAdapter",
     "PocketfulWebSocketAdapter",
     "NubraWebSocketAdapter",
+    "RMoneyWebSocketAdapter",
 ]
