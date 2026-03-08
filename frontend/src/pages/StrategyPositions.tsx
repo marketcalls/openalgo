@@ -1705,7 +1705,7 @@ export default function StrategyPositions() {
     if (!autoRefreshEnabled) return
 
     // Avoid extremely low / invalid values
-    const intervalSeconds = Math.min(300, Math.max(5, autoRefreshSeconds))
+    const intervalSeconds = Math.min(300, Math.max(1, autoRefreshSeconds))
 
     const id = window.setInterval(() => {
       // Don't overlap requests
@@ -2024,14 +2024,14 @@ export default function StrategyPositions() {
                 <Label className="text-xs text-muted-foreground">Every (s)</Label>
                 <Input
                   type="number"
-                  min={5}
+                  min={1}
                   max={300}
                   step={1}
                   value={autoRefreshSeconds}
                   onChange={(e) => {
                     const raw = Number.parseInt(e.target.value, 10)
                     if (Number.isNaN(raw)) return
-                    const clamped = Math.min(300, Math.max(5, raw))
+                    const clamped = Math.min(300, Math.max(1, raw))
                     setAutoRefreshSeconds(clamped)
                   }}
                   className="h-8 w-20"
