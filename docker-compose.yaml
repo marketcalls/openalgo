@@ -10,14 +10,15 @@ services:
       - "${FLASK_PORT:-5000}:5000"
       - "${WEBSOCKET_PORT:-8765}:8765"
 
-    # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
+    # Bind-mount host directories for persistent, host-accessible data.
+    # This ensures DB files, logs, strategies, and keys are created in the
+    # project directory on the host — not buried inside Docker's VM storage.
     volumes:
-      - openalgo_db:/app/db
-      - openalgo_log:/app/log            # Application logs (named volume)
-      - openalgo_strategies:/app/strategies  # Python strategies (named volume)
-      - openalgo_keys:/app/keys          # API keys/certificates (named volume)
-      - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
-      - ./.env:/app/.env:ro
+      - ./db:/app/db                     # SQLite databases
+      - ./log:/app/log                   # Application logs
+      - ./strategies:/app/strategies     # Python strategy scripts
+      - ./keys:/app/keys                 # API keys / certificates
+      - ./.env:/app/.env:ro              # Configuration (read-only)
 
     # (optional) extra env-vars that are NOT in .env
     environment:
@@ -50,15 +51,3 @@ services:
 
     restart: unless-stopped
 
-# Define named volumes for persistence
-volumes:
-  openalgo_db:
-    driver: local
-  openalgo_log:
-    driver: local
-  openalgo_strategies:
-    driver: local
-  openalgo_keys:
-    driver: local
-  openalgo_tmp:
-    driver: local
