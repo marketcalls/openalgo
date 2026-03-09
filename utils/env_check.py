@@ -47,14 +47,11 @@ def configure_llvmlite_paths() -> None:
     check_tmp_noexec()
 
 
-def check_tmp_noexec() -> bool:
+def check_tmp_noexec() -> None:
     """
-    Check if /tmp is mounted with the noexec flag.
+    Check if /tmp is mounted with the noexec flag and print a warning.
 
     This helps users understand why llvmlite might fail to load.
-
-    Returns:
-        bool: True if /tmp is likely mounted with noexec on Linux, False otherwise.
     """
     if sys.platform != 'linux':
         return
