@@ -113,7 +113,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             failed_list = []
 
             self.logger.info(
-                f"🧹 Unsubscribing from {len(self.subscriptions)} active subscriptions..."
+                f"Unsubscribing from {len(self.subscriptions)} active subscriptions..."
             )
 
             # Create a copy of subscriptions to iterate over
@@ -133,7 +133,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         unsubscribed_list.append(
                             {"symbol": symbol, "exchange": exchange, "mode": mode}
                         )
-                        self.logger.debug(f"✅ Unsubscribed: {exchange}:{symbol} mode {mode}")
+                        self.logger.debug(f"Unsubscribed: {exchange}:{symbol} mode {mode}")
                     else:
                         failed_count += 1
                         failed_list.append(
@@ -145,7 +145,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             }
                         )
                         self.logger.warning(
-                            f"❌ Failed to unsubscribe: {exchange}:{symbol} mode {mode}"
+                            f"Failed to unsubscribe: {exchange}:{symbol} mode {mode}"
                         )
 
                 except Exception as e:
@@ -157,13 +157,12 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.subscriptions.clear()
             self.subscription_keys.clear()
 
-            # CRITICAL: Call the disconnect method to properly close everything
-            self.logger.info("🔌 Calling disconnect() to terminate Groww connection completely...")
+            self.logger.info("Calling disconnect() to terminate Groww connection...")
             try:
                 self.disconnect()
-                self.logger.info("✅ Successfully disconnected from Groww server")
+                self.logger.info("Successfully disconnected from Groww server")
             except Exception as e:
-                self.logger.error(f"❌ Error during disconnect: {e}")
+                self.logger.error(f"Error during disconnect: {e}")
                 # Force cleanup even if disconnect fails
                 self.running = False
                 self.connected = False
@@ -180,10 +179,8 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._message_count = 0
 
             self.logger.info(
-                f"📊 Unsubscribe all complete: {unsubscribed_count} success, {failed_count} failed"
+                f"Unsubscribe all complete: {unsubscribed_count} success, {failed_count} failed"
             )
-            self.logger.info("✅ All subscriptions cleared and disconnected from Groww server")
-            self.logger.info("✅ ZMQ resources cleaned up - no more data will be published")
 
             return self._create_success_response(
                 f"Unsubscribed from {unsubscribed_count} subscriptions and disconnected from server",
@@ -203,7 +200,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def disconnect(self) -> None:
         """Disconnect from Groww WebSocket with proper cleanup"""
-        self.logger.info("🔌 Starting Groww adapter disconnect sequence...")
+        self.logger.info("Starting Groww adapter disconnect sequence...")
         self.running = False
 
         try:
@@ -211,7 +208,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if self.ws_client:
                 try:
                     self.ws_client.disconnect()
-                    self.logger.info("🔗 WebSocket client disconnected")
+                    self.logger.debug("WebSocket client disconnected")
                 except Exception as e:
                     self.logger.error(f"Error disconnecting WebSocket client: {e}")
 
@@ -224,10 +221,10 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Clean up ZeroMQ resources
             self.cleanup_zmq()
 
-            self.logger.info("✅ Groww adapter disconnected and state cleared")
+            self.logger.info("Groww adapter disconnected and state cleared")
 
         except Exception as e:
-            self.logger.error(f"❌ Error during disconnect: {e}")
+            self.logger.error(f"Error during disconnect: {e}")
             # Force cleanup even if there were errors
             self.connected = False
             self.ws_client = None
@@ -279,7 +276,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             sym = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
             if sym:
                 instrumenttype = sym.instrumenttype
-                self.logger.info(
+                self.logger.debug(
                     f"Retrieved instrumenttype: {instrumenttype} for {symbol}.{exchange}"
                 )
         except Exception as e:
@@ -303,14 +300,8 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get exchange and segment for Groww
         groww_exchange, segment = GrowwExchangeMapper.get_exchange_segment(exchange)
 
-        # Log token details for debugging F&O
         if exchange in ["NFO", "BFO"]:
-            self.logger.info("F&O Subscription Debug:")
-            self.logger.info(f"  Symbol: {symbol}")
-            self.logger.info(f"  Exchange: {exchange} -> Groww: {groww_exchange}")
-            self.logger.info(f"  Segment: {segment}")
-            self.logger.info(f"  Token from DB: {token}")
-            self.logger.info(f"  Brexchange: {brexchange}")
+            self.logger.debug(f"F&O Subscription: {symbol}, exchange={exchange}->{groww_exchange}, segment={segment}, token={token}")
 
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -333,8 +324,8 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             try:
                 if mode in [1, 2]:  # LTP or Quote mode
                     if mode == 2:
-                        self.logger.info(
-                            f"📈 QUOTE subscription for {symbol} - Note: Groww only provides LTP, OHLCV will be 0"
+                        self.logger.debug(
+                            f"QUOTE subscription for {symbol} - Groww only provides LTP, OHLCV will be 0"
                         )
                     sub_key = self.ws_client.subscribe_ltp(
                         groww_exchange, segment, token, symbol, instrumenttype
@@ -342,8 +333,8 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 elif mode == 3:  # Depth mode
                     # Check if this is an index - indices don't have depth data
                     if instrumenttype == "INDEX" or "INDEX" in exchange:
-                        self.logger.warning(
-                            f"⚠️ Indices don't have depth data. Converting to LTP subscription for {symbol}"
+                        self.logger.info(
+                            f"Indices don't have depth data. Converting to LTP for {symbol}"
                         )
                         # Subscribe to LTP instead for indices
                         sub_key = self.ws_client.subscribe_ltp(
@@ -353,38 +344,21 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self.subscriptions[correlation_id]["mode"] = 1  # Change to LTP mode
                     else:
                         # Enhanced logging for BSE depth subscriptions
-                        if "BSE" in groww_exchange:
-                            self.logger.info("🔴 Creating BSE DEPTH subscription:")
-                            self.logger.info(f"   Exchange: {groww_exchange}")
-                            self.logger.info(f"   Segment: {segment}")
-                            self.logger.info(f"   Token: {token}")
-                            self.logger.info(f"   Symbol: {symbol}")
-
                         # Subscribe to depth for non-index instruments
                         sub_key = self.ws_client.subscribe_depth(
                             groww_exchange, segment, token, symbol, instrumenttype
                         )
-
-                        if "BSE" in groww_exchange:
-                            self.logger.info(f"🔴 BSE DEPTH subscription key: {sub_key}")
 
                 # Store subscription key for unsubscribe
                 self.subscription_keys[correlation_id] = sub_key
 
                 mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
                 self.logger.info(
-                    f"✅ Subscribed to {symbol}.{exchange} in {mode_name} mode (key: {sub_key})"
+                    f"Subscribed to {symbol}.{exchange} in {mode_name} mode"
                 )
 
-                # Special logging for LTP subscriptions to debug subscribe all issue
-                if mode == 1:
-                    self.logger.info(
-                        f"🔥 LTP SUBSCRIPTION CONFIRMED: {exchange}:{symbol} - data should start flowing"
-                    )
-
-                # Extra logging for F&O
                 if exchange in ["NFO", "BFO"]:
-                    self.logger.info(f"F&O subscription key created: {sub_key}")
+                    self.logger.debug(f"F&O subscription key created: {sub_key}")
 
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
@@ -467,17 +441,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, data: dict[str, Any]) -> None:
         """Callback for market data from WebSocket"""
         try:
-            # Enhanced logging for BSE depth data
-            is_bse_depth = False
-            if "depth_data" in data and "exchange" in data and "BSE" in data.get("exchange", ""):
-                is_bse_depth = True
-                self.logger.info("🔴 BSE DEPTH DATA RECEIVED!")
-                self.logger.info(f"   Depth data: {data.get('depth_data', {})}")
-
-            # Debug log the raw message data to see what we're actually receiving
-            self.logger.debug(
-                f"RAW GROWW DATA{' (BSE DEPTH)' if is_bse_depth else ''}: Type: {type(data)}, Data: {data}"
-            )
+            self.logger.debug(f"RAW GROWW DATA: Type: {type(data)}, Data: {data}")
 
             # Add data validation to ensure we have the minimum required fields
             if not isinstance(data, dict):
@@ -513,14 +477,13 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Convert string numeric to string mode
                     mode = {1: "ltp", 2: "quote", 3: "depth"}.get(int(mode), "ltp")
 
-                # Special logging for BSE depth
                 if "BSE" in exchange and mode == "depth":
-                    self.logger.info("🔴 BSE DEPTH: Looking for subscription")
+                    self.logger.debug("BSE DEPTH: Looking for subscription")
 
-                self.logger.info(
+                self.logger.debug(
                     f"Looking for subscription: symbol={symbol_from_data}, exchange={exchange}, mode={mode}"
                 )
-                self.logger.info(f"Available subscriptions: {list(self.subscriptions.keys())}")
+                self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
 
                 # Find matching subscription based on symbol, exchange and mode
                 with self.lock:
@@ -557,7 +520,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         if is_index_match or is_regular_match:
                             subscription = sub
                             correlation_id = cid
-                            self.logger.info(f"Matched subscription: {cid}")
+                            self.logger.debug(f"Matched subscription: {cid}")
                             break
 
             # Try to match based on exchange token from protobuf data
@@ -566,7 +529,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 segment = data.get("segment", "CASH")
                 exchange = data.get("exchange", "NSE")
 
-                self.logger.info(
+                self.logger.debug(
                     f"Processing message with token: {token}, segment: {segment}, exchange: {exchange}"
                 )
 
@@ -583,12 +546,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             break
 
             if not subscription:
-                # Enhanced logging for BSE depth debugging
-                if "BSE" in str(data) and "depth" in str(data).lower():
-                    self.logger.error("🔴 BSE DEPTH DATA RECEIVED BUT NO SUBSCRIPTION FOUND!")
-                    self.logger.error(f"   Data: {data}")
-                    self.logger.error(f"   Active subscriptions: {self.subscriptions}")
-                self.logger.warning(f"Received data for unsubscribed token/symbol: {data}")
+                self.logger.debug(f"Received data for unsubscribed token/symbol: {data}")
                 return
 
             # Extract symbol and exchange from subscription
@@ -652,15 +610,14 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if market_data["ltp"] == 0:
                         self.logger.warning(f"⚠️ NO VALID LTP DATA for {symbol}, check data source")
                     else:
-                        self.logger.info(f"📈 LTP recovered for {symbol}: {market_data['ltp']}")
+                        self.logger.debug(f"LTP recovered for {symbol}: {market_data['ltp']}")
 
                 # Ensure LTP timestamp
                 if "ltt" not in market_data:
                     market_data["ltt"] = int(time.time() * 1000)
 
-                # Log LTP data for debugging subscribe all issue
-                self.logger.info(
-                    f"🔍 LTP MODE: {exchange}:{symbol} = ₹{market_data['ltp']} at {market_data.get('ltt')}"
+                self.logger.debug(
+                    f"LTP MODE: {exchange}:{symbol} = {market_data['ltp']} at {market_data.get('ltt')}"
                 )
 
             elif actual_mode == 2:  # Quote mode
@@ -679,9 +636,8 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
                     market_data["ltp"] = float(ltp_value) if ltp_value else 0.0
 
-                # Log Quote data
-                self.logger.info(
-                    f"🔍 QUOTE MODE: {exchange}:{symbol} = ₹{market_data['ltp']} (Vol: {market_data.get('volume', 0)})"
+                self.logger.debug(
+                    f"QUOTE MODE: {exchange}:{symbol} = {market_data['ltp']} (Vol: {market_data.get('volume', 0)})"
                 )
 
             elif actual_mode == 3:  # Depth mode
@@ -694,54 +650,33 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if "ltp" not in market_data:
                     market_data["ltp"] = 0.0
 
-                # Log Depth data
                 buy_levels = len(market_data["depth"].get("buy", []))
                 sell_levels = len(market_data["depth"].get("sell", []))
-                self.logger.info(
-                    f"🔍 DEPTH MODE: {exchange}:{symbol} = {buy_levels}B/{sell_levels}S levels"
+                self.logger.debug(
+                    f"DEPTH MODE: {exchange}:{symbol} = {buy_levels}B/{sell_levels}S levels"
                 )
 
-            # Enhanced logging for BSE depth
-            if "BSE" in exchange and mode == 3:
-                self.logger.info(f"🔴 Publishing BSE DEPTH data for {symbol}")
-                if "depth" in market_data:
-                    self.logger.info(f"   Buy levels: {len(market_data['depth'].get('buy', []))}")
-                    self.logger.info(f"   Sell levels: {len(market_data['depth'].get('sell', []))}")
-
-            # Periodic logging instead of every message (reduces noise) - but more frequent for debugging
+            # Track message count for periodic logging
             if not hasattr(self, "_message_count"):
                 self._message_count = 0
             self._message_count += 1
 
-            # More frequent logging for debugging LTP issue
-            if self._message_count <= 20 or self._message_count % 25 == 0:
+            # Periodic logging - log first message and then every 500th
+            if self._message_count == 1 or self._message_count % 500 == 0:
                 mode_name = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}[actual_mode]
                 ltp_info = (
-                    f"LTP: ₹{market_data.get('ltp', 'N/A')}"
+                    f"LTP: {market_data.get('ltp', 'N/A')}"
                     if actual_mode in [1, 2]
                     else f"Depth: {len(market_data.get('depth', {}).get('buy', []))}B/{len(market_data.get('depth', {}).get('sell', []))}S"
                 )
                 self.logger.info(
-                    f"📈 Publishing #{self._message_count}: {topic} ({mode_name}) -> {ltp_info}"
-                )
-
-            # CRITICAL: Always log LTP mode data to debug subscribe all issue
-            if actual_mode == 1:
-                self.logger.info(
-                    f"🚨 LTP PUBLISH: {topic} -> ₹{market_data.get('ltp')} (Message #{self._message_count})"
+                    f"Publishing #{self._message_count}: {topic} ({mode_name}) -> {ltp_info}"
                 )
 
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
 
-            # Log successful publication for debugging data flow issues
-            self.logger.debug(f"✅ ZMQ Published: {topic} with {len(str(market_data))} bytes")
-
-            # Verify publication by checking if we can access the data
-            if actual_mode == 1 and market_data.get("ltp", 0) > 0:
-                self.logger.info(
-                    f"✅ LTP DATA VERIFIED: {exchange}:{symbol} = ₹{market_data['ltp']} published successfully"
-                )
+            self.logger.debug(f"ZMQ Published: {topic}")
 
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
