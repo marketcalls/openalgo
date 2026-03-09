@@ -1,5 +1,5 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping fivepaisaxts Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
+# Mapping RMoney XTS Broking Parameters
 
 from database.token_db import get_br_symbol, get_token
 from utils.logging import get_logger
@@ -14,18 +14,18 @@ def transform_data(data, token):
     symbol = get_br_symbol(data["symbol"], data["exchange"])
     # token = get_token(data['symbol'], data['exchange'])
     # logger.info(f"token: {token}")
-    # Basic mapping
+    # Basic mapping - ensure correct data types per XTS API spec
     transformed = {
         "exchangeSegment": map_exchange(data["exchange"]),
-        "exchangeInstrumentID": token,
+        "exchangeInstrumentID": int(token),
         "productType": map_product_type(data["product"]),
         "orderType": map_order_type(data["pricetype"]),
         "orderSide": data["action"].upper(),
         "timeInForce": "DAY",
-        "disclosedQuantity": data.get("disclosed_quantity", "0"),
-        "orderQuantity": data["quantity"],
-        "limitPrice": data.get("price", "0"),
-        "stopPrice": data.get("trigger_price", "0"),
+        "disclosedQuantity": int(data.get("disclosed_quantity", "0")),
+        "orderQuantity": int(data["quantity"]),
+        "limitPrice": float(data.get("price", "0")),
+        "stopPrice": float(data.get("trigger_price", "0")),
         "orderUniqueIdentifier": "openalgo",
     }
     logger.info(f"transformed data: {transformed}")
@@ -48,7 +48,11 @@ def transform_modify_order_data(data, token):
 
 def map_exchange(exchange):
     """
-    Maps the new exchange to the existing exchange.
+    Maps the OpenAlgo exchange to the broker exchange string format.
+    Used for order placement API.
+
+    Per XTS Interactive API docs, exchangeSegment must be a string:
+    "NSECM", "NSEFO", "NSECD", "BSECM", "BSEFO", "MCXFO"
     """
     exchange_mapping = {
         "NSE": "NSECM",
@@ -57,9 +61,38 @@ def map_exchange(exchange):
         "NFO": "NSEFO",
         "BFO": "BSEFO",
         "CDS": "NSECD",
-        "EXCHANGE": "EXCHANGE",
     }
-    return exchange_mapping.get(exchange, "EXCHANGE")
+    if exchange not in exchange_mapping:
+        raise ValueError(f"Unsupported exchange: {exchange}")
+    return exchange_mapping[exchange]
+
+
+def map_exchange_numeric(exchange):
+    """
+    Maps the OpenAlgo exchange to the broker's numeric exchange code.
+    Used for margin calculator API which requires numeric exchange segments.
+
+    Reference: XTS API Documentation - ExchangeSegments Enum
+    - NSECM = 1 (NSE Cash Market)
+    - NSEFO = 2 (NSE Futures & Options)
+    - NSECD = 3 (NSE Currency Derivatives)
+    - BSECM = 11 (BSE Cash Market)
+    - BSEFO = 12 (BSE Futures & Options)
+    - BSECD = 13 (BSE Currency Derivatives)
+    - MCXFO = 51 (MCX Futures & Options)
+    - NCDEX = 21 (NCDEX Commodity)
+    """
+    exchange_numeric_mapping = {
+        "NSE": 1,      # NSECM
+        "NFO": 2,      # NSEFO
+        "CDS": 3,      # NSECD
+        "BSE": 11,     # BSECM
+        "BFO": 12,     # BSEFO
+        "MCX": 51,     # MCXFO
+    }
+    if exchange not in exchange_numeric_mapping:
+        raise ValueError(f"Unsupported exchange: {exchange}")
+    return exchange_numeric_mapping[exchange]
 
 
 def map_order_type(pricetype):
