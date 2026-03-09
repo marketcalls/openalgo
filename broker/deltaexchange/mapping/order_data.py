@@ -1,6 +1,6 @@
 import json
 
-from database.token_db import get_symbol, get_symbol_info
+from database.token_db import get_oa_symbol, get_symbol, get_symbol_info
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -427,16 +427,26 @@ def map_position_data(position_data):
 
             product_id = position.get("product_id", "")
             product_symbol = position.get("product_symbol", "")
+            is_spot = position.get("_is_spot", False)
 
-            # Resolve symbol from DB; fall back to product_symbol
-            symbol_from_db = get_symbol(str(product_id), "CRYPTO") if product_id else None
+            # Resolve symbol from DB; fall back to product_symbol.
+            # For spot wallet entries, product_id is the asset_id (not a product token),
+            # so look up by brsymbol (e.g. BTC_INR) instead.
+            if is_spot:
+                symbol_from_db = get_oa_symbol(product_symbol, "CRYPTO")
+            else:
+                symbol_from_db = get_symbol(str(product_id), "CRYPTO") if product_id else None
             position["tradingSymbol"] = symbol_from_db or product_symbol
 
             position["exchangeSegment"] = "CRYPTO"
-            position["productType"] = "NRML"
+            position["productType"] = "CNC" if is_spot else "NRML"
 
             # Net quantity: positive = long, negative = short
-            net_qty = int(position.get("size", 0))
+            # Use float() to support fractional spot sizes (e.g. 0.0001 BTC)
+            try:
+                net_qty = float(position.get("size", 0))
+            except (ValueError, TypeError):
+                net_qty = 0
             position["netQty"] = net_qty
 
             # Average entry price

@@ -145,9 +145,9 @@ class SplitOrderSchema(Schema):
         required=True,
         validate=validate.Range(min=0, min_inclusive=False, error="Total quantity must be a positive number."),
     )  # Total quantity to split
-    splitsize = fields.Float(
+    splitsize = fields.Int(
         required=True,
-        validate=validate.Range(min=0, min_inclusive=False, error="Split size must be a positive number."),
+        validate=validate.Range(min=1, error="Split size must be a positive integer."),
     )  # Size of each split
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
