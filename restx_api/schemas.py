@@ -9,8 +9,8 @@ class OrderSchema(Schema):
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
-        required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer.")
+    quantity = fields.Float(
+        required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
     )
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
@@ -38,11 +38,11 @@ class SmartOrderSchema(Schema):
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
+    quantity = fields.Float(
         required=True,
-        validate=validate.Range(min=0, error="Quantity must be a non-negative integer."),
+        validate=validate.Range(min=0, error="Quantity must be a non-negative number."),
     )
-    position_size = fields.Int(required=True)
+    position_size = fields.Float(required=True)
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
     )
@@ -74,8 +74,8 @@ class ModifyOrderSchema(Schema):
     price = fields.Float(
         required=True, validate=validate.Range(min=0, error="Price must be a non-negative number.")
     )
-    quantity = fields.Int(
-        required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer.")
+    quantity = fields.Float(
+        required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
     )
     disclosed_quantity = fields.Int(
         required=True,
@@ -107,8 +107,8 @@ class BasketOrderItemSchema(Schema):
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
-        required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer.")
+    quantity = fields.Float(
+        required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
     )
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
@@ -141,13 +141,13 @@ class SplitOrderSchema(Schema):
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
+    quantity = fields.Float(
         required=True,
-        validate=validate.Range(min=1, error="Total quantity must be a positive integer."),
+        validate=validate.Range(min=0, min_inclusive=False, error="Total quantity must be a positive number."),
     )  # Total quantity to split
-    splitsize = fields.Int(
+    splitsize = fields.Float(
         required=True,
-        validate=validate.Range(min=1, error="Split size must be a positive integer."),
+        validate=validate.Range(min=0, min_inclusive=False, error="Split size must be a positive number."),
     )  # Size of each split
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])

@@ -406,22 +406,22 @@ def place_smartorder_api(data, auth):
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
+    position_size = float(data.get("position_size", "0"))
 
-    current_position = int(
+    current_position = float(
         get_open_position(symbol, exchange, map_product_type(product), auth)
     )
     logger.info(
         f"[DeltaExchange] SmartOrder: target={position_size} current={current_position}"
     )
 
-    if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
+    if position_size == 0 and current_position == 0 and float(data["quantity"]) != 0:
         return place_order_api(data, auth)
 
     if position_size == current_position:
         msg = (
             "No OpenPosition Found. Not placing Exit order."
-            if int(data["quantity"]) == 0
+            if float(data["quantity"]) == 0
             else "No action needed. Position size matches current position"
         )
         return res, {"status": "success", "message": msg}, None

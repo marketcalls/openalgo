@@ -253,6 +253,8 @@ CONTRACT_TYPE_MAP = {
     "futures": "FUT",
     "call_options": "CE",
     "put_options": "PE",
+    "spot": "SPOT",
+    "move_options": "MOVE",
     "interest_rate_swaps": "IRS",
     "spreads": "SPREAD",
     "options_combos": "COMBO",
@@ -386,7 +388,7 @@ def process_delta_products(products):
         expiry         ← settlement_time       (None → "" for perpetuals;
                                                 ISO string → "DD-MON-YY" for futures/options)
         strike         ← 0.0                   (strike is encoded in the symbol for options)
-        lotsize        ← 1                     (1 contract; contract_value gives underlying units)
+        lotsize        ← product_specs.min_order_size or 1  (fractional for spot, e.g. 0.0001 BTC)
         instrumenttype ← contract_type         (mapped via CONTRACT_TYPE_MAP)
         tick_size      ← tick_size             (string → float)
     """
@@ -437,16 +439,30 @@ def process_delta_products(products):
         except (ValueError, TypeError):
             tick_size = 0.0
 
-        # Extract strike for option contracts from symbol (e.g. C-BTC-80000-280225 -> 80000.0)
+        # Extract strike price — use the API field directly when available,
+        # fall back to parsing from the symbol (e.g. C-BTC-80000-280225 -> 80000.0)
         symbol_str = p.get("symbol", "")
         strike_val = 0.0
         if instrument_type in ("CE", "PE", "TCE", "TPE", "SYNCE", "SYNPE"):
-            parts_s = symbol_str.split("-")
-            if len(parts_s) >= 3:
-                try:
-                    strike_val = float(parts_s[2])
-                except (ValueError, TypeError):
-                    strike_val = 0.0
+            try:
+                strike_val = float(p.get("strike_price") or 0)
+            except (ValueError, TypeError):
+                strike_val = 0.0
+            # Fallback: parse from symbol if API field missing
+            if strike_val == 0.0:
+                parts_s = symbol_str.split("-")
+                if len(parts_s) >= 3:
+                    try:
+                        strike_val = float(parts_s[2])
+                    except (ValueError, TypeError):
+                        strike_val = 0.0
+
+        # Lot size: use min_order_size from product_specs (important for spot
+        # instruments where fractional quantities are allowed, e.g. 0.0001 BTC)
+        try:
+            lotsize = float(product_specs.get("min_order_size") or 1)
+        except (ValueError, TypeError):
+            lotsize = 1.0
 
         # Build OpenAlgo canonical symbol (exchange = CRYPTO, broker-agnostic format)
         canonical_symbol = _to_canonical_symbol(symbol_str, instrument_type, expiry)
@@ -461,7 +477,7 @@ def process_delta_products(products):
                 "brexchange": "DELTAIN",       # Broker identifier (Delta Exchange India)
                 "expiry": expiry,
                 "strike": strike_val,
-                "lotsize": 1,
+                "lotsize": lotsize,
                 "instrumenttype": instrument_type,
                 "tick_size": tick_size,
                 "contract_value": float(p.get("contract_value") or 1.0),
