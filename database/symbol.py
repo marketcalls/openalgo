@@ -85,18 +85,18 @@ def enhanced_search_symbols(query: str, exchange: str = None) -> list[SymToken]:
             try:
                 num_term = float(term)
                 term_conditions = or_(
-                    SymToken.symbol.ilike(f"%{safe_term}%"),
-                    SymToken.brsymbol.ilike(f"%{safe_term}%"),
-                    SymToken.name.ilike(f"%{safe_term}%"),
-                    SymToken.token.ilike(f"%{safe_term}%"),
+                    SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                     SymToken.strike == num_term,
                 )
             except ValueError:
                 term_conditions = or_(
-                    SymToken.symbol.ilike(f"%{safe_term}%"),
-                    SymToken.brsymbol.ilike(f"%{safe_term}%"),
-                    SymToken.name.ilike(f"%{safe_term}%"),
-                    SymToken.token.ilike(f"%{safe_term}%"),
+                    SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                 )
             all_conditions.append(term_conditions)
 
@@ -192,18 +192,18 @@ def fno_search_symbols_db(
                 try:
                     num_term = float(term)
                     term_conditions = or_(
-                        SymToken.symbol.ilike(f"%{safe_term}%"),
-                        SymToken.brsymbol.ilike(f"%{safe_term}%"),
-                        SymToken.name.ilike(f"%{safe_term}%"),
-                        SymToken.token.ilike(f"%{safe_term}%"),
+                        SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                         SymToken.strike == num_term,
                     )
                 except ValueError:
                     term_conditions = or_(
-                        SymToken.symbol.ilike(f"%{safe_term}%"),
-                        SymToken.brsymbol.ilike(f"%{safe_term}%"),
-                        SymToken.name.ilike(f"%{safe_term}%"),
-                        SymToken.token.ilike(f"%{safe_term}%"),
+                        SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                     )
                 all_conditions.append(term_conditions)
 

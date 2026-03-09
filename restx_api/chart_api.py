@@ -1,3 +1,4 @@
+import json
 import os
 
 from flask import jsonify, make_response, request
@@ -83,7 +84,12 @@ class ChartPreferencesResource(Resource):
                     return make_response(
                         jsonify({"status": "error", "message": f"Preference key too long: {k[:20]}... (max 50 chars)"}), 400
                     )
-                if isinstance(v, str) and len(v) > 1_048_576:
+                # Check serialized size for all value types (not just strings)
+                try:
+                    serialized = json.dumps(v)
+                except (TypeError, ValueError):
+                    serialized = str(v)
+                if len(serialized) > 1_048_576:
                     return make_response(
                         jsonify({"status": "error", "message": f"Preference value too large for key: {k} (max 1MB)"}), 400
                     )
