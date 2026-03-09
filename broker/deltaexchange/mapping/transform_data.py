@@ -12,11 +12,18 @@ def _order_size(quantity, symbol, exchange):
     Convert quantity to the correct type for the Delta Exchange size parameter.
     - Spot instruments: fractional float (e.g. 0.05 SOL)
     - Derivatives (futures/options/perps): integer number of contracts
+
+    Raises ValueError if a fractional quantity is passed for a non-spot instrument.
     """
     qty = float(quantity)
     info = get_symbol_info(symbol, exchange)
     if info and info.instrumenttype == "SPOT":
         return qty
+    if qty != int(qty):
+        raise ValueError(
+            f"Fractional quantity ({qty}) not allowed for derivative contracts. "
+            f"Use whole numbers for {symbol}."
+        )
     return int(qty)
 
 

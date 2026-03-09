@@ -228,20 +228,61 @@ def get_trade_book(auth):
 # ---------------------------------------------------------------------------
 
 def get_positions(auth):
-    """Fetch all open margined positions."""
+    """
+    Fetch all open positions — both derivatives (margined) and spot (wallet).
+
+    Derivatives come from GET /v2/positions/margined.
+    Spot holdings come from GET /v2/wallet/balances — non-INR assets with
+    a non-zero balance are synthesised into position-like dicts so they
+    appear in the OpenAlgo position book alongside derivative positions.
+    """
+    positions = []
+
+    # 1. Derivative positions (perpetual futures, options)
     try:
         result = get_api_response("/v2/positions/margined", auth, method="GET")
         if result.get("success"):
-            return result.get("result", [])
-        logger.warning(f"[DeltaExchange] get_positions unexpected response: {result}")
-        return []
+            positions.extend(result.get("result", []))
+        else:
+            logger.warning(f"[DeltaExchange] get_positions/margined unexpected: {result}")
     except Exception as e:
-        logger.error(f"[DeltaExchange] Exception in get_positions: {e}")
-        return []
+        logger.error(f"[DeltaExchange] Exception in get_positions/margined: {e}")
+
+    # 2. Spot holdings from wallet balances
+    try:
+        wallet_result = get_api_response("/v2/wallet/balances", auth, method="GET")
+        if wallet_result.get("success"):
+            for asset in wallet_result.get("result", []):
+                if not isinstance(asset, dict):
+                    continue
+                symbol = asset.get("asset_symbol", "") or asset.get("symbol", "")
+                # Skip INR (settlement currency) and zero-balance assets
+                if symbol in ("INR", "USD", "") or not symbol:
+                    continue
+                balance = float(asset.get("balance", 0) or 0)
+                blocked = float(asset.get("blocked_margin", 0) or 0)
+                size = balance - blocked  # available spot holding
+                if size <= 0:
+                    continue
+                # Synthesise a position-like dict matching /v2/positions/margined structure
+                spot_symbol = f"{symbol}_INR"
+                positions.append({
+                    "product_id": asset.get("asset_id", ""),
+                    "product_symbol": spot_symbol,
+                    "size": size,
+                    "entry_price": "0",  # Wallet doesn't track entry price
+                    "realized_pnl": "0",
+                    "unrealized_pnl": "0",
+                    "_is_spot": True,  # Internal flag for downstream mapping
+                })
+    except Exception as e:
+        logger.error(f"[DeltaExchange] Exception fetching spot wallet positions: {e}")
+
+    return positions
 
 
 def get_holdings(auth):
-    """Delta Exchange is a derivatives-only exchange; equity holdings are not applicable."""
+    """Delta Exchange has no equity holdings concept; spot is shown in positions."""
     return []
 
 
