@@ -2,6 +2,7 @@
 # Mapping OpenAlgo margin positions to Delta Exchange margin_required API format
 # Delta Exchange endpoint: GET /v2/products/{product_id}/margin_required
 
+from broker.deltaexchange.mapping.transform_data import _order_size
 from database.token_db import get_token
 from utils.logging import get_logger
 
@@ -15,7 +16,7 @@ def transform_margin_positions(positions):
     Each OpenAlgo position is converted to a dict with the fields needed
     to call GET /v2/products/{product_id}/margin_required:
         product_id  (int)  – from token DB (token = product_id on Delta)
-        size        (int)  – absolute quantity
+        size        (int|float)  – contracts (int) or spot quantity (float)
         side        (str)  – "buy" or "sell"
         order_type  (str)  – "limit_order" or "market_order"
         limit_price (str)  – required if order_type == "limit_order"
@@ -54,7 +55,7 @@ def transform_margin_positions(positions):
 
             entry = {
                 "product_id": product_id,
-                "size": int(pos["quantity"]),
+                "size": _order_size(pos["quantity"], symbol, exchange),
                 "side": side,
                 "order_type": order_type,
             }
