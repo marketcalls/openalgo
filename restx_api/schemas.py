@@ -304,7 +304,7 @@ class MarginCalculatorSchema(Schema):
     """Schema for margin calculator request"""
 
     apikey = fields.Str(
-        required=True, validate=validate.Length(min=1, max=256, error="API key is required.")
+        required=True, validate=validate.Length(min=1, max=256, error="API key must be between 1 and 256 characters.")
     )
     positions = fields.List(
         fields.Nested(MarginPositionSchema),
