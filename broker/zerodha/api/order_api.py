@@ -9,12 +9,63 @@ from broker.zerodha.mapping.transform_data import (
     transform_data,
     transform_modify_order_data,
 )
+from broker.zerodha.utils import validate_enctoken
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_order_api_config(auth):
+    """
+    Return (base_url, base_headers) for order write operations.
+
+    When ZERODHA_PLACE_ORDER_VIA_KITE_OMS_API=TRUE the Kite OMS endpoint
+    (kite.zerodha.com/oms) is used with an enctoken cookie, bypassing the
+    need for a Kite Connect developer subscription.  The enctoken is
+    validated via the shared cache in broker.zerodha.utils (same cache used
+    by the WebSocket adapter) so repeated calls within the TTL window incur
+    no extra HTTP round-trip.
+
+    Raises RuntimeError if OMS mode is requested but:
+      - ZERODHA_ENCTOKEN or ZERODHA_USER_ID env vars are missing, or
+      - the current enctoken is invalid / expired.
+
+    When OMS mode is disabled (default) the standard api.kite.trade endpoint
+    is used with the api_key:access_token pair passed in *auth*.
+    """
+    use_oms = os.getenv("ZERODHA_PLACE_ORDER_VIA_KITE_OMS_API", "").strip().upper() == "TRUE"
+
+    if not use_oms:
+        return "https://api.kite.trade", {
+            "X-Kite-Version": "3",
+            "Authorization": f"token {auth}",
+        }
+
+    enctoken = os.getenv("ZERODHA_ENCTOKEN", "").strip()
+    user_id = os.getenv("ZERODHA_USER_ID", "").strip()
+
+    if not enctoken:
+        raise RuntimeError(
+            "ZERODHA_PLACE_ORDER_VIA_KITE_OMS_API is TRUE but ZERODHA_ENCTOKEN is not set."
+        )
+    if not user_id:
+        raise RuntimeError(
+            "ZERODHA_PLACE_ORDER_VIA_KITE_OMS_API is TRUE but ZERODHA_USER_ID is not set."
+        )
+
+    if not validate_enctoken(enctoken, user_id):
+        raise RuntimeError(
+            f"ZERODHA_PLACE_ORDER_VIA_KITE_OMS_API is TRUE but enctoken is invalid or "
+            f"expired for user {user_id}. Please refresh ZERODHA_ENCTOKEN in your .env."
+        )
+
+    logger.debug(f"Using Kite OMS API for order operations (user: {user_id})")
+    return "https://kite.zerodha.com/oms", {
+        "Authorization": f"enctoken {enctoken}",
+    }
 
 
 def get_api_response(endpoint, auth, method="GET", payload=None):
@@ -142,18 +193,16 @@ def place_order_api(data, auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    headers = {
-        "X-Kite-Version": "3",
-        "Authorization": f"token {AUTH_TOKEN}",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
+    # Resolve base URL and auth headers (OMS or standard Kite Connect)
+    base_url, base_headers = _get_order_api_config(AUTH_TOKEN)
+    headers = {**base_headers, "Content-Type": "application/x-www-form-urlencoded"}
 
     # Determine order variety: "amo" for After Market Orders, "regular" otherwise
     variety = newdata.get("variety", "regular")
 
     # Make the request using the shared client
     response = client.post(
-        f"https://api.kite.trade/orders/{variety}", headers=headers, content=payload_encoded
+        f"{base_url}/orders/{variety}", headers=headers, content=payload_encoded
     )
 
     # Parse the response
@@ -310,12 +359,12 @@ def cancel_order(orderid, auth, variety="regular"):
         # Get the shared httpx client with connection pooling
         client = get_httpx_client()
 
-        # Set up the request headers
-        headers = {"X-Kite-Version": "3", "Authorization": f"token {AUTH_TOKEN}"}
+        # Resolve base URL and auth headers (OMS or standard Kite Connect)
+        base_url, headers = _get_order_api_config(AUTH_TOKEN)
 
         # Make the DELETE request using the shared client
         response = client.delete(
-            f"https://api.kite.trade/orders/{variety}/{orderid}", headers=headers
+            f"{base_url}/orders/{variety}/{orderid}", headers=headers
         )
 
         response.raise_for_status()
@@ -365,18 +414,16 @@ def modify_order(data, auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    headers = {
-        "X-Kite-Version": "3",
-        "Authorization": f"token {AUTH_TOKEN}",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
+    # Resolve base URL and auth headers (OMS or standard Kite Connect)
+    base_url, base_headers = _get_order_api_config(AUTH_TOKEN)
+    headers = {**base_headers, "Content-Type": "application/x-www-form-urlencoded"}
 
     # Determine variety: "amo" for After Market Orders, "regular" otherwise
     variety = data.get("variety", "regular")
 
     # Make the request using the shared client
     response = client.put(
-        f"https://api.kite.trade/orders/{variety}/{data['orderid']}",
+        f"{base_url}/orders/{variety}/{data['orderid']}",
         headers=headers,
         content=payload_encoded,
     )
