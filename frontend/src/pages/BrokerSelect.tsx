@@ -21,6 +21,7 @@ const allBrokers = [
   { id: 'angel', name: 'Angel One', authType: 'totp' },
   { id: 'compositedge', name: 'CompositEdge', authType: 'oauth' },
   { id: 'dhan', name: 'Dhan', authType: 'oauth' },
+  { id: 'deltaexchange', name: 'Delta Exchange', authType: 'totp' },
   { id: 'indmoney', name: 'IndMoney', authType: 'totp' },
   { id: 'dhan_sandbox', name: 'Dhan (Sandbox)', authType: 'totp' },
   { id: 'definedge', name: 'Definedge', authType: 'totp' },
@@ -37,6 +38,7 @@ const allBrokers = [
   { id: 'nubra', name: 'Nubra', authType: 'totp' },
   { id: 'paytm', name: 'Paytm Money', authType: 'oauth' },
   { id: 'pocketful', name: 'Pocketful', authType: 'oauth' },
+  { id: 'rmoney', name: 'RMoney', authType: 'oauth' },
   { id: 'samco', name: 'Samco', authType: 'totp' },
   { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
   { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
@@ -130,6 +132,7 @@ export default function BrokerSelect() {
       case 'angel':
       case 'mstock':
       case 'indmoney':
+      case 'deltaexchange':
       case 'jainamxts':
       case 'dhan_sandbox':
       case 'definedge':
@@ -141,6 +144,7 @@ export default function BrokerSelect() {
       case 'ibulls':
       case 'iifl':
       case 'kotak':
+      case 'rmoney':
       case 'shoonya':
       case 'tradejini':
       case 'wisdom':

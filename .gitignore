@@ -23,6 +23,9 @@ config.ini
 
 #DB Files, CSV Files and Log/Tmp Files
 
+# Temporary/debug files
+tmp/
+
 # Numba/LLVMLITE cache directories (auto-created on Linux)
 .numba_cache/
 .llvm_tmp/

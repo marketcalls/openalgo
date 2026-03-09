@@ -19,30 +19,60 @@ from database.master_contract_status_db import (
     update_download_stats,
     update_status,
 )
+from utils.constants import CRYPTO_BROKERS
 from utils.logging import get_logger
 from utils.session import get_session_expiry_time, set_session_login_time
 
 logger = get_logger(__name__)
 
-# IST timezone for cutoff time
+# Timezones
 IST = pytz.timezone("Asia/Kolkata")
+UTC = pytz.utc
 
 
-def get_master_contract_cutoff():
+def get_master_contract_cutoff(broker: str):
     """
-    Get master contract cutoff time from environment variable.
-    Returns tuple of (hour, minute) in IST.
-    Default: 08:00 IST
+    Get master contract cutoff time and reference timezone for the given broker.
+
+    Indian exchange brokers:
+        Reads MASTER_CONTRACT_CUTOFF_TIME (default "08:00").
+        Timezone: IST.  The Indian exchanges publish a complete symbol list once
+        daily before market open; 08:00 IST is a safe cache boundary.
+
+    Crypto brokers (CRYPTO_BROKERS):
+        Reads CRYPTO_MASTER_CONTRACT_CUTOFF_TIME (default "00:00").
+        Timezone: UTC.  Crypto markets run 24/7 on UTC; new expiry series can
+        appear at any time.  The default "00:00" UTC means: cache is valid for
+        the current UTC calendar day — the first login of each UTC day fetches
+        fresh data, subsequent logins reuse it.
+
+    Returns:
+        tuple: (hour: int, minute: int, tz: tzinfo)
     """
-    cutoff_time = os.getenv("MASTER_CONTRACT_CUTOFF_TIME", "08:00")
+    if broker.lower() in CRYPTO_BROKERS:
+        env_val = os.getenv("CRYPTO_MASTER_CONTRACT_CUTOFF_TIME", "00:00")
+        default = (0, 0)
+        env_name = "CRYPTO_MASTER_CONTRACT_CUTOFF_TIME"
+        tz = UTC
+        tz_label = "UTC"
+    else:
+        env_val = os.getenv("MASTER_CONTRACT_CUTOFF_TIME", "08:00")
+        default = (8, 0)
+        env_name = "MASTER_CONTRACT_CUTOFF_TIME"
+        tz = IST
+        tz_label = "IST"
+
     try:
-        parts = cutoff_time.split(":")
+        parts = env_val.split(":")
         hour = int(parts[0])
         minute = int(parts[1]) if len(parts) > 1 else 0
-        return hour, minute
+        return hour, minute, tz
     except (ValueError, IndexError):
-        logger.warning(f"Invalid MASTER_CONTRACT_CUTOFF_TIME: {cutoff_time}, using default 08:00")
-        return 8, 0
+        logger.warning(
+            f"Invalid {env_name}: {env_val!r}, using default "
+            f"{default[0]:02d}:{default[1]:02d} {tz_label}"
+        )
+        return default[0], default[1], tz
 
 
 def should_download_master_contract(broker):
@@ -51,9 +81,12 @@ def should_download_master_contract(broker):
 
     Rules:
     - If never downloaded before: always download
-    - If downloaded today after cutoff time (default 08:00 IST): skip download, use cached
-    - If downloaded before cutoff time today: download fresh
-    - If downloaded on previous day: download fresh
+    - If downloaded today (in broker's reference timezone) after cutoff: skip, use cached
+    - If downloaded before cutoff today: download fresh
+    - If downloaded on a previous day: download fresh
+
+    Indian brokers use IST and a default 08:00 IST cutoff.
+    Crypto brokers use UTC and a default 00:00 UTC cutoff (once per UTC day).
 
     Returns:
         tuple: (should_download: bool, reason: str)
@@ -63,36 +96,37 @@ def should_download_master_contract(broker):
     if last_download is None:
         return True, "No previous download found"
 
-    # Get cutoff time from environment
-    cutoff_hour, cutoff_minute = get_master_contract_cutoff()
+    # Get cutoff time and reference timezone for this broker
+    cutoff_hour, cutoff_minute, tz = get_master_contract_cutoff(broker)
+    tz_label = "UTC" if tz is UTC else "IST"
 
-    # Get current time in IST
-    now_ist = datetime.now(IST)
-    today_ist = now_ist.date()
+    # Current calendar date in the broker's reference timezone
+    now_tz = datetime.now(tz)
+    today_tz = now_tz.date()
 
-    # Get the download time in IST
-    # Handle naive datetime by assuming it was stored in local time (IST)
+    # Normalise the stored download timestamp into the broker's reference timezone
     if last_download.tzinfo is None:
-        last_download_ist = IST.localize(last_download)
+        last_download_tz = IST.localize(last_download).astimezone(tz)
     else:
-        last_download_ist = last_download.astimezone(IST)
+        last_download_tz = last_download.astimezone(tz)
 
-    download_date = last_download_ist.date()
-    download_hour = last_download_ist.hour
-    download_minute = last_download_ist.minute
-
-    # If downloaded on a different day, download fresh
-    if download_date != today_ist:
-        return True, f"Last download was on {download_date}, today is {today_ist}"
-
-    # Downloaded today - check if it was after cutoff time
-    download_time_minutes = download_hour * 60 + download_minute
+    download_date = last_download_tz.date()
+    download_time_minutes = last_download_tz.hour * 60 + last_download_tz.minute
     cutoff_time_minutes = cutoff_hour * 60 + cutoff_minute
 
+    # Different calendar day in reference timezone → always re-download
+    if download_date != today_tz:
+        return True, f"Last download was on {download_date} {tz_label}, today is {today_tz}"
+
+    # Same calendar day — use cache if downloaded after cutoff, otherwise re-download
     if download_time_minutes >= cutoff_time_minutes:
-        return False, f"Already downloaded today at {last_download_ist.strftime('%H:%M')} IST (after {cutoff_hour:02d}:{cutoff_minute:02d} cutoff)"
+        return (
+            False,
+            f"Already downloaded today at {last_download_tz.strftime('%H:%M')} {tz_label} "
+            f"(after {cutoff_hour:02d}:{cutoff_minute:02d} cutoff)",
+        )
     else:
-        return True, f"Download was before {cutoff_hour:02d}:{cutoff_minute:02d} IST cutoff"
+        return True, f"Download was before {cutoff_hour:02d}:{cutoff_minute:02d} {tz_label} cutoff"
 
 
 def load_existing_master_contract(broker):

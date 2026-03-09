@@ -37,10 +37,10 @@ if "%OPENALGO_DIR:~-1%"=="\" set OPENALGO_DIR=%OPENALGO_DIR:~0,-1%
 set SETUP_FAILED=0
 
 REM XTS Brokers that require market data credentials
-set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom
+set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom
 
 REM Valid brokers list
-set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha
+set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha
 
 REM Banner
 echo.
@@ -157,10 +157,10 @@ echo   ========================================
 echo.
 echo   Valid brokers:
 echo   fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,
-echo   definedge, dhan, dhan_sandbox, firstock, flattrade, fyers,
+echo   definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,
 echo   groww, ibulls, iifl, indmoney, jainamxts, kotak, motilal,
-echo   mstock, nubra, paytm, pocketful, samco, shoonya, tradejini,
-echo   upstox, wisdom, zebu, zerodha
+echo   mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,
+echo   tradejini, upstox, wisdom, zebu, zerodha
 echo.
 
 :get_broker
@@ -508,7 +508,7 @@ echo   - Strategies: %OPENALGO_DIR%\strategies\
 echo   - Logs:       %OPENALGO_DIR%\log\
 echo.
 echo XTS Brokers (require market data credentials):
-echo   fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom
+echo   fivepaisaxts, compositedge, ibulls, iifl, jainamxts, rmoney, wisdom
 echo.
 goto end
 

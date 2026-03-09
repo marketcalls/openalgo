@@ -1,9 +1,11 @@
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { showToast } from '@/utils/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useThemeStore } from '@/stores/themeStore'
+import { useAuthStore } from '@/stores/authStore'
+import { makeFormatCurrency } from '@/lib/utils'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
@@ -40,18 +42,11 @@ interface PnLData {
   drawdown_series: PnLDataPoint[]
 }
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value)
-}
-
 export default function PnLTracker() {
   const { mode } = useThemeStore()
   const isDarkMode = mode === 'dark'
+  const { user } = useAuthStore()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
 
   // State
   const [isLoading, setIsLoading] = useState(false)
@@ -72,6 +67,14 @@ export default function PnLTracker() {
   const pnlSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
   const drawdownSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
   const watermarkRef = useRef<HTMLDivElement | null>(null)
+  // Stable ref for formatCurrency — always holds the latest function without
+  // being a useCallback/useEffect dependency.  The chart price formatter reads
+  // from this ref so it always uses the current broker format, while initChart
+  // does NOT need formatCurrency in its dependency array.  This prevents the
+  // cascade: user?.broker changes → formatCurrency new ref → initChart new ref
+  // → both useEffects fire → duplicate chart init + duplicate API requests.
+  const formatCurrencyRef = useRef(formatCurrency)
+  useEffect(() => { formatCurrencyRef.current = formatCurrency }, [formatCurrency])
 
   // Initialize chart
   const initChart = useCallback(() => {
@@ -81,6 +84,14 @@ export default function PnLTracker() {
     if (chartRef.current) {
       chartRef.current.remove()
       chartRef.current = null
+    }
+
+    // Remove existing watermark before creating a new one — prevents stacking
+    // multiple watermark divs when initChart is called more than once (e.g. on
+    // theme change or dependency array re-evaluation).
+    if (watermarkRef.current && watermarkRef.current.parentNode) {
+      watermarkRef.current.parentNode.removeChild(watermarkRef.current)
+      watermarkRef.current = null
     }
 
     const container = chartContainerRef.current
@@ -169,7 +180,7 @@ export default function PnLTracker() {
       priceScaleId: 'right',
       priceFormat: {
         type: 'custom',
-        formatter: (price: number) => formatCurrency(price),
+        formatter: (price: number) => formatCurrencyRef.current(price),
       },
     })
 
@@ -182,7 +193,7 @@ export default function PnLTracker() {
       priceScaleId: 'right',
       priceFormat: {
         type: 'custom',
-        formatter: (price: number) => formatCurrency(price),
+        formatter: (price: number) => formatCurrencyRef.current(price),
       },
     })
 
@@ -321,13 +332,19 @@ export default function PnLTracker() {
 
   // Initialize chart and load data
   useEffect(() => {
-    initChart()
+    const resizeCleanup = initChart()
     loadPnLData()
 
     return () => {
+      // Remove the resize listener registered inside initChart
+      resizeCleanup?.()
       if (chartRef.current) {
         chartRef.current.remove()
         chartRef.current = null
+      }
+      if (watermarkRef.current && watermarkRef.current.parentNode) {
+        watermarkRef.current.parentNode.removeChild(watermarkRef.current)
+        watermarkRef.current = null
       }
     }
   }, [initChart, loadPnLData])
@@ -335,8 +352,9 @@ export default function PnLTracker() {
   // Re-initialize chart on theme change
   useEffect(() => {
     if (chartRef.current) {
-      initChart()
+      const resizeCleanup = initChart()
       loadPnLData()
+      return resizeCleanup
     }
   }, [initChart, loadPnLData])
 

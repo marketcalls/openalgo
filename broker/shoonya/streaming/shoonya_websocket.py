@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Dict, Optional
+from typing import Any
 
 import websocket
 
@@ -86,6 +86,12 @@ class ShoonyaWebSocket:
         # Logging
         self.logger = logging.getLogger("shoonya_websocket")
 
+    def __del__(self):
+        try:
+            self.stop()
+        except Exception:
+            pass
+
     def connect(self) -> bool:
         """
         Establish WebSocket connection with authentication
@@ -129,7 +135,7 @@ class ShoonyaWebSocket:
         """
         start_time = time.time()
 
-        while time.time() - start_time < self.CONNECTION_TIMEOUT:
+        while self.running and time.time() - start_time < self.CONNECTION_TIMEOUT:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True
@@ -151,6 +157,8 @@ class ShoonyaWebSocket:
     def _cleanup_connection_state(self) -> None:
         """Clean up connection state"""
         self.connected = False
+        with self._heartbeat_lock:
+            self._last_message_time = None
         self._stop_heartbeat()
 
     def stop(self) -> None:
@@ -165,32 +173,39 @@ class ShoonyaWebSocket:
         self._stop_heartbeat()
 
     def _close_websocket(self) -> None:
-        """Close WebSocket connection"""
+        """Close WebSocket connection and null reference"""
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
                 self.logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self.ws = None
 
+    # M3 fix: Null ws_thread after join to match _close_websocket pattern
     def _wait_for_thread_completion(self) -> None:
         """Wait for WebSocket thread to complete"""
         if self.ws_thread and self.ws_thread.is_alive():
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
+                return
+        self.ws_thread = None
 
     # WebSocket Event Handlers
+
     def _on_open(self, ws) -> None:
-        """Handle WebSocket connection open event"""
-        self.connected = True
+        """Handle WebSocket connection open event — wait for auth before marking connected"""
         self._update_last_message_time()
 
         self.logger.info("WebSocket connection opened, sending authentication")
 
-        if self._send_authentication():
-            self._start_heartbeat()
-            self._call_external_callback(self.on_open, ws)
+        # SW-1 fix: Don't start heartbeat here — connected is still False so
+        # the heartbeat worker loop exits immediately. Start it in
+        # _handle_auth_response after connected=True instead.
+        self._send_authentication()
 
+    # SW-4 fix: Snapshot self.ws to prevent race with _close_websocket nulling it
     def _send_authentication(self) -> bool:
         """
         Send authentication message to server
@@ -198,6 +213,11 @@ class ShoonyaWebSocket:
         Returns:
             bool: True if authentication sent successfully, False otherwise
         """
+        ws = self.ws
+        if not ws:
+            self.logger.error("Cannot send authentication: WebSocket not available")
+            return False
+
         auth_msg = {
             "t": self.MSG_TYPE_CONNECT,
             "uid": self.user_id,
@@ -207,7 +227,7 @@ class ShoonyaWebSocket:
         }
 
         try:
-            self.ws.send(json.dumps(auth_msg))
+            ws.send(json.dumps(auth_msg))
             self.logger.info("Authentication message sent")
             return True
         except Exception as e:
@@ -251,7 +271,7 @@ class ShoonyaWebSocket:
 
     def _handle_auth_response(self, data: dict[str, Any]) -> bool:
         """
-        Handle authentication response
+        Handle authentication response — set connected only after auth succeeds
 
         Args:
             data: Authentication response data
@@ -260,9 +280,20 @@ class ShoonyaWebSocket:
             bool: True (message handled)
         """
         if data.get("s") == self.AUTH_SUCCESS:
+            self.connected = True
             self.logger.info("Authentication successful")
+            # SW-1 fix: Start heartbeat AFTER connected=True so the worker loop runs
+            self._start_heartbeat()
+            # SA-R6-11 fix: Pass actual ws reference via snapshot to avoid race with _close_websocket
+            ws = self.ws
+            self._call_external_callback(self.on_open, ws)
         else:
             self.logger.error(f"Authentication failed: {data}")
+            # SW-5 fix: Defensively set connected=False in case future changes
+            # set it before auth completes
+            self.connected = False
+            self.running = False
+            self._close_websocket()
 
         return True
 
@@ -299,20 +330,43 @@ class ShoonyaWebSocket:
         with self._heartbeat_lock:
             self._last_message_time = time.time()
 
+    # SW-3 fix: Read _last_message_time under lock
+    def _get_last_message_time(self) -> float | None:
+        """Get the timestamp of the last received message (thread-safe)"""
+        with self._heartbeat_lock:
+            return self._last_message_time
+
     def _start_heartbeat(self) -> None:
-        """Start heartbeat monitoring thread"""
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            return
+        """Start heartbeat monitoring thread (serialized under lock to prevent duplicates)"""
+        with self._heartbeat_lock:
+            if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+                # If the old heartbeat's loop conditions are no longer met,
+                # clear stale reference so we start a fresh thread
+                if not (self.running and self.connected):
+                    self._heartbeat_thread = None
+                else:
+                    return
 
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
-        self._heartbeat_thread.start()
-        self.logger.debug("Heartbeat thread started")
+            self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+            self._heartbeat_thread.start()
+            self.logger.debug("Heartbeat thread started")
 
+    # SW-2 fix: Guard against self-join when heartbeat thread calls _stop_heartbeat
+    # via _check_connection_health → _close_websocket → _on_close → _stop_heartbeat
     def _stop_heartbeat(self) -> None:
         """Stop heartbeat monitoring thread"""
-        # Thread will stop when self.running becomes False
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+        with self._heartbeat_lock:
+            thread = self._heartbeat_thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
             self.logger.debug("Waiting for heartbeat thread to stop")
+            thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if thread.is_alive():
+                self.logger.warning("Heartbeat thread did not terminate within timeout")
+        with self._heartbeat_lock:
+            # SW-R6-2 fix: Only null if still pointing to the thread we joined,
+            # to avoid nulling a new thread started by a concurrent _start_heartbeat
+            if self._heartbeat_thread is thread:
+                self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
@@ -331,6 +385,7 @@ class ShoonyaWebSocket:
                 self.logger.error(f"Heartbeat worker error: {e}")
                 break
 
+    # L1 fix: Snapshot self.ws to prevent race with _close_websocket nulling it
     def _send_heartbeat(self) -> bool:
         """
         Send heartbeat message to server
@@ -338,18 +393,20 @@ class ShoonyaWebSocket:
         Returns:
             bool: True if heartbeat sent successfully, False otherwise
         """
-        if not self.ws:
+        ws = self.ws
+        if not ws:
             return False
 
         try:
             heartbeat_msg = {"t": self.MSG_TYPE_HEARTBEAT}
-            self.ws.send(json.dumps(heartbeat_msg))
+            ws.send(json.dumps(heartbeat_msg))
             self.logger.debug("Sent heartbeat")
             return True
         except Exception as e:
             self.logger.error(f"Heartbeat send error: {e}")
             return False
 
+    # M3 fix: Set flag under lock, close websocket OUTSIDE lock to avoid blocking
     def _check_connection_health(self) -> bool:
         """
         Check connection health based on last message timestamp
@@ -357,13 +414,21 @@ class ShoonyaWebSocket:
         Returns:
             bool: True if connection is healthy, False if timed out
         """
+        # M5 fix: Don't write self.running under _heartbeat_lock — it's not the
+        # lock that protects running. Set it alongside should_close outside the lock.
+        should_close = False
         with self._heartbeat_lock:
             if self._last_message_time:
                 time_since_message = time.time() - self._last_message_time
                 if time_since_message > self.HEARTBEAT_TIMEOUT:
                     self.logger.error("Connection timeout - no messages received")
-                    self._close_websocket()
-                    return False
+                    should_close = True
+
+        # SW-R6-3 fix: Merged redundant should_close checks
+        if should_close:
+            self.running = False
+            self._close_websocket()
+            return False
 
         return True
 
@@ -441,6 +506,7 @@ class ShoonyaWebSocket:
         message_dict = {"t": msg_type, "k": scrip_list}
         return self._send_message(message_dict, operation_name)
 
+    # L2 fix: Snapshot self.ws to prevent race with _close_websocket nulling it
     def _send_message(self, message_dict: dict[str, Any], operation_name: str) -> bool:
         """
         Send message with comprehensive error handling and validation
@@ -452,29 +518,31 @@ class ShoonyaWebSocket:
         Returns:
             bool: True if message sent successfully, False otherwise
         """
-        if not self._validate_connection_state(operation_name):
+        ws = self.ws
+        if not self._validate_connection_state(ws, operation_name):
             return False
 
         try:
             message_json = json.dumps(message_dict)
-            self.ws.send(message_json)
+            ws.send(message_json)
             self.logger.debug(f"Sent {operation_name}: {message_dict}")
             return True
         except Exception as e:
             self.logger.error(f"Failed to send {operation_name}: {e}")
             return False
 
-    def _validate_connection_state(self, operation_name: str) -> bool:
+    def _validate_connection_state(self, ws, operation_name: str) -> bool:
         """
         Validate that connection is ready for sending messages
 
         Args:
+            ws: WebSocket reference snapshot
             operation_name: Operation name for logging
 
         Returns:
             bool: True if connection is ready, False otherwise
         """
-        if not self.ws:
+        if not ws:
             self.logger.warning(f"Cannot send {operation_name}: WebSocket not initialized")
             return False
 
@@ -494,6 +562,7 @@ class ShoonyaWebSocket:
         """
         return self.connected and self.running
 
+    # L5 fix: Snapshot thread references to prevent race with null assignments
     def get_connection_info(self) -> dict[str, Any]:
         """
         Get connection information for debugging
@@ -501,15 +570,17 @@ class ShoonyaWebSocket:
         Returns:
             Dict: Connection state information
         """
+        heartbeat_thread = self._heartbeat_thread
+        ws_thread = self.ws_thread
         return {
             "connected": self.connected,
             "running": self.running,
             "user_id": self.user_id,
             "actid": self.actid,
             "ws_url": self.WS_URL,
-            "last_message_time": self._last_message_time,
-            "heartbeat_thread_alive": self._heartbeat_thread.is_alive()
-            if self._heartbeat_thread
+            "last_message_time": self._get_last_message_time(),
+            "heartbeat_thread_alive": heartbeat_thread.is_alive()
+            if heartbeat_thread
             else False,
-            "ws_thread_alive": self.ws_thread.is_alive() if self.ws_thread else False,
+            "ws_thread_alive": ws_thread.is_alive() if ws_thread else False,
         }
