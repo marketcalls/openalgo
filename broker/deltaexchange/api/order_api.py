@@ -228,20 +228,61 @@ def get_trade_book(auth):
 # ---------------------------------------------------------------------------
 
 def get_positions(auth):
-    """Fetch all open margined positions."""
+    """
+    Fetch all open positions — both derivatives (margined) and spot (wallet).
+
+    Derivatives come from GET /v2/positions/margined.
+    Spot holdings come from GET /v2/wallet/balances — non-INR assets with
+    a non-zero balance are synthesised into position-like dicts so they
+    appear in the OpenAlgo position book alongside derivative positions.
+    """
+    positions = []
+
+    # 1. Derivative positions (perpetual futures, options)
     try:
         result = get_api_response("/v2/positions/margined", auth, method="GET")
         if result.get("success"):
-            return result.get("result", [])
-        logger.warning(f"[DeltaExchange] get_positions unexpected response: {result}")
-        return []
+            positions.extend(result.get("result", []))
+        else:
+            logger.warning(f"[DeltaExchange] get_positions/margined unexpected: {result}")
     except Exception as e:
-        logger.error(f"[DeltaExchange] Exception in get_positions: {e}")
-        return []
+        logger.error(f"[DeltaExchange] Exception in get_positions/margined: {e}")
+
+    # 2. Spot holdings from wallet balances
+    try:
+        wallet_result = get_api_response("/v2/wallet/balances", auth, method="GET")
+        if wallet_result.get("success"):
+            for asset in wallet_result.get("result", []):
+                if not isinstance(asset, dict):
+                    continue
+                symbol = asset.get("asset_symbol", "") or asset.get("symbol", "")
+                # Skip INR (settlement currency) and zero-balance assets
+                if symbol in ("INR", "USD", "") or not symbol:
+                    continue
+                balance = float(asset.get("balance", 0) or 0)
+                blocked = float(asset.get("blocked_margin", 0) or 0)
+                size = balance - blocked  # available spot holding
+                if size <= 0:
+                    continue
+                # Synthesise a position-like dict matching /v2/positions/margined structure
+                spot_symbol = f"{symbol}_INR"
+                positions.append({
+                    "product_id": asset.get("asset_id", ""),
+                    "product_symbol": spot_symbol,
+                    "size": size,
+                    "entry_price": "0",  # Wallet doesn't track entry price
+                    "realized_pnl": "0",
+                    "unrealized_pnl": "0",
+                    "_is_spot": True,  # Internal flag for downstream mapping
+                })
+    except Exception as e:
+        logger.error(f"[DeltaExchange] Exception fetching spot wallet positions: {e}")
+
+    return positions
 
 
 def get_holdings(auth):
-    """Delta Exchange is a derivatives-only exchange; equity holdings are not applicable."""
+    """Delta Exchange has no equity holdings concept; spot is shown in positions."""
     return []
 
 
@@ -406,22 +447,22 @@ def place_smartorder_api(data, auth):
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
+    position_size = float(data.get("position_size", "0"))
 
-    current_position = int(
+    current_position = float(
         get_open_position(symbol, exchange, map_product_type(product), auth)
     )
     logger.info(
         f"[DeltaExchange] SmartOrder: target={position_size} current={current_position}"
     )
 
-    if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
+    if position_size == 0 and current_position == 0 and float(data["quantity"]) != 0:
         return place_order_api(data, auth)
 
     if position_size == current_position:
         msg = (
             "No OpenPosition Found. Not placing Exit order."
-            if int(data["quantity"]) == 0
+            if float(data["quantity"]) == 0
             else "No action needed. Position size matches current position"
         )
         return res, {"status": "success", "message": msg}, None

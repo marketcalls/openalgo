@@ -133,6 +133,9 @@ class RMoneyWebSocketClient:
         self.subscriptions = {}
         self._binary_packet_seen = False
 
+        # Reusable HTTP session for connection pooling (avoids FD churn)
+        self._http_session = requests.Session()
+
         # Initialize Socket.IO client
         self._setup_socketio()
 
@@ -255,40 +258,42 @@ class RMoneyWebSocketClient:
 
             self.logger.info(f"[MARKET DATA LOGIN] Attempting login to: {self.login_url}")
 
-            response = requests.post(
+            response = self._http_session.post(
                 self.login_url,
                 json=login_payload,
                 headers=headers,
                 timeout=30
             )
+            try:
+                if response.status_code == 200:
+                    result = response.json()
+                    self.logger.debug(f"[MARKET DATA LOGIN] Response: {result}")
 
-            if response.status_code == 200:
-                result = response.json()
-                self.logger.debug(f"[MARKET DATA LOGIN] Response: {result}")
+                    if result.get("type") == "success":
+                        login_result = result.get("result", {})
+                        self.market_data_token = login_result.get("token")
+                        self.actual_user_id = login_result.get("userID")
+                        self.app_version = login_result.get("appVersion")
+                        self.expiry_date = login_result.get("application_expiry_date")
 
-                if result.get("type") == "success":
-                    login_result = result.get("result", {})
-                    self.market_data_token = login_result.get("token")
-                    self.actual_user_id = login_result.get("userID")
-                    self.app_version = login_result.get("appVersion")
-                    self.expiry_date = login_result.get("application_expiry_date")
-
-                    if self.market_data_token and self.actual_user_id:
-                        self.logger.info(
-                            f"[MARKET DATA LOGIN] Success! UserID: {self.actual_user_id}"
-                        )
-                        return True
+                        if self.market_data_token and self.actual_user_id:
+                            self.logger.info(
+                                f"[MARKET DATA LOGIN] Success! UserID: {self.actual_user_id}"
+                            )
+                            return True
+                        else:
+                            self.logger.error("[MARKET DATA LOGIN] Missing token or userID in response")
+                            return False
                     else:
-                        self.logger.error("[MARKET DATA LOGIN] Missing token or userID in response")
+                        self.logger.error(f"[MARKET DATA LOGIN] API returned error: {result}")
                         return False
                 else:
-                    self.logger.error(f"[MARKET DATA LOGIN] API returned error: {result}")
+                    self.logger.error(
+                        f"[MARKET DATA LOGIN] HTTP Error: {response.status_code}, Response: {response.text}"
+                    )
                     return False
-            else:
-                self.logger.error(
-                    f"[MARKET DATA LOGIN] HTTP Error: {response.status_code}, Response: {response.text}"
-                )
-                return False
+            finally:
+                response.close()
 
         except requests.exceptions.Timeout:
             self.logger.error("[MARKET DATA LOGIN] Request timeout")
@@ -316,6 +321,14 @@ class RMoneyWebSocketClient:
                         self.sio.disconnect()
                 except Exception:
                     pass
+                # Force-kill Engine.IO transport to release its FD and threads
+                try:
+                    eio = getattr(self.sio, "eio", None)
+                    if eio and hasattr(eio, "disconnect"):
+                        eio.disconnect(abort=True)
+                except Exception:
+                    pass
+                self.sio = None
                 self.connected = False
 
             # Create fresh Socket.IO client to avoid stale internal state
@@ -365,15 +378,31 @@ class RMoneyWebSocketClient:
         self.running = False
         self.connected = False
 
-        try:
-            if self.sio and self.sio.connected:
-                self.sio.disconnect()
-                self.logger.info("[SOCKET.IO] Disconnected successfully")
-        except Exception as e:
-            self.logger.warning(f"[SOCKET.IO] Error during disconnect: {e}")
+        if self.sio:
+            try:
+                if self.sio.connected:
+                    self.sio.disconnect()
+                    self.logger.info("[SOCKET.IO] Disconnected successfully")
+            except Exception as e:
+                self.logger.warning(f"[SOCKET.IO] Error during disconnect: {e}")
+            # Force-kill Engine.IO transport to release its FD and threads
+            try:
+                eio = getattr(self.sio, "eio", None)
+                if eio and hasattr(eio, "disconnect"):
+                    eio.disconnect(abort=True)
+            except Exception:
+                pass
+            self.sio = None
 
         # Clear subscriptions
         self.subscriptions.clear()
+
+    def close(self) -> None:
+        """Full teardown: disconnect Socket.IO and release HTTP session."""
+        self.disconnect()
+        if self._http_session:
+            self._http_session.close()
+            self.logger.info("[CLEANUP] HTTP session closed")
 
     def subscribe(self, correlation_id: str, mode: int, instruments: List[Dict]) -> None:
         """
@@ -418,94 +447,99 @@ class RMoneyWebSocketClient:
                 f"[SUBSCRIBE] Code: {xts_message_code}, Instruments: {len(instruments)}"
             )
 
-            response = requests.post(
+            response = self._http_session.post(
                 self.subscription_url,
                 json=subscription_request,
                 headers=headers,
                 timeout=10,
             )
+            try:
+                if response.status_code == 200:
+                    result = response.json()
+                    self.logger.debug(f"[SUBSCRIBE] Response: {result}")
+                    if result.get("type") != "success":
+                        error_desc = result.get("description") or result.get("message") or str(result)
+                        self.logger.error(f"[SUBSCRIBE] API error response: {error_desc}")
+                        raise RuntimeError(error_desc)
 
-            if response.status_code == 200:
-                result = response.json()
-                self.logger.debug(f"[SUBSCRIBE] Response: {result}")
-                if result.get("type") != "success":
-                    error_desc = result.get("description") or result.get("message") or str(result)
-                    self.logger.error(f"[SUBSCRIBE] API error response: {error_desc}")
-                    raise RuntimeError(error_desc)
-
-                # Process initial quote data if available
-                if "result" in result:
-                    list_quotes = result["result"].get("listQuotes", [])
-                    self.logger.info(
-                        f"[SUBSCRIBE] Initial quote payload count: {len(list_quotes)} for code {xts_message_code}"
-                    )
-                    for quote_str in list_quotes:
-                        try:
-                            quote_data = (
-                                json.loads(quote_str) if isinstance(quote_str, str) else quote_str
-                            )
-                            self.logger.debug(f"[INITIAL QUOTE] {quote_data}")
-                            if isinstance(quote_data, dict) and "MessageCode" not in quote_data:
-                                quote_data["MessageCode"] = xts_message_code
-                            if self.on_data:
-                                self.on_data(self, quote_data)
-                        except json.JSONDecodeError as e:
-                            self.logger.error(f"[INITIAL QUOTE] Parse error: {e}")
-
-                self.logger.info(
-                    f"[SUBSCRIBE] Success - {len(instruments)} instruments, code {xts_message_code}"
-                )
-            else:
-                error_msg = f"[SUBSCRIBE] Failed - Status: {response.status_code}, Response: {response.text}"
-                # "Instrument Already Subscribed" is non-fatal (expected after reconnect)
-                if "Already Subscribed" in response.text or "e-session-0002" in response.text:
-                    self.logger.info(f"[SUBSCRIBE] Instrument already subscribed (non-fatal)")
-                    return
-                # Handle Invalid Token by re-authenticating and retrying once.
-                # This happens when data.py refreshes the feed token, which creates
-                # a new market data session and invalidates our current token.
-                if "Invalid Token" in response.text or "e-session-0007" in response.text:
-                    self.logger.warning(
-                        "[SUBSCRIBE] Token invalidated (likely by feed token refresh). Re-authenticating..."
-                    )
-                    if self.marketdata_login():
-                        # Retry with new token
-                        retry_headers = {
-                            "authorization": self.market_data_token,
-                            "Content-Type": "application/json",
-                        }
-                        retry_response = requests.post(
-                            self.subscription_url,
-                            json=subscription_request,
-                            headers=retry_headers,
-                            timeout=10,
+                    # Process initial quote data if available
+                    if "result" in result:
+                        list_quotes = result["result"].get("listQuotes", [])
+                        self.logger.info(
+                            f"[SUBSCRIBE] Initial quote payload count: {len(list_quotes)} for code {xts_message_code}"
                         )
-                        if retry_response.status_code == 200:
-                            retry_result = retry_response.json()
-                            if retry_result.get("type") == "success":
-                                self.logger.info(
-                                    f"[SUBSCRIBE] Retry succeeded after re-auth - {len(instruments)} instruments"
+                        for quote_str in list_quotes:
+                            try:
+                                quote_data = (
+                                    json.loads(quote_str) if isinstance(quote_str, str) else quote_str
                                 )
-                                # Process initial quotes from retry
-                                if "result" in retry_result:
-                                    list_quotes = retry_result["result"].get("listQuotes", [])
-                                    for quote_str in list_quotes:
-                                        try:
-                                            quote_data = (
-                                                json.loads(quote_str)
-                                                if isinstance(quote_str, str)
-                                                else quote_str
-                                            )
-                                            if isinstance(quote_data, dict) and "MessageCode" not in quote_data:
-                                                quote_data["MessageCode"] = xts_message_code
-                                            if self.on_data:
-                                                self.on_data(self, quote_data)
-                                        except json.JSONDecodeError:
-                                            pass
-                                return
-                    self.logger.error("[SUBSCRIBE] Re-auth retry also failed")
-                self.logger.error(error_msg)
-                raise RuntimeError(f"Subscribe failed: {response.text}")
+                                self.logger.debug(f"[INITIAL QUOTE] {quote_data}")
+                                if isinstance(quote_data, dict) and "MessageCode" not in quote_data:
+                                    quote_data["MessageCode"] = xts_message_code
+                                if self.on_data:
+                                    self.on_data(self, quote_data)
+                            except json.JSONDecodeError as e:
+                                self.logger.error(f"[INITIAL QUOTE] Parse error: {e}")
+
+                    self.logger.info(
+                        f"[SUBSCRIBE] Success - {len(instruments)} instruments, code {xts_message_code}"
+                    )
+                else:
+                    error_msg = f"[SUBSCRIBE] Failed - Status: {response.status_code}, Response: {response.text}"
+                    # "Instrument Already Subscribed" is non-fatal (expected after reconnect)
+                    if "Already Subscribed" in response.text or "e-session-0002" in response.text:
+                        self.logger.info(f"[SUBSCRIBE] Instrument already subscribed (non-fatal)")
+                        return
+                    # Handle Invalid Token by re-authenticating and retrying once.
+                    # This happens when data.py refreshes the feed token, which creates
+                    # a new market data session and invalidates our current token.
+                    if "Invalid Token" in response.text or "e-session-0007" in response.text:
+                        self.logger.warning(
+                            "[SUBSCRIBE] Token invalidated (likely by feed token refresh). Re-authenticating..."
+                        )
+                        if self.marketdata_login():
+                            # Retry with new token
+                            retry_headers = {
+                                "authorization": self.market_data_token,
+                                "Content-Type": "application/json",
+                            }
+                            retry_response = self._http_session.post(
+                                self.subscription_url,
+                                json=subscription_request,
+                                headers=retry_headers,
+                                timeout=10,
+                            )
+                            try:
+                                if retry_response.status_code == 200:
+                                    retry_result = retry_response.json()
+                                    if retry_result.get("type") == "success":
+                                        self.logger.info(
+                                            f"[SUBSCRIBE] Retry succeeded after re-auth - {len(instruments)} instruments"
+                                        )
+                                        # Process initial quotes from retry
+                                        if "result" in retry_result:
+                                            list_quotes = retry_result["result"].get("listQuotes", [])
+                                            for quote_str in list_quotes:
+                                                try:
+                                                    quote_data = (
+                                                        json.loads(quote_str)
+                                                        if isinstance(quote_str, str)
+                                                        else quote_str
+                                                    )
+                                                    if isinstance(quote_data, dict) and "MessageCode" not in quote_data:
+                                                        quote_data["MessageCode"] = xts_message_code
+                                                    if self.on_data:
+                                                        self.on_data(self, quote_data)
+                                                except json.JSONDecodeError:
+                                                    pass
+                                        return
+                            finally:
+                                retry_response.close()
+                        self.logger.error("[SUBSCRIBE] Re-auth retry also failed")
+                    self.logger.error(error_msg)
+                    raise RuntimeError(f"Subscribe failed: {response.text}")
+            finally:
+                response.close()
 
         except Exception as e:
             self.logger.error(f"[SUBSCRIBE] Exception: {e}")
@@ -551,26 +585,28 @@ class RMoneyWebSocketClient:
                 f"[UNSUBSCRIBE] Code: {xts_message_code}, Instruments: {len(instruments)}"
             )
 
-            response = requests.put(
+            response = self._http_session.put(
                 self.subscription_url,
                 json=unsubscription_request,
                 headers=headers,
                 timeout=10,
             )
-
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("type") == "success":
-                    self.logger.info(f"[UNSUBSCRIBE] Success - {len(instruments)} instruments")
-                    return True
+            try:
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("type") == "success":
+                        self.logger.info(f"[UNSUBSCRIBE] Success - {len(instruments)} instruments")
+                        return True
+                    else:
+                        self.logger.error(f"[UNSUBSCRIBE] API error response: {result}")
+                        return False
                 else:
-                    self.logger.error(f"[UNSUBSCRIBE] API error response: {result}")
+                    self.logger.error(
+                        f"[UNSUBSCRIBE] Failed - Status: {response.status_code}"
+                    )
                     return False
-            else:
-                self.logger.error(
-                    f"[UNSUBSCRIBE] Failed - Status: {response.status_code}"
-                )
-                return False
+            finally:
+                response.close()
 
         except Exception as e:
             self.logger.error(f"[UNSUBSCRIBE] Exception: {e}")
