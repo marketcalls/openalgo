@@ -75,8 +75,9 @@ def copy_from_dataframe(df):
             for i in range(0, total, BATCH_SIZE):
                 batch = filtered_data_dict[i : i + BATCH_SIZE]
                 db_session.bulk_insert_mappings(SymToken, batch)
-                db_session.commit()
+                db_session.flush()
                 logger.info(f"Inserted batch {i // BATCH_SIZE + 1} ({min(i + BATCH_SIZE, total)}/{total} records)")
+            db_session.commit()
             logger.info(f"Bulk insert completed successfully with {total} new records.")
         else:
             logger.info("No new records to insert")
