@@ -134,6 +134,11 @@ REQUIRED_MODIFY_ORDER_FIELDS = [
     "trigger_price",
 ]
 
+# Broker __init__ parameter count thresholds (includes 'self')
+# Used to determine how to instantiate BrokerData based on its __init__ signature.
+BROKER_INIT_BASE_PARAMS = 2   # self + auth_token
+BROKER_INIT_FEED_PARAMS = 3   # self + auth_token + feed_token
+
 # Default Values for Optional Fields
 DEFAULT_PRODUCT_TYPE = PRODUCT_MIS
 DEFAULT_PRICE_TYPE = PRICE_TYPE_MARKET
