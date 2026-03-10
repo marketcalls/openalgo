@@ -31,7 +31,7 @@ def format_trade_data(trade_data):
     if isinstance(trade_data, list):
         return [
             {
-                key: int(value)
+                key: (int(value) if value == int(value) else value)
                 if (key.lower() in quantity_fields and isinstance(value, (int, float)))
                 else (format_decimal(value) if isinstance(value, (int, float)) else value)
                 for key, value in item.items()

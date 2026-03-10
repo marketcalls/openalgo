@@ -750,9 +750,6 @@ def broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "aliceblue", "compositedge", "pocketful", "definedge", "dhan"]:
-            # For Compositedge, handle missing session user
-            if broker == "compositedge" and "user" not in session:
         if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney"]:
             # For OAuth brokers, handle missing session user
             if broker in ("compositedge", "rmoney") and "user" not in session:
