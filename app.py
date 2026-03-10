@@ -376,6 +376,9 @@ def create_app():
         csrf.exempt(app.view_functions["health_bp.simple_health"])
         csrf.exempt(app.view_functions["health_bp.detailed_health_check"])
 
+        # Exempt pnltracker public API endpoint from CSRF (for cross-instance dashboard access)
+        csrf.exempt(app.view_functions["pnltracker_bp.get_strategy_pnl_data_public"])
+
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
 

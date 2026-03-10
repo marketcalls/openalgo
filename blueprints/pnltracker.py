@@ -1439,3 +1439,118 @@ def get_strategy_pnl_data():
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+@pnltracker_bp.route("/pnltracker/api/strategy-pnl-public", methods=["POST"])
+@cross_origin()
+def get_strategy_pnl_data_public():
+    """
+    Public endpoint for cross-instance P&L data access.
+    
+    Unlike /pnltracker/api/strategy-pnl which requires session authentication,
+    this endpoint accepts an API key directly for trusted internal calls.
+    
+    Primary use case: private/dashboard.py (multi-instance dashboard on port 8888)
+    needs to fetch P&L data from all 4 openalgo instances without session auth.
+    
+    Request body (JSON):
+        - instance_id (str, required): Strategy instance ID
+        - api_key (str, required): Valid API key for authentication
+    
+    Response: Same structure as /pnltracker/api/strategy-pnl
+        {
+            "status": "success",
+            "data": {
+                "current_mtm": float,
+                "max_mtm": float,
+                "max_mtm_time": str | None,
+                "min_mtm": float,
+                "min_mtm_time": str | None,
+                "max_drawdown": float,
+                "pnl_series": [{"time": int, "value": float}, ...],
+                "drawdown_series": [{"time": int, "value": float}, ...]
+            }
+        }
+    """
+    _empty_data = {
+        "current_mtm": 0, "max_mtm": 0, "max_mtm_time": None,
+        "min_mtm": 0, "min_mtm_time": None, "max_drawdown": 0,
+        "pnl_series": [], "drawdown_series": [],
+    }
+
+    try:
+        from database.strategy_state_db import get_strategy_state_by_instance_id
+        from database.auth_db import get_username_by_apikey
+
+        data = request.get_json(silent=True) or {}
+        instance_id = data.get("instance_id")
+        provided_api_key = data.get("api_key")
+
+        # Validate required parameters
+        if not instance_id:
+            return jsonify({"status": "error", "message": "instance_id is required"}), 400
+
+        if not provided_api_key:
+            return jsonify({"status": "error", "message": "api_key is required"}), 400
+
+        # Validate API key by looking up the associated username
+        # This ensures only valid API keys can access P&L data
+        login_username = get_username_by_apikey(provided_api_key)
+        if not login_username:
+            logger.warning(f"[strategy-pnl-public] Invalid API key provided: {provided_api_key[:8]}...")
+            return jsonify({"status": "error", "message": "Invalid API key"}), 401
+
+        # Fetch strategy state from database
+        state = get_strategy_state_by_instance_id(instance_id)
+        if not state:
+            return jsonify({"status": "error", "message": f"Strategy {instance_id} not found"}), 404
+
+        # Get IST timezone and today's date for filtering trades
+        ist = pytz.timezone("Asia/Kolkata")
+        today_ist = datetime.now(ist).date()
+        today_str = today_ist.strftime("%Y-%m-%d")
+
+        # Build position windows from strategy's trade history and open legs
+        symbol_windows = _build_position_windows(
+            state.get("trade_history") or [],
+            state.get("legs") or {},
+            today_ist,
+        )
+
+        # If no positions/trades found for today, return empty data
+        if not symbol_windows:
+            return jsonify({"status": "success", "data": _empty_data}), 200
+
+        # Determine earliest trade time across all windows for candle filtering
+        first_trade_time = None
+        for windows in symbol_windows.values():
+            for w in windows:
+                if w["start_time"] and (first_trade_time is None or w["start_time"] < first_trade_time):
+                    first_trade_time = w["start_time"]
+
+        # Calculate P&L for each symbol and aggregate into portfolio-level series
+        portfolio_pnl = None
+        for sym_key, position_windows in symbol_windows.items():
+            sym_df = _calculate_symbol_pnl(sym_key, position_windows, provided_api_key, today_str, first_trade_time)
+            if sym_df is None:
+                continue
+            portfolio_pnl = sym_df if portfolio_pnl is None else portfolio_pnl.join(sym_df, how="outer")
+
+        if portfolio_pnl is None or portfolio_pnl.empty:
+            return jsonify({"status": "success", "data": _empty_data}), 200
+
+        # Compute aggregate statistics (current MTM, max, min, drawdown, time series)
+        result = _aggregate_portfolio_stats(portfolio_pnl)
+
+        logger.info(
+            f"[strategy-pnl-public] {instance_id}: {len(result['pnl_series'])} points, "
+            f"current={result['current_mtm']:.2f}, max={result['max_mtm']:.2f}, "
+            f"drawdown={result['max_drawdown']:.2f}"
+        )
+
+        return jsonify({"status": "success", "data": result}), 200
+
+    except Exception as e:
+        logger.error(f"[strategy-pnl-public] Error: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+

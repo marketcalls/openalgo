@@ -30,6 +30,7 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
+import StrategyPnLChart from '@/components/StrategyPnLChart'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
@@ -43,6 +44,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { getStrategyStates } from '@/api/strategy-state'
 import type { StrategyState, TradeHistoryRecord } from '@/types/strategy-state'
 
@@ -548,6 +555,8 @@ export default function StrategyDashboard() {
   const [activeTab, setActiveTab] = useState('open-legs')
   const [legsPage, setLegsPage] = useState(0)
   const [tradesPage, setTradesPage] = useState(0)
+  const [isPnLModalOpen, setIsPnLModalOpen] = useState(false)
+  const [selectedStrategyForPnL, setSelectedStrategyForPnL] = useState<{ instanceId: string; name: string } | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchData = useCallback(async () => {
@@ -892,6 +901,7 @@ export default function StrategyDashboard() {
             <thead className="border-b bg-muted/20">
               <tr>
                 <Th label="Strategy" sortKey="name" currentKey={sKey} dir={sDir} onSort={() => sToggle('name')} className="pl-4 min-w-[140px]" />
+                <Th label="P&L Curve" />
                 <Th label="Status" />
                 <Th label="Health" />
                 <Th label="Underlying" sortKey="underlying" currentKey={sKey} dir={sDir} onSort={() => sToggle('underlying')} />
@@ -932,7 +942,7 @@ export default function StrategyDashboard() {
             <tbody>
               {sortedStrategies.length === 0 && (
                 <tr>
-                  <td colSpan={20} className="px-4 py-8 text-center text-muted-foreground text-sm">
+                  <td colSpan={21} className="px-4 py-8 text-center text-muted-foreground text-sm">
                     No strategies match the current filters
                   </td>
                 </tr>
@@ -948,6 +958,23 @@ export default function StrategyDashboard() {
                   >
                     <td className="px-3 py-2 pl-4 font-medium text-foreground whitespace-nowrap max-w-[180px] truncate">
                       <span title={m.strategy.strategy_name}>{m.strategy.strategy_name}</span>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {(m.strategy.status === 'RUNNING' || m.strategy.status === 'PAUSED') && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setSelectedStrategyForPnL({ instanceId: m.instanceId, name: m.strategy.strategy_name })
+                            setIsPnLModalOpen(true)
+                          }}
+                          title="View P&L Curve"
+                        >
+                          <BarChart2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap"><StatusBadge status={m.strategy.status} /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><HealthDot health={m.health} /></td>
@@ -1275,6 +1302,28 @@ export default function StrategyDashboard() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* ─── P&L Curve Modal ─── */}
+      <Dialog open={isPnLModalOpen} onOpenChange={setIsPnLModalOpen}>
+        <DialogContent 
+          className="max-h-[90vh] overflow-y-auto p-0"
+          style={{ width: '80vw', maxWidth: '80vw' }}
+        >
+          <DialogHeader className="px-6 pt-6 pb-4 border-b">
+            <DialogTitle className="text-lg">
+              {selectedStrategyForPnL?.name ? `${selectedStrategyForPnL.name} — P&L Curve` : 'Strategy P&L Curve'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="p-6">
+            {selectedStrategyForPnL && (
+              <StrategyPnLChart
+                instanceId={selectedStrategyForPnL.instanceId}
+                strategyName={selectedStrategyForPnL.name}
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
