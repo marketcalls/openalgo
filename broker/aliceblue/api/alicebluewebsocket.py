@@ -26,8 +26,8 @@ class AliceBlueWebSocket:
     PRIMARY_URL = "wss://ws1.aliceblueonline.com/NorenWS/"
     ALTERNATE_URL = "wss://ws2.aliceblueonline.com/NorenWS/"
 
-    # REST API base URL for WebSocket session management
-    BASE_URL = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/"
+    # REST API base URL for WebSocket session management (V2 API)
+    BASE_URL = "https://a3.aliceblueonline.com/"
 
     # Maximum reconnection attempts
     MAX_RECONNECT_ATTEMPTS = 5
@@ -61,7 +61,7 @@ class AliceBlueWebSocket:
     def _get_auth_header(self) -> dict:
         """Get authorization header for REST API calls."""
         return {
-            "Authorization": f"Bearer {self.user_id.upper()} {self.session_id}",
+            "Authorization": f"Bearer {self.session_id}",
             "Content-Type": "application/json",
         }
 
@@ -74,9 +74,8 @@ class AliceBlueWebSocket:
             bool: True if successful, False otherwise
         """
         try:
-            # Try both endpoint variants (createWsSession and createSocketSess)
-            url = self.BASE_URL + "ws/invalidateWsSession"
-            payload = {"loginType": "API"}
+            url = self.BASE_URL + "open-api/od/v1/profile/invalidateWsSess"
+            payload = {"source": "API", "userId": self.user_id}
 
             with httpx.Client() as client:
                 response = client.post(
@@ -105,9 +104,8 @@ class AliceBlueWebSocket:
             bool: True if successful, False otherwise
         """
         try:
-            # Use the same endpoint as aliceblue_client.py: ws/createWsSession
-            url = self.BASE_URL + "ws/createWsSession"
-            payload = {"loginType": "API"}
+            url = self.BASE_URL + "open-api/od/v1/profile/createWsSess"
+            payload = {"source": "API", "userId": self.user_id}
 
             with httpx.Client() as client:
                 response = client.post(
@@ -119,7 +117,7 @@ class AliceBlueWebSocket:
                 logger.info(f"Create socket session response: {data}")
 
                 # Check for success
-                if data.get("stat") == "Ok":
+                if data.get("status") == "Ok":
                     logger.info("WebSocket session created successfully")
                     return True
                 else:
@@ -366,10 +364,10 @@ class AliceBlueWebSocket:
             else:
                 # Fallback to broker symbol from AliceBlue data
                 symbol = data.get("ts", f"TOKEN_{token}")
-                logger.warning(
-                    f"✗ Using broker symbol: {symbol} for {subscription_key} (subscription not found)"
+                logger.debug(
+                    f"Using broker symbol: {symbol} for {subscription_key} (subscription not found)"
                 )
-                logger.warning(f"Available subscriptions: {list(self.subscriptions.keys())}")
+                logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
 
             # Use consistent key format for data storage: exchange:token
             key = f"{exchange}:{token}"
@@ -396,6 +394,10 @@ class AliceBlueWebSocket:
                     "prev_open_interest": int(float(data.get("poi", 0))) if data.get("poi") else 0,
                     "total_buy_quantity": int(data.get("tbq", 0)),
                     "total_sell_quantity": int(data.get("tsq", 0)),
+                    "bid": float(data.get("bp1", 0)),
+                    "ask": float(data.get("sp1", 0)),
+                    "bid_qty": int(data.get("bq1", 0)),
+                    "ask_qty": int(data.get("sq1", 0)),
                     "symbol": symbol,  # Use OpenAlgo symbol from subscription
                     "broker_symbol": data.get("ts", ""),  # Keep broker symbol for reference
                     "timestamp": datetime.now().isoformat(),
@@ -502,10 +504,10 @@ class AliceBlueWebSocket:
             else:
                 # Fallback to broker symbol from AliceBlue data
                 symbol = data.get("ts", f"TOKEN_{token}")
-                logger.warning(
-                    f"✗ Using broker symbol: {symbol} for {subscription_key} (subscription not found)"
+                logger.debug(
+                    f"Using broker symbol: {symbol} for {subscription_key} (subscription not found)"
                 )
-                logger.warning(f"Available subscriptions: {list(self.subscriptions.keys())}")
+                logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
 
             # Use consistent key format for data storage: exchange:token
             key = f"{exchange}:{token}"
@@ -543,6 +545,12 @@ class AliceBlueWebSocket:
                     "token": token,
                     "bids": bids,
                     "asks": asks,
+                    "open": float(data.get("o", 0)),
+                    "high": float(data.get("h", 0)),
+                    "low": float(data.get("l", 0)),
+                    "close": float(data.get("c", 0)),
+                    "volume": int(data.get("v", 0)),
+                    "last_trade_quantity": int(data.get("ltq", 0)),
                     "total_buy_quantity": int(data.get("tbq", 0)),
                     "total_sell_quantity": int(data.get("tsq", 0)),
                     "ltp": float(data.get("lp", 0)),
@@ -576,6 +584,16 @@ class AliceBlueWebSocket:
                     # Update specific fields if they exist in the feed
                     if "lp" in data:
                         depth["ltp"] = float(data.get("lp", 0))
+                    if "o" in data:
+                        depth["open"] = float(data.get("o", 0))
+                    if "h" in data:
+                        depth["high"] = float(data.get("h", 0))
+                    if "l" in data:
+                        depth["low"] = float(data.get("l", 0))
+                    if "c" in data:
+                        depth["close"] = float(data.get("c", 0))
+                    if "v" in data:
+                        depth["volume"] = int(data.get("v", 0))
                     if "pc" in data:
                         depth["percent_change"] = float(data.get("pc", 0))
                     if "ft" in data:
