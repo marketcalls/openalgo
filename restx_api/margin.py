@@ -60,6 +60,6 @@ class MarginCalculator(Resource):
                 log_executor.submit(
                     async_log_order, "margin", data if "data" in locals() else {}, error_response
                 )
-            except:
-                pass
+            except Exception as e:
+                logger.exception(f"Failed to log margin error to database: {e}")
             return make_response(jsonify(error_response), 500)
