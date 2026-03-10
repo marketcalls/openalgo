@@ -95,9 +95,9 @@ export function useMarketStatus() {
       if (!todayHoliday) return false
 
       // Check if exchange is in closed_exchanges
-      if (todayHoliday.closed_exchanges.includes(exchange)) {
+      if (todayHoliday.closed_exchanges?.includes(exchange)) {
         // Check if there's a special session for this exchange
-        const specialSession = todayHoliday.open_exchanges.find((e) => e.exchange === exchange)
+        const specialSession = todayHoliday.open_exchanges?.find((e) => e.exchange === exchange)
         if (specialSession) {
           // There's a special session - check if we're within it
           const now = Date.now()

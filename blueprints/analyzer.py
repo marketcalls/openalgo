@@ -1,7 +1,7 @@
 import csv
 import io
 import json
-import traceback
+
 from datetime import datetime, timedelta
 
 import pytz
@@ -128,7 +128,7 @@ def get_filtered_requests(start_date=None, end_date=None):
 
         return requests
     except Exception as e:
-        logger.exception(f"Error getting filtered requests: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting filtered requests: {e}")
         return []
 
 
@@ -173,7 +173,7 @@ def generate_csv(requests):
 
         return output.getvalue()
     except Exception as e:
-        logger.exception(f"Error generating CSV: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error generating CSV: {str(e)}")
         return ""
 
 
@@ -216,7 +216,7 @@ def analyzer():
             end_date=end_date,
         )
     except Exception as e:
-        logger.exception(f"Error rendering analyzer: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error rendering analyzer: {str(e)}")
         flash("Error loading analyzer dashboard", "error")
         return redirect(url_for("core_bp.home"))
 
@@ -268,7 +268,7 @@ def api_get_data():
             {"status": "success", "data": {"stats": stats_transformed, "requests": requests_data}}
         )
     except Exception as e:
-        logger.exception(f"Error getting analyzer data: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting analyzer data: {str(e)}")
         return jsonify(
             {"status": "error", "message": f"Error loading analyzer data: {str(e)}"}
         ), 500
@@ -352,6 +352,6 @@ def export_requests():
         )
         return output
     except Exception as e:
-        logger.exception(f"Error exporting requests: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error exporting requests: {str(e)}")
         flash("Error exporting requests", "error")
         return redirect(url_for("analyzer_bp.analyzer"))

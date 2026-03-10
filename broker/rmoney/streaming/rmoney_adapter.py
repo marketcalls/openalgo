@@ -38,6 +38,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self._reconnect_worker_lock = threading.Lock()
         self._reconnect_worker: threading.Thread | None = None
+        self._stop_event = threading.Event()  # Interruptible sleep for reconnect
 
         # Log the ZMQ port being used
         self.logger.info(f"RMoney XTS adapter initialized with ZMQ port: {self.zmq_port}")
@@ -96,6 +97,13 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             raise ValueError("Missing RMoney XTS API credentials")
 
         self.logger.info(f"Using API Key: {api_key[:10]}... for RMoney XTS connection")
+
+        # Close previous client if initialize() is called again
+        if self.ws_client is not None:
+            try:
+                self.ws_client.close()
+            except Exception:
+                pass
 
         # Create RMoney XTS WebSocket client with API credentials
         self.ws_client = RMoneyWebSocketClient(
@@ -197,6 +205,8 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
+        # Reset stop event for fresh connection lifecycle
+        self._stop_event.clear()
         self._start_reconnect_worker(trigger="connect")
 
     def _start_reconnect_worker(self, trigger: str) -> None:
@@ -232,7 +242,9 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
                 )
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                # Use event-based wait so disconnect() can interrupt immediately
+                if self._stop_event.wait(delay):
+                    break  # Stop event was set — abort reconnect
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
@@ -244,18 +256,20 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Set running to False to prevent reconnection attempts
         self.running = False
         self.reconnect_attempts = self.max_reconnect_attempts  # Prevent reconnection attempts
+        # Wake up any sleeping reconnect worker immediately
+        self._stop_event.set()
         self.logger.info(
             "Set running=False and max reconnect attempts to prevent auto-reconnection"
         )
 
-        # Disconnect Socket.IO client
+        # Full teardown of Socket.IO client + HTTP session
         if hasattr(self, "ws_client") and self.ws_client:
             try:
-                self.logger.info("Disconnecting Socket.IO client...")
-                self.ws_client.disconnect()
-                self.logger.info("Socket.IO client disconnect call completed")
+                self.logger.info("Closing Socket.IO client and HTTP session...")
+                self.ws_client.close()
+                self.logger.info("Socket.IO client close call completed")
             except Exception as e:
-                self.logger.error(f"Error during Socket.IO disconnect: {e}")
+                self.logger.error(f"Error during Socket.IO close: {e}")
         else:
             self.logger.warning("No WebSocket client to disconnect")
 
