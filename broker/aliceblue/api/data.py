@@ -27,7 +27,19 @@ ALICEBLUE_TOKEN_MAP = {
 
 # Token retrieval function
 def get_token(symbol, exchange):
-    """Get token for a symbol and exchange"""
+    """
+    Get token for a given symbol and exchange.
+
+    Attempts to look up the broker-specific token for a tradable symbol by first checking
+    a local hardcoded mapping, and falling back to database queries (or returning None).
+
+    Args:
+        symbol (str): The trading symbol to find the token for (e.g., 'RELIANCE').
+        exchange (str): The exchange the symbol trades on (e.g., 'NSE', 'BSE').
+
+    Returns:
+        str or None: The broker-specific token string if found, otherwise None.
+    """
     try:
         # First try the local token map
         key = (exchange, symbol)
@@ -69,8 +81,17 @@ class BrokerData:
 
     def _auto_detect_exchange(self, symbol: str) -> str:
         """
-        Auto-detect exchange for a symbol by looking up its instrumenttype in database
-        Returns the appropriate exchange based on instrumenttype
+        Auto-detect the appropriate exchange for a symbol based on database lookup.
+
+        Queries the SymToken database to extract the `instrumenttype` and intelligently 
+        maps it to the broker's required exchange code (e.g., 'NSE_INDEX' to 'NSE'). 
+        Provides fallback logic based on common suffix patterns (like 'FUT', 'CE').
+
+        Args:
+            symbol (str): The trading symbol whose exchange needs detection.
+
+        Returns:
+            str: The calculated/detected exchange code string.
         """
         try:
             # Query database for the symbol
@@ -109,6 +130,13 @@ class BrokerData:
             return "NSE"  # Default fallback
 
     def __init__(self, auth_token=None):
+        """
+        Initialize the BrokerData class for AliceBlue.
+
+        Args:
+            auth_token (str, optional): The session ID (auth token) returned from successful 
+                AliceBlue broker authentication. Defaults to None.
+        """
         self.token_mapping = {}
         self.session_id = auth_token  # Store the session ID from authentication
         # AliceBlue only supports 1-minute and daily data
@@ -1209,11 +1237,20 @@ class BrokerData:
             from datetime import datetime
 
             def convert_to_unix_ms(timestamp, is_end_date=False):
-                """Convert various timestamp formats to Unix milliseconds in IST
+                """
+                Convert various timestamp string formats to Unix milliseconds in IST.
+
+                Parses string representations of dates or timestamps (e.g., ISO formats, date-only
+                strings) and standardizes them to Unix epoch time in milliseconds using the
+                Indian Standard Time context.
 
                 Args:
-                    timestamp: The timestamp to convert
-                    is_end_date: If True, sets time to end of day (23:59:59) for date-only strings
+                    timestamp (str or pd.Timestamp): The datetime stamp to convert.
+                    is_end_date (bool, optional): If True, forces the parsed time to the end of
+                        the day (23:59:59.999) when given a date-only string. Defaults to False.
+
+                Returns:
+                    int: The timestamp represented in Unix milliseconds.
                 """
                 import pytz
 
@@ -1497,11 +1534,14 @@ class BrokerData:
             logger.error(f"Error fetching historical data: {str(e)}")
             return pd.DataFrame()
 
-    def get_intervals(self) -> list[str]:
+    def get_intervals(self):
         """
-        Get list of supported timeframes.
+        Retrieve a valid list of supported chart timeframes.
+
+        Specifies the historical timeframe resolutions natively supported by the
+        AliceBlue API for historical data fetching.
 
         Returns:
-            List[str]: List of supported timeframe strings
+            list of str: A list of timeframe strings available (e.g., '1', 'D').
         """
         return list(self.timeframe_map.keys())
