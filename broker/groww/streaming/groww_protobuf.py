@@ -206,16 +206,7 @@ class MiniProtobufParser:
         length = self._read_varint()
         end_pos = self.position + length
 
-        # Log depth message size for BSE vs NSE debugging
-        total_size = len(self.data)
-        logger.info(
-            f"📊 Parsing depth message: inner length={length} bytes, total message={total_size} bytes"
-        )
-        if total_size == 501:
-            logger.info("🔴 BSE depth message detected (501 bytes)")
-        elif total_size == 499:
-            logger.info("✅ NSE depth message detected (499 bytes)")
-
+        logger.debug(f"Parsing depth message: inner length={length} bytes")
         result = {"timestamp": 0, "buy": [], "sell": []}
 
         # Parse depth data fields
@@ -323,33 +314,13 @@ def parse_groww_market_data(data: bytes) -> dict[str, Any]:
     Returns:
         Parsed market data
     """
-    data_len = len(data)
-    logger.info(f"Parsing protobuf data: {data_len} bytes")
-
-    # Special logging for BSE data (501 bytes) vs NSE (499 bytes)
-    if data_len == 501:
-        logger.info("🔴 Potential BSE message detected (501 bytes)")
-    elif data_len == 499:
-        logger.info("✅ Potential NSE message detected (499 bytes)")
-
-    # For BSE depth messages, check if there's an extra field
-    if data_len == 501:
-        logger.debug(f"BSE message - Last 10 bytes (hex): {data[-10:].hex()}")
-
-    logger.debug(f"First 50 bytes (hex): {data[:50].hex() if len(data) > 50 else data.hex()}")
+    logger.debug(f"Parsing protobuf data: {len(data)} bytes")
 
     parser = MiniProtobufParser()
     result = parser.parse_market_data(data)
 
-    # Log what was parsed
     if result:
-        logger.info(f"Successfully parsed protobuf data: {result.keys()}")
-        if "ltp_data" in result:
-            logger.info(f"LTP data found: {result['ltp_data']}")
-        if "index_data" in result:
-            logger.info(f"Index data found: {result['index_data']}")
-        if "depth_data" in result:
-            logger.info(f"Depth data found: {result['depth_data']}")
+        logger.debug(f"Parsed protobuf: {result.keys()}")
     else:
         logger.warning("No data parsed from protobuf")
 

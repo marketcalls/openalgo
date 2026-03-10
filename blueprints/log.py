@@ -3,7 +3,7 @@
 import csv
 import io
 import json
-import traceback
+
 from datetime import datetime
 
 import pytz
@@ -66,7 +66,7 @@ def format_log_entry(log, ist):
             "created_at": log.created_at.astimezone(ist).strftime("%Y-%m-%d %I:%M:%S %p"),
         }
     except Exception as e:
-        logger.exception(f"Error formatting log {log.id}: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error formatting log {log.id}: {str(e)}")
         return {
             "id": log.id,
             "api_type": log.api_type,
@@ -130,7 +130,7 @@ def get_filtered_logs(start_date=None, end_date=None, search_query=None, page=No
         return logs, total_pages, total_logs
 
     except Exception as e:
-        logger.exception(f"Error in get_filtered_logs: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error in get_filtered_logs: {str(e)}")
         return [], 1, 0
 
 
@@ -203,7 +203,7 @@ def generate_csv(logs):
         return si.getvalue()
 
     except Exception as e:
-        logger.exception(f"Error generating CSV: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error generating CSV: {str(e)}")
         raise
 
 
@@ -243,7 +243,7 @@ def view_logs():
         )
 
     except Exception as e:
-        logger.exception(f"Error in view_logs: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error in view_logs: {str(e)}")
         return render_template(
             "logs.html",
             logs=[],
@@ -300,6 +300,5 @@ def export_logs():
         )
 
     except Exception as e:
-        error_msg = f"Error exporting logs: {str(e)}\n{traceback.format_exc()}"
-        logger.exception(error_msg)
-        return jsonify({"error": error_msg}), 500
+        logger.exception(f"Error exporting logs: {e}")
+        return jsonify({"error": "An error occurred while exporting logs"}), 500

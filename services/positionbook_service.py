@@ -41,7 +41,7 @@ def format_position_data(position_data):
                 key: value
                 if key.lower() in passthrough_fields
                 else (
-                    int(value)
+                    (int(value) if value == int(value) else value)
                     if (key.lower() in quantity_fields and isinstance(value, (int, float)))
                     else (format_decimal(value) if isinstance(value, (int, float)) else value)
                 )

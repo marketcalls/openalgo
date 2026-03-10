@@ -1,7 +1,6 @@
 # api/funds.py
 
 import json
-import os
 
 import httpx
 
@@ -11,8 +10,52 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _get_realized_pnl(client, headers):
+    """Fetch positions and sum up realizedPnl from all positions."""
+    try:
+        positions_url = "https://a3.aliceblueonline.com/open-api/od/v1/positions"
+        response = client.get(positions_url, headers=headers)
+        response.raise_for_status()
+
+        positions_data = response.json()
+
+        if positions_data.get("status") != "Ok":
+            logger.warning(
+                f"Error fetching positions for PnL: {positions_data.get('message', 'Unknown error')}"
+            )
+            return 0.0, 0.0
+
+        positions = positions_data.get("result", [])
+        if not positions:
+            return 0.0, 0.0
+
+        total_realized_pnl = 0.0
+        total_unrealized_pnl = 0.0
+
+        for position in positions:
+            # Sum realized PnL from all positions
+            total_realized_pnl += float(position.get("realizedPnl", 0) or 0)
+
+            # Calculate unrealized PnL for open positions
+            net_qty = int(position.get("netQuantity", 0) or 0)
+            if net_qty != 0:
+                buy_value = float(position.get("dayBuyValue", 0) or 0)
+                sell_value = float(position.get("daySellValue", 0) or 0)
+                # Unrealized = sell_value - buy_value - realized_pnl (for the position)
+                # Or more simply: net open value based on avg price vs current price
+                # Using the standard formula: total sell value - total buy value - realized pnl
+                unrealized = sell_value - buy_value - float(position.get("realizedPnl", 0) or 0)
+                total_unrealized_pnl += unrealized
+
+        return total_realized_pnl, total_unrealized_pnl
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch positions for PnL calculation: {str(e)}")
+        return 0.0, 0.0
+
+
 def get_margin_data(auth_token):
-    """Fetch margin data from Alice Blue's API using the provided auth token and shared connection pooling."""
+    """Fetch margin/funds data from Alice Blue's V2 API using the provided auth token and shared connection pooling."""
     # Initialize processed data dictionary
     processed_margin_data = {
         "availablecash": "0.00",
@@ -26,51 +69,56 @@ def get_margin_data(auth_token):
         # Get the shared httpx client with connection pooling
         client = get_httpx_client()
 
-        url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/limits/getRmsLimits"
+        url = "https://a3.aliceblueonline.com/open-api/od/v1/limits/"
+        # V2 API uses just the auth_token (JWT) in the Bearer header
         headers = {
             "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json",
         }
 
         # Make the API request using the shared client
-        logger.debug("Making getRmsLimits request to AliceBlue API")
         response = client.get(url, headers=headers)
         response.raise_for_status()
 
         margin_data = response.json()
-        logger.debug(f"Funds Details: {json.dumps(margin_data, indent=2)}")
 
-        # Process the margin data
-        for item in margin_data:
-            if item.get("stat") == "Not_Ok":
-                # Log the error or return an empty dictionary to indicate failure
-                logger.error(f"Error fetching margin data: {item.get('emsg', 'Unknown error')}")
-                return {}
+        # Check for API-level errors in the new response format
+        if margin_data.get("status") != "Ok":
+            error_msg = margin_data.get("message", "Unknown error")
+            logger.error(f"Error fetching margin data: {error_msg}")
+            return {}
 
-            # Accumulate values
-            processed_margin_data["availablecash"] = "{:.2f}".format(float(item.get("net", 0)))
-            processed_margin_data["collateral"] = "{:.2f}".format(
-                float(item.get("collateralvalue", 0))
-            )
-            processed_margin_data["m2munrealized"] = "{:.2f}".format(
-                float(item.get("unrealizedMtomPrsnt", 0))
-            )
-            processed_margin_data["m2mrealized"] = "{:.2f}".format(
-                float(item.get("realizedMtomPrsnt", 0))
-            )
-            processed_margin_data["utiliseddebits"] = "{:.2f}".format(
-                float(item.get("cncMarginUsed", 0))
-            )
+        # Process the result array from the V2 API response
+        results = margin_data.get("result", [])
+        if not results:
+            logger.warning("No margin data returned from AliceBlue API")
+            return processed_margin_data
+
+        item = results[0]
+
+        # Fetch realized & unrealized PnL from positions API
+        realized_pnl, unrealized_pnl = _get_realized_pnl(client, headers)
+
+        # Map V2 API fields to OpenAlgo format
+        processed_margin_data["availablecash"] = "{:.2f}".format(
+            float(item.get("tradingLimit", 0))
+        )
+        processed_margin_data["collateral"] = "{:.2f}".format(
+            float(item.get("collateralMargin", 0))
+        )
+        processed_margin_data["m2munrealized"] = "{:.2f}".format(unrealized_pnl)
+        processed_margin_data["m2mrealized"] = "{:.2f}".format(realized_pnl)
+        processed_margin_data["utiliseddebits"] = "{:.2f}".format(
+            float(item.get("utilizedMargin", 0))
+        )
 
         return processed_margin_data
     except KeyError as e:
-        # Return an empty dictionary in case of unexpected data structure
         logger.error(f"KeyError while processing margin data: {str(e)}")
         return {}
     except httpx.HTTPError as e:
-        # Handle HTTPX connection errors
         logger.error(f"HTTP connection error: {str(e)}")
         return {}
     except Exception as e:
-        # General exception handling
         logger.error(f"An exception occurred while fetching margin data: {str(e)}")
         return {}

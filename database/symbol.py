@@ -10,6 +10,11 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcard characters to prevent unintended broad matching."""
+    return term.replace("%", r"\%").replace("_", r"\_")
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 # Conditionally create engine based on DB type
 if DATABASE_URL and "sqlite" in DATABASE_URL:
@@ -75,22 +80,23 @@ def enhanced_search_symbols(query: str, exchange: str = None) -> list[SymToken]:
         # Create conditions for each term
         all_conditions = []
         for term in terms:
+            safe_term = _escape_like(term)
             # Number detection for more accurate strike price and token searches
             try:
                 num_term = float(term)
                 term_conditions = or_(
-                    SymToken.symbol.ilike(f"%{term}%"),
-                    SymToken.brsymbol.ilike(f"%{term}%"),
-                    SymToken.name.ilike(f"%{term}%"),
-                    SymToken.token.ilike(f"%{term}%"),
+                    SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                     SymToken.strike == num_term,
                 )
             except ValueError:
                 term_conditions = or_(
-                    SymToken.symbol.ilike(f"%{term}%"),
-                    SymToken.brsymbol.ilike(f"%{term}%"),
-                    SymToken.name.ilike(f"%{term}%"),
-                    SymToken.token.ilike(f"%{term}%"),
+                    SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                    SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                 )
             all_conditions.append(term_conditions)
 
@@ -182,21 +188,22 @@ def fno_search_symbols_db(
             primary_term = terms[0] if terms else None
             all_conditions = []
             for term in terms:
+                safe_term = _escape_like(term)
                 try:
                     num_term = float(term)
                     term_conditions = or_(
-                        SymToken.symbol.ilike(f"%{term}%"),
-                        SymToken.brsymbol.ilike(f"%{term}%"),
-                        SymToken.name.ilike(f"%{term}%"),
-                        SymToken.token.ilike(f"%{term}%"),
+                        SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                         SymToken.strike == num_term,
                     )
                 except ValueError:
                     term_conditions = or_(
-                        SymToken.symbol.ilike(f"%{term}%"),
-                        SymToken.brsymbol.ilike(f"%{term}%"),
-                        SymToken.name.ilike(f"%{term}%"),
-                        SymToken.token.ilike(f"%{term}%"),
+                        SymToken.symbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.brsymbol.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.name.ilike(f"%{safe_term}%", escape="\\"),
+                        SymToken.token.ilike(f"%{safe_term}%", escape="\\"),
                     )
                 all_conditions.append(term_conditions)
 

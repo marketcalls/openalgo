@@ -135,51 +135,30 @@ def broker_callback(broker, para=None):
             )
 
     elif broker == "aliceblue":
-        if request.method == "GET":
-            # Redirect to React TOTP page
-            return redirect("/broker/aliceblue/totp")
+        # New OAuth redirect flow:
+        # 1. GET without authCode → redirect to AliceBlue login page with appcode
+        # 2. GET with authCode + userId (callback) → authenticate and get session
+        authCode = request.args.get("authCode")
+        userId = request.args.get("userId")
 
-        elif request.method == "POST":
-            logger.info("Aliceblue Login Flow initiated")
-            userid = request.form.get("userid")
-            # Step 1: Get encryption key
-            # Use the shared httpx client with connection pooling
-            from utils.httpx_client import get_httpx_client
-
-            client = get_httpx_client()
-
-            # AliceBlue API expects only userId in the encryption key request
-            # Do not include API key in this initial request
-            payload = {"userId": userid}
-            headers = {"Content-Type": "application/json"}
-            try:
-                # Get encryption key
-                url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/customer/getAPIEncpkey"
-                response = client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                data_dict = response.json()
-                logger.debug(f"Aliceblue response data: {data_dict}")
-
-                # Check if we successfully got the encryption key
-                if data_dict.get("stat") == "Ok" and data_dict.get("encKey"):
-                    enc_key = data_dict["encKey"]
-                    # Step 2: Authenticate with encryption key
-                    auth_token, error_message = auth_function(userid, enc_key)
-
-                    if auth_token:
-                        return handle_auth_success(auth_token, session["user"], broker)
-                    else:
-                        return handle_auth_failure(error_message, forward_url="broker.html")
-                else:
-                    # Failed to get encryption key
-                    error_msg = data_dict.get("emsg", "Failed to get encryption key")
-                    return handle_auth_failure(
-                        f"Failed to get encryption key: {error_msg}", forward_url="broker.html"
-                    )
-            except Exception as e:
-                return jsonify(
-                    {"status": "error", "message": f"Authentication error: {str(e)}"}
-                ), 500
+        if authCode and userId:
+            # Callback from AliceBlue with authorization code
+            logger.info(f"AliceBlue OAuth callback received for user {userId}")
+            auth_token, client_id, error_message = auth_function(userId, authCode)
+            user_id = client_id or userId  # clientId from API response, fallback to OAuth userId
+            feed_token = None  # AliceBlue doesn't use a separate feed token
+            forward_url = "broker.html"
+        else:
+            # Initial visit — redirect to AliceBlue login page
+            logger.info("Redirecting to AliceBlue login page")
+            appcode = os.environ.get("BROKER_API_KEY")
+            if not appcode:
+                return handle_auth_failure(
+                    "BROKER_API_KEY (appCode) not configured in environment",
+                    forward_url="broker.html",
+                )
+            aliceblue_login_url = f"https://ant.aliceblueonline.com/?appcode={appcode}"
+            return redirect(aliceblue_login_url)
 
     elif broker == "fivepaisaxts":
         code = "fivepaisaxts"
@@ -771,6 +750,9 @@ def broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
+        if broker in ["angel", "aliceblue", "compositedge", "pocketful", "definedge", "dhan"]:
+            # For Compositedge, handle missing session user
+            if broker == "compositedge" and "user" not in session:
         if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney"]:
             # For OAuth brokers, handle missing session user
             if broker in ("compositedge", "rmoney") and "user" not in session:
