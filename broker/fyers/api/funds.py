@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from typing import Any, Dict, Optional
 
 import httpx
@@ -13,10 +14,25 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Cache and rate limit state
+_cache = {
+    "data": None,
+    "timestamp": 0,
+}
+_rate_limit = {
+    "backoff_until": 0,
+    "backoff_seconds": 0,
+}
+
+CACHE_TTL = 60  # seconds - serve cached data within this window
+INITIAL_BACKOFF = 30  # seconds - first backoff after 429
+MAX_BACKOFF = 120  # seconds - maximum backoff duration
+
 
 def get_margin_data(auth_token: str) -> dict[str, str]:
     """
     Fetch and process margin/funds data from Fyers' API using shared HTTP client with connection pooling.
+    Includes response caching and exponential backoff on rate limits (429).
 
     Args:
         auth_token: The authentication token for Fyers API (format: 'app_id:access_token')
@@ -37,6 +53,18 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
         "m2mrealized": "0.00",
         "utiliseddebits": "0.00",
     }
+
+    now = time.time()
+
+    # If within cache TTL, return cached data
+    if _cache["data"] and (now - _cache["timestamp"]) < CACHE_TTL:
+        return _cache["data"]
+
+    # If rate-limited and in backoff period, return cached or default data
+    if now < _rate_limit["backoff_until"]:
+        remaining = int(_rate_limit["backoff_until"] - now)
+        logger.debug(f"Rate limit backoff active, {remaining}s remaining. Serving cached data.")
+        return _cache["data"] if _cache["data"] else default_response
 
     api_key = os.getenv("BROKER_API_KEY")
     if not api_key:
@@ -59,7 +87,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
         if funds_data.get("code") != 200:
             error_msg = funds_data.get("message", "Unknown error")
             logger.error(f"Error in Fyers funds API: {error_msg}")
-            return default_response
+            return _cache["data"] if _cache["data"] else default_response
 
         # Process the funds data
         processed_funds = {}
@@ -120,7 +148,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
             total_realised, total_unrealised = sum_realised_unrealised(position_book)
 
             # Format and return the response
-            return {
+            result = {
                 "availablecash": f"{total_balance:.2f}",
                 "collateral": f"{total_collateral:.2f}",
                 "m2munrealized": f"{total_unrealised:.2f}",
@@ -128,11 +156,33 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
                 "utiliseddebits": f"{total_utilized:.2f}",
             }
 
+            # Cache successful response and reset backoff
+            _cache["data"] = result
+            _cache["timestamp"] = now
+            _rate_limit["backoff_seconds"] = 0
+            _rate_limit["backoff_until"] = 0
+
+            return result
+
         except (ValueError, TypeError):
             logger.exception("Error calculating fund totals")
-            return default_response
+            return _cache["data"] if _cache["data"] else default_response
 
     except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            # Exponential backoff: 30s → 60s → 120s (max)
+            if _rate_limit["backoff_seconds"] == 0:
+                _rate_limit["backoff_seconds"] = INITIAL_BACKOFF
+            else:
+                _rate_limit["backoff_seconds"] = min(
+                    _rate_limit["backoff_seconds"] * 2, MAX_BACKOFF
+                )
+            _rate_limit["backoff_until"] = now + _rate_limit["backoff_seconds"]
+            logger.warning(
+                f"Fyers API rate limited (429). Backing off for {_rate_limit['backoff_seconds']}s. "
+                f"Serving cached data."
+            )
+            return _cache["data"] if _cache["data"] else default_response
         logger.error(f"HTTP error {e.response.status_code} fetching Fyers funds: {e.response.text}")
     except httpx.RequestError as e:
         logger.error(f"Request failed: {str(e)}")
@@ -141,4 +191,4 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
     except Exception:
         logger.exception("Unexpected error in get_margin_data")
 
-    return default_response
+    return _cache["data"] if _cache["data"] else default_response
