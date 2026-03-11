@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import httpx
 
@@ -17,7 +18,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
 
@@ -36,27 +37,46 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         "X-PrivateKey": api_key,
     }
 
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    url = f"https://apiconnect.angelone.in{endpoint}"
 
-    if method == "GET":
-        response = client.get(url, headers=headers)
-    elif method == "POST":
-        response = client.post(url, headers=headers, content=payload)
-    else:
-        response = client.request(method, url, headers=headers, content=payload)
+    for attempt in range(max_retries + 1):
+        try:
+            if method == "GET":
+                response = client.get(url, headers=headers)
+            elif method == "POST":
+                response = client.post(url, headers=headers, content=payload)
+            else:
+                response = client.request(method, url, headers=headers, content=payload)
+        except Exception as e:
+            logger.error(f"HTTP request failed for {endpoint}: {e}")
+            if attempt < max_retries:
+                time.sleep(1)
+                continue
+            return {"status": "error", "message": str(e)}
 
-    # Add status attribute for compatibility with the existing codebase
-    response.status = response.status_code
+        # Add status attribute for compatibility with the existing codebase
+        response.status = response.status_code
 
-    # Handle empty response
-    if not response.text:
-        return {}
+        # Handle empty response
+        if not response.text:
+            logger.error(f"Empty response from {endpoint} (HTTP {response.status_code})")
+            if attempt < max_retries:
+                time.sleep(1)
+                continue
+            return {"status": "error", "message": f"Empty response (HTTP {response.status_code})"}
 
-    try:
-        return json.loads(response.text)
-    except json.JSONDecodeError:
-        logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
-        return {}
+        try:
+            return json.loads(response.text)
+        except json.JSONDecodeError:
+            # Rate limit returns plain text like "Access denied because of exceeding access rate"
+            if "exceeding access rate" in response.text.lower() and attempt < max_retries:
+                logger.warning(f"Rate limited on {endpoint}, retrying in 1s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(1)
+                continue
+            logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
+            return {"status": "error", "message": f"Invalid JSON response (HTTP {response.status_code})"}
+
+    return {"status": "error", "message": "Max retries exceeded"}
 
 
 def get_order_book(auth):
@@ -139,7 +159,7 @@ def place_order_api(data, auth):
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/placeOrder",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder",
         headers=headers,
         content=payload,
     )
@@ -325,7 +345,7 @@ def cancel_order(orderid, auth):
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/cancelOrder",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/cancelOrder",
         headers=headers,
         content=payload,
     )
@@ -377,7 +397,7 @@ def modify_order(data, auth):
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/modifyOrder",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/modifyOrder",
         headers=headers,
         content=payload,
     )

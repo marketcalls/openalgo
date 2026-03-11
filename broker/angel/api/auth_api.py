@@ -29,7 +29,7 @@ def authenticate_broker(clientcode, broker_pin, totp_code):
         }
 
         response = client.post(
-            "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword",
+            "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword",
             headers=headers,
             content=payload,
         )
