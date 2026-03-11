@@ -1,13 +1,13 @@
 import { Eye, EyeOff, Github, Info, Loader2, LogIn, MessageCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -168,6 +168,7 @@ export default function Login() {
                     required
                     disabled={isLoading}
                     autoComplete="username"
+                    maxLength={50}
                   />
                 </div>
 
@@ -183,6 +184,7 @@ export default function Login() {
                       required
                       disabled={isLoading}
                       autoComplete="current-password"
+                      maxLength={128}
                       className="pr-10"
                     />
                     <Button

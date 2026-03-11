@@ -11,7 +11,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -19,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { showToast } from '@/utils/toast'
 
 type Step = 'email' | 'method' | 'totp' | 'email_sent' | 'password'
 
@@ -308,6 +308,8 @@ export default function ResetPassword() {
                     placeholder="Enter your email"
                     required
                     autoFocus
+                    maxLength={254}
+                    autoComplete="email"
                   />
                   <p className="text-sm text-muted-foreground">
                     Enter the email address associated with your account
@@ -387,6 +389,8 @@ export default function ResetPassword() {
                     className="text-center text-2xl tracking-widest"
                     required
                     autoFocus
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
                   />
                   <p className="text-sm text-muted-foreground">
                     Enter the 6-digit code from your authenticator app
@@ -450,6 +454,8 @@ export default function ResetPassword() {
                     placeholder="Enter new password"
                     required
                     autoFocus
+                    maxLength={128}
+                    autoComplete="new-password"
                   />
                   <Progress value={passwordStrength} className="h-2" />
                   {password && (
@@ -468,6 +474,8 @@ export default function ResetPassword() {
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Confirm new password"
                     required
+                    maxLength={128}
+                    autoComplete="new-password"
                   />
                   {passwordsMatch !== null && (
                     <p className={`text-sm ${passwordsMatch ? 'text-green-500' : 'text-red-500'}`}>

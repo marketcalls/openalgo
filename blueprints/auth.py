@@ -127,8 +127,11 @@ def login():
                 {"status": "success", "message": "Already logged in", "redirect": "/dashboard"}
             ), 200
 
-        username = request.form["username"]
-        password = request.form["password"]
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+
+        if len(username) > 50 or len(password) > 128:
+            return jsonify({"status": "error", "message": "Invalid credentials length"}), 400
 
         if authenticate_user(username, password):
             session["user"] = username  # Set the username in the session
@@ -181,6 +184,9 @@ def reset_password():
         # Fall back to form data for compatibility
         step = request.form.get("step")
         email = request.form.get("email")
+
+    if email and len(email) > 254:
+        return jsonify({"status": "error", "message": "Email exceeds maximum length."}), 400
 
     # Debug logging for CSRF issues
     logger.debug(f"Password reset step: {step}, Session: {session.keys()}")
@@ -264,6 +270,9 @@ def reset_password():
         else:
             token = request.form.get("token")
             password = request.form.get("password")
+
+        if password and len(password) > 128:
+            return jsonify({"status": "error", "message": "Password exceeds maximum length."}), 400
 
         # Verify token from session (handles both TOTP and email reset tokens)
         valid_token = token == session.get("reset_token") or token == session.get(
@@ -356,6 +365,9 @@ def change_password():
         old_password = request.form.get("old_password") or request.form.get("current_password")
         new_password = request.form.get("new_password")
         confirm_password = request.form.get("confirm_password", new_password)
+
+    if (old_password and len(old_password) > 128) or (new_password and len(new_password) > 128):
+        return jsonify({"status": "error", "message": "Password exceeds maximum length."}), 400
 
     username = session["user"]
     user = User.query.filter_by(username=username).first()
