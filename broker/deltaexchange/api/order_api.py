@@ -526,7 +526,25 @@ def cancel_order(orderid, auth):
 
 
 def cancel_all_orders_api(data, auth):
-    """Cancel all currently open orders (regardless of creation date)."""
+    """
+    Cancel all currently open orders via DELETE /v2/orders/all.
+
+    Uses the bulk cancel endpoint instead of cancelling orders one by one.
+    Falls back to individual cancellation if bulk endpoint fails.
+    """
+    # Try bulk cancel first (single API call)
+    body = {
+        "cancel_limit_orders": True,
+        "cancel_stop_orders": True,
+        "cancel_reduce_only_orders": True,
+    }
+    result = get_api_response("/v2/orders/all", auth, method="DELETE", payload=json.dumps(body))
+    if result.get("success"):
+        logger.info("[DeltaExchange] All open orders cancelled via /v2/orders/all")
+        return ["all"], []
+
+    # Fallback: cancel individually
+    logger.warning("[DeltaExchange] Bulk cancel failed, falling back to individual cancellation")
     order_book = _get_all_open_orders(auth)
     if not order_book:
         return [], []
@@ -573,7 +591,7 @@ def modify_order(data, auth):
 # ---------------------------------------------------------------------------
 
 def close_all_positions(current_api_key, auth):
-    """Square off all open positions using market orders."""
+    """Square off all open positions (derivatives + spot) using market orders."""
     positions = get_positions(auth)
     if not positions:
         return {"message": "No Open Positions Found"}, 200
@@ -581,7 +599,13 @@ def close_all_positions(current_api_key, auth):
     for pos in positions:
         if not isinstance(pos, dict):
             continue
-        size = int(pos.get("size", 0))
+        is_spot = pos.get("_is_spot", False)
+
+        # Use float() to handle fractional spot sizes (e.g. 0.0001 BTC)
+        try:
+            size = float(pos.get("size", 0))
+        except (ValueError, TypeError):
+            size = 0
         if size == 0:
             continue
 
@@ -590,8 +614,13 @@ def close_all_positions(current_api_key, auth):
         action = "SELL" if size > 0 else "BUY"
         quantity = abs(size)
 
-        # Resolve OpenAlgo symbol from DB; fall back to product_symbol
-        symbol = get_symbol(str(product_id), "CRYPTO") or product_symbol
+        # Resolve OpenAlgo symbol from DB.
+        # For spot wallet entries, product_id is asset_id (not product token),
+        # so look up by brsymbol instead.
+        if is_spot:
+            symbol = get_oa_symbol(product_symbol, "CRYPTO") or product_symbol
+        else:
+            symbol = get_symbol(str(product_id), "CRYPTO") or product_symbol
         logger.info(f"[DeltaExchange] Close: {action} {quantity} {symbol}")
 
         order_payload = {
@@ -601,7 +630,7 @@ def close_all_positions(current_api_key, auth):
             "action": action,
             "exchange": "CRYPTO",
             "pricetype": "MARKET",
-            "product": "NRML",
+            "product": "CNC" if is_spot else "NRML",
             "quantity": str(quantity),
         }
         _, api_response, _ = place_order_api(order_payload, auth)
