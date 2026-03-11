@@ -155,9 +155,6 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.ws_client.subscribe_ticker([br_symbol])
                 else:
                     self.ws_client.subscribe_l2_orderbook([br_symbol])
-                    # Also subscribe to v2/ticker so that LTP is available in the
-                    # cache for depth responses (Delta's l2_orderbook doesn't carry LTP).
-                    self.ws_client.subscribe_ticker([br_symbol])
                 self.logger.info("Subscribed: %s.%s mode=%s channel=%s", symbol, exchange, mode, channel)
             except Exception as exc:
                 self.logger.error("subscribe error %s.%s: %s", symbol, exchange, exc)
@@ -413,7 +410,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # LTP: prefer mark_price, fall back to close (last traded price) or spot_price.
         # Spot instruments may not have mark_price in early ticker messages.
-        raw_ltp = msg.get("mark_price") or msg.get("close") or msg.get("spot_price")
+        raw_ltp = msg.get("mark_price") or msg.get("spot_price")
 
         result = {
             "ltp":           _cv("ltp",        raw_ltp,                _f),

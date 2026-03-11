@@ -345,7 +345,7 @@ class DeltaWebSocket:
             logger.error("DeltaWS server error: %s", msg)
             return
 
-        logger.info("DeltaWS dispatching: type=%s symbol=%s", msg_type, msg.get("symbol", ""))
+        logger.debug("DeltaWS dispatching: type=%s symbol=%s", msg_type, msg.get("symbol", ""))
         self.on_message(wsapp, msg)
 
     def _ws_on_error(self, wsapp, error) -> None:
