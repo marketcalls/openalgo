@@ -130,7 +130,7 @@ def login():
         username = request.form.get("username", "")
         password = request.form.get("password", "")
 
-        if len(username) > 50 or len(password) > 128:
+        if len(username) > 80 or len(password) > 128:
             return jsonify({"status": "error", "message": "Invalid credentials length"}), 400
 
         if authenticate_user(username, password):
