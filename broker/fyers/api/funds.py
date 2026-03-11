@@ -174,7 +174,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
                 backoff = user_rate_limit["backoff_seconds"]
                 backoff = INITIAL_BACKOFF if backoff == 0 else min(backoff * 2, MAX_BACKOFF)
                 _rate_limit[auth_token] = {
-                    "backoff_until": now + backoff,
+                    "backoff_until": time.time() + backoff,
                     "backoff_seconds": backoff,
                 }
             logger.warning(
