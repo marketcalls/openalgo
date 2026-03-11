@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -14,15 +15,10 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Cache and rate limit state
-_cache = {
-    "data": None,
-    "timestamp": 0,
-}
-_rate_limit = {
-    "backoff_until": 0,
-    "backoff_seconds": 0,
-}
+# Per-user cache and rate limit state, keyed by auth_token
+_cache: dict[str, dict] = {}
+_rate_limit: dict[str, dict] = {}
+_lock = threading.Lock()
 
 CACHE_TTL = 60  # seconds - serve cached data within this window
 INITIAL_BACKOFF = 30  # seconds - first backoff after 429
@@ -56,15 +52,19 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
 
     now = time.time()
 
+    with _lock:
+        user_cache = _cache.get(auth_token, {"data": None, "timestamp": 0})
+        user_rate_limit = _rate_limit.get(auth_token, {"backoff_until": 0, "backoff_seconds": 0})
+
     # If within cache TTL, return cached data
-    if _cache["data"] and (now - _cache["timestamp"]) < CACHE_TTL:
-        return _cache["data"]
+    if user_cache["data"] and (now - user_cache["timestamp"]) < CACHE_TTL:
+        return user_cache["data"]
 
     # If rate-limited and in backoff period, return cached or default data
-    if now < _rate_limit["backoff_until"]:
-        remaining = int(_rate_limit["backoff_until"] - now)
+    if now < user_rate_limit["backoff_until"]:
+        remaining = int(user_rate_limit["backoff_until"] - now)
         logger.debug(f"Rate limit backoff active, {remaining}s remaining. Serving cached data.")
-        return _cache["data"] if _cache["data"] else default_response
+        return user_cache["data"] if user_cache["data"] else default_response
 
     api_key = os.getenv("BROKER_API_KEY")
     if not api_key:
@@ -87,7 +87,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
         if funds_data.get("code") != 200:
             error_msg = funds_data.get("message", "Unknown error")
             logger.error(f"Error in Fyers funds API: {error_msg}")
-            return _cache["data"] if _cache["data"] else default_response
+            return user_cache["data"] if user_cache["data"] else default_response
 
         # Process the funds data
         processed_funds = {}
@@ -157,32 +157,31 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
             }
 
             # Cache successful response and reset backoff
-            _cache["data"] = result
-            _cache["timestamp"] = now
-            _rate_limit["backoff_seconds"] = 0
-            _rate_limit["backoff_until"] = 0
+            with _lock:
+                _cache[auth_token] = {"data": result, "timestamp": now}
+                _rate_limit[auth_token] = {"backoff_until": 0, "backoff_seconds": 0}
 
             return result
 
         except (ValueError, TypeError):
             logger.exception("Error calculating fund totals")
-            return _cache["data"] if _cache["data"] else default_response
+            return user_cache["data"] if user_cache["data"] else default_response
 
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
             # Exponential backoff: 30s → 60s → 120s (max)
-            if _rate_limit["backoff_seconds"] == 0:
-                _rate_limit["backoff_seconds"] = INITIAL_BACKOFF
-            else:
-                _rate_limit["backoff_seconds"] = min(
-                    _rate_limit["backoff_seconds"] * 2, MAX_BACKOFF
-                )
-            _rate_limit["backoff_until"] = now + _rate_limit["backoff_seconds"]
+            with _lock:
+                backoff = user_rate_limit["backoff_seconds"]
+                backoff = INITIAL_BACKOFF if backoff == 0 else min(backoff * 2, MAX_BACKOFF)
+                _rate_limit[auth_token] = {
+                    "backoff_until": now + backoff,
+                    "backoff_seconds": backoff,
+                }
             logger.warning(
-                f"Fyers API rate limited (429). Backing off for {_rate_limit['backoff_seconds']}s. "
+                f"Fyers API rate limited (429). Backing off for {backoff}s. "
                 f"Serving cached data."
             )
-            return _cache["data"] if _cache["data"] else default_response
+            return user_cache["data"] if user_cache["data"] else default_response
         logger.error(f"HTTP error {e.response.status_code} fetching Fyers funds: {e.response.text}")
     except httpx.RequestError as e:
         logger.error(f"Request failed: {str(e)}")
@@ -191,4 +190,4 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
     except Exception:
         logger.exception("Unexpected error in get_margin_data")
 
-    return _cache["data"] if _cache["data"] else default_response
+    return user_cache["data"] if user_cache["data"] else default_response
