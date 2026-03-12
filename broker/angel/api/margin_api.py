@@ -62,7 +62,7 @@ def calculate_margin_api(positions, auth):
     try:
         # Make the request using the shared client
         response = client.post(
-            "https://apiconnect.angelbroking.com/rest/secure/angelbroking/margin/v1/batch",
+            "https://apiconnect.angelone.in/rest/secure/angelbroking/margin/v1/batch",
             headers=headers,
             content=payload,
         )
