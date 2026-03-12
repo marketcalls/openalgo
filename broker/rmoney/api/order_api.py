@@ -1,11 +1,11 @@
 import json
 import os
-from tokenize import Token
+
 
 import httpx
 
-from broker.fivepaisaxts.baseurl import INTERACTIVE_URL
-from broker.fivepaisaxts.mapping.transform_data import (
+from broker.rmoney.baseurl import INTERACTIVE_URL
+from broker.rmoney.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -75,12 +75,13 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
     net_qty = "0"
 
-    if positions_data and positions_data.get("status") and positions_data.get("data"):
-        for position in positions_data["data"]:
+    if positions_data and positions_data.get("type") == "success" and "result" in positions_data:
+        positions_list = positions_data["result"].get("positionList", [])
+        for position in positions_list:
             if (
-                position.get("tradingsymbol") == tradingsymbol
-                and position.get("exchange") == exchange
-                and position.get("producttype") == producttype
+                position.get("TradingSymbol") == tradingsymbol
+                and str(position.get("ExchangeSegment")) == str(exchange)
+                and position.get("ProductType") == producttype
             ):
                 net_qty = position.get("Quantity", "0")
                 # logger.info(f"Net Quantity: {net_qty}")
@@ -285,9 +286,6 @@ def cancel_order(orderid, auth):
         "authorization": AUTH_TOKEN,
         "Content-Type": "application/json",
     }
-
-    # Prepare the payload
-    payload = json.dumps({"appOrderID": orderid, "orderUniqueIdentifier": "openalgo"})
 
     # Make the request using the shared client
     response = client.delete(f"{INTERACTIVE_URL}/orders?appOrderID={orderid}", headers=headers)

@@ -14,7 +14,7 @@ from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_e
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
-from broker.fivepaisaxts.baseurl import MARKET_DATA_URL
+from broker.rmoney.baseurl import MARKET_DATA_URL
 from database.auth_db import get_auth_token
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client

@@ -1,1 +1,1 @@
-# FivepaisaXTS streaming module
+# RMoney streaming module

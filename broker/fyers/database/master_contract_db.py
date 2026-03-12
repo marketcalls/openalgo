@@ -206,12 +206,52 @@ def download_csv_fyers_data(output_path: str) -> tuple[bool, list[str], str | No
 
 
 def reformat_symbol_detail(s):
-    parts = s.split()  # Split the string into parts
-    # Reorder and format the parts to match the OpenAlgo standard symbol format
-    # Input format: "Name DD Mon YY Strike" (e.g., "NIFTY 02 Mar 26 30600")
-    # Output format: Name + DD + MMM + YY + Strike (e.g., "NIFTY02MAR2630600")
-    # This matches the DDMMMYY convention used by all other brokers
-    return f"{parts[0]}{parts[1]}{parts[2].upper()}{parts[3]}{parts[4]}"
+    if not s:
+        return s
+    parts = s.split()
+    if len(parts) < 3:
+        return s.replace(" ", "")
+
+    # parts[0]: Symbol (e.g., NIFTY)
+    symbol = parts[0]
+    
+    # Check if parts[1] is a day (numeric) or a month (alpha)
+    if parts[1].isdigit():
+        # Weekly/Dailies: NIFTY 04 APR 24 ...
+        day = parts[1]
+        month = parts[2].upper()
+        year = parts[3] if len(parts) > 3 and parts[3].isdigit() else ""
+        
+        # OpenAlgo format often expects SYMBOL YY MMM DD
+        # But commonly used is SYMBOL YY M DD (where M is month letter)
+        # We'll follow the pattern: SYMBOL YY MMM DD
+        res = f"{symbol}{year}{month}{day}"
+        
+        # Add strike if present
+        if len(parts) > 4:
+            # Handle cases like NIFTY 04 APR 24 19000 CE
+            # Strike is usually parts[4]
+            res += parts[4]
+        elif len(parts) > 3 and not parts[3].isdigit() and parts[3] != "FUT":
+            # Handle cases like NIFTY 04 APR 19000 CE (if year missing in parts[3])
+            res += parts[3]
+            
+    else:
+        # Monthlies: NIFTY APR 24 ...
+        month = parts[1].upper()
+        year = parts[2] if len(parts) > 2 and parts[2].isdigit() else ""
+        
+        res = f"{symbol}{year}{month}"
+        
+        # Add strike if present
+        if len(parts) > 3:
+            # Handle cases like NIFTY APR 24 19000 CE
+            if parts[3] != "FUT":
+                res += parts[3]
+            else:
+                res += "FUT"
+
+    return res
 
 
 def process_fyers_nse_csv(path):

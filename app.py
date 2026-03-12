@@ -399,7 +399,8 @@ def create_app():
 
         # Wait up to 30s for DB init (typically ~3.5s)
         if hasattr(app, "db_ready") and not app.db_ready.is_set():
-            app.db_ready.wait(timeout=30)
+            if not app.db_ready.wait(timeout=30):
+                return "Service Unavailable: Database initialization is taking too long. Please refresh in a moment.", 503
 
     @app.before_request
     def check_session_expiry():
@@ -528,6 +529,14 @@ def create_app():
         )
 
         return jsonify({"host_server": host_server, "is_localhost": is_localhost})
+
+    @app.route("/api/auth/csrf-token", methods=["GET"])
+    def get_csrf_token_api():
+        """Return a CSRF token for React SPA to use in form submissions."""
+        from flask_wtf.csrf import generate_csrf
+
+        token = generate_csrf()
+        return jsonify({"csrf_token": token})
 
     return app
 
@@ -713,6 +722,10 @@ def setup_environment(app):
                             logger.error(f"Error in Telegram bot startup: {e}")
             except Exception as e:
                 logger.error(f"Error auto-starting Telegram bot: {e}")
+            finally:
+                # Ensure db_ready is ALWAYS set even if something above fails
+                if not app.db_ready.is_set():
+                    app.db_ready.set()
 
     threading.Thread(target=_init_databases_and_schedulers, daemon=True).start()
 

@@ -1,5 +1,5 @@
 import json
-from turtle import position
+
 
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
@@ -364,13 +364,13 @@ def transform_holdings_data(holdings_data):
 def map_portfolio_data(portfolio_data):
     logger.info(f"portfolio_data: {portfolio_data}")
     """
-    Processes and modifies portfolio data from FivePaisaXTS API.
+    Processes and modifies portfolio data from IIFL API.
     
     Parameters:
-    - portfolio_data: A dictionary containing the portfolio/holdings information from FivePaisaXTS API.
+    - portfolio_data: A dictionary containing the portfolio/holdings information from IIFL API.
     
     Returns:
-    - A dictionary with 'holdings' and 'totalholding' keys structured for the OpenAlgoXTS system.
+    - A dictionary with 'holdings' and 'totalholding' keys structured for the OpenAlgo system.
     """
     # Check if response is valid and contains result data
     if (

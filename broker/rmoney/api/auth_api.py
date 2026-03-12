@@ -79,7 +79,8 @@ def get_feed_token():
             if feed_result.get("type") == "success":
                 feed_token = feed_result["result"].get("token")
                 user_id = feed_result["result"].get("userID")
-                logger.info(f"Feed Token: {feed_token}")
+                logger.info(f"Feed Token obtained successfully for user: {user_id}")
+                logger.debug(f"Feed Token: {feed_token[:4]}****{feed_token[-4:] if len(feed_token) > 8 else ''}")
             else:
                 return None, None, "Feed token request failed. Please check the response."
         else:

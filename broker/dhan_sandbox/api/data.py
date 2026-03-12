@@ -662,7 +662,15 @@ class BrokerData:
                 logger.info(f"Sandbox returned empty history for {symbol}, generating fake candles.")
 
                 # Calculate interval in seconds based on requested timeframe
-                interval_seconds = self.timeframe_map.get(interval, 300)
+                interval_seconds_map = {
+                    "1m": 60,
+                    "5m": 300,
+                    "15m": 900,
+                    "25m": 1500,
+                    "1h": 3600,
+                    "D": 86400,
+                }
+                interval_seconds = interval_seconds_map.get(interval, 300)
 
                 # Determine number of candles to generate based on date range
                 start_dt = datetime.strptime(str(start_date), "%Y-%m-%d")
@@ -691,6 +699,8 @@ class BrokerData:
                         quote_tmpl.copy(),
                         seed=candle_ts,
                     )
+                    if "fake_candles" not in locals():
+                        fake_candles = []
                     fake_candles.append({
                         "timestamp": candle_ts,
                         "open": realistic["open"],

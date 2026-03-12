@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-from broker.fivepaisaxts.streaming.fivepaisaxts_websocket import FivepaisaXTSWebSocketClient
+from .rmoney_websocket import RmoneyWebSocketClient
 from database.auth_db import get_auth_token, get_feed_token
 from database.token_db import get_token
 
@@ -18,18 +18,18 @@ from database.token_db import get_symbol
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
-from .fivepaisaxts_mapping import FivepaisaXTSCapabilityRegistry, FivepaisaXTSExchangeMapper
+from .rmoney_mapping import RmoneyCapabilityRegistry, RmoneyExchangeMapper
 
 
-class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
-    """Fivepaisa XTS specific implementation of the WebSocket adapter"""
+class RmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
+    """RMoney XTS specific implementation of the WebSocket adapter"""
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("fivepaisa_xts_websocket")
+        self.logger = logging.getLogger("rmoney_websocket")
         self.ws_client = None
         self.user_id = None
-        self.broker_name = "fivepaisaxts"
+        self.broker_name = "rmoney"
         self.reconnect_delay = 5  # Initial delay in seconds
         self.max_reconnect_delay = 60  # Maximum delay in seconds
         self.reconnect_attempts = 0
@@ -38,16 +38,16 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
 
         # Log the ZMQ port being used
-        self.logger.info(f"Fivepaisa XTS adapter initialized with ZMQ port: {self.zmq_port}")
+        self.logger.info(f"RMoney adapter initialized with ZMQ port: {self.zmq_port}")
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
     ) -> None:
         """
-        Initialize connection with Fivepaisa XTS WebSocket API
+        Initialize connection with RMoney XTS WebSocket API
 
         Args:
-            broker_name: Name of the broker (always 'fivepaisaxts' in this case)
+            broker_name: Name of the broker (always 'rmoney' in this case)
             user_id: Client ID/user ID
             auth_data: If provided, use these credentials instead of fetching from DB
 
@@ -76,7 +76,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(
                     "Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET environment variables"
                 )
-                raise ValueError("Missing Fivepaisa XTS API credentials in environment variables")
+                raise ValueError("Missing RMoney XTS API credentials in environment variables")
 
         else:
             # Use provided tokens
@@ -89,10 +89,10 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        self.logger.info(f"Using API Key: {api_key[:10]}... for Fivepaisa XTS connection")
+        self.logger.info(f"Using API Key: {api_key[:4]}**** for RMoney XTS connection")
 
-        # Create Fivepaisa XTS WebSocket client with API credentials
-        self.ws_client = FivepaisaXTSWebSocketClient(
+        # Create RMoney XTS WebSocket client with API credentials
+        self.ws_client = RmoneyWebSocketClient(
             api_key=api_key,
             api_secret=api_secret,
             user_id=user_id,  # Pass the user_id, client will get actual userID from login
@@ -186,7 +186,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return fallback_user_id
 
     def connect(self) -> None:
-        """Establish connection to Fivepaisa XTS WebSocket"""
+        """Establish connection to RMoney XTS WebSocket"""
         if not self.ws_client:
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
@@ -194,11 +194,11 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to Fivepaisa XTS WebSocket with retry logic"""
+        """Connect to RMoney XTS WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
                 self.logger.info(
-                    f"Connecting to Fivepaisa XTS WebSocket (attempt {self.reconnect_attempts + 1})"
+                    f"Connecting to RMoney XTS WebSocket (attempt {self.reconnect_attempts + 1})"
                 )
                 self.ws_client.connect()
                 self.reconnect_attempts = 0  # Reset attempts on successful connection
@@ -216,8 +216,8 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("Max reconnection attempts reached. Giving up.")
 
     def disconnect(self) -> None:
-        """Disconnect from Fivepaisa XTS WebSocket"""
-        self.logger.info("*** DISCONNECT CALLED - Starting Fivepaisa XTS disconnect process ***")
+        """Disconnect from RMoney XTS WebSocket"""
+        self.logger.info("*** DISCONNECT CALLED - Starting RMoney XTS disconnect process ***")
 
         # Set running to False to prevent reconnection attempts
         self.running = False
@@ -231,7 +231,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             try:
                 self.logger.info("Disconnecting Socket.IO client...")
                 self.ws_client.disconnect()
-                self.logger.info("Socket.IO client disconnect call completed")
+                self.logger.info("RMoney WebSocket client disconnect call completed")
             except Exception as e:
                 self.logger.error(f"Error during Socket.IO disconnect: {e}")
         else:
@@ -270,7 +270,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # DO NOT terminate shared context - other instances may still need it
             # Context will be cleaned up when the process exits
 
-            self.logger.info("Fivepaisa XTS WebSocket cleanup completed successfully")
+            self.logger.info("RMoney XTS WebSocket cleanup completed successfully")
         except Exception as e:
             self.logger.exception(f"Error cleaning up ZeroMQ resources: {e}")
 
@@ -278,7 +278,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
     ) -> dict[str, Any]:
         """
-        Subscribe to market data with Fivepaisa XTS specific implementation
+        Subscribe to market data with RMoney XTS specific implementation
 
         Args:
             symbol: Trading symbol (e.g., 'RELIANCE')
@@ -320,9 +320,9 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         actual_depth = depth_level
 
         if mode == 3:  # Depth mode
-            if not FivepaisaXTSCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
+            if not RmoneyCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
                 # If requested depth is not supported, use the highest available
-                actual_depth = FivepaisaXTSCapabilityRegistry.get_fallback_depth_level(
+                actual_depth = RmoneyCapabilityRegistry.get_fallback_depth_level(
                     exchange, depth_level
                 )
                 is_fallback = True
@@ -337,8 +337,8 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             f"Subscription input - symbol: {symbol}, exchange: {exchange}, brexchange: {brexchange}"
         )
 
-        # Create instrument list for Fivepaisa XTS API
-        exchange_type = FivepaisaXTSExchangeMapper.get_exchange_type(brexchange)
+        # Create instrument list for RMoney XTS API
+        exchange_type = RmoneyExchangeMapper.get_exchange_type(brexchange)
 
         # Log the full mapping for debugging
         self.logger.info("Exchange mapping details:")
@@ -430,7 +430,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             str: Exchange segment code for XTS API
         """
-        return FivepaisaXTSExchangeMapper.get_exchange_type(exchange)
+        return RmoneyExchangeMapper.get_exchange_type(exchange)
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """
@@ -457,10 +457,10 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
 
-        # Create instrument list for Fivepaisa XTS API
+        # Create instrument list for RMoney XTS API
         instruments = [
             {
-                "exchangeSegment": FivepaisaXTSExchangeMapper.get_exchange_type(brexchange),
+                "exchangeSegment": RmoneyExchangeMapper.get_exchange_type(brexchange),
                 "exchangeInstrumentID": token,
             }
         ]
@@ -505,7 +505,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_open(self, wsapp) -> None:
         """Callback when connection is established"""
-        self.logger.info("Connected to Fivepaisa XTS WebSocket")
+        self.logger.info("Connected to RMoney XTS WebSocket")
         self.connected = True
 
         # Resubscribe to existing subscriptions if reconnecting
@@ -525,11 +525,11 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
-        self.logger.error(f"Fivepaisa XTS WebSocket error: {error}")
+        self.logger.error(f"RMoney XTS WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
         """Callback when connection is closed"""
-        self.logger.info("Fivepaisa XTS WebSocket connection closed")
+        self.logger.info("RMoney XTS WebSocket connection closed")
         self.connected = False
 
         # Attempt to reconnect if we're still running
@@ -543,8 +543,8 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, wsapp, message) -> None:
         """Callback for market data from the WebSocket"""
         try:
-            self.logger.info(f"RAW FIVEPAISA DATA: Type: {type(message)}, Data: {message}")
-            self.logger.info(
+            self.logger.debug(f"RAW RMONEY DATA: Type: {type(message)}, Data: {message}")
+            self.logger.debug(
                 f"Adapter state - Connected: {self.connected}, Subscriptions count: {len(self.subscriptions)}"
             )
 
@@ -593,7 +593,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             )
 
             # Create reverse mapping from ExchangeSegment to exchange code
-            # Based on Fivepaisa XTS API documentation:
+            # Based on RMoney XTS API documentation:
             # "NSECM": 1, "NSEFO": 2, "NSECD": 3, "BSECM": 11, "BSEFO": 12, "MCXFO": 51
             segment_to_exchange = {
                 1: "NSE",  # NSECM

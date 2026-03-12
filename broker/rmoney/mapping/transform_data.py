@@ -1,5 +1,5 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping fivepaisaxts Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
+# Mapping RMoney Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
 
 from database.token_db import get_br_symbol, get_token
 from utils.logging import get_logger
@@ -11,7 +11,7 @@ def transform_data(data, token):
     """
     Transforms the new API request structure to the current expected structure.
     """
-    symbol = get_br_symbol(data["symbol"], data["exchange"])
+    # symbol = get_br_symbol(data["symbol"], data["exchange"])
     # token = get_token(data['symbol'], data['exchange'])
     # logger.info(f"token: {token}")
     # Basic mapping

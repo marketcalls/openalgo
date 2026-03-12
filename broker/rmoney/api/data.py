@@ -7,9 +7,9 @@ import pandas as pd
 import pytz
 from flask import session
 
-from broker.fivepaisaxts.api.auth_api import get_feed_token as refresh_feed_token
-from broker.fivepaisaxts.baseurl import MARKET_DATA_URL
-from broker.fivepaisaxts.database.master_contract_db import SymToken, db_session
+from broker.rmoney.api.auth_api import get_feed_token as refresh_feed_token
+from broker.rmoney.baseurl import MARKET_DATA_URL
+from broker.rmoney.database.master_contract_db import SymToken, db_session
 from database.auth_db import get_feed_token
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol
 from utils.httpx_client import get_httpx_client
@@ -81,12 +81,12 @@ def get_api_response(endpoint, auth, method="GET", payload="", feed_token=None, 
 
 class BrokerData:
     def __init__(self, auth_token, feed_token=None, user_id=None):
-        """Initialize FivepaisaXTS data handler with authentication token"""
+        """Initialize RMoney data handler with authentication token"""
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
 
-        # Map common timeframe format to FivepaisaXTS intervals
+        # Map common timeframe format to RMoney intervals
         self.timeframe_map = {
             "1s": "1",
             "1m": "60",
@@ -161,7 +161,7 @@ class BrokerData:
         self, token: dict, message_code: int, retry_on_invalid_token: bool = True
     ) -> dict:
         """
-        Helper method to fetch market data from FivepaisaXTS API
+        Helper method to fetch market data from RMoney API
         Args:
             token: Dictionary containing exchangeSegment and exchangeInstrumentID
             message_code: XTS message code (e.g., 1502 for market data, 1510 for OI)
@@ -449,7 +449,7 @@ class BrokerData:
                     response.get("description", "Unknown error") if response else "No response"
                 )
                 logger.error(f"Error fetching multiquotes: {error_msg}")
-                raise Exception(f"Error from FivepaisaXTS API: {error_msg}")
+                raise Exception(f"Error from RMoney API: {error_msg}")
 
             # Parse response
             list_quotes = response.get("result", {}).get("listQuotes", [])
@@ -571,7 +571,7 @@ class BrokerData:
             while current_start <= to_date:
                 current_end = min(current_start + timedelta(days=6), to_date)
 
-                # FivepaisaXTS expects MMM DD YYYY HHMMSS in IST
+                # RMoney expects MMM DD YYYY HHMMSS in IST
                 from_str = current_start.strftime("%b %d %Y %H%M%S")
                 to_str = current_end.strftime("%b %d %Y %H%M%S")
 
@@ -601,7 +601,7 @@ class BrokerData:
                 if not response or response.get("type") != "success":
                     logger.error(f"API Response: {response}")
                     raise Exception(
-                        f"Error from FivepaisaXTS API: {response.get('description', 'Unknown error')}"
+                        f"Error from RMoney API: {response.get('description', 'Unknown error')}"
                     )
 
                 # Parse dataResponse (pipe-delimited string)
@@ -654,7 +654,7 @@ class BrokerData:
 
                     # Determine segment ID based on exchange
                     segment_id = exchange_segment_map.get(exchange)
-                    logger.debug(f"Exchange: {{exchange}}, Segment ID: {segment_id}")
+                    logger.debug(f"Exchange: {exchange}, Segment ID: {segment_id}")
                     if segment_id is None:
                         raise ValueError(f"Unknown exchange: {exchange}")
                     payload = {
@@ -675,7 +675,7 @@ class BrokerData:
 
                     if not response or response.get("type") != "success":
                         raise Exception(
-                            f"Error from FivepaisaXTS API: {response.get('description', 'Unknown error')}"
+                            f"Error from RMoney API: {response.get('description', 'Unknown error')}"
                         )
 
                     # Parse quote data from response

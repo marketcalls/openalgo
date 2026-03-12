@@ -162,6 +162,7 @@ class Dhan_sandboxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # when self.running becomes False without needing join()
             self._mock_thread = None
             logger.info("Mock WebSocket disconnected")
+            self.cleanup_zmq()
             
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
