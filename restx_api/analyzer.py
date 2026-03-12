@@ -40,8 +40,6 @@ class AnalyzerStatus(Resource):
                     400,
                 )
 
-            data = data
-
             # Validate and deserialize input using AnalyzerSchema
             try:
                 analyzer_data = analyzer_schema.load(data)
@@ -74,8 +72,17 @@ class AnalyzerToggle(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
         """Toggle analyzer mode on/off"""
+        data = None  # Initialize for error handler
         try:
-            data = data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
 
             # Validate and deserialize input using AnalyzerToggleSchema
             try:

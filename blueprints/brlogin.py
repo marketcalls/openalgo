@@ -33,6 +33,13 @@ def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
 
 
+def get_remote_ip():
+    """Get the remote IP address, handling reverse proxies."""
+    if request.headers.get("X-Forwarded-For"):
+        return request.headers.get("X-Forwarded-For").split(",")[0].strip()
+    return request.remote_addr
+
+
 @brlogin_bp.route("/<broker>/callback", methods=["POST", "GET"])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
@@ -97,7 +104,7 @@ def broker_callback(broker, para=None):
             # Static IP Validation for Angel One (Compliance Apr 1, 2026)
             from broker.angel.config.static_ip_config import angel_static_ip_config
 
-            is_valid_ip, ip_msg = angel_static_ip_config.validate_request_ip(request.remote_addr)
+            is_valid_ip, ip_msg = angel_static_ip_config.validate_request_ip(get_remote_ip())
             if not is_valid_ip:
                 logger.warning(f"Angel One Static IP validation failed: {ip_msg}")
                 # For now, we log but continue, unless it's past April 1, 2026
@@ -358,7 +365,7 @@ def broker_callback(broker, para=None):
             # Static IP Validation for Dhan (Compliance Apr 1, 2026)
             from broker.dhan.config.static_ip_config import dhan_static_ip_config
 
-            is_valid_ip, ip_msg = dhan_static_ip_config.validate_request_ip(request.remote_addr)
+            is_valid_ip, ip_msg = dhan_static_ip_config.validate_request_ip(get_remote_ip())
             if not is_valid_ip:
                 logger.warning(f"Dhan Static IP validation failed: {ip_msg}")
 
@@ -409,7 +416,7 @@ def broker_callback(broker, para=None):
             # Static IP Validation for Dhan (Compliance Apr 1, 2026)
             from broker.dhan.config.static_ip_config import dhan_static_ip_config
 
-            is_valid_ip, ip_msg = dhan_static_ip_config.validate_request_ip(request.remote_addr)
+            is_valid_ip, ip_msg = dhan_static_ip_config.validate_request_ip(get_remote_ip())
             if not is_valid_ip:
                 logger.warning(f"Dhan Static IP validation failed: {ip_msg}")
 
@@ -428,6 +435,7 @@ def broker_callback(broker, para=None):
 
                     if is_valid:
                         logger.info("Dhan direct token authentication successful")
+                        user_id = None  # Initialize for success flow
                         forward_url = "broker.html"
                         # The auth_token will be handled by the common success flow below
                     else:
@@ -784,7 +792,7 @@ def broker_callback(broker, para=None):
             from broker.zerodha.config.static_ip_config import zerodha_static_ip_config
 
             is_valid_ip, ip_msg = zerodha_static_ip_config.validate_request_ip(
-                request.remote_addr
+                get_remote_ip()
             )
             if not is_valid_ip:
                 logger.warning(f"Zerodha Static IP validation failed: {ip_msg}")

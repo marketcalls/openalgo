@@ -179,7 +179,7 @@ class RmoneyWebSocketClient:
             # Use the market data token and actual user ID from login response
             connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
 
-            self.logger.info(f"Connecting to RMoney XTS Socket.IO: {connection_url}")
+            self.logger.info("Connecting to RMoney XTS Socket.IO")
 
             # Connect to Socket.IO server
             self.sio.connect(
