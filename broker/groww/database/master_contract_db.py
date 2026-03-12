@@ -867,7 +867,7 @@ def process_groww_data(path):
 
                 expiry_date = pd.to_datetime(row["expiry"])
                 expiry_str = expiry_date.strftime("%d%b%y").upper()
-            except:
+            except Exception:
                 expiry_str = row["expiry"]
 
             # For futures

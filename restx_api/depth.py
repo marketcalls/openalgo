@@ -27,8 +27,19 @@ class Depth(Resource):
     def post(self):
         """Get market depth for given symbol"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            depth_data = depth_schema.load(request.json)
+            depth_data = depth_schema.load(data)
 
             api_key = depth_data["apikey"]
             symbol = depth_data["symbol"]

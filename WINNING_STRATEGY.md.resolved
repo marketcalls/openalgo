@@ -1,0 +1,248 @@
+# 🏆 FOSS Hack 2026 — COMPLETE EXECUTION PLAYBOOK
+
+> **Last Updated:** Mar 4, 2026 19:50 IST
+> **Goal:** Solve 10-11 of 12 official FOSSHack issues + Docker fix = 12-15 merged PRs
+> **Status:** Docker fix ASSIGNED by maintainer ⭐
+
+---
+
+## 📌 PHASE 0: DOCKER VOLUME FIX (ASSIGNED — DO FIRST!)
+
+### The Problem
+[docker-compose.yaml](file:///d:/sem4/openalgo/docker-compose.yaml) uses **named volumes** (`openalgo_db:`) that store DB files deep inside Docker's internal VM storage (e.g., `/var/lib/docker/volumes/`). Users can't see, back up, or access their data from the host machine.
+
+### The Fix
+Replace named volumes with **bind mounts** (`./db:/app/db`) so data lives in the host directory — matching what [docker-run.sh](file:///d:/sem4/openalgo/install/docker-run.sh) already does correctly.
+
+### Branch: `fix/docker-compose-bind-mounts`
+
+### Files to Change:
+1. **[docker-compose.yaml](file:///d:/sem4/openalgo/docker-compose.yaml)** — Replace named volumes with bind mounts, remove `volumes:` block
+2. **[DOCKER_README.md](file:///d:/sem4/openalgo/DOCKER_README.md)** — Add clear documentation about volume mapping
+
+### Exact Changes:
+
+**docker-compose.yaml (BEFORE):**
+```yaml
+volumes:
+  - openalgo_db:/app/db
+  - openalgo_log:/app/log
+  - openalgo_strategies:/app/strategies
+  - openalgo_keys:/app/keys
+  - openalgo_tmp:/app/tmp
+  - ./.env:/app/.env:ro
+
+# ...bottom of file...
+volumes:
+  openalgo_db:
+    driver: local
+  openalgo_log:
+    driver: local
+  openalgo_strategies:
+    driver: local
+  openalgo_keys:
+    driver: local
+  openalgo_tmp:
+    driver: local
+```
+
+**docker-compose.yaml (AFTER):**
+```yaml
+volumes:
+  - ./db:/app/db
+  - ./log:/app/log
+  - ./strategies:/app/strategies
+  - ./keys:/app/keys
+  - ./.env:/app/.env:ro
+```
+
+### Commit: [fix(docker): use bind mounts instead of named volumes for host-accessible data](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+
+### PR Description:
+```markdown
+## Description
+Fixes the Docker Compose volume configuration so database files, logs, strategies,
+and keys are stored in the host directory instead of Docker's internal named volumes.
+
+Closes #XXXX
+
+## Problem
+The current `docker-compose.yaml` uses Docker named volumes (`openalgo_db:`, etc.)
+which store data deep inside the Docker VM's internal storage
+(`/var/lib/docker/volumes/`). Users cannot easily access, back up, or inspect
+their database files, strategies, or logs from the host machine.
+
+## Solution
+Replaced named volumes with bind mounts (`./db:/app/db`, etc.) to match the
+behavior of the `docker-run.sh` script, which already uses bind mounts correctly.
+Also removed the now-unused `openalgo_tmp` volume — the `/app/tmp` directory
+is ephemeral cache data (numba/scipy) that doesn't need host persistence.
+
+## Changes Made
+- `docker-compose.yaml`: Replaced 5 named volumes with 4 bind mounts
+- `docker-compose.yaml`: Removed the `volumes:` definition block at bottom
+- `DOCKER_README.md`: Updated Data Persistence section with volume details
+
+## Testing
+- Verified `docker compose config` parses without errors
+- Confirmed directory structure matches `docker-run.sh` behavior
+- Ensured `.env` is mounted read-only (`:ro`)
+
+## Checklist
+- [x] Follows existing `docker-run.sh` bind mount pattern
+- [x] No breaking changes to existing functionality
+- [x] Updated documentation
+- [x] Tested config parsing
+```
+
+---
+
+## 📌 PHASE 1: TIER 1 QUICK WINS (4 PRs, ~2 hours total)
+
+### Issue #1013 — Fix bare except in margin.py + gex_service.py
+- **Branch:** `fix/bare-except-margin-gex`
+- **Files:** [restx_api/margin.py](file:///d:/sem4/openalgo/restx_api/margin.py) (line 63), [services/gex_service.py](file:///d:/sem4/openalgo/services/gex_service.py) (lines 102-103, 125-126)
+- **Fix:** Replace `except:` with `except Exception as e:` + add `logger.exception()`
+- **Fix:** Replace `except Exception: pass` with `except Exception: logger.debug()`
+- **Commit:** [fix(api): replace bare except with specific exception handling in margin and gex](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+- **Time:** 30 min
+
+### Issue #1014 — Add security headers
+- **Branch:** `fix/add-security-headers`
+- **Files:** `csp.py` (add to `add_security_headers()`)
+- **Fix:** Add 4 headers: `X-Frame-Options`, `X-Content-Type-Options`, `X-XSS-Protection`, `Referrer-Policy`
+- **Commit:** [fix(security): add missing HTTP security headers to Flask responses](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+- **Time:** 30 min
+
+### Issue #1015 — Null check for request.json
+- **Branch:** `fix/null-check-request-json`
+- **Files:** [restx_api/market_holidays.py](file:///d:/sem4/openalgo/restx_api/market_holidays.py), [restx_api/symbol.py](file:///d:/sem4/openalgo/restx_api/symbol.py), [restx_api/intervals.py](file:///d:/sem4/openalgo/restx_api/intervals.py)
+- **Fix:** Add `if request.json is None:` guard before schema validation (copy pattern from `option_greeks.py`)
+- **Commit:** [fix(api): add null check for request.json in market_holidays, symbol, and intervals](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+- **Time:** 30 min
+
+### Issue #1022 — Standardize error format in option_greeks.py
+- **Branch:** `fix/standardize-error-format-greeks`
+- **Files:** [restx_api/option_greeks.py](file:///d:/sem4/openalgo/restx_api/option_greeks.py) (lines 99-100)
+- **Fix:** Change `{"status": "error", "errors": err.messages}` → `{"status": "error", "message": str(err.messages)}`
+- **Commit:** [fix(api): standardize error response format in option_greeks endpoint](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+- **Time:** 30 min
+
+---
+
+## 📌 PHASE 2: SECURITY SWEEP (3 PRs, ~4 hours total)
+
+### Issue #1012 — Replace traceback.print_exc()
+- **Branch:** `fix/remove-traceback-print-exc`
+- **Files:** 15+ files in `restx_api/`
+- **Fix:** Remove `traceback.print_exc()`, replace `logger.error()` with `logger.exception()`, remove unused `import traceback`
+- **Commit:** [fix(security): replace traceback.print_exc with logger.exception across all endpoints](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+- **Time:** 1-2 hours
+
+### Issue #1019 — CSRF time limit validation
+- **Branch:** `fix/csrf-validation-warning`
+- **Files:** `app.py` (lines 270-295)
+- **Fix:** Add `logger.warning()` when CSRF disabled, add min/max bounds (300-86400s)
+- **Commit:** [fix(security): add CSRF time limit validation and warning when disabled](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+- **Time:** 1 hour
+
+### Issue #1017 — Standardize error logging
+- **Branch:** `refactor/standardize-error-logging`
+- **Files:** [restx_api/cancel_order.py](file:///d:/sem4/openalgo/restx_api/cancel_order.py), `close_position.py`, `cancel_all_order.py`, `basket_order.py`, `place_order.py`, `modify_order.py`
+- **Fix:** Replace `logger.error()` with `logger.exception()` in all except blocks
+- **Commit:** `refactor(api): standardize error logging to use logger.exception consistently`
+- **Time:** 1-2 hours
+
+---
+
+## 📌 PHASE 3: DOCS + FRONTEND (4 PRs, ~4 hours total)
+
+### Issue #1016 — Type hints + docstrings for config.py
+- **Branch:** `docs/type-hints-config`
+- **Files:** [utils/config.py](file:///d:/sem4/openalgo/utils/config.py) (lines 11-28)
+- **Fix:** Add `-> str | None` return types, add one-line Google-style docstrings
+- **Commit:** `docs(utils): add type hints and docstrings to config.py`
+- **Time:** 30 min
+
+### Issue #1023 — Type hints + docstrings for security_middleware.py
+- **Branch:** `docs/type-hints-security-middleware`
+- **Files:** [utils/security_middleware.py](file:///d:/sem4/openalgo/utils/security_middleware.py)
+- **Fix:** Add type hints to `__init__`, `__call__`, `check_ip_ban`, add class/function docstrings
+- **Commit:** `docs(utils): add type hints and docstrings to security_middleware.py`
+- **Time:** 30 min
+
+### Issue #1024 — ARIA descriptions for dialogs
+- **Branch:** `fix/aria-dialog-descriptions`
+- **Files:** [frontend/src/pages/OrderBook.tsx](file:///d:/sem4/openalgo/frontend/src/pages/OrderBook.tsx), `Positions.tsx`, `TradeBook.tsx`
+- **Fix:** Add `<DialogDescription>` with `className="sr-only"` in each dialog
+- **Commit:** [fix(a11y): add ARIA descriptions to dialog components](file:///d:/sem4/openalgo/test/test_conftest_smoke.py#83-93)
+- **Time:** 1 hour
+
+### Issue #1021 — React Error Boundary
+- **Branch:** `feat/react-error-boundary`
+- **Files:** Create `frontend/src/components/ErrorBoundary.tsx`, wrap pages
+- **Fix:** Class component with `getDerivedStateFromError`, fallback UI with retry button
+- **Commit:** `feat(frontend): add ErrorBoundary component for React pages`
+- **Time:** 2 hours
+
+---
+
+## 🕐 DAILY SCHEDULE (Mar 4-10)
+
+| Day | Date | Morning | Evening | PRs |
+|-----|------|---------|---------|-----|
+| **3** | Mar 4 | ✅ B02 tests done | Docker fix PR + #1013 | 2 |
+| **4** | Mar 5 | #1014 + #1015 + #1022 | #1012 (big refactor) | 4 |
+| **5** | Mar 6 | #1019 (CSRF) + #1017 | #1016 + #1023 | 4 |
+| **6** | Mar 7 | #1024 (ARIA) | #1021 (Error Boundary) | 2 |
+| **7** | Mar 8 | Address any PR review feedback | B03 smart order tests | 1-2 |
+| **8** | Mar 9 | B04 cancel order tests | B05 basket tests | 1-2 |
+| **9** | Mar 10 | Polish + respond to reviews | Any remaining items | 0-1 |
+
+---
+
+## 🎭 HUMANIZING RULES (CRITICAL)
+
+### DO:
+- Write commit messages like a real developer (casual but precise)
+- Ask 1 clarifying question on ~2 issues before PRing
+- Space out comments: don't claim all 11 issues in 5 minutes
+- Reference other issues in your PRs when relevant ("This pairs with #1012")
+- Vary PR description lengths — some short (30 words), some detailed (200 words)
+- Use contractions: "I'll", "don't", "it's" in comments
+- Make genuine review comments on other people's PRs
+
+### DON'T:
+- Don't submit PRs faster than 30-min intervals
+- Don't use identical PR description formats for every PR
+- Don't add features not asked for in the issue
+- Don't use overly formal language ("Greetings, I would like to...")
+- Don't write 500-word PR descriptions for a 5-line change
+
+---
+
+## 🔒 SECURITY ANGLE (YOUR BRAND)
+
+You are positioning yourself as the **security contributor**. Every PR should reinforce this:
+
+1. In security PRs: Explain the attack vector ("bare except masks KeyboardInterrupt, making graceful shutdown impossible")
+2. In non-security PRs: Add a 1-line security note if relevant ("Verified no API keys are exposed in log output")
+3. After completing security issues: File 1 NEW security issue showing initiative
+
+---
+
+## ✅ PR SUBMISSION CHECKLIST (Every single PR)
+
+```
+[ ] Branch name follows convention (fix/, feat/, docs/, refactor/)
+[ ] Sync with upstream main before creating branch
+[ ] Changes match EXACTLY what the issue asks for
+[ ] All existing tests pass: python -m pytest test/ -v
+[ ] Linting clean: flake8 on changed files
+[ ] Commit message uses conventional format
+[ ] PR title matches commit message
+[ ] PR body references "Closes #XXXX" or "Fixes #XXXX"
+[ ] PR body explains WHAT, WHY, and HOW TESTED
+[ ] No unrelated changes included
+[ ] No debug prints or commented-out code
+```

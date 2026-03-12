@@ -231,7 +231,7 @@ def test_cache_performance():
                 hours, remainder = divmod(remaining.seconds, 3600)
                 minutes, _ = divmod(remainder, 60)
                 print(f"Time until expiry: {hours} hours, {minutes} minutes")
-            except:
+            except Exception:
                 pass
 
         # 10. Summary

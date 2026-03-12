@@ -26,8 +26,19 @@ class MultiQuotes(Resource):
     def post(self):
         """Get real-time quotes for multiple symbols"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            multiquotes_data = multiquotes_schema.load(request.json)
+            multiquotes_data = multiquotes_schema.load(data)
 
             api_key = multiquotes_data["apikey"]
             symbols = multiquotes_data["symbols"]

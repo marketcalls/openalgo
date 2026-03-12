@@ -315,7 +315,7 @@ class MstockWebSocket:
                             try:
                                 response_data = json.loads(response)
                                 logger.debug(f"Parsed JSON response: {response_data}")
-                            except:
+                            except Exception:
                                 logger.debug(f"Non-JSON string response: {response}")
                             # Continue to wait for binary quote data
                         else:

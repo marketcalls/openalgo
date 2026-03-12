@@ -85,7 +85,7 @@ def test_logout_csrf_protection(base_url="http://127.0.0.1:5000"):
                 if re.search(r'<a[^>]*href=["\'][^"\']*auth\.logout[^"\']*["\']', response.text):
                     get_logout_found = True
                     print(f"  ✗ Found GET logout link in {page}")
-            except:
+            except Exception:
                 continue
 
         if not get_logout_found:

@@ -78,7 +78,7 @@ def get_margin_data(auth_token):
         try:
             error_detail = e.response.json()
             logger.error(f"Error details: {error_detail}")
-        except:
+        except Exception:
             pass
         return {}
     except httpx.RequestError as e:

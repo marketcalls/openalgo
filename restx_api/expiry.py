@@ -26,8 +26,19 @@ class Expiry(Resource):
     def post(self):
         """Get expiry dates for F&O symbols (futures or options) for a given underlying symbol"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            expiry_data = expiry_schema.load(request.json)
+            expiry_data = expiry_schema.load(data)
 
             # Extract parameters
             api_key = expiry_data.pop("apikey", None)

@@ -26,8 +26,19 @@ class Tradebook(Resource):
     def post(self):
         """Get trade book details"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            tradebook_data = tradebook_schema.load(request.json)
+            tradebook_data = tradebook_schema.load(data)
 
             api_key = tradebook_data["apikey"]
 

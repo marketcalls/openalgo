@@ -27,6 +27,17 @@ class PnLSymbols(Resource):
     def post(self):
         """Get day P&L breakdown by symbol (Sandbox mode only)"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Check if sandbox mode is enabled
             if not is_sandbox_mode():
                 return make_response(
@@ -40,12 +51,12 @@ class PnLSymbols(Resource):
                 )
 
             # Validate request data
-            pnl_data = pnl_symbols_schema.load(request.json)
+            pnl_data = pnl_symbols_schema.load(data)
 
             api_key = pnl_data["apikey"]
 
             # Call the service function to get PnL by symbols
-            success, response_data, status_code = sandbox_get_pnl_symbols(api_key, request.json)
+            success, response_data, status_code = sandbox_get_pnl_symbols(api_key, data)
             return make_response(jsonify(response_data), status_code)
 
         except ValidationError as err:

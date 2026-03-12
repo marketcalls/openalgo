@@ -660,7 +660,7 @@ class TelegramBotService:
                         status = "🟢 Connected"
                     else:
                         status = "🔴 Connection Failed"
-                except:
+                except Exception:
                     status = "🔴 Connection Failed"
             else:
                 status = "🔴 Client Error"

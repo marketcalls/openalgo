@@ -113,6 +113,10 @@ def check_env_version_compatibility() -> bool:
                 if line.startswith("ENV_CONFIG_VERSION"):
                     env_version = line.split("=")[1].strip().strip("'\"")
                     break
+    except PermissionError:
+        print(f"\nError: Permission denied when reading .env file at {env_path}")
+        print("Solution: Please check your file permissions.")
+        return True  # Avoid crashing the check, but user will get errors later
     except Exception as e:
         print(f"\nWarning: Could not read .env file: {e}")
         return True  # Assume compatible if can't read
@@ -234,7 +238,12 @@ def load_and_check_env_variables() -> None:
         sys.exit(1)
 
     # Load environment variables from the .env file with override=True to ensure values are updated
-    load_dotenv(dotenv_path=env_path, override=True)
+    try:
+        load_dotenv(dotenv_path=env_path, override=True)
+    except PermissionError:
+        print(f"\nError: Permission denied when loading .env file at {env_path}")
+        print("Solution: Run with appropriate permissions or fix file ownership.")
+        sys.exit(1)
 
     # Define the required environment variables
     required_vars = [
@@ -292,7 +301,7 @@ def load_and_check_env_variables() -> None:
         match = re.search(r"/([^/]+)/callback$", redirect_url)
         if match:
             broker_name = match.group(1).lower()
-    except:
+    except Exception:
         pass
 
     # Validate 5paisa API key format

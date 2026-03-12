@@ -688,7 +688,7 @@ class TelegramBotService:
                         status = "🟢 Connected"
                     else:
                         status = "🔴 Connection Failed"
-                except:
+                except Exception:
                     status = "🔴 Connection Failed"
             else:
                 status = "🔴 Client Error"
@@ -1186,7 +1186,7 @@ class TelegramBotService:
             logger.exception(f"Error generating charts: {e}")
             try:
                 await loading_msg.delete()
-            except:
+            except Exception:
                 pass
             await update.message.reply_text(f"❌ Error generating charts: {str(e)}")
 

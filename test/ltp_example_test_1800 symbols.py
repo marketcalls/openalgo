@@ -305,7 +305,7 @@ def main():
                     if response != "y":
                         break
                     test_start_time = time.time()  # Reset timer
-                except:
+                except Exception:
                     break
 
     except KeyboardInterrupt:

@@ -202,7 +202,7 @@ def get_ngrok_url() -> str | None:
     if _ngrok_tunnel:
         try:
             return _ngrok_tunnel.public_url
-        except:
+        except Exception:
             pass
     return None
 

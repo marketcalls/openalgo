@@ -83,6 +83,17 @@ class MultiOptionGreeks(Resource):
                     400,
                 )
 
+            # Get request data
+            data = data
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
             try:
                 validated_data = multi_option_greeks_schema.load(data)

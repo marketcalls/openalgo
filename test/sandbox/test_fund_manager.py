@@ -211,7 +211,7 @@ def cleanup_test_data(user_id):
     try:
         SandboxFunds.query.filter_by(user_id=user_id).delete()
         db_session.commit()
-    except:
+    except Exception:
         db_session.rollback()
 
 

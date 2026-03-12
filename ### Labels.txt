@@ -1,0 +1,6 @@
+### Labels
+
+[FOSSHack 2026FOSSHack 2026 Hackathon](https://github.com/marketcalls/openalgo/issues?q=state%3Aopen%20label%3A%22FOSSHack%202026%22)
+[backendFlask backend issues](https://github.com/marketcalls/openalgo/issues?q=state%3Aopen%20label%3A%22backend%22)
+[bugSomething isn't working](https://github.com/marketcalls/openalgo/issues?q=state%3Aopen%20label%3A%22bug%22)
+[good first issueGood for newcomers](https://github.com/marketcalls/openalgo/issues?q=state%3Aopen%20label%3A%22good%20first%20issue%22)

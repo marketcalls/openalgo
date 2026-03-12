@@ -62,7 +62,18 @@ class ChartPreferencesResource(Resource):
         {"apikey": "your-api-key", "tv_theme": "dark", "tv_chart_layout": "{...}"}
         """
         try:
+            # Get request data
             data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
+            data = data
             if not data:
                 return make_response(
                     jsonify({"status": "error", "message": "No data provided"}), 400

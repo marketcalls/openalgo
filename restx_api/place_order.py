@@ -22,8 +22,19 @@ class PlaceOrder(Resource):
     def post(self):
         """Place an order with the broker"""
         try:
-            # Get the request data
+            # Get request data
             data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
+            # Get the request data
+            data = data
 
             # Extract API key without removing it from the original data
             api_key = data.get("apikey", None)

@@ -29,7 +29,18 @@ class OrderStatus(Resource):
     def post(self):
         """Get status of a specific order"""
         try:
+            # Get request data
             data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
+            data = data
 
             # Validate and deserialize input using OrderStatusSchema
             try:

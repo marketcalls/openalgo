@@ -170,7 +170,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if self.ws_client:
                     try:
                         self.ws_client.disconnect()
-                    except:
+                    except Exception:
                         pass
                     self.ws_client = None
                 self.cleanup_zmq()

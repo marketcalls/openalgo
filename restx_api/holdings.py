@@ -27,8 +27,19 @@ class Holdings(Resource):
     def post(self):
         """Get holdings details"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            holdings_data = holdings_schema.load(request.json)
+            holdings_data = holdings_schema.load(data)
 
             api_key = holdings_data["apikey"]
 

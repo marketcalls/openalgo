@@ -526,5 +526,5 @@ class FyersDataMapper:
             if timestamp > 0:
                 return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
             return ""
-        except:
+        except Exception:
             return ""

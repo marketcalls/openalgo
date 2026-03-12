@@ -179,6 +179,22 @@ def place_order_with_auth(
         executor.submit(async_log_order, "placeorder", original_data, error_response)
         return False, error_response, 404
 
+    # Apply market protection order conversion for April 1, 2026 compliance
+    try:
+        from services.market_protection_order_converter import market_protection_converter
+
+        if market_protection_converter.is_market_order(order_data):
+            # Check if order is for a broker that requires protection
+            if market_protection_converter.supports_protection(broker):
+                order_data, converted, msg = market_protection_converter.convert_market_order(
+                    order_data, broker
+                )
+                if converted:
+                    logger.info(f"Market protection applied for {broker}: {msg}")
+    except Exception as e:
+        logger.warning(f"Error applying market protection: {e}")
+        # Log error but continue with original order to avoid trade disruption
+
     try:
         # Call the broker's place_order_api function
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)

@@ -33,6 +33,9 @@ def read_env_file():
         # Use UTF-8 encoding for cross-platform compatibility
         with open(env_path, encoding="utf-8") as f:
             return f.read(), None
+    except PermissionError:
+        logger.error(f"Permission denied when reading .env file at {env_path}")
+        return None, "Permission denied. Please check if the .env file is readable by the application."
     except Exception as e:
         logger.exception(f"Error reading .env file: {e}")
         return None, str(e)
@@ -91,7 +94,7 @@ def get_broker_from_redirect_url(redirect_url: str) -> str:
         match = re.search(r"/([^/]+)/callback$", redirect_url)
         if match:
             return match.group(1).lower()
-    except:
+    except Exception:
         pass
     return ""
 
@@ -315,6 +318,17 @@ def update_credentials():
             with open(env_path, "w", encoding="utf-8") as f:
                 f.write(content)
             logger.info(f"Updated broker credentials: {', '.join(updated_fields)}")
+        except PermissionError:
+            logger.error(f"Permission denied when writing to .env file at {env_path}")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "Permission denied. Please check if the .env file is writable by the application.",
+                    }
+                ),
+                403,
+            )
         except Exception as e:
             logger.exception(f"Error writing .env file: {e}")
             return jsonify({"status": "error", "message": f"Failed to write .env file: {e}"}), 500

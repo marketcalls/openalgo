@@ -1147,7 +1147,7 @@ class FyersHSMWebSocket:
             if hasattr(self, "ws") and self.ws:
                 try:
                     self.ws.close()
-                except:
+                except Exception:
                     pass
                 self.ws = None
 
@@ -1167,5 +1167,5 @@ class FyersHSMWebSocket:
             if hasattr(self, "reconnect_attempts"):
                 self.reconnect_attempts = 0
 
-        except:
+        except Exception:
             pass  # Suppress all errors in force cleanup

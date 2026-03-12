@@ -929,7 +929,7 @@ class GrowwNATSWebSocket:
                     try:
                         unsub_cmd = self.nats_protocol.create_unsubscribe(str(i))
                         self.ws.send(unsub_cmd)
-                    except:
+                    except Exception:
                         break
 
                 # Give server time to process unsubscribes
@@ -964,7 +964,7 @@ class GrowwNATSWebSocket:
                     try:
                         unsub_cmd = self.nats_protocol.create_unsubscribe(str(sid))
                         self.ws.send(unsub_cmd)
-                    except:
+                    except Exception:
                         pass
 
                 # Brief delay for server to process

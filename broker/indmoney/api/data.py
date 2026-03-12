@@ -710,7 +710,7 @@ class BrokerData:
                         if total_sell
                         else sum(ask["quantity"] for ask in asks)
                     )
-                except:
+                except Exception:
                     # Fallback to calculation from depth
                     totalbuyqty = sum(bid["quantity"] for bid in bids)
                     totalsellqty = sum(ask["quantity"] for ask in asks)

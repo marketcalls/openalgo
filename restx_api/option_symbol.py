@@ -57,9 +57,20 @@ class OptionSymbol(Resource):
     def post(self):
         """Get option symbol based on underlying, expiry, strike offset, and option type"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
             schema = OptionSymbolSchema()
-            data = schema.load(request.json)
+            data = schema.load(data)
 
             # Extract parameters
             api_key = data["apikey"]

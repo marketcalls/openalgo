@@ -26,8 +26,19 @@ class Search(Resource):
     def post(self):
         """Search for symbols in the database"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            search_data = search_schema.load(request.json)
+            search_data = search_schema.load(data)
 
             # Extract parameters
             api_key = search_data.pop("apikey", None)

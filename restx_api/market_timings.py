@@ -26,8 +26,19 @@ class MarketTimings(Resource):
     def post(self):
         """Get market timings for a specific date"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            timings_data = timings_schema.load(request.json)
+            timings_data = timings_schema.load(data)
 
             # Extract parameters
             date_str = timings_data["date"]

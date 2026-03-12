@@ -61,9 +61,20 @@ class SyntheticFuture(Resource):
         Does NOT place any orders - returns calculation only.
         """
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
             schema = SyntheticFutureSchema()
-            data = schema.load(request.json)
+            data = schema.load(data)
 
             # Extract parameters
             api_key = data.get("apikey")

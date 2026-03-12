@@ -8,12 +8,12 @@ from typing import Any, Dict, List, Optional
 import requests
 import socketio
 
-from broker.fivepaisaxts.baseurl import BASE_URL, INTERACTIVE_URL, MARKET_DATA_URL
+from broker.rmoney.baseurl import BASE_URL, INTERACTIVE_URL, MARKET_DATA_URL
 
 
-class FivepaisaXTSWebSocketClient:
+class RmoneyWebSocketClient:
     """
-    Fivepaisa XTS Socket.IO client for market data streaming
+    RMoney XTS Socket.IO client for market data streaming
     Based on the XTS Python SDK architecture using Socket.IO
     """
 
@@ -46,7 +46,7 @@ class FivepaisaXTSWebSocketClient:
 
     def __init__(self, api_key: str, api_secret: str, user_id: str, base_url: str = None):
         """
-        Initialize the Fivepaisa XTS Socket.IO client
+        Initialize the RMoney XTS Socket.IO client
 
         Args:
             api_key: Market data API key
@@ -77,7 +77,7 @@ class FivepaisaXTSWebSocketClient:
         self.on_message = None
 
         # Logger
-        self.logger = logging.getLogger("fivepaisaxts_websocket")
+        self.logger = logging.getLogger("rmoney_websocket")
 
         # Subscriptions tracking
         self.subscriptions = {}
@@ -179,7 +179,7 @@ class FivepaisaXTSWebSocketClient:
             # Use the market data token and actual user ID from login response
             connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
 
-            self.logger.info(f"Connecting to Fivepaisa XTS Socket.IO: {connection_url}")
+            self.logger.info(f"Connecting to RMoney XTS Socket.IO: {connection_url}")
 
             # Connect to Socket.IO server
             self.sio.connect(
@@ -193,7 +193,7 @@ class FivepaisaXTSWebSocketClient:
             self.running = True
 
         except Exception as e:
-            self.logger.error(f"Failed to connect to Fivepaisa XTS Socket.IO: {e}")
+            self.logger.error(f"Failed to connect to RMoney XTS Socket.IO: {e}")
             if self.on_error:
                 self.on_error(self, e)
             raise
@@ -213,7 +213,7 @@ class FivepaisaXTSWebSocketClient:
         # Clear subscriptions
         self.subscriptions.clear()
 
-        self.logger.info("Disconnected from Fivepaisa XTS Socket.IO")
+        self.logger.info("Disconnected from RMoney XTS Socket.IO")
 
     def subscribe(self, correlation_id: str, mode: int, instruments: list[dict]):
         """
@@ -341,7 +341,7 @@ class FivepaisaXTSWebSocketClient:
     def _on_connect(self):
         """Socket.IO connect event handler"""
         self.connected = True
-        self.logger.info("Connected to Fivepaisa XTS Socket.IO")
+        self.logger.info("Connected to RMoney XTS Socket.IO")
 
         # Call external callback
         if self.on_open:
@@ -350,7 +350,7 @@ class FivepaisaXTSWebSocketClient:
     def _on_disconnect(self):
         """Socket.IO disconnect event handler"""
         self.connected = False
-        self.logger.info("Disconnected from Fivepaisa XTS Socket.IO")
+        self.logger.info("Disconnected from RMoney XTS Socket.IO")
 
         # Call external callback
         if self.on_close:

@@ -1,0 +1,1458 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-7.4.4, pluggy-1.6.0 -- C:\Users\ansar\anaconda3\python.exe
+cachedir: .pytest_cache
+rootdir: D:\sem4\openalgo
+configfile: pyproject.toml
+plugins: anyio-4.2.0, cov-7.0.0, timeout-2.4.0
+timeout: 60.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 8 items
+
+test/test_cancel_order_service.py::test_cancel_order_valid_id FAILED     [ 12%]
+test/test_cancel_order_service.py::test_cancel_order_missing_id PASSED   [ 25%]
+test/test_cancel_order_service.py::test_cancel_order_already_cancelled FAILED [ 37%]
+test/test_cancel_order_service.py::test_cancel_all_orders_success FAILED [ 50%]
+test/test_cancel_order_service.py::test_cancel_all_orders_partial_failure FAILED [ 62%]
+test/test_cancel_order_service.py::test_cancel_all_orders_semi_auto_restriction FAILED [ 75%]
+test/test_cancel_order_service.py::test_cancel_order_sandbox_route FAILED [ 87%]
+test/test_cancel_order_service.py::test_cancel_all_order_sandbox_route FAILED [100%]
+
+================================== FAILURES ===================================
+_________________________ test_cancel_order_valid_id __________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000025636FE2300>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563695B290>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x00000256366FB470>
+parameters = [(1, 0)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025636FC9BC0>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563695B290>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.OperationalError: no such table: settings
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+
+The above exception was the direct cause of the following exception:
+
+mock_exec = <MagicMock name='executor' id='2569313012384'>
+mock_log = <MagicMock name='async_log_order' id='2569313016272'>
+mock_import = <MagicMock name='import_broker_module' id='2569313020112'>
+mock_get_auth = <MagicMock name='get_auth_token_broker' id='2569313023952'>
+mock_analyze = <MagicMock name='get_analyze_mode' id='2569313044048'>
+mock_broker = <MagicMock name='import_broker_module()' id='2569312844208'>
+
+    @patch("database.settings_db.get_analyze_mode")
+    @patch("services.cancel_order_service.get_auth_token_broker")
+    @patch("services.cancel_order_service.import_broker_module")
+    @patch("services.cancel_order_service.async_log_order")
+    @patch("services.cancel_order_service.executor")
+    def test_cancel_order_valid_id(mock_exec, mock_log, mock_import, mock_get_auth, mock_analyze, mock_broker):
+        """Test cancel_order with a valid order ID"""
+        mock_analyze.return_value = False
+        mock_get_auth.return_value = ("fake_token", "fake_broker")
+        mock_broker.cancel_order.return_value = ({"status": "success", "message": "Canceled"}, 200)
+        mock_import.return_value = mock_broker
+    
+        with patch("services.cancel_order_service.socketio"), patch("services.cancel_order_service.telegram_alert_service"):
+            # We need to bypass `verify_api_key` since it's used to check semi_auto mode
+            with patch("database.auth_db.verify_api_key", return_value="user123"), \
+                 patch("database.auth_db.get_order_mode", return_value="auto"):
+>               success, response, status = cancel_order("ORD12345", api_key="testkey")
+
+test\test_cancel_order_service.py:45: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\cancel_order_service.py:215: in cancel_order
+    return cancel_order_with_auth(orderid, AUTH_TOKEN, broker_name, original_data)
+services\cancel_order_service.py:90: in cancel_order_with_auth
+    if get_analyze_mode():
+database\settings_db.py:87: in get_analyze_mode
+    settings = Settings.query.first()
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2728: in first
+    return self.limit(1)._iter().first()  # type: ignore
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2827: in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2362: in execute
+    return self._execute_internal(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2247: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py:293: in orm_execute_statement
+    result = conn.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1418: in execute
+    return meth(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py:515: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1640: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025636FC9BC0>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563695B290>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: settings
+E       [SQL: SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_smtp_server, settings.smtp_port AS settings_smtp_port, settings.smtp_username AS settings_smtp_username, settings.smtp_password_encrypted AS settings_smtp_password_encrypted, settings.smtp_use_tls AS settings_smtp_use_tls, settings.smtp_from_email AS settings_smtp_from_email, settings.smtp_helo_hostname AS settings_smtp_helo_hostname, settings.security_404_threshold AS settings_security_404_threshold, settings.security_404_ban_duration AS settings_security_404_ban_duration, settings.security_api_threshold AS settings_security_api_threshold, settings.security_api_ban_duration AS settings_security_api_ban_duration, settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit 
+E       FROM settings
+E        LIMIT ? OFFSET ?]
+E       [parameters: (1, 0)]
+E       (Background on this error at: https://sqlalche.me/e/20/e3q8)
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+_____________________ test_cancel_order_already_cancelled _____________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000025636FE2300>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563723FDD0>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x00000256366FB470>
+parameters = [(1, 0)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x00000256392685C0>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563723FDD0>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.OperationalError: no such table: settings
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+
+The above exception was the direct cause of the following exception:
+
+mock_exec = <MagicMock name='executor' id='2569315524800'>
+mock_log = <MagicMock name='async_log_order' id='2569315528688'>
+mock_import = <MagicMock name='import_broker_module' id='2569313236944'>
+mock_get_auth = <MagicMock name='get_auth_token_broker' id='2569313232000'>
+mock_analyze = <MagicMock name='get_analyze_mode' id='2569313230800'>
+mock_broker = <MagicMock name='import_broker_module()' id='2569315520864'>
+
+    @patch("database.settings_db.get_analyze_mode")
+    @patch("services.cancel_order_service.get_auth_token_broker")
+    @patch("services.cancel_order_service.import_broker_module")
+    @patch("services.cancel_order_service.async_log_order")
+    @patch("services.cancel_order_service.executor")
+    def test_cancel_order_already_cancelled(mock_exec, mock_log, mock_import, mock_get_auth, mock_analyze, mock_broker):
+        """Test cancel_order when order is already cancelled / invalid status"""
+        mock_analyze.return_value = False
+        mock_get_auth.return_value = ("fake_token", "fake_broker")
+    
+        # Mocking broker response for already canceled order (usually 400 with a specific message)
+        mock_broker.cancel_order.return_value = ({"status": "error", "message": "Order is already cancelled or executed"}, 400)
+        mock_import.return_value = mock_broker
+    
+        with patch("services.cancel_order_service.socketio"), patch("services.cancel_order_service.telegram_alert_service"):
+            with patch("database.auth_db.verify_api_key", return_value="user123"), \
+                 patch("database.auth_db.get_order_mode", return_value="auto"):
+>               success, response, status = cancel_order("ORD_ALREADY_DONE", api_key="testkey")
+
+test\test_cancel_order_service.py:81: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\cancel_order_service.py:215: in cancel_order
+    return cancel_order_with_auth(orderid, AUTH_TOKEN, broker_name, original_data)
+services\cancel_order_service.py:90: in cancel_order_with_auth
+    if get_analyze_mode():
+database\settings_db.py:87: in get_analyze_mode
+    settings = Settings.query.first()
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2728: in first
+    return self.limit(1)._iter().first()  # type: ignore
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2827: in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2362: in execute
+    return self._execute_internal(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2247: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py:293: in orm_execute_statement
+    result = conn.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1418: in execute
+    return meth(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py:515: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1640: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x00000256392685C0>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563723FDD0>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: settings
+E       [SQL: SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_smtp_server, settings.smtp_port AS settings_smtp_port, settings.smtp_username AS settings_smtp_username, settings.smtp_password_encrypted AS settings_smtp_password_encrypted, settings.smtp_use_tls AS settings_smtp_use_tls, settings.smtp_from_email AS settings_smtp_from_email, settings.smtp_helo_hostname AS settings_smtp_helo_hostname, settings.security_404_threshold AS settings_security_404_threshold, settings.security_404_ban_duration AS settings_security_404_ban_duration, settings.security_api_threshold AS settings_security_api_threshold, settings.security_api_ban_duration AS settings_security_api_ban_duration, settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit 
+E       FROM settings
+E        LIMIT ? OFFSET ?]
+E       [parameters: (1, 0)]
+E       (Background on this error at: https://sqlalche.me/e/20/e3q8)
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+_______________________ test_cancel_all_orders_success ________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000025636FE2300>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000025637072690>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x00000256366FB470>
+parameters = [(1, 0)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025638A74840>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000025637072690>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.OperationalError: no such table: settings
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+
+The above exception was the direct cause of the following exception:
+
+mock_exec = <MagicMock name='executor' id='2569313064464'>
+mock_log = <MagicMock name='async_log_order' id='2569313047648'>
+mock_import = <MagicMock name='import_broker_module' id='2569313043616'>
+mock_get_auth = <MagicMock name='get_auth_token_broker' id='2569313048896'>
+mock_analyze = <MagicMock name='get_analyze_mode' id='2569313024720'>
+mock_broker = <MagicMock name='import_broker_module()' id='2569313060720'>
+
+    @patch("database.settings_db.get_analyze_mode")
+    @patch("services.cancel_all_order_service.get_auth_token_broker")
+    @patch("services.cancel_all_order_service.import_broker_module")
+    @patch("services.cancel_all_order_service.async_log_order")
+    @patch("services.cancel_all_order_service.executor")
+    def test_cancel_all_orders_success(mock_exec, mock_log, mock_import, mock_get_auth, mock_analyze, mock_broker):
+        """Test cancel_all_orders successfully cancels multiple orders"""
+        mock_analyze.return_value = False
+        mock_get_auth.return_value = ("fake_token", "fake_broker")
+    
+        # Mock broker cancel_all_orders_api to return matched (canceled, failed) lists
+        mock_broker.cancel_all_orders_api.return_value = (["ORD1", "ORD2"], [])
+        mock_import.return_value = mock_broker
+    
+        with patch("services.cancel_all_order_service.socketio"), patch("services.cancel_all_order_service.telegram_alert_service"):
+            with patch("database.auth_db.verify_api_key", return_value="user123"), \
+                 patch("database.auth_db.get_order_mode", return_value="auto"):
+>               success, response, status = cancel_all_orders({}, api_key="testkey")
+
+test\test_cancel_order_service.py:105: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\cancel_all_order_service.py:226: in cancel_all_orders
+    if not get_analyze_mode():
+database\settings_db.py:87: in get_analyze_mode
+    settings = Settings.query.first()
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2728: in first
+    return self.limit(1)._iter().first()  # type: ignore
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2827: in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2362: in execute
+    return self._execute_internal(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2247: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py:293: in orm_execute_statement
+    result = conn.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1418: in execute
+    return meth(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py:515: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1640: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025638A74840>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000025637072690>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: settings
+E       [SQL: SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_smtp_server, settings.smtp_port AS settings_smtp_port, settings.smtp_username AS settings_smtp_username, settings.smtp_password_encrypted AS settings_smtp_password_encrypted, settings.smtp_use_tls AS settings_smtp_use_tls, settings.smtp_from_email AS settings_smtp_from_email, settings.smtp_helo_hostname AS settings_smtp_helo_hostname, settings.security_404_threshold AS settings_security_404_threshold, settings.security_404_ban_duration AS settings_security_404_ban_duration, settings.security_api_threshold AS settings_security_api_threshold, settings.security_api_ban_duration AS settings_security_api_ban_duration, settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit 
+E       FROM settings
+E        LIMIT ? OFFSET ?]
+E       [parameters: (1, 0)]
+E       (Background on this error at: https://sqlalche.me/e/20/e3q8)
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+___________________ test_cancel_all_orders_partial_failure ____________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000025636FE2300>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x00000256370CF230>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x00000256366FB470>
+parameters = [(1, 0)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025636F96740>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x00000256370CF230>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.OperationalError: no such table: settings
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+
+The above exception was the direct cause of the following exception:
+
+mock_exec = <MagicMock name='executor' id='2569313662784'>
+mock_log = <MagicMock name='async_log_order' id='2569313652944'>
+mock_import = <MagicMock name='import_broker_module' id='2569313660960'>
+mock_get_auth = <MagicMock name='get_auth_token_broker' id='2569313688160'>
+mock_analyze = <MagicMock name='get_analyze_mode' id='2569313681728'>
+mock_broker = <MagicMock name='import_broker_module()' id='2569313020256'>
+
+    @patch("database.settings_db.get_analyze_mode")
+    @patch("services.cancel_all_order_service.get_auth_token_broker")
+    @patch("services.cancel_all_order_service.import_broker_module")
+    @patch("services.cancel_all_order_service.async_log_order")
+    @patch("services.cancel_all_order_service.executor")
+    def test_cancel_all_orders_partial_failure(mock_exec, mock_log, mock_import, mock_get_auth, mock_analyze, mock_broker):
+        """Test cancel_all_orders where some orders fail to cancel"""
+        mock_analyze.return_value = False
+        mock_get_auth.return_value = ("fake_token", "fake_broker")
+    
+        # 1 success, 1 failure
+        mock_broker.cancel_all_orders_api.return_value = (["ORD1"], ["ORD2"])
+        mock_import.return_value = mock_broker
+    
+        with patch("services.cancel_all_order_service.socketio"), patch("services.cancel_all_order_service.telegram_alert_service"):
+            with patch("database.auth_db.verify_api_key", return_value="user123"), \
+                 patch("database.auth_db.get_order_mode", return_value="auto"):
+>               success, response, status = cancel_all_orders({}, api_key="testkey")
+
+test\test_cancel_order_service.py:131: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\cancel_all_order_service.py:226: in cancel_all_orders
+    if not get_analyze_mode():
+database\settings_db.py:87: in get_analyze_mode
+    settings = Settings.query.first()
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2728: in first
+    return self.limit(1)._iter().first()  # type: ignore
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2827: in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2362: in execute
+    return self._execute_internal(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2247: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py:293: in orm_execute_statement
+    result = conn.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1418: in execute
+    return meth(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py:515: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1640: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025636F96740>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x00000256370CF230>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: settings
+E       [SQL: SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_smtp_server, settings.smtp_port AS settings_smtp_port, settings.smtp_username AS settings_smtp_username, settings.smtp_password_encrypted AS settings_smtp_password_encrypted, settings.smtp_use_tls AS settings_smtp_use_tls, settings.smtp_from_email AS settings_smtp_from_email, settings.smtp_helo_hostname AS settings_smtp_helo_hostname, settings.security_404_threshold AS settings_security_404_threshold, settings.security_404_ban_duration AS settings_security_404_ban_duration, settings.security_api_threshold AS settings_security_api_threshold, settings.security_api_ban_duration AS settings_security_api_ban_duration, settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit 
+E       FROM settings
+E        LIMIT ? OFFSET ?]
+E       [parameters: (1, 0)]
+E       (Background on this error at: https://sqlalche.me/e/20/e3q8)
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+________________ test_cancel_all_orders_semi_auto_restriction _________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000025636FE2300>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563707CA10>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x00000256366FB470>
+parameters = [(1, 0)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025638D9DC40>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563707CA10>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.OperationalError: no such table: settings
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+
+The above exception was the direct cause of the following exception:
+
+mock_get_auth = <MagicMock name='get_auth_token_broker' id='2569314029056'>
+mock_analyze = <MagicMock name='get_analyze_mode' id='2569314026032'>
+
+    @patch("database.settings_db.get_analyze_mode")
+    @patch("services.cancel_all_order_service.get_auth_token_broker")
+    def test_cancel_all_orders_semi_auto_restriction(mock_get_auth, mock_analyze):
+        """Test that cancel_all_orders is blocked if user is in semi-auto mode"""
+        mock_analyze.return_value = False
+        # Don't mock verify_api_key so we can't test internal db. Have to mock it explicitly.
+        with patch("database.auth_db.verify_api_key", return_value="user123"), \
+             patch("database.auth_db.get_order_mode", return_value="semi_auto"), \
+             patch("services.cancel_all_order_service.async_log_order"), \
+             patch("services.cancel_all_order_service.executor"):
+>           success, response, status = cancel_all_orders({}, api_key="testkey")
+
+test\test_cancel_order_service.py:150: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\cancel_all_order_service.py:226: in cancel_all_orders
+    if not get_analyze_mode():
+database\settings_db.py:87: in get_analyze_mode
+    settings = Settings.query.first()
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2728: in first
+    return self.limit(1)._iter().first()  # type: ignore
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2827: in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2362: in execute
+    return self._execute_internal(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2247: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py:293: in orm_execute_statement
+    result = conn.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1418: in execute
+    return meth(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py:515: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1640: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025638D9DC40>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000002563707CA10>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: settings
+E       [SQL: SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_smtp_server, settings.smtp_port AS settings_smtp_port, settings.smtp_username AS settings_smtp_username, settings.smtp_password_encrypted AS settings_smtp_password_encrypted, settings.smtp_use_tls AS settings_smtp_use_tls, settings.smtp_from_email AS settings_smtp_from_email, settings.smtp_helo_hostname AS settings_smtp_helo_hostname, settings.security_404_threshold AS settings_security_404_threshold, settings.security_404_ban_duration AS settings_security_404_ban_duration, settings.security_api_threshold AS settings_security_api_threshold, settings.security_api_ban_duration AS settings_security_api_ban_duration, settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit 
+E       FROM settings
+E        LIMIT ? OFFSET ?]
+E       [parameters: (1, 0)]
+E       (Background on this error at: https://sqlalche.me/e/20/e3q8)
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+_______________________ test_cancel_order_sandbox_route _______________________
+
+mock_analyze = <MagicMock name='get_analyze_mode' id='2569314035632'>
+
+    @patch("database.settings_db.get_analyze_mode")
+    def test_cancel_order_sandbox_route(mock_analyze):
+        """Test that sandbox mode correctly routes to sandbox service"""
+        mock_analyze.return_value = True
+    
+        with patch("services.sandbox_service.sandbox_cancel_order") as mock_sandbox:
+            mock_sandbox.return_value = (True, {"status": "success"}, 200)
+            success, response, status = cancel_order("ORD_SANDBOX", api_key="testkey")
+    
+>       assert success is True
+E       assert False is True
+
+test\test_cancel_order_service.py:166: AssertionError
+---------------------------- Captured stderr call -----------------------------
+[2026-03-06 23:58:34,368] ERROR in auth_db: Error verifying API key: (sqlite3.OperationalError) no such table: api_keys
+[SQL: SELECT api_keys.id AS api_keys_id, api_keys.user_id AS api_keys_user_id, api_keys.api_key_hash AS api_keys_api_key_hash, api_keys.api_key_encrypted AS api_keys_api_key_encrypted, api_keys.created_at AS api_keys_created_at, api_keys.order_mode AS api_keys_order_mode 
+FROM api_keys]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Traceback (most recent call last):
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.OperationalError: no such table: api_keys
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\sem4\openalgo\database\auth_db.py", line 518, in verify_api_key
+    api_keys = ApiKeys.query.all()
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py", line 2673, in all
+    return self._iter().all()  # type: ignore
+           ^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py", line 2827, in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+                                                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2362, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2247, in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py", line 293, in orm_execute_statement
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1418, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: api_keys
+[SQL: SELECT api_keys.id AS api_keys_id, api_keys.user_id AS api_keys_user_id, api_keys.api_key_hash AS api_keys_api_key_hash, api_keys.api_key_encrypted AS api_keys_api_key_encrypted, api_keys.created_at AS api_keys_created_at, api_keys.order_mode AS api_keys_order_mode 
+FROM api_keys]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+------------------------------ Captured log call ------------------------------
+ERROR    database.auth_db:auth_db.py:555 Error verifying API key: (sqlite3.OperationalError) no such table: api_keys
+[SQL: SELECT api_keys.id AS api_keys_id, api_keys.user_id AS api_keys_user_id, api_keys.api_key_hash AS api_keys_api_key_hash, api_keys.api_key_encrypted AS api_keys_api_key_encrypted, api_keys.created_at AS api_keys_created_at, api_keys.order_mode AS api_keys_order_mode 
+FROM api_keys]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Traceback (most recent call last):
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.OperationalError: no such table: api_keys
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\sem4\openalgo\database\auth_db.py", line 518, in verify_api_key
+    api_keys = ApiKeys.query.all()
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py", line 2673, in all
+    return self._iter().all()  # type: ignore
+           ^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py", line 2827, in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+                                                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2362, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2247, in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py", line 293, in orm_execute_statement
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1418, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: api_keys
+[SQL: SELECT api_keys.id AS api_keys_id, api_keys.user_id AS api_keys_user_id, api_keys.api_key_hash AS api_keys_api_key_hash, api_keys.api_key_encrypted AS api_keys_api_key_encrypted, api_keys.created_at AS api_keys_created_at, api_keys.order_mode AS api_keys_order_mode 
+FROM api_keys]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+_____________________ test_cancel_all_order_sandbox_route _____________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000025636FE2300>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x00000256374C9670>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x00000256366FB470>
+parameters = [(1, 0)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025637426040>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x00000256374C9670>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.OperationalError: no such table: settings
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+
+The above exception was the direct cause of the following exception:
+
+mock_analyze = <MagicMock name='get_analyze_mode' id='2569318381088'>
+
+    @patch("database.settings_db.get_analyze_mode")
+    def test_cancel_all_order_sandbox_route(mock_analyze):
+        """Test that sandbox mode routes cancel all to sandbox service"""
+        mock_analyze.return_value = True
+    
+        with patch("services.sandbox_service.sandbox_cancel_all_orders") as mock_sandbox:
+            mock_sandbox.return_value = (True, {"status": "success"}, 200)
+>           success, response, status = cancel_all_orders({"some": "data"}, api_key="testkey")
+
+test\test_cancel_order_service.py:178: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\cancel_all_order_service.py:226: in cancel_all_orders
+    if not get_analyze_mode():
+database\settings_db.py:87: in get_analyze_mode
+    settings = Settings.query.first()
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2728: in first
+    return self.limit(1)._iter().first()  # type: ignore
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\query.py:2827: in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2362: in execute
+    return self._execute_internal(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\session.py:2247: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\orm\context.py:293: in orm_execute_statement
+    result = conn.execute(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1418: in execute
+    return meth(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\sql\elements.py:515: in _execute_on_connection
+    return connection._execute_clauseelement(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1640: in _execute_clauseelement
+    ret = self._execute_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x00000256352CA5D0>
+cursor = <sqlite3.Cursor object at 0x0000025637426040>
+statement = 'SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_s... settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit \nFROM settings\n LIMIT ? OFFSET ?'
+parameters = (1, 0)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x00000256374C9670>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such table: settings
+E       [SQL: SELECT settings.id AS settings_id, settings.analyze_mode AS settings_analyze_mode, settings.smtp_server AS settings_smtp_server, settings.smtp_port AS settings_smtp_port, settings.smtp_username AS settings_smtp_username, settings.smtp_password_encrypted AS settings_smtp_password_encrypted, settings.smtp_use_tls AS settings_smtp_use_tls, settings.smtp_from_email AS settings_smtp_from_email, settings.smtp_helo_hostname AS settings_smtp_helo_hostname, settings.security_404_threshold AS settings_security_404_threshold, settings.security_404_ban_duration AS settings_security_404_ban_duration, settings.security_api_threshold AS settings_security_api_threshold, settings.security_api_ban_duration AS settings_security_api_ban_duration, settings.security_repeat_offender_limit AS settings_security_repeat_offender_limit 
+E       FROM settings
+E        LIMIT ? OFFSET ?]
+E       [parameters: (1, 0)]
+E       (Background on this error at: https://sqlalche.me/e/20/e3q8)
+
+C:\Users\ansar\anaconda3\Lib\site-packages\sqlalchemy\engine\default.py:941: OperationalError
+=========================== short test summary info ===========================
+FAILED test/test_cancel_order_service.py::test_cancel_order_valid_id - sqlalc...
+FAILED test/test_cancel_order_service.py::test_cancel_order_already_cancelled
+FAILED test/test_cancel_order_service.py::test_cancel_all_orders_success - sq...
+FAILED test/test_cancel_order_service.py::test_cancel_all_orders_partial_failure
+FAILED test/test_cancel_order_service.py::test_cancel_all_orders_semi_auto_restriction
+FAILED test/test_cancel_order_service.py::test_cancel_order_sandbox_route - a...
+FAILED test/test_cancel_order_service.py::test_cancel_all_order_sandbox_route
+========================= 7 failed, 1 passed in 5.17s =========================

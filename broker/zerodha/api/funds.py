@@ -30,7 +30,7 @@ def get_margin_data(auth_token):
             if hasattr(e, "response") and e.response is not None:
                 error_detail = e.response.json()
                 error_message = error_detail.get("message", str(e))
-        except:
+        except Exception:
             pass
 
         logger.error(f"Error fetching margin data: {error_message}")

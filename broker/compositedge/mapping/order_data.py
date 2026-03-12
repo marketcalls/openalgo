@@ -364,10 +364,10 @@ def transform_holdings_data(holdings_data):
 def map_portfolio_data(portfolio_data):
     logger.info(f"portfolio_data: {portfolio_data}")
     """
-    Processes and modifies portfolio data from FivePaisaXTS API.
+    Processes and modifies portfolio data from CompositEdge API.
     
     Parameters:
-    - portfolio_data: A dictionary containing the portfolio/holdings information from FivePaisaXTS API.
+    - portfolio_data: A dictionary containing the portfolio/holdings information from CompositEdge API.
     
     Returns:
     - A dictionary with 'holdings' and 'totalholding' keys structured for the OpenAlgoXTS system.

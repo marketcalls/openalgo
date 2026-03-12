@@ -27,8 +27,19 @@ class History(Resource):
     def post(self):
         """Get historical data for given symbol"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            history_data = history_schema.load(request.json)
+            history_data = history_schema.load(data)
 
             api_key = history_data["apikey"]
             symbol = history_data["symbol"]

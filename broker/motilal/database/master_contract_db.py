@@ -429,7 +429,7 @@ def process_motilal_csv(df, exchange_name):
             else:
                 # Remove trailing zeros after decimal point
                 return str(strike_float).rstrip("0").rstrip(".")
-        except:
+        except Exception:
             return str(strike)
 
     # Format Futures symbols: NAME + EXPIRY(no dashes) + FUT

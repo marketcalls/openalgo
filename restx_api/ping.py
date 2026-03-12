@@ -27,8 +27,19 @@ class Ping(Resource):
     def post(self):
         """Check API connectivity and authentication"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            ping_data = ping_schema.load(request.json)
+            ping_data = ping_schema.load(data)
 
             api_key = ping_data["apikey"]
 

@@ -94,6 +94,15 @@ def broker_callback(broker, para=None):
             totp_code = request.form.get("totp")
             # to store user_id in the DB
             user_id = clientcode
+            # Static IP Validation for Angel One (Compliance Apr 1, 2026)
+            from broker.angel.config.static_ip_config import angel_static_ip_config
+
+            is_valid_ip, ip_msg = angel_static_ip_config.validate_request_ip(request.remote_addr)
+            if not is_valid_ip:
+                logger.warning(f"Angel One Static IP validation failed: {ip_msg}")
+                # For now, we log but continue, unless it's past April 1, 2026
+                # return handle_auth_failure(ip_msg, forward_url="broker.html")
+
             auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = "broker.html"
 
@@ -346,6 +355,13 @@ def broker_callback(broker, para=None):
                 or request.args.get("token")
             )
 
+            # Static IP Validation for Dhan (Compliance Apr 1, 2026)
+            from broker.dhan.config.static_ip_config import dhan_static_ip_config
+
+            is_valid_ip, ip_msg = dhan_static_ip_config.validate_request_ip(request.remote_addr)
+            if not is_valid_ip:
+                logger.warning(f"Dhan Static IP validation failed: {ip_msg}")
+
             if token_id:
                 # Step 3: Consume consent with tokenId
                 logger.debug(f"Dhan broker - Received tokenId: {token_id}")
@@ -390,6 +406,13 @@ def broker_callback(broker, para=None):
         elif request.method == "POST":
             # This should only handle direct access token submission now
             # OAuth flow is handled by /dhan/initiate-oauth
+            # Static IP Validation for Dhan (Compliance Apr 1, 2026)
+            from broker.dhan.config.static_ip_config import dhan_static_ip_config
+
+            is_valid_ip, ip_msg = dhan_static_ip_config.validate_request_ip(request.remote_addr)
+            if not is_valid_ip:
+                logger.warning(f"Dhan Static IP validation failed: {ip_msg}")
+
             access_token = request.form.get("access_token")
 
             if access_token:
@@ -756,6 +779,16 @@ def broker_callback(broker, para=None):
             return jsonify({"error": f"Error processing request: {str(e)}"}), 500
 
     else:
+        # Static IP Validation for Zerodha (Compliance Apr 1, 2026)
+        if broker == "zerodha":
+            from broker.zerodha.config.static_ip_config import zerodha_static_ip_config
+
+            is_valid_ip, ip_msg = zerodha_static_ip_config.validate_request_ip(
+                request.remote_addr
+            )
+            if not is_valid_ip:
+                logger.warning(f"Zerodha Static IP validation failed: {ip_msg}")
+
         code = request.args.get("code") or request.args.get("request_token")
         logger.debug(f"Generic broker - The code is {code}")
         auth_token, error_message = auth_function(code)

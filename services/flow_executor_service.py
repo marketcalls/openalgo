@@ -1205,7 +1205,7 @@ class NodeExecutor:
 
             try:
                 response_data = response.json()
-            except:
+            except Exception:
                 response_data = response.text
 
             result = {

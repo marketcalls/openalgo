@@ -180,7 +180,7 @@ class JainamXTSWebSocketClient:
                 raise Exception("Market data login failed")
 
             # Build connection URL with proper market data token and user ID
-            # Use JSON format like fivepaisaxts - the socket sends JSON events (1512-json-full, etc.)
+            # Use JSON format like other XTS brokers - the socket sends JSON events (1512-json-full, etc.)
             publish_format = "JSON"
             broadcast_mode = "FULL"  # or 'PARTIAL'
 

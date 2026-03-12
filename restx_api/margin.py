@@ -27,8 +27,19 @@ class MarginCalculator(Resource):
     def post(self):
         """Calculate margin requirement for a basket of positions"""
         try:
-            # Get the request data
+            # Get request data
             data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
+            # Get the request data
+            data = data
 
             # Validate and deserialize input using Marshmallow schema
             try:
@@ -60,6 +71,6 @@ class MarginCalculator(Resource):
                 log_executor.submit(
                     async_log_order, "margin", data if "data" in locals() else {}, error_response
                 )
-            except:
+            except Exception:
                 pass
             return make_response(jsonify(error_response), 500)

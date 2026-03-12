@@ -132,9 +132,20 @@ class OptionsMultiOrder(Resource):
         BUY legs execute first for margin efficiency.
         """
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
             schema = OptionsMultiOrderSchema()
-            data = schema.load(request.json)
+            data = schema.load(data)
 
             # Extract API key
             api_key = data.get("apikey")

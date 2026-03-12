@@ -26,8 +26,19 @@ class Positionbook(Resource):
     def post(self):
         """Get position book details"""
         try:
+            # Get request data
+            data = request.json
+
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            positionbook_data = positionbook_schema.load(request.json)
+            positionbook_data = positionbook_schema.load(data)
 
             api_key = positionbook_data["apikey"]
 
