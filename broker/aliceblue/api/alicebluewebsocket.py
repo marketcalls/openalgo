@@ -717,14 +717,15 @@ class AliceBlueWebSocket:
             if self._stop_event.is_set():
                 return
 
-            # Wait for any previous reconnect thread to finish before starting a new one
+            # Grab reference to old thread while holding lock
             old_thread = self._reconnect_thread
-            if old_thread and old_thread.is_alive():
-                logger.info("Waiting for previous reconnect thread to finish")
-                old_thread.join(timeout=5)
-
             self.reconnect_count += 1
             sleep_time = min(2**self.reconnect_count, 30)
+
+        # Join outside lock to avoid deadlock (delayed_reconnect -> connect -> self.lock)
+        if old_thread and old_thread.is_alive():
+            logger.info("Waiting for previous reconnect thread to finish")
+            old_thread.join(timeout=5)
 
         logger.info(f"Attempting to reconnect in {sleep_time} seconds")
 

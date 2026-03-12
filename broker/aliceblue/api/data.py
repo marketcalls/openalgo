@@ -648,7 +648,16 @@ class BrokerData:
                 exchange = "MCX"
 
             # Check for exchange limitations based on AliceBlue API documentation
-            if exchange in ["BSE", "BCD", "BFO"]:
+            # BSE/BCD equity historical data is not supported by AliceBlue.
+            # BFO (BSE F&O) is allowed through — futures contracts work fine.
+            if exchange in ["BSE", "BCD"]:
+                # If this was an index exchange, try the futures fallback first
+                if original_exchange in ("BSE_INDEX",):
+                    fut_df = self._get_index_history_via_futures(
+                        symbol, original_exchange, timeframe, start_date, end_date
+                    )
+                    if not fut_df.empty:
+                        return fut_df
                 logger.error(f"Historical data not available for {exchange} exchange on AliceBlue")
                 return pd.DataFrame()
 
@@ -850,7 +859,7 @@ class BrokerData:
                         logger.error(
                             f"Symbol '{symbol}' might be an expired contract or not a current expiry."
                         )
-                    elif exchange in ["BSE", "BCD", "BFO"]:
+                    elif exchange in ["BSE", "BCD"]:
                         logger.error(
                             f"AliceBlue does not support historical data for {exchange} exchange yet."
                         )
