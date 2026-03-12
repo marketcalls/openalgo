@@ -34,6 +34,12 @@ const tools = [
     color: 'bg-teal-500',
   },
   {
+    title: 'Straddle PnL',
+    description: 'Simulated intraday ATM straddle P&L with automated N-point adjustments and trade log',
+    href: '/straddlepnl',
+    color: 'bg-orange-500',
+  },
+  {
     title: 'Vol Surface',
     description: '3D Implied Volatility surface across strikes and expiries using live option chain data',
     href: '/volsurface',
