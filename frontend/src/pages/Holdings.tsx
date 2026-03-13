@@ -29,6 +29,7 @@ import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
+import { showToast } from '@/utils/toast'
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-IN', {
@@ -155,36 +156,47 @@ export default function Holdings() {
   }, [fetchHoldings])
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Quantity',
-      'Avg Price',
-      'LTP',
-      'Product',
-      'P&L',
-      'P&L %',
-    ]
-    const rows = enhancedHoldings.map((h) => [
-      sanitizeCSV(h.symbol),
-      sanitizeCSV(h.exchange),
-      sanitizeCSV(h.quantity),
-      sanitizeCSV(h.average_price),
-      sanitizeCSV(h.ltp),
-      sanitizeCSV(h.product),
-      sanitizeCSV(h.pnl),
-      sanitizeCSV(h.pnlpercent),
-    ])
+    if (enhancedHoldings.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `holdings_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
-    // Revoke the object URL to free memory
-    URL.revokeObjectURL(url)
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        'Quantity',
+        'Avg Price',
+        'LTP',
+        'Product',
+        'P&L',
+        'P&L %',
+      ]
+      const rows = enhancedHoldings.map((h) => [
+        sanitizeCSV(h.symbol),
+        sanitizeCSV(h.exchange),
+        sanitizeCSV(h.quantity),
+        sanitizeCSV(h.average_price),
+        sanitizeCSV(h.ltp),
+        sanitizeCSV(h.product),
+        sanitizeCSV(h.pnl),
+        sanitizeCSV(h.pnlpercent),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `holdings_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      // Revoke the object URL to free memory
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const isProfit = (value: number) => value >= 0
