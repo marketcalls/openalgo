@@ -7,9 +7,9 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import httpx
 import websocket
 
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -52,6 +52,7 @@ class AliceBlueWebSocket:
         self.last_quotes = {}  # Dictionary to store quote data: exchange:token -> quote data
         self.last_depth = {}  # Dictionary to store depth data: exchange:token -> depth data
         self._connect_thread = None
+        self._reconnect_thread = None
         self._stop_event = threading.Event()
 
         # Generate the encrypted token as required by AliceBlue
@@ -77,10 +78,10 @@ class AliceBlueWebSocket:
             url = self.BASE_URL + "open-api/od/v1/profile/invalidateWsSess"
             payload = {"source": "API", "userId": self.user_id}
 
-            with httpx.Client() as client:
-                response = client.post(
-                    url, json=payload, headers=self._get_auth_header(), timeout=10
-                )
+            client = get_httpx_client()
+            response = client.post(
+                url, json=payload, headers=self._get_auth_header(), timeout=10
+            )
 
             if response.status_code == 200:
                 data = response.json()
@@ -107,10 +108,10 @@ class AliceBlueWebSocket:
             url = self.BASE_URL + "open-api/od/v1/profile/createWsSess"
             payload = {"source": "API", "userId": self.user_id}
 
-            with httpx.Client() as client:
-                response = client.post(
-                    url, json=payload, headers=self._get_auth_header(), timeout=10
-                )
+            client = get_httpx_client()
+            response = client.post(
+                url, json=payload, headers=self._get_auth_header(), timeout=10
+            )
 
             if response.status_code == 200:
                 data = response.json()
@@ -137,27 +138,33 @@ class AliceBlueWebSocket:
         Establishes the WebSocket connection and starts the connection thread.
         Must first create a WebSocket session via REST API before connecting.
         """
-        if self._connect_thread and self._connect_thread.is_alive():
-            logger.info("WebSocket connection thread is already running")
-            return
+        with self.lock:
+            if self._connect_thread and self._connect_thread.is_alive():
+                logger.info("WebSocket connection thread is already running")
+                return
 
-        # Reset the stop event
-        self._stop_event.clear()
+            # Reset the stop event
+            self._stop_event.clear()
 
-        # Step 1: Invalidate any existing WebSocket session
-        logger.info("Invalidating existing WebSocket session...")
-        self._invalidate_socket_session()
+        try:
+            # Step 1: Invalidate any existing WebSocket session
+            logger.info("Invalidating existing WebSocket session...")
+            self._invalidate_socket_session()
 
-        # Step 2: Create a new WebSocket session
-        logger.info("Creating new WebSocket session...")
-        if not self._create_socket_session():
-            logger.error("Failed to create WebSocket session. Cannot connect.")
-            return
+            # Step 2: Create a new WebSocket session
+            logger.info("Creating new WebSocket session...")
+            if not self._create_socket_session():
+                logger.error("Failed to create WebSocket session. Cannot connect.")
+                self._stop_event.set()
+                return
 
-        # Step 3: Start the connection in a separate thread
-        self._connect_thread = threading.Thread(target=self._connect_with_retry)
-        self._connect_thread.daemon = True
-        self._connect_thread.start()
+            # Step 3: Start the connection in a separate thread
+            self._connect_thread = threading.Thread(target=self._connect_with_retry)
+            self._connect_thread.daemon = True
+            self._connect_thread.start()
+        except Exception as e:
+            logger.error(f"Error during connect: {e}")
+            self._stop_event.set()
 
     def _connect_with_retry(self):
         """
@@ -174,6 +181,14 @@ class AliceBlueWebSocket:
 
                 try:
                     logger.info(f"Connecting to AliceBlue WebSocket: {url}")
+
+                    # Close any previous WebSocket before creating a new one
+                    if self.ws:
+                        try:
+                            self.ws.close()
+                        except Exception:
+                            pass
+
                     websocket.enableTrace(False)
                     self.ws = websocket.WebSocketApp(
                         url,
@@ -224,6 +239,13 @@ class AliceBlueWebSocket:
             logger.info("Closing AliceBlue WebSocket connection")
             self.ws.close()
 
+        # Wait for threads to finish so they don't leak
+        for thr in (self._connect_thread, self._reconnect_thread):
+            if thr and thr.is_alive():
+                thr.join(timeout=5)
+
+        self._connect_thread = None
+        self._reconnect_thread = None
         self.is_connected = False
         logger.info("AliceBlue WebSocket disconnected")
 
@@ -686,25 +708,36 @@ class AliceBlueWebSocket:
             close_status_code: Status code for the close
             close_msg: Close message
         """
+        logger.info(f"AliceBlue WebSocket connection closed: {close_status_code}, {close_msg}")
+
         with self.lock:
             self.is_connected = False
 
-        logger.info(f"AliceBlue WebSocket connection closed: {close_status_code}, {close_msg}")
+            # Only attempt to reconnect if we didn't explicitly stop
+            if self._stop_event.is_set():
+                return
 
-        # Only attempt to reconnect if we didn't explicitly stop
-        if not self._stop_event.is_set():
+            # Grab reference to old thread while holding lock
+            old_thread = self._reconnect_thread
             self.reconnect_count += 1
-
-            # Reconnect with exponential backoff
             sleep_time = min(2**self.reconnect_count, 30)
-            logger.info(f"Attempting to reconnect in {sleep_time} seconds")
 
-            def delayed_reconnect():
-                time.sleep(sleep_time)
-                if not self._stop_event.is_set():
-                    self.connect()
+        # Join outside lock to avoid deadlock (delayed_reconnect -> connect -> self.lock)
+        if old_thread and old_thread.is_alive():
+            logger.info("Waiting for previous reconnect thread to finish")
+            old_thread.join(timeout=5)
 
-            threading.Thread(target=delayed_reconnect).start()
+        logger.info(f"Attempting to reconnect in {sleep_time} seconds")
+
+        def delayed_reconnect():
+            time.sleep(sleep_time)
+            if not self._stop_event.is_set():
+                self.connect()
+
+        t = threading.Thread(target=delayed_reconnect, daemon=True)
+        with self.lock:
+            self._reconnect_thread = t
+        t.start()
 
     def subscribe(self, instruments, is_depth=False):
         """Subscribe to market data for given instruments
@@ -729,6 +762,7 @@ class AliceBlueWebSocket:
             for instrument in instruments:
                 subscription_key = f"{instrument.exchange}|{instrument.token}"
                 self.subscriptions[subscription_key] = instrument
+                self.subscribed_tokens.add(subscription_key)
                 logger.info(
                     f"Storing subscription: {subscription_key} -> {getattr(instrument, 'symbol', 'Unknown')}"
                 )
@@ -753,8 +787,11 @@ class AliceBlueWebSocket:
                 f"Sending {'depth' if is_depth else 'tick'} subscription message: {json.dumps(message)}"
             )
 
-            # Send the message
-            self.ws.send(json.dumps(message))
+            try:
+                self.ws.send(json.dumps(message))
+            except Exception as e:
+                logger.error(f"Failed to send subscription message: {e}")
+                return False
 
             logger.info(
                 f"Subscribed to {len(instruments)} instruments for {'market depth' if is_depth else 'tick data'}"
@@ -784,6 +821,7 @@ class AliceBlueWebSocket:
                 del self.subscriptions[subscription_key]
                 logger.info(f"Removed subscription: {subscription_key}")
 
+            self.subscribed_tokens.discard(subscription_key)
             subscription_keys.append(subscription_key)
 
         if subscription_keys:
@@ -797,7 +835,11 @@ class AliceBlueWebSocket:
             logger.info(f"Sending unsubscription message: {json.dumps(message)}")
 
             # Send the message
-            self.ws.send(json.dumps(message))
+            try:
+                self.ws.send(json.dumps(message))
+            except Exception as e:
+                logger.error(f"Failed to send unsubscription message: {e}")
+                return False
 
             logger.info(f"Unsubscribed from {len(instruments)} instruments")
             return True

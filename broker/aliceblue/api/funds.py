@@ -1,7 +1,5 @@
 # api/funds.py
 
-import json
-
 import httpx
 
 from utils.httpx_client import get_httpx_client
@@ -11,7 +9,11 @@ logger = get_logger(__name__)
 
 
 def _get_realized_pnl(client, headers):
-    """Fetch positions and sum up realizedPnl from all positions."""
+    """Fetch positions and sum up realizedPnl from all positions.
+
+    Note: AliceBlue positions API does not return LTP, so unrealized PnL
+    cannot be accurately calculated here. Only realized PnL is returned.
+    """
     try:
         positions_url = "https://a3.aliceblueonline.com/open-api/od/v1/positions"
         response = client.get(positions_url, headers=headers)
@@ -23,35 +25,22 @@ def _get_realized_pnl(client, headers):
             logger.warning(
                 f"Error fetching positions for PnL: {positions_data.get('message', 'Unknown error')}"
             )
-            return 0.0, 0.0
+            return 0.0
 
         positions = positions_data.get("result", [])
         if not positions:
-            return 0.0, 0.0
+            return 0.0
 
         total_realized_pnl = 0.0
-        total_unrealized_pnl = 0.0
 
         for position in positions:
-            # Sum realized PnL from all positions
             total_realized_pnl += float(position.get("realizedPnl", 0) or 0)
 
-            # Calculate unrealized PnL for open positions
-            net_qty = int(position.get("netQuantity", 0) or 0)
-            if net_qty != 0:
-                buy_value = float(position.get("dayBuyValue", 0) or 0)
-                sell_value = float(position.get("daySellValue", 0) or 0)
-                # Unrealized = sell_value - buy_value - realized_pnl (for the position)
-                # Or more simply: net open value based on avg price vs current price
-                # Using the standard formula: total sell value - total buy value - realized pnl
-                unrealized = sell_value - buy_value - float(position.get("realizedPnl", 0) or 0)
-                total_unrealized_pnl += unrealized
-
-        return total_realized_pnl, total_unrealized_pnl
+        return total_realized_pnl
 
     except Exception as e:
         logger.warning(f"Failed to fetch positions for PnL calculation: {str(e)}")
-        return 0.0, 0.0
+        return 0.0
 
 
 def get_margin_data(auth_token):
@@ -96,8 +85,9 @@ def get_margin_data(auth_token):
 
         item = results[0]
 
-        # Fetch realized & unrealized PnL from positions API
-        realized_pnl, unrealized_pnl = _get_realized_pnl(client, headers)
+        # Fetch realized PnL from positions API
+        # Note: unrealized PnL requires LTP which is not available via REST API
+        realized_pnl = _get_realized_pnl(client, headers)
 
         # Map V2 API fields to OpenAlgo format
         processed_margin_data["availablecash"] = "{:.2f}".format(
@@ -106,7 +96,7 @@ def get_margin_data(auth_token):
         processed_margin_data["collateral"] = "{:.2f}".format(
             float(item.get("collateralMargin", 0))
         )
-        processed_margin_data["m2munrealized"] = "{:.2f}".format(unrealized_pnl)
+        processed_margin_data["m2munrealized"] = "0.00"
         processed_margin_data["m2mrealized"] = "{:.2f}".format(realized_pnl)
         processed_margin_data["utiliseddebits"] = "{:.2f}".format(
             float(item.get("utilizedMargin", 0))
