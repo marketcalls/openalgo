@@ -256,7 +256,7 @@ export default function OrderBook() {
   }
 
   const exportToCSV = () => {
-    if (orders.length === 0) {
+    if (filteredOrders.length === 0) {
       showToast.error('No data to export', 'system')
       return
     }
@@ -275,7 +275,7 @@ export default function OrderBook() {
         'Status',
         'Time',
       ]
-      const rows = orders.map((o) => [
+      const rows = filteredOrders.map((o) => [
         sanitizeCSV(o.symbol),
         sanitizeCSV(o.exchange),
         sanitizeCSV(o.action),
