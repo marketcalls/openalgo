@@ -1,9 +1,6 @@
 # csp.py
 
 import os
-from functools import wraps
-
-from flask import current_app, request
 
 
 def get_csp_config():
@@ -128,24 +125,43 @@ def get_security_headers():
     headers = {}
 
     # Referrer Policy
-    referrer_policy = os.getenv("REFERRER_POLICY", "strict-origin-when-cross-origin")
+    referrer_policy = os.getenv(
+        "REFERRER_POLICY", "strict-origin-when-cross-origin"
+    )
     if referrer_policy:
         headers["Referrer-Policy"] = referrer_policy
 
     # Permissions Policy
     permissions_policy = os.getenv(
         "PERMISSIONS_POLICY",
-        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(), web-share=()",
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+        "screen-wake-lock=(), web-share=()",
     )
     if permissions_policy:
         headers["Permissions-Policy"] = permissions_policy
+
+    # X-Frame-Options (Clickjacking defense)
+    x_frame_options = os.getenv("X_FRAME_OPTIONS", "SAMEORIGIN")
+    if x_frame_options:
+        headers["X-Frame-Options"] = x_frame_options
+
+    # X-Content-Type-Options (MIME-sniffing defense)
+    x_content_type_options = os.getenv("X_CONTENT_TYPE_OPTIONS", "nosniff")
+    if x_content_type_options:
+        headers["X-Content-Type-Options"] = x_content_type_options
+
+    # X-XSS-Protection (Cross-site scripting filter)
+    x_xss_protection = os.getenv("X_XSS_PROTECTION", "1; mode=block")
+    if x_xss_protection:
+        headers["X-XSS-Protection"] = x_xss_protection
 
     return headers
 
 
 def apply_csp_middleware(app):
     """
-    Apply Content Security Policy and other security headers middleware to the Flask application.
+    Apply Content Security Policy and other security headers middleware
+    to the Flask application.
     """
 
     @app.after_request
@@ -155,7 +171,7 @@ def apply_csp_middleware(app):
         if csp_config:
             csp_header = build_csp_header(csp_config)
             if csp_header:
-                # Use Content-Security-Policy-Report-Only for testing if configured
+                # Use CSP-Report-Only for testing if configured
                 header_type = "Content-Security-Policy"
                 if os.getenv("CSP_REPORT_ONLY", "FALSE").upper() == "TRUE":
                     header_type = "Content-Security-Policy-Report-Only"
