@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
-from utils.constants import VALID_EXCHANGES
+from utils.constants import BROKER_INIT_ARGS_WITH_AUTH, VALID_EXCHANGES
 from utils.logging import get_logger
 
 # Initialize logger
@@ -128,7 +128,7 @@ def get_quotes_with_auth(
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 2:  # More than self and auth_token
+            if param_count > BROKER_INIT_ARGS_WITH_AUTH:  # More than self and auth_token
                 data_handler = broker_module.BrokerData(auth_token, feed_token)
             else:
                 data_handler = broker_module.BrokerData(auth_token)
@@ -260,7 +260,7 @@ def get_multiquotes_with_auth(
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 2:  # More than self and auth_token
+            if param_count > BROKER_INIT_ARGS_WITH_AUTH:  # More than self and auth_token
                 data_handler = broker_module.BrokerData(auth_token, feed_token)
             else:
                 data_handler = broker_module.BrokerData(auth_token)
