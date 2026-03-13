@@ -26,8 +26,14 @@ class Symbol(Resource):
     def post(self):
         """Get symbol information for a given symbol and exchange"""
         try:
+            # Get request data
+            data = request.json
+            if data is None:
+                msg = {"status": "error", "message": "Request body must be JSON"}
+                return make_response(jsonify(msg), 400)
+
             # Validate request data
-            symbol_data = symbol_schema.load(request.json)
+            symbol_data = symbol_schema.load(data)
 
             # Extract parameters
             api_key = symbol_data.pop("apikey", None)
@@ -42,10 +48,11 @@ class Symbol(Resource):
             return make_response(jsonify(response_data), status_code)
 
         except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
+            return make_response(
+                jsonify({"status": "error", "message": err.messages}), 400
+            )
 
         except Exception as e:
             logger.exception(f"Unexpected error in symbol endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+            msg = {"status": "error", "message": "Internal server error"}
+            return make_response(jsonify(msg), 500)
