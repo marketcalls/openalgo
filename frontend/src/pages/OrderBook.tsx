@@ -251,40 +251,52 @@ export default function OrderBook() {
   }
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Action',
-      'Qty',
-      'Price',
-      'Trigger',
-      'Type',
-      'Product',
-      'Order ID',
-      'Status',
-      'Time',
-    ]
-    const rows = orders.map((o) => [
-      sanitizeCSV(o.symbol),
-      sanitizeCSV(o.exchange),
-      sanitizeCSV(o.action),
-      sanitizeCSV(o.quantity),
-      sanitizeCSV(o.price),
-      sanitizeCSV(o.trigger_price),
-      sanitizeCSV(o.pricetype),
-      sanitizeCSV(o.product),
-      sanitizeCSV(o.orderid),
-      sanitizeCSV(o.order_status),
-      sanitizeCSV(o.timestamp),
-    ])
+    if (filteredOrders.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        'Action',
+        'Qty',
+        'Price',
+        'Trigger',
+        'Type',
+        'Product',
+        'Order ID',
+        'Status',
+        'Time',
+      ]
+      const rows = filteredOrders.map((o) => [
+        sanitizeCSV(o.symbol),
+        sanitizeCSV(o.exchange),
+        sanitizeCSV(o.action),
+        sanitizeCSV(o.quantity),
+        sanitizeCSV(o.price),
+        sanitizeCSV(o.trigger_price),
+        sanitizeCSV(o.pricetype),
+        sanitizeCSV(o.product),
+        sanitizeCSV(o.orderid),
+        sanitizeCSV(o.order_status),
+        sanitizeCSV(o.timestamp),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const openOrders = orders.filter((o) => o.order_status === 'open')
