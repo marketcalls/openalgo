@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 load_dotenv()
 
 # Database path - in /db folder like other OpenAlgo databases
-HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
+HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_URL", "db/historify.duckdb")
 
 
 def get_db_path() -> str:
