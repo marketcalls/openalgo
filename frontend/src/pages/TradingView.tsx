@@ -1,5 +1,6 @@
 import { AlertTriangle, BookOpen, Copy, ExternalLink, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { copyToClipboard as copyText } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -200,7 +201,7 @@ export default function TradingView() {
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(text)
+      await copyText(text)
       showToast.success(`${label} copied to clipboard`, 'clipboard')
     } catch {
       showToast.error('Copy failed - please copy manually', 'clipboard')

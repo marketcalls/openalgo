@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { copyToClipboard } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import { chartinkApi } from '@/api/chartink'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -90,7 +91,7 @@ export default function ViewChartinkStrategy() {
 
   const copyToClipboard = async (text: string, field: string) => {
     try {
-      await navigator.clipboard.writeText(text)
+      await copyToClipboard(text)
       setCopiedField(field)
       showToast.success('Copied to clipboard', 'clipboard')
       setTimeout(() => setCopiedField(null), 2000)
