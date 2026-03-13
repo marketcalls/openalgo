@@ -526,6 +526,7 @@ Additionally, many contributions today are developed with AI assistance, which c
 - Each PR should be independently reviewable and testable
 - Submit them sequentially — wait for one to be reviewed before sending the next
 - Large monolithic PRs or full-project integrations will not be accepted in their current form
+- **Exception — New broker integrations** may be submitted as a single PR since they are self-contained within their own `broker/` directory and don't modify core platform code
 
 **If you have a large integration or project built on OpenAlgo:**
 
