@@ -216,6 +216,14 @@ logger = get_logger(__name__)
 def create_app():
     # Initialize Flask application
     app = Flask(__name__)
+    
+    # Configure ProxyFix if the app is behind a reverse proxy
+    # This ensures request.remote_addr is correctly set from X-Forwarded-For
+    trusted_proxies = os.getenv("TRUSTED_PROXIES", "0")
+    if trusted_proxies.isdigit() and int(trusted_proxies) > 0:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=int(trusted_proxies))
+        logger.info(f"ProxyFix applied with {trusted_proxies} trusted proxies")
 
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app

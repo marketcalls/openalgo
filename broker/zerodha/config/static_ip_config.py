@@ -65,8 +65,8 @@ class ZerodhaStaticIPConfig:
         config = {
             "primary_ip": os.getenv("ZERODHA_STATIC_IP", ""),
             "backup_ip": os.getenv("ZERODHA_STATIC_IP_BACKUP", ""),
-            "api_key": os.getenv("ZERODHA_API_KEY", ""),
-            "api_secret": os.getenv("ZERODHA_API_SECRET", ""),
+            "api_key": os.getenv("ZERODHA_API_KEY", os.getenv("BROKER_API_KEY", "")),
+            "api_secret": os.getenv("ZERODHA_API_SECRET", os.getenv("BROKER_API_SECRET", "")),
             "ip_enabled": os.getenv("ZERODHA_IP_ENABLED", "true").lower() == "true",
             "session_token": "",  # Will be populated during authentication
             "request_token": "",  # OAuth request token

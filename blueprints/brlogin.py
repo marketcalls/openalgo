@@ -34,9 +34,13 @@ def ratelimit_handler(e):
 
 
 def get_remote_ip():
-    """Get the remote IP address, handling reverse proxies."""
-    if request.headers.get("X-Forwarded-For"):
-        return request.headers.get("X-Forwarded-For").split(",")[0].strip()
+    """
+    Get the remote IP address of the client.
+    
+    Securely handles reverse proxies by relying on request.remote_addr.
+    The ProxyFix middleware (configured in app.py via TRUSTED_PROXIES) 
+    must be used to populate this correctly when behind a proxy.
+    """
     return request.remote_addr
 
 
