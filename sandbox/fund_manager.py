@@ -258,7 +258,7 @@ class FundManager:
                 logger.exception(f"Error blocking margin for user {self.user_id}: {e}")
                 return False, f"Error blocking margin: {str(e)}"
 
-    def release_margin(self, amount, realized_pnl=0, description=""):
+    def release_margin(self, amount, realized_pnl: "int | Decimal" = 0, description=""):
         """Release blocked margin and update P&L"""
         with self._lock:
             try:
@@ -391,8 +391,11 @@ class FundManager:
                 logger.error(f"Symbol {symbol} not found on {exchange}")
                 return None, "Symbol not found"
 
-            # Calculate trade value (quantity × price)
-            trade_value = quantity * price
+            # Apply contract_value multiplier (e.g. 0.01 for ETHUSD.P crypto perpetuals)
+            cv = Decimal(str(symbol_obj.contract_value)) if symbol_obj.contract_value else Decimal("1")
+
+            # Calculate trade value (quantity × price × contract_value)
+            trade_value = quantity * price * cv
 
             # Determine leverage based on action, product and symbol type
             leverage = self._get_leverage(exchange, product, symbol, action)
