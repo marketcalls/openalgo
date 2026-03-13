@@ -1,6 +1,5 @@
 import copy
 import importlib
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.analyzer_db import async_log_analyzer
@@ -183,8 +182,7 @@ def place_order_with_auth(
         # Call the broker's place_order_api function
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
     except Exception as e:
-        logger.error(f"Error in broker_module.place_order_api: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.place_order_api: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to place order due to internal error",

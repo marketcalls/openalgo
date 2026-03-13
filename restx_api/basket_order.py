@@ -1,6 +1,5 @@
 import copy
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -54,8 +53,7 @@ class BasketOrder(Resource):
             return make_response(jsonify(response_data), status_code)
 
         except Exception:
-            logger.error("An unexpected error occurred in BasketOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in BasketOrder endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)

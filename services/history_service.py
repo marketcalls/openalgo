@@ -1,6 +1,5 @@
 import importlib
 import time
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -138,8 +137,7 @@ def get_history_with_auth(
 
         return True, {"status": "success", "data": df.to_dict(orient="records")}, 200
     except Exception as e:
-        logger.error(f"Error in broker_module.get_history: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.get_history: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -214,8 +212,7 @@ def get_history_from_db(
         return True, {"status": "success", "data": df.to_dict(orient="records")}, 200
 
     except Exception as e:
-        logger.error(f"Error fetching history from DB: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error fetching history from DB: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 

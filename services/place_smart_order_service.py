@@ -1,7 +1,6 @@
 import copy
 import importlib
 import time
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.analyzer_db import async_log_analyzer
@@ -266,8 +265,7 @@ def place_smart_order_with_auth(
             )
 
     except Exception as e:
-        logger.error(f"Error in broker_module.place_smartorder_api: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.place_smartorder_api: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to place smart order due to internal error",
@@ -279,8 +277,7 @@ def place_smart_order_with_auth(
     try:
         time.sleep(float(smart_order_delay))
     except Exception:
-        logger.error(f"Invalid SMART_ORDER_DELAY value: {smart_order_delay}")
-        traceback.print_exc()
+        logger.exception(f"Invalid SMART_ORDER_DELAY value: {smart_order_delay}")
 
     if res and res.status == 200:
         return True, order_response_data, 200
