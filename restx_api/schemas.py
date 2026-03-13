@@ -1,12 +1,21 @@
-from marshmallow import Schema, fields, post_load, validate
+from marshmallow import Schema, ValidationError, fields, post_load, validate
 
 from utils.constants import CRYPTO_EXCHANGES, VALID_EXCHANGES
 
 
 def _coerce_quantity_to_int(data):
-    """Convert quantity from float to int for non-crypto exchanges."""
+    """Convert quantity from float to int for non-crypto exchanges.
+
+    Raises ValidationError if a fractional quantity (e.g. 1.9) is sent
+    to a non-crypto exchange, since brokers like Zerodha only accept integers.
+    """
     if data.get("exchange") not in CRYPTO_EXCHANGES and "quantity" in data:
-        data["quantity"] = int(data["quantity"])
+        qty = data["quantity"]
+        if qty != int(qty):
+            raise ValidationError(
+                {"quantity": [f"Fractional quantity ({qty}) is not allowed for non-crypto exchanges."]}
+            )
+        data["quantity"] = int(qty)
     return data
 
 
