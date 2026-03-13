@@ -230,6 +230,22 @@ def load_and_check_env_variables() -> None:
         print("\nSolution: Copy .sample.env to .env and configure your settings")
         sys.exit(1)
 
+    # Check if .env file is readable
+    try:
+        with open(env_path, "r") as test_f:
+            pass
+    except PermissionError:
+        print("\n" + "🔴 " + "=" * 68)
+        print("🔴  PERMISSION ERROR: Cannot read .env file")
+        print("🔴 " + "=" * 68)
+        print("   The .env file exists but the application doesn't have read access.")
+        print("   This is common in Docker when permissions mismatch (e.g., chmod 600).")
+        print("\n   SOLUTION ON HOST:")
+        print("   Run: chmod 644 .env")
+        print("   This ensures the non-root container user can read it.")
+        print("🔴 " + "=" * 68 + "\n")
+        sys.exit(1)
+
     # Load environment variables from the .env file with override=True to ensure values are updated
     load_dotenv(dotenv_path=env_path, override=True)
 

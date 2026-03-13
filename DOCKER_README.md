@@ -55,6 +55,16 @@ All data is stored locally in the script directory:
 - `log/` - Application and strategy logs
 - `.env` - Configuration file
 
+## Troubleshooting File Permissions
+
+If your Docker container fails to start with a `.env` read error, the issue is likely due to the file being unreadable by the container's internal non-root user. This often occurs on Linux servers.
+
+**To resolve permission errors:**
+```bash
+# Ensure the file is readable by the container user
+chmod 644 .env
+```
+
 ## Documentation
 
 - **Full Docs**: https://docs.openalgo.in
