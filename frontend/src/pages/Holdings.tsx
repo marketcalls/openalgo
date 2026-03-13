@@ -132,12 +132,15 @@ export default function Holdings() {
       setShowStaleWarning(true)
       fetchHoldings()
       lastFetchRef.current = Date.now()
-
-      // Hide the warning after 5 seconds
-      const timeout = setTimeout(() => setShowStaleWarning(false), 5000)
-      return () => clearTimeout(timeout)
     }
   }, [wasHidden, isVisible, timeSinceHidden, fetchHoldings])
+
+  // Auto-dismiss stale data warning after 5 seconds
+  useEffect(() => {
+    if (!showStaleWarning) return
+    const timeout = setTimeout(() => setShowStaleWarning(false), 5000)
+    return () => clearTimeout(timeout)
+  }, [showStaleWarning])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
