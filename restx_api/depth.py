@@ -10,8 +10,9 @@ from services.depth_service import get_depth
 from utils.logging import get_logger
 
 from .data_schemas import DepthSchema
+from config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+
 api = Namespace("depth", description="Market Depth API")
 
 # Initialize logger

@@ -9,7 +9,7 @@ from services.instruments_service import get_instruments
 from utils.logging import get_logger
 
 from .data_schemas import InstrumentsSchema
-
+from config import API_RATE_LIMIT
 
 class CSVResponse(Response):
     """Custom Response class that supports both CSV and JSON properties for latency monitoring"""
@@ -23,7 +23,6 @@ class CSVResponse(Response):
         self._json = value
 
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("instruments", description="Instruments/Symbols download API")
 
 # Initialize logger

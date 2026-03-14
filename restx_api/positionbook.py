@@ -9,8 +9,8 @@ from services.positionbook_service import get_positionbook
 from utils.logging import get_logger
 
 from .account_schema import PositionbookSchema
+from .config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("positionbook", description="Position Book API")
 
 # Initialize logger

@@ -9,8 +9,9 @@ from services.tradebook_service import get_tradebook
 from utils.logging import get_logger
 
 from .account_schema import TradebookSchema
+from restx_api.config import API_RATE_LIMIT
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+
 api = Namespace("tradebook", description="Trade Book API")
 
 # Initialize logger

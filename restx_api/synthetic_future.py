@@ -41,6 +41,8 @@ from limiter import limiter
 from restx_api.schemas import SyntheticFutureSchema
 from services.synthetic_future_service import calculate_synthetic_future
 from utils.logging import get_logger
+# Get rate limit from environment
+from config import API_RATE_LIMIT
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -48,8 +50,6 @@ logger = get_logger(__name__)
 # Create namespace
 api = Namespace("syntheticfuture", description="Calculate Synthetic Future Price")
 
-# Get rate limit from environment
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
 @api.route("/", strict_slashes=False)

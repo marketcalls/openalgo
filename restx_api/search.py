@@ -7,10 +7,10 @@ from marshmallow import ValidationError
 from limiter import limiter
 from services.search_service import search_symbols
 from utils.logging import get_logger
-
+from config import API_RATE_LIMIT
 from .data_schemas import SearchSchema
 
-API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
+
 api = Namespace("search", description="Symbol search API")
 
 # Initialize logger
