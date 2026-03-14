@@ -360,6 +360,40 @@ def sandbox_get_funds(
         )
 
 
+def _get_strategy_positions(user_id: str, strategy: str) -> set[tuple[str, str, str]]:
+    """Look up which (symbol, exchange, product) positions a strategy has traded.
+
+    Uses the sandbox trades table to find instruments the strategy has
+    opened positions in, so closeposition can target only those instruments
+    instead of closing every open position.
+
+    Returns:
+        Set of (symbol, exchange, product) tuples traded by the strategy.
+    """
+    from database.sandbox_db import SandboxTrades, db_session as sandbox_session
+
+    try:
+        rows = (
+            sandbox_session.query(
+                SandboxTrades.symbol,
+                SandboxTrades.exchange,
+                SandboxTrades.product,
+            )
+            .filter(
+                SandboxTrades.user_id == user_id,
+                SandboxTrades.strategy == strategy,
+            )
+            .distinct()
+            .all()
+        )
+        return {(r.symbol, r.exchange, r.product) for r in rows}
+    except Exception as e:
+        logger.error(f"Error querying strategy positions for '{strategy}': {e}")
+        return set()
+    finally:
+        sandbox_session.remove()
+
+
 def sandbox_close_position(
     position_data: dict[str, Any], api_key: str, original_data: dict[str, Any]
 ) -> tuple[bool, dict[str, Any], int]:
@@ -390,6 +424,32 @@ def sandbox_close_position(
                     {
                         "status": "success",
                         "message": "No open positions to close",
+                        "mode": "analyze",
+                    },
+                    200,
+                )
+
+            # When a strategy is specified, only close positions for
+            # instruments that strategy has actually traded.  Without this
+            # filter, one strategy's EOD exit would close positions opened
+            # by other strategies running on the same account.
+            strategy = position_data.get("strategy")
+            if strategy:
+                strategy_instruments = _get_strategy_positions(user_id, strategy)
+                if strategy_instruments:
+                    positions = [
+                        pos
+                        for pos in positions
+                        if (pos.get("symbol"), pos.get("exchange"), pos.get("product"))
+                        in strategy_instruments
+                    ]
+
+            if not positions:
+                return (
+                    True,
+                    {
+                        "status": "success",
+                        "message": "No open positions to close for this strategy",
                         "mode": "analyze",
                     },
                     200,
