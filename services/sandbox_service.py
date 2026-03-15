@@ -7,21 +7,16 @@ When analyzer mode is enabled, all trading operations are routed to the sandbox
 virtual trading environment instead of the live broker.
 """
 
-import copy
 from typing import Any, Dict, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order, executor
 from database.auth_db import verify_api_key
 from database.settings_db import get_analyze_mode
-from extensions import socketio
 from sandbox.fund_manager import FundManager, get_user_funds
 from sandbox.holdings_manager import HoldingsManager
 
 # Import sandbox managers
 from sandbox.order_manager import OrderManager
 from sandbox.position_manager import PositionManager
-from services.telegram_alert_service import telegram_alert_service
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,7 +41,10 @@ def sandbox_place_order(
     order_data: dict[str, Any], api_key: str, original_data: dict[str, Any]
 ) -> tuple[bool, dict[str, Any], int]:
     """
-    Place order in sandbox mode
+    Place order in sandbox mode.
+
+    Side-effects (logging, socketio, telegram) are handled by the calling service
+    via the event bus. This function only performs the sandbox DB operations.
 
     Args:
         order_data: Validated order data
@@ -84,25 +82,6 @@ def sandbox_place_order(
 
         # Place order in sandbox
         success, response, status_code = order_manager.place_order(sandbox_order_data)
-
-        # Prepare logging data
-        log_request = copy.deepcopy(original_data)
-        if "apikey" in log_request:
-            log_request.pop("apikey", None)
-        log_request["api_type"] = "placeorder"
-
-        # Log to analyzer database
-        executor.submit(async_log_analyzer, log_request, response, "placeorder")
-
-        # Emit socket event asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit, "analyzer_update", {"request": log_request, "response": response}
-        )
-
-        # Send Telegram alert in background task (non-blocking)
-        socketio.start_background_task(
-            telegram_alert_service.send_order_alert, "placeorder", order_data, response, api_key
-        )
 
         return success, response, status_code
 
@@ -142,18 +121,7 @@ def sandbox_modify_order(
 
         success, response, status_code = order_manager.modify_order(orderid, new_data)
 
-        # Log and emit
-        log_request = copy.deepcopy(original_data)
-        if "apikey" in log_request:
-            log_request.pop("apikey", None)
-        log_request["api_type"] = "modifyorder"
-
-        executor.submit(async_log_analyzer, log_request, response, "modifyorder")
-        # Emit SocketIO event asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit, "analyzer_update", {"request": log_request, "response": response}
-        )
-
+        # Side-effects (logging, socketio, telegram) handled by calling service via event bus
         return success, response, status_code
 
     except Exception as e:
@@ -183,18 +151,7 @@ def sandbox_cancel_order(
         orderid = order_data.get("orderid") or order_data.get("order_id")
         success, response, status_code = order_manager.cancel_order(orderid)
 
-        # Log and emit
-        log_request = copy.deepcopy(original_data)
-        if "apikey" in log_request:
-            log_request.pop("apikey", None)
-        log_request["api_type"] = "cancelorder"
-
-        executor.submit(async_log_analyzer, log_request, response, "cancelorder")
-        # Emit SocketIO event asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit, "analyzer_update", {"request": log_request, "response": response}
-        )
-
+        # Side-effects (logging, socketio, telegram) handled by calling service via event bus
         return success, response, status_code
 
     except Exception as e:

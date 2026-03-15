@@ -60,6 +60,8 @@ class TelegramAlertService:
             "placesmartorder": "🎯 *Smart Order Placed*\n{details}",
             "basketorder": "🛒 *Basket Order Executed*\n{details}",
             "splitorder": "✂️ *Split Order Executed*\n{details}",
+            "optionsorder": "📊 *Options Order Executed*\n{details}",
+            "optionsmultiorder": "📊 *Options Multi-Order Executed*\n{details}",
             "modifyorder": "✏️ *Order Modified*\n{details}",
             "cancelorder": "❌ *Order Cancelled*\n{details}",
             "cancelallorder": "🚫 *All Orders Cancelled*\n{details}",
@@ -134,15 +136,27 @@ class TelegramAlertService:
                         details.append(f"... and {len(results) - 3} more")
 
             elif order_type == "splitorder":
-                if response.get("status") == "success":
-                    details.extend(
-                        [
-                            f"Symbol: `{order_data.get('symbol', 'N/A')}`",
-                            f"Total Quantity: {response.get('total_quantity', 'N/A')}",
-                            f"Split Size: {response.get('split_size', 'N/A')}",
-                            f"Orders Created: {len(response.get('results', []))}",
-                        ]
-                    )
+                details.append(f"Symbol: `{order_data.get('symbol', 'N/A')}`")
+                results = response.get("results", [])
+                success_count = len([r for r in results if r.get("status") == "success"])
+                failed_count = len([r for r in results if r.get("status") != "success"])
+                details.extend(
+                    [
+                        f"Total Quantity: {response.get('total_quantity', 'N/A')}",
+                        f"Split Size: {response.get('split_size', 'N/A')}",
+                        f"Total Orders: {len(results)}",
+                        f"✅ Successful: {success_count}",
+                        f"❌ Failed: {failed_count}",
+                    ]
+                )
+                if failed_count > 0 and success_count == 0:
+                    details.append("⚠️ All orders rejected")
+                elif failed_count > 0:
+                    details.append("⚠️ Partial fill")
+                    # Show first failure reason
+                    first_fail = next((r for r in results if r.get("status") != "success"), None)
+                    if first_fail and first_fail.get("message"):
+                        details.append(f"Reason: {first_fail['message']}")
 
             elif order_type == "modifyorder":
                 details.extend(
@@ -191,7 +205,73 @@ class TelegramAlertService:
                             ]
                         )
                     else:
-                        details.append("✅ All positions closed successfully")
+                        closed = response.get("closed_positions", 0)
+                        failed = response.get("failed_closures", 0)
+                        if closed or failed:
+                            details.extend(
+                                [
+                                    f"✅ Closed: {closed} positions",
+                                    f"❌ Failed: {failed} positions",
+                                ]
+                            )
+                        else:
+                            details.append("✅ All positions closed successfully")
+                else:
+                    details.append(f"❌ Error: {response.get('message', 'Failed')}")
+
+            elif order_type == "optionsorder":
+                details.append(f"Underlying: `{order_data.get('underlying', 'N/A')}`")
+                if response.get("status") == "success":
+                    results = response.get("results", [])
+                    success_count = len([r for r in results if r.get("status") == "success"])
+                    failed_count = len([r for r in results if r.get("status") != "success"])
+                    if results:
+                        details.extend(
+                            [
+                                f"Total Orders: {len(results)}",
+                                f"✅ Successful: {success_count}",
+                                f"❌ Failed: {failed_count}",
+                            ]
+                        )
+                        for result in results[:5]:
+                            status_emoji = "✅" if result.get("status") == "success" else "❌"
+                            details.append(
+                                f"{status_emoji} `{result.get('symbol', 'N/A')}` {result.get('action', '')} → {result.get('orderid', result.get('message', 'N/A'))}"
+                            )
+                    else:
+                        # Single order (non-split)
+                        details.extend(
+                            [
+                                f"Symbol: `{response.get('symbol', order_data.get('symbol', 'N/A'))}`",
+                                f"Action: {order_data.get('action', 'N/A')}",
+                                f"Quantity: {order_data.get('quantity', 'N/A')}",
+                                f"Order ID: `{response.get('orderid', 'N/A')}`",
+                            ]
+                        )
+                else:
+                    details.append(f"❌ Error: {response.get('message', 'Failed')}")
+
+            elif order_type == "optionsmultiorder":
+                details.append(f"Underlying: `{order_data.get('underlying', 'N/A')}`")
+                if response.get("status") == "success":
+                    results = response.get("results", [])
+                    success_count = len([r for r in results if r.get("status") == "success"])
+                    failed_count = len([r for r in results if r.get("status") != "success"])
+                    details.extend(
+                        [
+                            f"Total Legs: {len(results)}",
+                            f"✅ Successful: {success_count}",
+                            f"❌ Failed: {failed_count}",
+                        ]
+                    )
+                    for result in results:
+                        status_emoji = "✅" if result.get("status") == "success" else "❌"
+                        symbol = result.get("symbol", "N/A")
+                        action = result.get("action", "")
+                        oid = result.get("orderid", result.get("message", "N/A"))
+                        details.append(f"{status_emoji} `{symbol}` {action} → {oid}")
+                    if response.get("underlying_ltp"):
+                        details.append(f"Underlying LTP: {response.get('underlying_ltp')}")
                 else:
                     details.append(f"❌ Error: {response.get('message', 'Failed')}")
 

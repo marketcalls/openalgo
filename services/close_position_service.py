@@ -3,17 +3,16 @@ import importlib
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order, executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
-from services.telegram_alert_service import telegram_alert_service
-from utils.api_analyzer import analyze_request
+from events import AnalyzerErrorEvent, PositionClosedEvent
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+API_TYPE = "closeposition"
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -33,15 +32,13 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     analyzer_request = request_data.copy()
     if "apikey" in analyzer_request:
         del analyzer_request["apikey"]
-    analyzer_request["api_type"] = "closeposition"
+    analyzer_request["api_type"] = API_TYPE
 
-    # Log to analyzer database
-    executor.submit(async_log_analyzer, analyzer_request, error_response, "closeposition")
-
-    # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
-    )
+    bus.publish(AnalyzerErrorEvent(
+        mode="analyze", api_type=API_TYPE,
+        request_data=analyzer_request, response_data=error_response,
+        error_message=error_message,
+    ))
 
     return error_response
 
@@ -110,22 +107,33 @@ def close_position_with_auth(
             "product": position_data.get("product_type") or position_data.get("product"),
         }
 
-        return sandbox_close_position(close_data, api_key, original_data)
+        success, response, status_code = sandbox_close_position(close_data, api_key, original_data)
 
-    # Existing broker logic below - keep the socketio.emit line
-    if False:  # This will never execute but preserves the code structure
-        socketio.emit("analyzer_update", {"request": analyzer_request, "response": response_data})
+        position_request_data["api_type"] = API_TYPE
+        bus.publish(PositionClosedEvent(
+            mode="analyze", api_type=API_TYPE,
+            symbol=position_data.get("symbol", ""),
+            exchange=position_data.get("exchange", ""),
+            product=position_data.get("product_type", "") or position_data.get("product", ""),
+            message=response.get("message", ""),
+            request_data=position_request_data,
+            response_data=response,
+            api_key=api_key,
+        ))
 
-        # Send Telegram alert for analyze mode
-        telegram_alert_service.send_order_alert(
-            "closeposition", position_data, response_data, position_data.get("apikey")
-        )
-        return True, response_data, 200
+        return success, response, status_code
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
         error_response = {"status": "error", "message": "Broker-specific module not found"}
-        executor.submit(async_log_order, "closeposition", original_data, error_response)
+        bus.publish(PositionClosedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=position_data.get("symbol", ""), exchange=position_data.get("exchange", ""),
+            product=position_data.get("product_type", "") or position_data.get("product", ""),
+            orderid="", message="Broker-specific module not found",
+            request_data=position_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, 404
 
     try:
@@ -139,26 +147,26 @@ def close_position_with_auth(
             "status": "error",
             "message": "Failed to close positions due to internal error",
         }
-        executor.submit(async_log_order, "closeposition", original_data, error_response)
+        bus.publish(PositionClosedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=position_data.get("symbol", ""), exchange=position_data.get("exchange", ""),
+            product=position_data.get("product_type", "") or position_data.get("product", ""),
+            orderid="", message="Failed to close positions due to internal error",
+            request_data=position_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, 500
 
     if status_code == 200:
         response_data = {"status": "success", "message": "All Open Positions Squared Off"}
-        # Emit SocketIO event asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "close_position_event",
-            {"status": "success", "message": "All Open Positions Squared Off", "mode": "live"},
-        )
-        executor.submit(async_log_order, "closeposition", position_request_data, response_data)
-        # Send Telegram alert in background task (non-blocking)
-        socketio.start_background_task(
-            telegram_alert_service.send_order_alert,
-            "closeposition",
-            position_data,
-            response_data,
-            original_data.get("apikey"),
-        )
+        bus.publish(PositionClosedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=position_data.get("symbol", ""), exchange=position_data.get("exchange", ""),
+            product=position_data.get("product_type", "") or position_data.get("product", ""),
+            orderid="", message="All Open Positions Squared Off",
+            request_data=position_request_data, response_data=response_data,
+            api_key=original_data.get("apikey", ""),
+        ))
         return True, response_data, 200
     else:
         message = (
@@ -167,7 +175,14 @@ def close_position_with_auth(
             else "Failed to close positions"
         )
         error_response = {"status": "error", "message": message}
-        executor.submit(async_log_order, "closeposition", original_data, error_response)
+        bus.publish(PositionClosedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=position_data.get("symbol", ""), exchange=position_data.get("exchange", ""),
+            product=position_data.get("product_type", "") or position_data.get("product", ""),
+            orderid="", message=message,
+            request_data=position_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, status_code
 
 
@@ -217,7 +232,17 @@ def close_position(
                         "message": "Close position operation is not allowed in Semi-Auto mode. Please switch to Auto mode to close positions.",
                     }
                     logger.warning(f"Close position blocked for user {user_id} (semi-auto mode)")
-                    executor.submit(async_log_order, "closeposition", original_data, error_response)
+                    position_request_data = copy.deepcopy(original_data)
+                    if "apikey" in position_request_data:
+                        position_request_data.pop("apikey", None)
+                    bus.publish(PositionClosedEvent(
+                        mode="live", api_type=API_TYPE,
+                        symbol=position_data.get("symbol", ""), exchange=position_data.get("exchange", ""),
+                        product=position_data.get("product_type", "") or position_data.get("product", ""),
+                        orderid="", message=error_response["message"],
+                        request_data=position_request_data, response_data=error_response,
+                        api_key=api_key,
+                    ))
                     return False, error_response, 403
 
         # Add API key to position data
