@@ -100,6 +100,9 @@ A unified API layer that:
 ### WebSocket Proxy
 - [WebSocket Proxy PRD](./websocket-proxy.md) - Real-time market data streaming
 
+### Event Bus - Order Side-Effect Decoupling
+- [Event Bus PRD](./event-bus.md) - In-process pub/sub for order logging, SocketIO, and Telegram
+
 ### CI/CD Pipeline
 - [CI/CD PRD](./ci-cd.md) - Main product requirements
 - [Workflows Reference](./ci-cd-workflows.md) - Detailed job documentation

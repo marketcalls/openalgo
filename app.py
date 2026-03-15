@@ -221,6 +221,11 @@ def create_app():
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app
 
+    # Initialize EventBus subscribers
+    from subscribers import register_all as register_event_subscribers
+
+    register_event_subscribers()
+
     # Initialize CSRF protection
     csrf = CSRFProtect(app)
 

@@ -141,9 +141,12 @@ The PlaceOrder API is the core order execution endpoint in OpenAlgo. It handles 
 │            ▼                              ▼                                  │
 │  ┌──────────────────┐          ┌──────────────────┐                         │
 │  │ Extract order_id │          │ Extract error    │                         │
-│  │ Emit SocketIO    │          │ message          │                         │
-│  │ Log order async  │          │ Log failure      │                         │
-│  │ Telegram alert   │          │ Return error     │                         │
+│  │ bus.publish(     │          │ message          │                         │
+│  │  OrderPlacedEvent│          │ bus.publish(     │                         │
+│  │ )                │          │  OrderFailedEvent│                         │
+│  │ → log+socketio+  │          │ )                │                         │
+│  │   telegram via   │          │ Return error     │                         │
+│  │   subscribers    │          │                  │                         │
 │  └──────────────────┘          └──────────────────┘                         │
 │                                                                              │
 │  Success Response:              Error Response:                              │
@@ -314,37 +317,38 @@ def place_order_api(data, auth):
 | Broker API error | 500 | `{"status": "error", "message": "Failed to place order"}` |
 | Rate limit | 429 | Rate limiter response |
 
-## Async Operations
+## Event Bus Side-Effects
 
-### Order Logging
+All post-order side-effects (logging, SocketIO, Telegram) are dispatched through the Event Bus. The service publishes a single typed event; subscribers handle each concern independently.
 
-```python
-# Non-blocking log to database
-executor.submit(async_log_order, 'placeorder', request_data, response)
-```
-
-### SocketIO Events
+### Publishing
 
 ```python
-# Real-time order event emission
-socketio.emit('order_event', {
-    'symbol': symbol,
-    'action': action,
-    'orderid': order_id,
-    'exchange': exchange,
-    'mode': 'live' or 'analyzer'
-})
+from events import OrderPlacedEvent
+from utils.event_bus import bus
+
+# After successful broker call — one line replaces three
+bus.publish(OrderPlacedEvent(
+    mode="live",
+    api_type="placeorder",
+    symbol=order_data["symbol"],
+    action=order_data["action"],
+    orderid=str(order_id),
+    request_data=cleaned_request,
+    response_data={"status": "success", "orderid": order_id},
+    api_key=api_key,
+))
 ```
 
-### Telegram Alerts
+### What Subscribers Do
 
-```python
-# Background notification
-socketio.start_background_task(
-    telegram_alert_service.send_order_alert,
-    'placeorder', order_data, response, api_key
-)
-```
+| Subscriber | Action |
+|------------|--------|
+| `log_subscriber` | Writes to `order_logs` (live) or `analyzer_logs` (analyze) |
+| `socketio_subscriber` | Emits `order_event` (live) or `analyzer_update` (analyze) |
+| `telegram_subscriber` | Sends Telegram alert via `send_order_alert()` |
+
+See [53-event-bus](../53-event-bus/README.md) for full architecture details.
 
 ## Security Layers
 
@@ -395,4 +399,6 @@ socketio.start_background_task(
 | `database/auth_db.py` | Authentication |
 | `broker/{name}/api/order_api.py` | Broker implementation |
 | `broker/{name}/mapping/transform_data.py` | Data transformation |
-| `database/apilog_db.py` | Order logging |
+| `utils/event_bus.py` | Event bus (side-effect dispatch) |
+| `events/order_events.py` | Order event types |
+| `subscribers/` | Log, SocketIO, Telegram subscribers |
