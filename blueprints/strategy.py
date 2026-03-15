@@ -88,6 +88,7 @@ DEFAULT_PRODUCT = "MIS"
 # Separate queues for different order types
 regular_order_queue = queue.Queue()  # For placeorder (up to 10/sec)
 smart_order_queue = queue.Queue()  # For placesmartorder (1/sec)
+options_order_queue = queue.Queue()  # For optionsorder (1/sec)
 
 # Order processor state
 order_processor_running = False
@@ -130,7 +131,34 @@ def process_orders():
                 continue  # Start next iteration
 
             except queue.Empty:
-                pass  # No smart orders, continue to regular orders
+                pass  # No smart orders, continue to options orders
+
+            # Process options orders (1 per second)
+            try:
+                options_order = options_order_queue.get_nowait()
+                if options_order is None:
+                    break
+
+                try:
+                    response = requests.post(
+                        f"{BASE_URL}/api/v1/optionsorder", json=options_order["payload"]
+                    )
+                    if response.ok:
+                        logger.info(
+                            f"Options order placed for {options_order['payload'].get('underlying', 'unknown')} in strategy {options_order['payload'].get('strategy', 'unknown')}"
+                        )
+                    else:
+                        logger.error(
+                            f"Error placing options order: {response.text}"
+                        )
+                except Exception as e:
+                    logger.exception(f"Error placing options order: {str(e)}")
+
+                time_module.sleep(1)
+                continue
+
+            except queue.Empty:
+                pass  # No options orders, continue to regular orders
 
             # Process regular orders (up to 10 per second)
             now = time()
@@ -203,6 +231,8 @@ def queue_order(endpoint, payload):
     ensure_order_processor()
     if endpoint == "placesmartorder":
         smart_order_queue.put({"payload": payload})
+    elif endpoint == "optionsorder":
+        options_order_queue.put({"payload": payload})
     else:
         regular_order_queue.put({"payload": payload})
 
@@ -877,15 +907,59 @@ def webhook(webhook_id):
         if not strategy.is_active:
             return jsonify({"error": "Strategy is inactive"}), 400
 
+        # Parse webhook data early (needed for all paths)
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data received"}), 400
+
+        # Detect options order payload — must run before intraday
+        # checks since options payloads may lack "action"/"symbol"
+        is_options = all(
+            k in data for k in ("underlying", "offset", "option_type")
+        )
+
+        if is_options:
+            # Enforce intraday trading hours for options too
+            if strategy.is_intraday:
+                now = datetime.now(pytz.timezone("Asia/Kolkata"))
+                current_time = now.strftime("%H:%M")
+                action = data.get("action", "").upper()
+
+                is_exit = (
+                    action == "SELL"
+                    if strategy.trading_mode == "LONG"
+                    else action == "BUY"
+                    if strategy.trading_mode == "SHORT"
+                    else int(data.get("position_size", 0)) == 0
+                )
+
+                if not is_exit:
+                    if strategy.start_time and current_time < strategy.start_time:
+                        return jsonify({"error": "Entry orders not allowed before start time"}), 400
+                    if strategy.end_time and current_time > strategy.end_time:
+                        return jsonify({"error": "Entry orders not allowed after end time"}), 400
+                else:
+                    if strategy.start_time and current_time < strategy.start_time:
+                        return jsonify({"error": "Exit orders not allowed before start time"}), 400
+                    if strategy.squareoff_time and current_time > strategy.squareoff_time:
+                        return jsonify({"error": "Exit orders not allowed after square off time"}), 400
+
+            api_key = get_api_key_for_tradingview(strategy.user_id)
+            if not api_key:
+                return jsonify({"error": "No API key found"}), 401
+
+            data["apikey"] = api_key
+            data["strategy"] = strategy.name
+            queue_order("optionsorder", data)
+            return jsonify({
+                "message": f"Options order queued for "
+                f"{data.get('underlying', 'unknown')}"
+            }), 200
+
         # Check trading hours for intraday strategies
         if strategy.is_intraday:
             now = datetime.now(pytz.timezone("Asia/Kolkata"))
             current_time = now.strftime("%H:%M")
-
-            # Determine if this is an entry or exit order
-            data = request.get_json()
-            if not data:
-                return jsonify({"error": "No data received"}), 400
 
             action = data["action"].upper()
             position_size = int(data.get("position_size", 0))
@@ -898,7 +972,6 @@ def webhook(webhook_id):
             else:  # BOTH mode
                 is_exit_order = position_size == 0
 
-            # For entry orders, check if within entry time window
             if not is_exit_order:
                 if strategy.start_time and current_time < strategy.start_time:
                     return jsonify({"error": "Entry orders not allowed before start time"}), 400
@@ -906,18 +979,12 @@ def webhook(webhook_id):
                 if strategy.end_time and current_time > strategy.end_time:
                     return jsonify({"error": "Entry orders not allowed after end time"}), 400
 
-            # For exit orders, check if within exit time window (up to square off time)
             else:
                 if strategy.start_time and current_time < strategy.start_time:
                     return jsonify({"error": "Exit orders not allowed before start time"}), 400
 
                 if strategy.squareoff_time and current_time > strategy.squareoff_time:
                     return jsonify({"error": "Exit orders not allowed after square off time"}), 400
-
-        # Parse webhook data
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "No data received"}), 400
 
         # Validate required fields
         required_fields = ["symbol", "action"]
