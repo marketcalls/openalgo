@@ -27,8 +27,18 @@ class Intervals(Resource):
     def post(self):
         """Get supported intervals for the broker"""
         try:
+            # Check if request body is valid JSON
+            data = request.get_json(silent=True)
+            if data is None:
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
+
             # Validate request data
-            intervals_data = intervals_schema.load(request.json)
+            intervals_data = intervals_schema.load(data)
 
             api_key = intervals_data["apikey"]
 
