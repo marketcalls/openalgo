@@ -37,7 +37,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     if isinstance(payload, dict):
         payload = json.dumps(payload)
 
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    url = f"https://apiconnect.angelone.in{endpoint}"
 
     try:
         if method == "GET":
