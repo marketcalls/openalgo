@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import logging
@@ -11,8 +12,9 @@ from typing import Any, Dict, List, Optional
 import websocket
 from dotenv import load_dotenv
 
-from database.auth_db import get_auth_token, get_feed_token
+from database.auth_db import get_auth_token, get_feed_token, get_user_id
 from database.token_db import get_token
+from utils.httpx_client import get_httpx_client
 
 from .aliceblue_client import Aliceblue, Instrument
 
@@ -49,6 +51,10 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.ws_session = None
         self.subscriptions = {}
+        self._heartbeat_thread = None
+        self._heartbeat_stop = None
+        self._reconnect_thread = None
+        self._reconnect_cancel = None
         self.symbol_state = {}  # Store last known state for each symbol
         self.market_snapshots = {}  # Store complete market snapshots with value retention
 
@@ -99,39 +105,38 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.error(f"No authentication tokens found for user {user_id}")
                     raise ValueError(f"No authentication tokens found for user {user_id}")
 
-                # Read both BROKER_API_KEY and BROKER_API_SECRET from environment
-                load_dotenv()
-                broker_api_key = os.getenv("BROKER_API_KEY")  # User ID (e.g., '1412368')
-                broker_api_secret = os.getenv("BROKER_API_SECRET")  # API Secret key
+                # Get the numeric client ID (UCC) from the database
+                # This is the AliceBlue user ID (e.g., '1412368') stored during login
+                stored_user_id = get_user_id(user_id)
 
-                if not broker_api_key:
-                    self.logger.error("BROKER_API_KEY not found in environment variables")
-                    raise ValueError("BROKER_API_KEY not found in environment variables")
+                # Fallback: extract UCC from the JWT token payload
+                if not stored_user_id:
+                    try:
+                        # JWT is 3 base64 parts separated by dots; payload is the 2nd
+                        payload_b64 = auth_token.split(".")[1]
+                        # Add padding if needed
+                        payload_b64 += "=" * (-len(payload_b64) % 4)
+                        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+                        stored_user_id = payload.get("ucc")
+                        if stored_user_id:
+                            self.logger.info(f"Extracted UCC from JWT: {stored_user_id}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to extract UCC from JWT: {e}")
 
-                if not broker_api_secret:
-                    self.logger.error("BROKER_API_SECRET not found in environment variables")
-                    raise ValueError("BROKER_API_SECRET not found in environment variables")
+                if not stored_user_id:
+                    self.logger.error(f"No user_id (clientId/UCC) found for user {user_id}")
+                    raise ValueError(f"No user_id (clientId/UCC) found for user {user_id}")
 
-                api_key = broker_api_secret  # Use BROKER_API_SECRET for X-API-KEY header
-                # For AliceBlue, session_id is the auth_token (JWT)
-                session_id = auth_token
-                # For WebSocket auth, client_id should be the BROKER_API_KEY value (user ID)
-                self.client_id = broker_api_key
-                # Store session_id (JWT) for WebSocket authentication
-                self.session_id = session_id
-                self.logger.info(f"Using BROKER_API_KEY as client_id (user_id): {self.client_id}")
-                self.logger.info("Using BROKER_API_SECRET for X-API-KEY header")
-                self.logger.info("Using auth_token as session_id for auth")
+                # For AliceBlue WebSocket:
+                # - client_id = numeric UCC (e.g., '1412368') for actid/uid in WS auth
+                # - session_id = JWT auth token for susertoken generation
+                self.client_id = stored_user_id
+                self.session_id = auth_token
+                self.logger.info(f"Using client_id (UCC): {self.client_id}")
+                self.logger.info("Using auth_token as session_id for WS auth")
 
             self.logger.info(
-                f"Final values: client_id={self.client_id}, session_id={self.session_id}"
-            )
-
-            # Initialize AliceBlue client - use client_id as user_id for the AliceBlue client
-            self.aliceblue_client = Aliceblue(
-                user_id=self.client_id,  # Use client_id (BROKER_API_KEY) as user_id
-                api_key=api_key,
-                session_id=session_id,
+                f"Final values: client_id={self.client_id}, session_id available={bool(self.session_id)}"
             )
 
             self.logger.info(f"AliceBlue WebSocket adapter initialized for user {user_id}")
@@ -156,56 +161,53 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.running = True
                 self.reconnect_attempts = 0
 
-            # AliceBlue WebSocket session flow (matching official SDK):
+            # AliceBlue V2 WebSocket session flow:
             # STAGE 1: Invalidate any previous WebSocket session
             # STAGE 2: Create new WebSocket session
-            # This registers the API credentials with AliceBlue's server
+            # Uses V2 API endpoints on a3.aliceblueonline.com
+            base_url = "https://a3.aliceblueonline.com"
+            headers = {
+                "Authorization": f"Bearer {self.session_id}",
+                "Content-Type": "application/json",
+            }
+            session_payload = {"source": "API", "userId": self.client_id}
+            client = get_httpx_client()
+
             self.logger.info("STAGE 1: Invalidating previous WebSocket session")
             try:
-                session_data = {"loginType": "API"}
-                # Invalidate previous session
-                invalid_response = self.aliceblue_client._request(
-                    "ws/invalidateSocketSess", "A", session_data
+                invalid_response = client.post(
+                    f"{base_url}/open-api/od/v1/profile/invalidateWsSess",
+                    json=session_payload,
+                    headers=headers,
                 )
+                invalid_data = invalid_response.json()
 
-                if invalid_response and invalid_response.get("stat") == "Ok":
+                if invalid_data.get("status") == "Ok":
                     self.logger.info("Previous session invalidated successfully")
                 else:
-                    self.logger.warning(f"Session invalidation response: {invalid_response}")
+                    self.logger.warning(f"Session invalidation response: {invalid_data}")
                     # Continue anyway - might be first time connection
 
                 # STAGE 2: Create new WebSocket session
                 self.logger.info("STAGE 2: Creating new WebSocket session")
-                session_response = self.aliceblue_client._request(
-                    "ws/createSocketSess", "A", session_data
+                session_response = client.post(
+                    f"{base_url}/open-api/od/v1/profile/createWsSess",
+                    json=session_payload,
+                    headers=headers,
                 )
+                session_data = session_response.json()
 
-                self.logger.info(f"createSocketSess response: {session_response}")
+                self.logger.info(f"createWsSess response: {session_data}")
 
-                if session_response is None:
-                    self.logger.error("createSocketSess returned None - API call may have failed")
-                    with self.lock:
-                        self.running = False
-                    return {"success": False, "error": "WebSocket session creation returned None"}
-
-                if session_response.get("stat") == "Ok":
-                    # Try to get wsSess from response - handle different response formats
-                    if "result" in session_response:
-                        if isinstance(session_response["result"], dict):
-                            self.ws_session = session_response["result"].get("wsSess")
-                        else:
-                            self.ws_session = session_response.get("wsSess")
-                    else:
-                        self.ws_session = session_response.get("wsSess")
-
-                    self.logger.info(f"WebSocket session created successfully: {self.ws_session}")
+                if session_data.get("status") == "Ok":
+                    self.logger.info("WebSocket session created successfully")
                 else:
-                    self.logger.error(f"WebSocket session creation failed: {session_response}")
+                    self.logger.error(f"WebSocket session creation failed: {session_data}")
                     with self.lock:
                         self.running = False
                     return {
                         "success": False,
-                        "error": f"WebSocket session creation failed: {session_response}",
+                        "error": f"WebSocket session creation failed: {session_data}",
                     }
             except Exception as e:
                 self.logger.error(f"Error in WebSocket session setup: {e}")
@@ -247,6 +249,17 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             def on_open(ws):
                 self._authenticate_websocket(ws)
+                # Start heartbeat thread to keep connection alive
+                self._start_heartbeat(ws)
+
+            # Close any previous WebSocket and wait for its thread to exit
+            if self.ws_client:
+                try:
+                    self.ws_client.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing previous WebSocket: {e}")
+            if hasattr(self, "ws_thread") and self.ws_thread and self.ws_thread.is_alive():
+                self.ws_thread.join(timeout=5)
 
             # Create WebSocket connection - use wss instead of https
             websocket.enableTrace(False)  # Disable trace for production
@@ -310,8 +323,37 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error authenticating WebSocket: {e}")
 
+    def _start_heartbeat(self, ws):
+        """Send heartbeat every 30 seconds to keep connection alive.
+        AliceBlue requires heartbeat within 50 seconds."""
+        # Stop any previous heartbeat thread and wait for it to exit
+        if self._heartbeat_stop:
+            self._heartbeat_stop.set()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=5)
+
+        stop = threading.Event()
+        self._heartbeat_stop = stop
+
+        def heartbeat_loop():
+            while not stop.is_set():
+                # Use event.wait() so thread exits promptly on stop
+                if stop.wait(timeout=30):
+                    break
+                try:
+                    if not stop.is_set() and ws.sock and ws.sock.connected:
+                        ws.send(json.dumps({"k": "", "t": "h"}))
+                        self.logger.debug("Heartbeat sent")
+                except Exception as e:
+                    self.logger.warning(f"Heartbeat send failed: {e}")
+                    break
+
+        t = threading.Thread(target=heartbeat_loop, daemon=True)
+        self._heartbeat_thread = t
+        t.start()
+
     def disconnect(self) -> None:
-        """Close WebSocket connection"""
+        """Close WebSocket connection and clean up all threads."""
         try:
             with self.lock:
                 if not self.running:
@@ -319,8 +361,28 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 self.running = False
 
+            # Signal heartbeat thread to stop immediately
+            if self._heartbeat_stop:
+                self._heartbeat_stop.set()
+
+            # Cancel any pending reconnect
+            if self._reconnect_cancel:
+                self._reconnect_cancel.set()
+
             if self.ws_client:
                 self.ws_client.close()
+
+            # Wait for threads to exit
+            for thr in (self._heartbeat_thread, self._reconnect_thread):
+                if thr and thr.is_alive():
+                    thr.join(timeout=5)
+
+            self._heartbeat_thread = None
+            self._reconnect_thread = None
+
+            # Clear accumulated state to free memory
+            self.symbol_state.clear()
+            self.market_snapshots.clear()
 
             # Clean up ZeroMQ resources
             self.cleanup_zmq()
@@ -367,13 +429,16 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info(
                 f"Subscribe: Looking up token for symbol: {symbol}, exchange: {exchange}"
             )
-            token = get_token(symbol, exchange)
-            self.logger.debug(f"Subscribe: Token lookup result: {token}")
-            if not token:
+            raw_token = get_token(symbol, exchange)
+            self.logger.debug(f"Subscribe: Token lookup result: {raw_token}")
+            if not raw_token:
                 self.logger.error(f"Token not found for {symbol} on {exchange}")
                 return self._create_error_response(
                     "TOKEN_NOT_FOUND", f"Token not found for {symbol} on {exchange}"
                 )
+
+            # Normalize token: remove .0 suffix (DB stores as float, WS expects integer string)
+            token = str(int(float(str(raw_token))))
 
             # Handle AliceBlue index token format
             # If token starts with "999" for indices, remove it as websocket expects actual token
@@ -742,10 +807,20 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self._schedule_reconnect()
 
     def _schedule_reconnect(self) -> None:
-        """Schedule a reconnection attempt"""
+        """Schedule a reconnection attempt.
+
+        Only one reconnect thread is active at a time — a new schedule
+        cancels any pending one via the ``_reconnect_cancel`` event.
+        """
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Maximum reconnection attempts reached")
             return
+
+        # Cancel any previously scheduled reconnect and wait for it to exit
+        if self._reconnect_cancel:
+            self._reconnect_cancel.set()
+        if self._reconnect_thread and self._reconnect_thread.is_alive():
+            self._reconnect_thread.join(timeout=5)
 
         delay = min(self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay)
         self.reconnect_attempts += 1
@@ -754,8 +829,13 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             f"Scheduling reconnection attempt {self.reconnect_attempts} in {delay} seconds"
         )
 
+        cancel = threading.Event()
+        self._reconnect_cancel = cancel
+
         def reconnect():
-            time.sleep(delay)
+            # Use event.wait() instead of time.sleep() so it can be cancelled
+            if cancel.wait(timeout=delay):
+                return  # Cancelled
             if not self.running:  # Only reconnect if not already running
                 self.logger.info("Attempting to reconnect...")
                 success = self.connect()
@@ -763,9 +843,9 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Resubscribe to all previous subscriptions
                     self._resubscribe_all()
 
-        reconnect_thread = threading.Thread(target=reconnect)
-        reconnect_thread.daemon = True
-        reconnect_thread.start()
+        t = threading.Thread(target=reconnect, daemon=True)
+        self._reconnect_thread = t
+        t.start()
 
     def _resubscribe_all(self) -> None:
         """Resubscribe to all previously subscribed symbols"""

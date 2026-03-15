@@ -134,7 +134,7 @@ dependencies = [
   "sse-starlette==2.4.1",
   "stack-data==0.6.3",
   "starlette==0.52.1",
-  "tornado==6.5.4",
+  "tornado==6.5.5",
   "traitlets==5.14.3",
   "typing-extensions>=4.12.2",
   "typing-inspection>=0.4.1",

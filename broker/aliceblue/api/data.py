@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import threading
@@ -66,7 +67,7 @@ class BrokerData:
         """
         # Return existing connection if it's valid and not forced to create a new one
         if not force_new and hasattr(self, "_websocket") and self._websocket:
-            if hasattr(self._websocket, "is_connected") and self._websocket.is_connected:
+            if hasattr(self._websocket, "is_websocket_connected") and self._websocket.is_websocket_connected():
                 return self._websocket
 
         try:
@@ -81,11 +82,22 @@ class BrokerData:
                 except Exception as e:
                     logger.warning(f"Error closing existing WebSocket: {str(e)}")
 
-            # Get user ID (clientId) from the auth database
-            # This is the numeric clientId (e.g., '1614986') stored during login,
-            # NOT the appCode from BROKER_API_KEY
+            # Get user ID (clientId/UCC) for WebSocket authentication
             auth_obj = Auth.query.filter_by(broker='aliceblue', is_revoked=False).first()
             user_id = auth_obj.user_id if auth_obj else None
+
+            # Fallback: extract UCC from JWT token
+            if not user_id and self.session_id:
+                try:
+                    payload_b64 = self.session_id.split(".")[1]
+                    payload_b64 += "=" * (-len(payload_b64) % 4)
+                    payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+                    user_id = payload.get("ucc")
+                    if user_id:
+                        logger.info(f"Extracted UCC from JWT: {user_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to extract UCC from JWT: {e}")
+
             if not user_id:
                 logger.error("Missing user_id (clientId) for AliceBlue WebSocket. Please re-login.")
                 return None
@@ -132,6 +144,9 @@ class BrokerData:
 
     def _try_fetch_quote_via_ws(self, api_exchange: str, token: str, br_symbol: str, symbol: str, exchange: str) -> dict | None:
         """Attempt a single WebSocket quote fetch. Returns quote dict or None."""
+        websocket = None
+        instruments = None
+        subscribed = False
         try:
             websocket = self.get_websocket()
             if not websocket or not websocket.is_connected:
@@ -158,19 +173,24 @@ class BrokerData:
                 logger.warning(f"Subscribe failed for {symbol} on {exchange}")
                 return None
 
+            subscribed = True
+
             # Wait for data to arrive
             time.sleep(2.0)
 
             quote = websocket.get_quote(api_exchange, token)
-
-            # Unsubscribe after getting the data
-            websocket.unsubscribe(instruments, is_depth=False)
-
             return quote
 
         except Exception as e:
             logger.warning(f"WebSocket quote attempt failed for {symbol}: {e}")
             return None
+        finally:
+            # Always unsubscribe to avoid dangling subscriptions
+            if subscribed and websocket and instruments:
+                try:
+                    websocket.unsubscribe(instruments, is_depth=False)
+                except Exception as unsub_err:
+                    logger.warning(f"Failed to unsubscribe {symbol} on cleanup: {unsub_err}")
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
@@ -202,13 +222,10 @@ class BrokerData:
                     break
                 if attempt < MAX_RETRIES:
                     logger.info(f"Retrying quote fetch for {symbol} (attempt {attempt + 1}/{MAX_RETRIES})")
-                    # Force a fresh WebSocket connection on retry
-                    try:
-                        if hasattr(self, "_websocket") and self._websocket:
-                            self._websocket.disconnect()
-                    except Exception:
-                        pass
-                    self._websocket = None
+                    # Force a fresh WebSocket connection on retry.
+                    # get_websocket(force_new=True) cleanly disconnects the old
+                    # instance before creating a new one.
+                    self.get_websocket(force_new=True)
                     time.sleep(1.0)
 
             if not quote:
@@ -277,14 +294,16 @@ class BrokerData:
         skipped_symbols = []
         instruments = []
         symbol_map = {}  # Map api_exchange:token -> original info
+        subscribed = False
+        ws = None
 
         # Get WebSocket connection
-        websocket = self.get_websocket()
-        if not websocket or not websocket.is_connected:
+        ws = self.get_websocket()
+        if not ws or not ws.is_connected:
             logger.warning("WebSocket not connected, reconnecting...")
-            websocket = self.get_websocket(force_new=True)
+            ws = self.get_websocket(force_new=True)
 
-        if not websocket or not websocket.is_connected:
+        if not ws or not ws.is_connected:
             logger.error("Could not establish WebSocket connection")
             raise ConnectionError("WebSocket connection unavailable")
 
@@ -324,102 +343,94 @@ class BrokerData:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
-        # Subscribe to all instruments at once with retry
-        logger.info(f"Subscribing to {len(instruments)} symbols via WebSocket")
-        success = websocket.subscribe(instruments, is_depth=False)
+        try:
+            # Subscribe to all instruments at once with retry
+            logger.info(f"Subscribing to {len(instruments)} symbols via WebSocket")
+            success = ws.subscribe(instruments, is_depth=False)
 
-        if not success:
-            # Retry once with a fresh connection
-            logger.warning("First subscription attempt failed, retrying with fresh connection...")
-            websocket = self.get_websocket(force_new=True)
-            if websocket and websocket.is_connected:
-                success = websocket.subscribe(instruments, is_depth=False)
+            if not success:
+                # Retry once with a fresh connection — update ws reference
+                logger.warning("First subscription attempt failed, retrying with fresh connection...")
+                ws = self.get_websocket(force_new=True)
+                if ws and ws.is_connected:
+                    success = ws.subscribe(instruments, is_depth=False)
 
-        if not success:
-            logger.error("Failed to send subscription request after retry")
+            if not success:
+                logger.error("Failed to send subscription request after retry")
+                for key, info in symbol_map.items():
+                    results.append(
+                        {"symbol": info["symbol"], "exchange": info["exchange"], "error": "Subscription failed"}
+                    )
+                return skipped_symbols + results
+
+            subscribed = True
+
+            # Wait for data to arrive — use higher cap for large batches
+            # (Vol Surface / OI Profile can request 60+ symbols at once)
+            wait_time = min(max(len(instruments) * 0.08, 2), 20)
+            logger.debug(f"Waiting {wait_time:.1f}s for quote data ({len(instruments)} instruments)...")
+            time.sleep(wait_time)
+
+            # Helper to format a quote dict
+            def _format_quote(q):
+                return {
+                    "bid": float(q.get("bid", 0)),
+                    "ask": float(q.get("ask", 0)),
+                    "open": float(q.get("open", 0)),
+                    "high": float(q.get("high", 0)),
+                    "low": float(q.get("low", 0)),
+                    "ltp": float(q.get("ltp", 0)),
+                    "prev_close": float(q.get("close", 0)),
+                    "volume": int(q.get("volume", 0)),
+                    "oi": int(q.get("open_interest", 0)),
+                }
+
+            # Collect results from WebSocket — first pass
+            missing_keys = []
             for key, info in symbol_map.items():
-                results.append(
-                    {"symbol": info["symbol"], "exchange": info["exchange"], "error": "Subscription failed"}
-                )
-            return skipped_symbols + results
-
-        # Wait for data to arrive — use higher cap for large batches
-        # (Vol Surface / OI Profile can request 60+ symbols at once)
-        wait_time = min(max(len(instruments) * 0.08, 2), 20)
-        logger.debug(f"Waiting {wait_time:.1f}s for quote data ({len(instruments)} instruments)...")
-        time.sleep(wait_time)
-
-        # Collect results from WebSocket — first pass
-        received_keys = set()
-        missing_keys = []
-        for key, info in symbol_map.items():
-            api_exchange, token = key.split(":")
-            quote = websocket.get_quote(api_exchange, token)
-
-            if quote:
-                received_keys.add(key)
-                results.append(
-                    {
-                        "symbol": info["symbol"],
-                        "exchange": info["exchange"],
-                        "data": {
-                            "bid": float(quote.get("bid", 0)),
-                            "ask": float(quote.get("ask", 0)),
-                            "open": float(quote.get("open", 0)),
-                            "high": float(quote.get("high", 0)),
-                            "low": float(quote.get("low", 0)),
-                            "ltp": float(quote.get("ltp", 0)),
-                            "prev_close": float(quote.get("close", 0)),
-                            "volume": int(quote.get("volume", 0)),
-                            "oi": int(quote.get("open_interest", 0)),
-                        },
-                    }
-                )
-            else:
-                missing_keys.append(key)
-
-        # Retry pass for symbols that didn't return data on first attempt
-        if missing_keys:
-            logger.info(f"{len(missing_keys)}/{len(symbol_map)} symbols missing after first pass, retrying...")
-            time.sleep(3.0)  # Extra wait for stragglers
-
-            for key in missing_keys:
                 api_exchange, token = key.split(":")
-                info = symbol_map[key]
-                quote = websocket.get_quote(api_exchange, token)
+                quote = ws.get_quote(api_exchange, token)
 
                 if quote:
                     results.append(
-                        {
-                            "symbol": info["symbol"],
-                            "exchange": info["exchange"],
-                            "data": {
-                                "bid": float(quote.get("bid", 0)),
-                                "ask": float(quote.get("ask", 0)),
-                                "open": float(quote.get("open", 0)),
-                                "high": float(quote.get("high", 0)),
-                                "low": float(quote.get("low", 0)),
-                                "ltp": float(quote.get("ltp", 0)),
-                                "prev_close": float(quote.get("close", 0)),
-                                "volume": int(quote.get("volume", 0)),
-                                "oi": int(quote.get("open_interest", 0)),
-                            },
-                        }
+                        {"symbol": info["symbol"], "exchange": info["exchange"], "data": _format_quote(quote)}
                     )
                 else:
-                    results.append(
-                        {"symbol": info["symbol"], "exchange": info["exchange"], "error": "No data received"}
-                    )
+                    missing_keys.append(key)
 
-        # Unsubscribe after getting data
-        logger.info(f"Unsubscribing from {len(instruments)} symbols")
-        websocket.unsubscribe(instruments, is_depth=False)
+            # Retry pass for symbols that didn't return data on first attempt
+            if missing_keys:
+                logger.info(f"{len(missing_keys)}/{len(symbol_map)} symbols missing after first pass, retrying...")
+                time.sleep(3.0)  # Extra wait for stragglers
 
-        received_count = len([r for r in results if 'data' in r])
-        logger.info(
-            f"Retrieved quotes for {received_count}/{len(symbol_map)} symbols"
-        )
-        return skipped_symbols + results
+                for key in missing_keys:
+                    api_exchange, token = key.split(":")
+                    info = symbol_map[key]
+                    quote = ws.get_quote(api_exchange, token)
+
+                    if quote:
+                        results.append(
+                            {"symbol": info["symbol"], "exchange": info["exchange"], "data": _format_quote(quote)}
+                        )
+                    else:
+                        results.append(
+                            {"symbol": info["symbol"], "exchange": info["exchange"], "error": "No data received"}
+                        )
+
+            received_count = len([r for r in results if 'data' in r])
+            logger.info(
+                f"Retrieved quotes for {received_count}/{len(symbol_map)} symbols"
+            )
+            return skipped_symbols + results
+
+        finally:
+            # Always unsubscribe to avoid dangling subscriptions
+            if subscribed and ws and instruments:
+                try:
+                    logger.info(f"Unsubscribing from {len(instruments)} symbols")
+                    ws.unsubscribe(instruments, is_depth=False)
+                except Exception as unsub_err:
+                    logger.warning(f"Failed to unsubscribe batch on cleanup: {unsub_err}")
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -523,6 +534,72 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
+    def _get_index_history_via_futures(
+        self, symbol: str, original_exchange: str, timeframe: str, start_date: str, end_date: str
+    ) -> pd.DataFrame:
+        """Fallback: fetch nearest-month futures data as proxy for index historical data.
+
+        AliceBlue's historical API doesn't serve index candle data (e.g. NIFTY on NSE).
+        This method finds the nearest expiry futures contract on NFO/BFO and fetches
+        its history instead. The futures price closely tracks the index intraday.
+        """
+        from database.token_db_enhanced import fno_search_symbols
+
+        # Map index exchange to F&O exchange
+        fno_exchange_map = {"NSE_INDEX": "NFO", "BSE_INDEX": "BFO", "MCX_INDEX": "MCX"}
+        fno_exchange = fno_exchange_map.get(original_exchange)
+        if not fno_exchange:
+            return pd.DataFrame()
+
+        try:
+            # Search for futures contracts for this underlying
+            results = fno_search_symbols(
+                underlying=symbol.upper(),
+                exchange=fno_exchange,
+                instrumenttype="FUT",
+                limit=10,
+            )
+            if not results:
+                logger.warning(f"No futures contracts found for {symbol} on {fno_exchange}")
+                return pd.DataFrame()
+
+            # Pick the nearest expiry futures contract
+            from datetime import datetime as _dt
+            nearest = None
+            nearest_expiry = None
+            today = _dt.now().date()
+
+            for r in results:
+                expiry_str = r.get("expiry", "")
+                if not expiry_str:
+                    continue
+                try:
+                    exp_date = _dt.strptime(expiry_str, "%d-%b-%y").date()
+                except ValueError:
+                    continue
+                # Only consider non-expired contracts
+                if exp_date >= today:
+                    if nearest_expiry is None or exp_date < nearest_expiry:
+                        nearest = r
+                        nearest_expiry = exp_date
+
+            if not nearest:
+                logger.warning(f"No active futures contract found for {symbol} on {fno_exchange}")
+                return pd.DataFrame()
+
+            fut_symbol = nearest["symbol"]
+            logger.info(
+                f"Index history fallback: using futures {fut_symbol} on {fno_exchange} "
+                f"(expiry {nearest['expiry']}) as proxy for {symbol}"
+            )
+
+            # Recursively call get_history with the futures symbol on NFO
+            return self.get_history(fut_symbol, fno_exchange, timeframe, start_date, end_date)
+
+        except Exception as e:
+            logger.warning(f"Futures fallback failed for {symbol}: {e}")
+            return pd.DataFrame()
+
     def get_history(
         self, symbol: str, exchange: str, timeframe: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
@@ -543,6 +620,9 @@ class BrokerData:
             logger.debug(f"Getting historical data for {symbol}:{exchange}, timeframe: {timeframe}")
             logger.debug(f"Date range: {start_date} to {end_date}")
             logger.debug(f"Date types - start_date: {type(start_date)}, end_date: {type(end_date)}")
+
+            # Remember original exchange for index fallback
+            original_exchange = exchange
 
             # Get token for the symbol
             token = get_token(symbol, exchange)
@@ -568,7 +648,16 @@ class BrokerData:
                 exchange = "MCX"
 
             # Check for exchange limitations based on AliceBlue API documentation
-            if exchange in ["BSE", "BCD", "BFO"]:
+            # BSE/BCD equity historical data is not supported by AliceBlue.
+            # BFO (BSE F&O) is allowed through — futures contracts work fine.
+            if exchange in ["BSE", "BCD"]:
+                # If this was an index exchange, try the futures fallback first
+                if original_exchange in ("BSE_INDEX",):
+                    fut_df = self._get_index_history_via_futures(
+                        symbol, original_exchange, timeframe, start_date, end_date
+                    )
+                    if not fut_df.empty:
+                        return fut_df
                 logger.error(f"Historical data not available for {exchange} exchange on AliceBlue")
                 return pd.DataFrame()
 
@@ -731,7 +820,7 @@ class BrokerData:
                 "resolution": aliceblue_timeframe,
             }
 
-            logger.debug(f"Historical API request: {symbol}:{exchange} res={aliceblue_timeframe} token={token}")
+            logger.debug(f"Historical API request: {symbol}:{exchange} res={aliceblue_timeframe} token={token} payload={payload}")
 
             # Make request to historical API
             client = get_httpx_client()
@@ -750,7 +839,16 @@ class BrokerData:
             # Check if response contains valid data
             if str(data.get("stat", "")).lower() in ["not_ok", "not ok"] or "result" not in data:
                 error_msg = data.get("emsg", "Unknown error")
-                logger.error(f"Error in historical data response: {error_msg}")
+                logger.warning(f"Historical data response for {symbol}:{exchange}: {error_msg}")
+
+                # AliceBlue doesn't serve index historical data (e.g. NIFTY on NSE).
+                # Fallback: use nearest month futures contract as a proxy.
+                if original_exchange in ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX"):
+                    fut_df = self._get_index_history_via_futures(
+                        symbol, original_exchange, timeframe, start_date, end_date
+                    )
+                    if not fut_df.empty:
+                        return fut_df
 
                 # Provide more helpful error messages based on the error
                 if "No data available" in error_msg or "market time" in error_msg.lower() or "Session" in error_msg:
@@ -761,25 +859,12 @@ class BrokerData:
                         logger.error(
                             f"Symbol '{symbol}' might be an expired contract or not a current expiry."
                         )
-                    elif exchange in ["BSE", "BCD", "BFO"]:
+                    elif exchange in ["BSE", "BCD"]:
                         logger.error(
                             f"AliceBlue does not support historical data for {exchange} exchange yet."
                         )
                     else:
                         logger.error(f"No historical data available for {symbol} on {exchange}.")
-
-                    # Check if we're during market hours (AliceBlue limitation)
-                    from datetime import time as dtime
-                    import pytz as _pytz
-                    _ist = _pytz.timezone("Asia/Kolkata")
-                    _now = datetime.now(_ist)
-                    _market_open = dtime(8, 0)
-                    _market_close = dtime(17, 30)
-                    if _now.weekday() < 5 and _market_open <= _now.time() <= _market_close:
-                        logger.error(
-                            "AliceBlue historical data API is only available from 5:30 PM to 8 AM on weekdays "
-                            "and fully on weekends/holidays. This request was made during market hours."
-                        )
 
                 return pd.DataFrame()
 
