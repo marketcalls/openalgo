@@ -241,7 +241,11 @@ def _to_canonical_symbol(delta_symbol: str, instrument_type: str, expiry: str) -
     # .P is the TradingView-standard suffix for perpetuals and avoids colliding
     # with BTCUSDT (Binance BTC/Tether spot pair — a completely different asset).
     if instrument_type == "PERPFUT":
-        return delta_symbol + ".P"
+        return delta_symbol + "FUT"
+
+    # ── Spot: BTC_INR → BTCINR (strip underscores) ─────────────────────────
+    if instrument_type == "SPOT":
+        return delta_symbol.replace("_", "")
 
     # ── All other types (SPREAD, COMBO, IRS, …): keep as-is ────────────────
     return delta_symbol
