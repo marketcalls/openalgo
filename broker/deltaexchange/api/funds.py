@@ -133,7 +133,7 @@ def get_margin_data(auth_token):
             return DEFAULT_MARGIN_RESPONSE
 
         data = response.json()
-        logger.debug(f"[DeltaExchange] Raw wallet/balances response: {data}")
+        logger.debug("[DeltaExchange] wallet/balances response received")
 
         if not data.get("success", False):
             error = data.get("error", {})
