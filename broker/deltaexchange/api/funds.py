@@ -92,8 +92,8 @@ def get_margin_data(auth_token):
         m2munrealized  ← sum of unrealized_pnl across all open positions
 
     OpenAlgo field mapping:
-        availablecash  ← available_balance
-        collateral     ← 0.00  (no pledge/collateral model on crypto derivatives)
+        availablecash  ← sum of balance_inr across all wallets (spot + FNO combined in INR)
+        collateral     ← sum of cross_locked_collateral across all wallets
         utiliseddebits ← blocked_margin
 
     Args:
@@ -133,6 +133,7 @@ def get_margin_data(auth_token):
             return DEFAULT_MARGIN_RESPONSE
 
         data = response.json()
+        logger.debug("[DeltaExchange] wallet/balances response received")
 
         if not data.get("success", False):
             error = data.get("error", {})
@@ -146,27 +147,28 @@ def get_margin_data(auth_token):
             )
             return DEFAULT_MARGIN_RESPONSE
 
-        total_available = 0.0
+        total_balance_inr = 0.0
         total_blocked = 0.0
-
+        total_collateral = 0.0
         for asset in balances:
             if not isinstance(asset, dict):
                 continue
-            total_available += _f(asset.get("available_balance", 0))
+            total_balance_inr += _f(asset.get("balance_inr", 0))
             total_blocked += _f(asset.get("blocked_margin", 0))
+            total_collateral += _f(asset.get("cross_locked_collateral", 0))
 
         # P&L comes from positions, not wallet balances
         total_realized_pnl, total_unrealized_pnl = _get_positions_pnl(api_key, api_secret)
 
         result = {
-            "availablecash": f"{total_available:.2f}",
-            "collateral": "0.00",
+            "availablecash": f"{total_balance_inr:.2f}",
+            "collateral": f"{total_collateral:.2f}",
             "m2mrealized": f"{total_realized_pnl:.2f}",
             "m2munrealized": f"{total_unrealized_pnl:.2f}",
             "utiliseddebits": f"{total_blocked:.2f}",
         }
 
-        logger.info(
+        logger.debug(
             f"[DeltaExchange] Wallet: available={result['availablecash']} "
             f"blocked={result['utiliseddebits']} "
             f"realized={result['m2mrealized']} unrealized={result['m2munrealized']}"
