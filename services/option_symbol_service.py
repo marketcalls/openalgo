@@ -557,7 +557,8 @@ def get_option_symbol(
         base_symbol, embedded_expiry = parse_underlying_symbol(underlying)
 
         # Determine final expiry date
-        final_expiry = embedded_expiry or expiry_date
+        # Explicit expiry_date takes precedence (e.g., MCX option expiry differs from futures expiry)
+        final_expiry = expiry_date or embedded_expiry
         if not final_expiry:
             logger.error("No expiry date provided or found in underlying symbol")
             return (
@@ -590,10 +591,13 @@ def get_option_symbol(
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
 
         # Construct the symbol to fetch quotes for
-        # If underlying already has expiry embedded, use base symbol only
-        # Otherwise, use underlying as-is
+        # For MCX/CDS: no spot symbol exists, so use the full futures symbol for LTP
+        # For NSE/BSE: use base symbol (spot/index symbol exists)
         if embedded_expiry:
-            quote_symbol = base_symbol
+            if exchange.upper() in ["MCX", "CDS"]:
+                quote_symbol = underlying.upper()
+            else:
+                quote_symbol = base_symbol
         else:
             quote_symbol = underlying
 
