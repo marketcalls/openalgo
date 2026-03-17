@@ -379,6 +379,12 @@ def react_admin_timings():
     return serve_react_app()
 
 
+# Leverage Configuration (Crypto)
+@react_bp.route("/leverage", strict_slashes=False)
+def react_leverage():
+    return serve_react_app()
+
+
 # Telegram - Dashboard
 @react_bp.route("/telegram", strict_slashes=False)
 def react_telegram_index():
