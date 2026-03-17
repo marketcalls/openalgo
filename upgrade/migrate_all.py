@@ -56,6 +56,7 @@ MIGRATIONS = [
     ("migrate_master_contract_stats.py", "Master Contract Smart Download"),
     ("migrate_contract_value.py", "Contract Value Column for Crypto"),
     ("migrate_market_holidays.py", "2026 Market Holiday Calendar Update"),
+    ("migrate_leverage.py", "Leverage Configuration for Crypto"),
 ]
 
 
