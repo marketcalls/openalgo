@@ -106,6 +106,13 @@ Flow:
 3. Only qualifying signals are forwarded to OpenAlgo
 4. OpenAlgo places the order
 
+Important:
+
+- protect the middleware before exposing it to the public internet
+- require an inbound secret, token, or signature check before processing alerts
+- optionally restrict requests to trusted sender IPs when your deployment allows it
+- only forward authenticated alerts to OpenAlgo after the Adanos checks pass
+
 Good when you want to:
 
 - reject weak breakouts

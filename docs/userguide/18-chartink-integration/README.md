@@ -237,6 +237,11 @@ Common pattern:
 ChartInk screener -> Python filter -> Adanos sentiment check -> OpenAlgo order
 ```
 
+If you enable an Adanos filter in this flow, ChartInk must send its webhook to
+your Python filter or middleware endpoint, not directly to
+`/api/v1/placeorder` or `/api/v1/placesmartorder`. Sending ChartInk straight to
+OpenAlgo bypasses the Adanos step entirely.
+
 Useful filters:
 
 - minimum `buzz_score`
