@@ -36,8 +36,12 @@ def update_leverage():
 
     try:
         leverage = float(data["leverage"])
+        import math
+        if math.isnan(leverage) or math.isinf(leverage):
+            return jsonify({"status": "error", "message": "Invalid leverage value"}), 400
         if leverage < 0:
             return jsonify({"status": "error", "message": "Leverage cannot be negative"}), 400
+        leverage = int(leverage)  # Only whole numbers (Delta Exchange API requires integer)
     except (ValueError, TypeError):
         return jsonify({"status": "error", "message": "Invalid leverage value"}), 400
 

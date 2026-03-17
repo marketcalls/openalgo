@@ -373,10 +373,10 @@ def place_order_api(data, auth):
         try:
             from database.leverage_db import get_leverage
             db_leverage = get_leverage()
-            if db_leverage and db_leverage > 0:
+            if db_leverage and int(db_leverage) > 0:
                 leverage = str(int(db_leverage))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[DeltaExchange] Could not read leverage config: {e}")
     if not leverage:
         leverage = os.getenv("DELTA_DEFAULT_LEVERAGE", "")
     if leverage and leverage != "0":
