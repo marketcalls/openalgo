@@ -462,7 +462,9 @@ import requests
 from flask import Flask, abort, request
 
 app = Flask(__name__)
-WEBHOOK_SECRET = os.getenv("CHARTINK_WEBHOOK_SECRET", "replace-me")
+WEBHOOK_SECRET = os.getenv("CHARTINK_WEBHOOK_SECRET")
+if not WEBHOOK_SECRET:
+    raise RuntimeError("Set CHARTINK_WEBHOOK_SECRET before starting the middleware")
 
 @app.route('/chartink-handler', methods=['POST'])
 def handle_chartink():
