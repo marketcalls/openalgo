@@ -85,6 +85,7 @@ def init_db():
         )
 
 
+
 def delete_symtoken_table():
     logger.info("Deleting Symtoken Table")
     SymToken.query.delete()

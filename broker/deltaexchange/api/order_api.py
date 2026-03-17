@@ -367,7 +367,18 @@ def place_order_api(data, auth):
         return _ErrResp(), {"status": "error", "message": msg}, None
 
     # Set leverage if requested (Delta Exchange requires a separate pre-order call)
-    leverage = str(data.get("leverage", "")).strip() or os.getenv("DELTA_DEFAULT_LEVERAGE", "")
+    # Priority: order payload > leverage_config DB > env var fallback
+    leverage = str(data.get("leverage", "")).strip()
+    if not leverage:
+        try:
+            from database.leverage_db import get_leverage
+            db_leverage = get_leverage()
+            if db_leverage and int(db_leverage) > 0:
+                leverage = str(int(db_leverage))
+        except Exception as e:
+            logger.warning(f"[DeltaExchange] Could not read leverage config: {e}")
+    if not leverage:
+        leverage = os.getenv("DELTA_DEFAULT_LEVERAGE", "")
     if leverage and leverage != "0":
         _set_leverage(int(token), leverage, auth)
 
