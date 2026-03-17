@@ -2,7 +2,8 @@
 SocketIO subscriber — emits the correct socketio event for each order event.
 
 Reproduces the exact event names and payload structures from the original code.
-All emissions use socketio.start_background_task for consistent async behavior.
+Called directly from the EventBus thread pool — socketio.emit() is thread-safe
+with async_mode="threading" and avoids greenlet errors under eventlet.
 """
 
 from extensions import socketio
@@ -16,8 +17,7 @@ def on_order_placed(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "order_event",
             {
                 "symbol": event.symbol,
@@ -42,8 +42,7 @@ def on_smart_order_no_action(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "order_notification",
             {
                 "symbol": event.symbol,
@@ -58,8 +57,7 @@ def on_order_modified(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "modify_order_event",
             {
                 "status": "success",
@@ -80,8 +78,7 @@ def on_order_cancelled(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "cancel_order_event",
             {
                 "status": event.status,
@@ -102,8 +99,7 @@ def on_all_orders_cancelled(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "cancel_order_event",
             {
                 "status": "success",
@@ -122,8 +118,7 @@ def on_position_closed(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "close_position_event",
             {
                 "status": "success",
@@ -138,8 +133,7 @@ def on_basket_completed(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "order_event",
             {
                 "symbol": event.strategy or "Basket",
@@ -160,8 +154,7 @@ def on_split_completed(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "order_event",
             {
                 "symbol": event.symbol or "Split",
@@ -182,8 +175,7 @@ def on_options_completed(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "order_event",
             {
                 "symbol": event.symbol,
@@ -204,8 +196,7 @@ def on_multiorder_completed(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
-        socketio.start_background_task(
-            socketio.emit,
+        socketio.emit(
             "order_event",
             {
                 "symbol": event.underlying,
@@ -232,8 +223,7 @@ def on_analyzer_error(event):
 
 def _emit_analyzer_update(event):
     """Helper to emit the analyzer_update socketio event."""
-    socketio.start_background_task(
-        socketio.emit,
+    socketio.emit(
         "analyzer_update",
         {"request": event.request_data, "response": event.response_data},
     )

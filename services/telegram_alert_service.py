@@ -79,10 +79,10 @@ class TelegramAlertService:
             # Add mode indicator at the top
             mode = response.get("mode", "live")
             if mode == "analyze":
-                details.append("🔬 **ANALYZE MODE - No Real Order**")
+                details.append("🔬 *ANALYZE MODE - No Real Order*")
                 details.append("─────────────────────")
             else:
-                details.append("💰 **LIVE MODE - Real Order**")
+                details.append("💰 *LIVE MODE - Real Order*")
                 details.append("─────────────────────")
 
             if order_type == "placeorder":
