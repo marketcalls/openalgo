@@ -1344,11 +1344,14 @@ wheels = [
 
 [[package]]
 name = "marshmallow"
-version = "4.2.2"
+version = "3.26.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f9/03/261af5efb3d3ce0e2db3fd1e11dc5a96b74a4fb76e488da1c845a8f12345/marshmallow-4.2.2.tar.gz", hash = "sha256:ba40340683a2d1c15103647994ff2f6bc2c8c80da01904cbe5d96ee4baa78d9f", size = 221404, upload-time = "2026-02-04T15:47:03.401Z" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/55/79/de6c16cc902f4fc372236926b0ce2ab7845268dcc30fb2fbb7f71b418631/marshmallow-3.26.2.tar.gz", hash = "sha256:bbe2adb5a03e6e3571b573f42527c6fe926e17467833660bebd11593ab8dfd57", size = 222095, upload-time = "2025-12-22T06:53:53.309Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/70/bb89f807a6a6704bdc4d6f850d5d32954f6c1965e3248e31455defdf2f30/marshmallow-4.2.2-py3-none-any.whl", hash = "sha256:084a9466111b7ec7183ca3a65aed758739af919fedc5ebdab60fb39d6b4dc121", size = 48454, upload-time = "2026-02-04T15:47:02.013Z" },
+    { url = "https://files.pythonhosted.org/packages/be/2f/5108cb3ee4ba6501748c4908b908e55f42a5b66245b4cfe0c99326e1ef6e/marshmallow-3.26.2-py3-none-any.whl", hash = "sha256:013fa8a3c4c276c24d26d84ce934dc964e2aa794345a0f8c7e5a7191482c8a73", size = 50964, upload-time = "2025-12-22T06:53:51.801Z" },
 ]
 
 [[package]]
@@ -1811,7 +1814,7 @@ requires-dist = [
     { name = "logzero", specifier = "==1.7.0" },
     { name = "markdown-it-py", specifier = "==4.0.0" },
     { name = "markupsafe", specifier = "==2.1.5" },
-    { name = "marshmallow", specifier = "==4.2.2" },
+    { name = "marshmallow", specifier = "==3.26.2" },
     { name = "matplotlib-inline", specifier = "==0.2.1" },
     { name = "mcp", specifier = "==1.26.0" },
     { name = "mdurl", specifier = "==0.1.2" },
