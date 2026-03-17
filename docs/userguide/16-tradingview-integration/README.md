@@ -254,11 +254,12 @@ TradingView webhook URL -> https://your-server.example.com/adanos-gate
 Middleware forwards approved signals -> matching OpenAlgo endpoint such as /api/v1/placeorder or /api/v1/placesmartorder
 ```
 
-Use `/api/v1/placeorder` for plain TradingView-style payloads that only contain
-symbol, side, quantity, and product fields. Only forward to
-`/api/v1/placesmartorder` when your middleware is intentionally building a
-smart-order payload and can supply the extra fields that endpoint expects, such
-as `position_size`.
+Use `/api/v1/placeorder` only when your middleware forwards a payload that
+still matches OpenAlgo's documented `placeorder` schema, including fields such
+as `apikey`, `strategy`, `symbol`, `action`, `exchange`, `quantity`,
+`pricetype`, and `product`. Only forward to `/api/v1/placesmartorder` when
+your middleware is intentionally building a smart-order payload and can supply
+the extra fields that endpoint expects, such as `position_size`.
 
 Typical checks:
 

@@ -41,6 +41,35 @@ ADANOS_ENDPOINTS = {
 client = api(api_key=OPENALGO_API_KEY, host=OPENALGO_HOST)
 
 
+def to_float(value, default=0.0):
+    """Convert nullable or string values to float safely."""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).replace(",", "").replace("%", "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def to_int(value, default=0):
+    """Convert nullable or string values to int safely."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        normalized = str(value).replace(",", "").strip()
+        return int(float(normalized))
+    except (TypeError, ValueError):
+        return default
+
+
 def fetch_source_signal(session, source, ticker):
     """Fetch one source signal from Adanos."""
     response = session.get(
@@ -59,10 +88,10 @@ def fetch_source_signal(session, source, ticker):
 
     return {
         "source": source,
-        "buzz": float(payload.get("buzz_score", 0.0)),
-        "bullish_pct": float(payload.get("bullish_pct", 0.0)),
-        "trend": str(payload.get("trend", "stable")).lower(),
-        "volume": int(volume or 0),
+        "buzz": to_float(payload.get("buzz_score")),
+        "bullish_pct": to_float(payload.get("bullish_pct")),
+        "trend": str(payload.get("trend") or "stable").lower(),
+        "volume": to_int(volume),
     }
 
 
