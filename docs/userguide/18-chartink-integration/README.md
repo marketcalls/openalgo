@@ -242,6 +242,14 @@ your Python filter or middleware endpoint, not directly to
 `/api/v1/placeorder` or `/api/v1/placesmartorder`. Sending ChartInk straight to
 OpenAlgo bypasses the Adanos step entirely.
 
+Your middleware should keep the ChartInk symbol mapping consistent. In the
+examples below, ChartInk provides `{stock}`, and the middleware should normalize
+that into the OpenAlgo `symbol` field before forwarding the request.
+
+Protect that middleware before exposing it publicly. Require an inbound secret,
+token, or signature check before accepting webhook traffic, and only forward
+authenticated requests to OpenAlgo.
+
 Useful filters:
 
 - minimum `buzz_score`
@@ -448,26 +456,35 @@ For complex scenarios, you can create a middleware:
 
 ```python
 # middleware.py
-from flask import Flask, request
+import os
+
 import requests
+from flask import Flask, abort, request
 
 app = Flask(__name__)
+WEBHOOK_SECRET = os.getenv("CHARTINK_WEBHOOK_SECRET", "replace-me")
 
 @app.route('/chartink-handler', methods=['POST'])
 def handle_chartink():
     data = request.json
-    stock = data.get('stock')
+    provided_secret = request.headers.get("X-Webhook-Secret")
+    if provided_secret != WEBHOOK_SECRET:
+        abort(401)
+
+    symbol = data.get('symbol') or data.get('stock')
+    if not symbol:
+        return {"status": "error", "message": "Missing symbol"}, 400
 
     # Apply custom logic
-    if should_trade(stock):
+    if should_trade(symbol):
         # Forward to OpenAlgo
         openalgo_payload = {
             "apikey": "YOUR_KEY",
             "strategy": "ChartInk",
-            "symbol": stock,
+            "symbol": symbol,
             "exchange": "NSE",
             "action": "BUY",
-            "quantity": calculate_quantity(stock),
+            "quantity": calculate_quantity(symbol),
             "pricetype": "MARKET",
             "product": "MIS"
         }
@@ -481,7 +498,7 @@ def handle_chartink():
 
     return {"status": "skipped"}
 
-def should_trade(stock):
+def should_trade(symbol):
     # Custom logic
     return True
 
