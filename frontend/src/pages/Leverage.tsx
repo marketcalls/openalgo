@@ -1,4 +1,4 @@
-import { Gauge, Loader2, Save } from 'lucide-react'
+import { Gauge, Loader2, RefreshCw, Save } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { webClient } from '@/api/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -114,11 +114,17 @@ export default function Leverage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {fetchError ? (
+                <Button size="sm" variant="destructive" onClick={fetchCurrent}>
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                  Retry
+                </Button>
+                ) : (
                 <Button
                   size="sm"
                   variant={isModified ? 'default' : 'secondary'}
                   onClick={handleSave}
-                  disabled={isSaving || fetchError}
+                  disabled={isSaving}
                 >
                   {isSaving ? (
                     <Loader2 className="h-4 w-4 animate-spin mr-1" />
@@ -127,6 +133,7 @@ export default function Leverage() {
                   )}
                   Set
                 </Button>
+                )}
               </div>
               <p className="text-xs text-muted-foreground">
                 Default uses the leverage already set on your Delta Exchange account. Other
