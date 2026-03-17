@@ -68,7 +68,13 @@ def get_leverage():
 
 
 def set_leverage(leverage):
-    """Set the common leverage value."""
+    """Set the common leverage value. Must be a non-negative integer."""
+    import math
+    leverage = float(leverage)
+    if math.isnan(leverage) or math.isinf(leverage) or leverage < 0:
+        raise ValueError(f"Invalid leverage: {leverage}")
+    leverage = int(leverage)
+
     config = LeverageConfig.query.first()
     if config:
         config.leverage = leverage

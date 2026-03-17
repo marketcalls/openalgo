@@ -29,17 +29,20 @@ export default function Leverage() {
   const [selectedLeverage, setSelectedLeverage] = useState('0')
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
 
   const fetchCurrent = useCallback(async () => {
     setIsLoading(true)
+    setFetchError(false)
     try {
       const res = await webClient.get('/leverage/api/current')
       if (res.data.status === 'success') {
-        const lev = String(res.data.leverage || 0)
+        const lev = String(Math.floor(res.data.leverage || 0))
         setCurrentLeverage(lev)
         setSelectedLeverage(lev)
       }
     } catch {
+      setFetchError(true)
       showToast.error('Failed to fetch leverage setting')
     } finally {
       setIsLoading(false)
@@ -99,7 +102,7 @@ export default function Leverage() {
             <div className="space-y-2">
               <Label htmlFor="leverage">Default Leverage</Label>
               <div className="flex gap-2">
-                <Select value={selectedLeverage} onValueChange={setSelectedLeverage}>
+                <Select value={selectedLeverage} onValueChange={setSelectedLeverage} disabled={fetchError}>
                   <SelectTrigger className="w-[250px]" id="leverage">
                     <SelectValue />
                   </SelectTrigger>
@@ -115,7 +118,7 @@ export default function Leverage() {
                   size="sm"
                   variant={isModified ? 'default' : 'secondary'}
                   onClick={handleSave}
-                  disabled={isSaving}
+                  disabled={isSaving || fetchError}
                 >
                   {isSaving ? (
                     <Loader2 className="h-4 w-4 animate-spin mr-1" />
