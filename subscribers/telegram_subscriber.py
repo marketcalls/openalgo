@@ -3,10 +3,10 @@ Telegram subscriber — sends alerts for all order events.
 
 Uses the existing telegram_alert_service.send_order_alert() which already
 handles mode detection (ANALYZE vs LIVE prefix) and message formatting.
-Calls are dispatched via socketio.start_background_task for consistency.
+Called directly from the EventBus thread pool — send_order_alert() handles
+its own async dispatch via alert_executor internally.
 """
 
-from extensions import socketio
 from services.telegram_alert_service import telegram_alert_service
 from utils.logging import get_logger
 
@@ -15,8 +15,7 @@ logger = get_logger(__name__)
 
 def _send_alert(api_type, order_data, response_data, api_key):
     """Wrapper that matches the original dispatch pattern."""
-    socketio.start_background_task(
-        telegram_alert_service.send_order_alert,
+    telegram_alert_service.send_order_alert(
         api_type,
         order_data,
         response_data,
