@@ -468,36 +468,47 @@ export default function Positions() {
   }
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Product',
-      'Quantity',
-      'Avg Price',
-      'LTP',
-      'P&L',
-      'P&L %',
-    ]
-    const rows = filteredPositions.map((p) => [
-      sanitizeCSV(p.symbol),
-      sanitizeCSV(p.exchange),
-      sanitizeCSV(p.product),
-      sanitizeCSV(p.quantity),
-      sanitizeCSV(p.average_price),
-      sanitizeCSV(p.ltp),
-      sanitizeCSV(p.pnl),
-      sanitizeCSV(calculatePnlPercent(p)),
-    ])
+    if (filteredPositions.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `positions_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
-    // Revoke the object URL to free memory
-    URL.revokeObjectURL(url)
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        'Product',
+        'Quantity',
+        'Avg Price',
+        'LTP',
+        'P&L',
+        'P&L %',
+      ]
+      const rows = filteredPositions.map((p) => [
+        sanitizeCSV(p.symbol),
+        sanitizeCSV(p.exchange),
+        sanitizeCSV(p.product),
+        sanitizeCSV(p.quantity),
+        sanitizeCSV(p.average_price),
+        sanitizeCSV(p.ltp),
+        sanitizeCSV(p.pnl),
+        sanitizeCSV(calculatePnlPercent(p)),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `positions_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      // Revoke the object URL to free memory
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const isProfit = (value: number) => value >= 0
