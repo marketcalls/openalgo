@@ -2,6 +2,7 @@ import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } fro
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
+import { showToast } from '@/utils/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -131,36 +132,48 @@ export default function TradeBook() {
   }, [fetchTrades])
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Product',
-      'Action',
-      'Qty',
-      'Price',
-      'Trade Value',
-      'Order ID',
-      'Time',
-    ]
-    const rows = trades.map((t) => [
-      sanitizeCSV(t.symbol),
-      sanitizeCSV(t.exchange),
-      sanitizeCSV(t.product),
-      sanitizeCSV(t.action),
-      sanitizeCSV(t.quantity),
-      sanitizeCSV(t.average_price),
-      sanitizeCSV(t.trade_value),
-      sanitizeCSV(t.orderid),
-      sanitizeCSV(t.timestamp),
-    ])
+    if (filteredTrades.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `tradebook_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        'Product',
+        'Action',
+        'Qty',
+        'Price',
+        'Trade Value',
+        'Order ID',
+        'Time',
+      ]
+      const rows = filteredTrades.map((t) => [
+        sanitizeCSV(t.symbol),
+        sanitizeCSV(t.exchange),
+        sanitizeCSV(t.product),
+        sanitizeCSV(t.action),
+        sanitizeCSV(t.quantity),
+        sanitizeCSV(t.average_price),
+        sanitizeCSV(t.trade_value),
+        sanitizeCSV(t.orderid),
+        sanitizeCSV(t.timestamp),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `tradebook_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const stats = {
