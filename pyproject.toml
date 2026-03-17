@@ -71,7 +71,7 @@ dependencies = [
   "logzero==1.7.0",
   "markdown-it-py==4.0.0",
   "MarkupSafe==2.1.5",
-  "marshmallow==3.26.2",
+  "marshmallow==4.2.2",
   "matplotlib-inline==0.2.1",
   "mcp==1.26.0",
   "mdurl==0.1.2",
