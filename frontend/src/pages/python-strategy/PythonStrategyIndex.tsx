@@ -374,19 +374,19 @@ export default function PythonStrategyIndex() {
               />
 
               <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="space-y-1">
-                    <CardTitle className="text-lg">{strategy.name}</CardTitle>
-                    <CardDescription className="font-mono text-xs">
+                <div className="flex items-start justify-between gap-2 overflow-hidden">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <CardTitle className="text-lg truncate">{strategy.name}</CardTitle>
+                    <CardDescription className="font-mono text-xs truncate">
                       {strategy.file_name}
                     </CardDescription>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 shrink-0">
                     <Tooltip>
                       <TooltipTrigger>
                         <Badge
                           variant={strategy.status === 'running' ? 'default' : 'secondary'}
-                          className={STATUS_COLORS[strategy.status] || ''}
+                          className={`${STATUS_COLORS[strategy.status] || ''} whitespace-nowrap`}
                         >
                           {STATUS_LABELS[strategy.status] || strategy.status}
                         </Badge>
