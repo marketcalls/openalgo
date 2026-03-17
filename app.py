@@ -143,6 +143,7 @@ from blueprints.straddle_chart import straddle_bp  # Import the straddle chart b
 from blueprints.custom_straddle import custom_straddle_bp  # Import custom straddle blueprint
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
+from blueprints.leverage import leverage_bp  # Import the leverage blueprint
 from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.log import log_bp
 from blueprints.logging import logging_bp  # Import the logging blueprint
@@ -181,6 +182,7 @@ from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
+from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
@@ -337,6 +339,7 @@ def create_app():
     app.register_blueprint(chartink_bp)
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
+    app.register_blueprint(leverage_bp)  # Register Leverage blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_bp)
     app.register_blueprint(master_contract_status_bp)
@@ -585,6 +588,7 @@ def setup_environment(app):
                 ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
+                ("Leverage DB", ensure_leverage_tables_exists),
             ]
 
             db_init_start = time.time()
