@@ -74,8 +74,15 @@ def get_underlying_ltp(
                 # Assume it's an equity symbol
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
 
-        # Use base symbol for quote if expiry was embedded
-        quote_symbol = base_symbol if embedded_expiry else underlying
+        # For MCX/CDS: no spot symbol exists, so use the full futures symbol for LTP
+        # For NSE/BSE: use base symbol (spot/index symbol exists)
+        if embedded_expiry:
+            if exchange.upper() in ["MCX", "CDS"]:
+                quote_symbol = underlying.upper()
+            else:
+                quote_symbol = base_symbol
+        else:
+            quote_symbol = underlying
 
         logger.info(f"Fetching LTP once for: {quote_symbol} on {quote_exchange}")
 
