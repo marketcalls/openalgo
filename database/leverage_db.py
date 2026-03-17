@@ -73,6 +73,8 @@ def set_leverage(leverage):
     leverage = float(leverage)
     if math.isnan(leverage) or math.isinf(leverage) or leverage < 0:
         raise ValueError(f"Invalid leverage: {leverage}")
+    if not leverage.is_integer():
+        raise ValueError(f"Leverage must be a whole number, got: {leverage}")
     leverage = int(leverage)
 
     config = LeverageConfig.query.first()
