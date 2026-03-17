@@ -4,7 +4,7 @@ This example keeps the OpenAlgo execution path untouched:
 
 1. Fetch source-level sentiment from Adanos
 2. Build a lightweight composite inside Python
-3. Place an OpenAlgo smart order only if thresholds pass
+3. Place an OpenAlgo order only if thresholds pass
 
 By default the script runs in dry-run mode and only logs the decision.
 """
@@ -29,6 +29,7 @@ MIN_AVG_BUZZ = float(os.getenv("MIN_AVG_BUZZ", "60"))
 MIN_BULLISH_AVG = float(os.getenv("MIN_BULLISH_AVG", "55"))
 BLOCK_FALLING = os.getenv("BLOCK_FALLING", "true").lower() == "true"
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
+ORDER_MODE = os.getenv("ORDER_MODE", "standard").lower()
 
 ADANOS_ENDPOINTS = {
     "reddit": "https://api.adanos.org/reddit/stocks/v1/stock/{ticker}",
@@ -152,16 +153,27 @@ def main():
         print("Decision: PASS trade gate (dry run, no order sent)")
         return
 
-    response = client.placesmartorder(
-        strategy="Adanos Sentiment Gate",
-        symbol=SYMBOL,
-        action="BUY",
-        exchange=EXCHANGE,
-        price_type="MARKET",
-        product=PRODUCT,
-        quantity=QUANTITY,
-        position_size=QUANTITY,
-    )
+    if ORDER_MODE == "smart":
+        response = client.placesmartorder(
+            strategy="Adanos Sentiment Gate",
+            symbol=SYMBOL,
+            action="BUY",
+            exchange=EXCHANGE,
+            price_type="MARKET",
+            product=PRODUCT,
+            quantity=QUANTITY,
+            position_size=QUANTITY,
+        )
+    else:
+        response = client.placeorder(
+            strategy="Adanos Sentiment Gate",
+            symbol=SYMBOL,
+            action="BUY",
+            exchange=EXCHANGE,
+            price_type="MARKET",
+            product=PRODUCT,
+            quantity=QUANTITY,
+        )
     print("Order Response:", response)
 
 
