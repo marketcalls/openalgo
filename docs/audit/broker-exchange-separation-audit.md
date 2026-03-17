@@ -460,12 +460,113 @@ The `makeFormatCurrency()` utility in `/frontend/src/lib/utils.ts` already handl
 
 ---
 
-## 6. Implementation Priority
+## 6. Product Type Normalization (REST API Schemas)
+
+### 6.1 The Problem
+
+The REST API schemas in `restx_api/schemas.py` hardcode product validation to stock broker values:
+
+```python
+product = fields.Str(missing="MIS", validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+```
+
+Crypto brokers like Delta Exchange **do not use MIS, NRML, or CNC**. These are Indian stock market concepts:
+- **MIS** (Margin Intraday Square-off) — auto-squared off at EOD
+- **NRML** (Normal) — carry-forward derivatives
+- **CNC** (Cash and Carry) — delivery-based equity
+
+Delta Exchange currently works around this by:
+1. Accepting `NRML` or `MIS` from the API (schema passes validation)
+2. Silently ignoring the value in `map_product_type()` (passthrough, not used)
+3. Hardcoding `NRML` in `reverse_map_product_type()` for all positions/orders returned
+4. Using `CNC` for spot wallet holdings and `NRML` for derivatives
+
+This workaround is fragile and semantically incorrect. As more crypto exchanges are added, each would need the same silent-ignore hack.
+
+### 6.2 Affected Schemas
+
+All schemas with product validation in `restx_api/schemas.py`:
+
+| Schema | Product Field | Current Validation |
+|--------|--------------|-------------------|
+| `OrderSchema` | `product` | `OneOf(["MIS", "NRML", "CNC"])`, default `MIS` |
+| `SmartOrderSchema` | `product` | `OneOf(["MIS", "NRML", "CNC"])`, default `MIS` |
+| `ModifyOrderSchema` | `product` | `OneOf(["MIS", "NRML", "CNC"])` (required) |
+| `BasketOrderItemSchema` | `product` | `OneOf(["MIS", "NRML", "CNC"])`, default `MIS` |
+| `SplitOrderSchema` | `product` | `OneOf(["MIS", "NRML", "CNC"])`, default `MIS` |
+| `OptionsOrderSchema` | `product` | `OneOf(["MIS", "NRML"])`, default `MIS` |
+| `OptionsMultiOrderLegSchema` | `product` | `OneOf(["MIS", "NRML"])`, default `MIS` |
+| `MarginPositionSchema` | `product` | `OneOf(["MIS", "NRML", "CNC"])` (required) |
+
+### 6.3 Proposed Solution
+
+**Option A: Expand validation to include crypto product types (recommended)**
+
+Add crypto-compatible product types that normalize in the broker mapping layer:
+
+```python
+VALID_PRODUCTS_ALL = ["MIS", "NRML", "CNC", "CROSS", "ISOLATED"]
+
+product = fields.Str(
+    missing="MIS",
+    validate=validate.OneOf(VALID_PRODUCTS_ALL)
+)
+```
+
+Where:
+- `CROSS` — Cross-margin (crypto derivatives, shared margin pool)
+- `ISOLATED` — Isolated margin (crypto derivatives, per-position margin)
+
+Each crypto broker's `map_product_type()` would then translate:
+- `CROSS` → broker-specific cross-margin parameter
+- `ISOLATED` → broker-specific isolated-margin parameter
+- `NRML`/`MIS` → fallback to default crypto margin mode (backward compatibility)
+
+**Option B: Make product validation exchange-aware**
+
+Validate product based on the `exchange` field in the same request:
+
+```python
+@post_load
+def validate_product_for_exchange(self, data, **kwargs):
+    exchange = data.get("exchange", "")
+    product = data.get("product", "")
+    if exchange == "CRYPTO" and product in ("MIS", "CNC"):
+        data["product"] = "NRML"  # Normalize to NRML for crypto
+    return data
+```
+
+**Option C: Accept any product for crypto exchanges (most flexible)**
+
+Skip product validation when `exchange == "CRYPTO"` since the broker mapping layer handles normalization anyway. This is the least disruptive change but loses schema-level documentation of valid values.
+
+### 6.4 Frontend Impact
+
+The product type dropdowns on trading pages also need updating:
+
+| Page | Current Products | Stock Broker | Crypto Broker |
+|------|-----------------|-------------|--------------|
+| **TradingView** | MIS, NRML, CNC | MIS, NRML, CNC | CROSS, ISOLATED (or hide product) |
+| **GoCharting** | MIS, NRML, CNC | MIS, NRML, CNC | CROSS, ISOLATED (or hide product) |
+| **PlaceOrderDialog** | MIS/NRML (F&O), CNC/MIS (equity) | No change | CROSS, ISOLATED |
+| **Flow Editor** | Webhook payload examples | Stock products | Crypto products |
+
+### 6.5 Backward Compatibility
+
+Any change must maintain backward compatibility:
+- Existing API users sending `product: "NRML"` to Delta Exchange must continue to work
+- The broker mapping layer already ignores the product value for crypto
+- New crypto product types (`CROSS`, `ISOLATED`) should be additive, not replacing
+
+---
+
+## 7. Implementation Priority
 
 ### Phase 1: Foundation (Backend)
 1. Add `broker_type` and `supported_exchanges` to all 31 `plugin.json` files
 2. Create `GET /api/v1/broker/capabilities` endpoint
 3. Update `utils/plugin_loader.py` to parse new fields
+4. Normalize product types in `restx_api/schemas.py` — expand `OneOf` validation to include crypto products (`CROSS`, `ISOLATED`) or make validation exchange-aware
 
 ### Phase 2: Frontend Store + Shared Hooks
 4. Create `brokerStore.ts` with capabilities caching
@@ -498,17 +599,19 @@ The `makeFormatCurrency()` utility in `/frontend/src/lib/utils.ts` already handl
 
 ---
 
-## 6. Files to Modify
+## 8. Files to Modify
 
-### Backend (6 files + 31 plugin.json)
+### Backend (8 files + 31 plugin.json)
 | File | Change |
 |------|--------|
 | `broker/*/plugin.json` (x31) | Add `broker_type` and `supported_exchanges` |
 | `utils/plugin_loader.py` | Parse new plugin.json fields |
 | `restx_api/` (new endpoint) | `GET /api/v1/broker/capabilities` |
-| `utils/constants.py` | Add `STOCK_EXCHANGES`, refine `CRYPTO_EXCHANGES` |
+| `restx_api/schemas.py` | Expand product validation for crypto (`CROSS`, `ISOLATED`) |
+| `utils/constants.py` | Add `STOCK_EXCHANGES`, `VALID_PRODUCTS_CRYPTO`, refine `CRYPTO_EXCHANGES` |
 | `database/historify_db.py` | Make `SUPPORTED_EXCHANGES` dynamic per broker |
 | `services/historify_service.py` | Filter exchanges by broker capabilities |
+| `broker/deltaexchange/mapping/transform_data.py` | Map `CROSS`/`ISOLATED` to Delta Exchange margin modes |
 
 ### Frontend (22 files + 4 new)
 | File | Change |
@@ -536,15 +639,134 @@ The `makeFormatCurrency()` utility in `/frontend/src/lib/utils.ts` already handl
 | `pages/GEXDashboard.tsx` | Replace FNO_EXCHANGES + currency formatting |
 | `pages/IVSmile.tsx` | Replace hardcoded FNO_EXCHANGES with useFnoExchanges() |
 | `pages/OIProfile.tsx` | Replace hardcoded FNO_EXCHANGES with useFnoExchanges() |
-| `components/trading/PlaceOrderDialog.tsx` | Crypto product types |
+| `pages/Holdings.tsx` | Normalize product display for crypto (CROSS/ISOLATED instead of CNC/NRML) |
+| `pages/OrderBook.tsx` | Normalize product column display; crypto orders show crypto product types |
+| `pages/TradeBook.tsx` | Normalize product column display for crypto trades |
+| `pages/Positions.tsx` | Normalize product display + currency formatting (USD vs INR) |
+| `components/trading/PlaceOrderDialog.tsx` | Crypto product types in dropdown |
 | `App.tsx` | Conditional routes (Leverage, Straddle PnL) |
 | `lib/flow/constants.ts` | Split exchange constants |
 
 ---
 
-## 7. Backward Compatibility
+## 9. Trading Pages Normalization (Holdings / OrderBook / TradeBook / Positions)
+
+These four core pages display data returned by broker mapping layers. Currently they show stock-centric labels that are meaningless for crypto:
+
+### 9.1 Current Behavior
+
+| Page | Product Column Shows | Currency | Issue for Crypto |
+|------|---------------------|----------|-----------------|
+| **Holdings** | `CNC` (hardcoded in Delta mapping) | Already uses `makeFormatCurrency` (INR/USD) | `CNC` label makes no sense for crypto spot holdings |
+| **OrderBook** | `NRML` (hardcoded in Delta mapping) | Already uses `makeFormatCurrency` | `NRML` label makes no sense for crypto orders |
+| **TradeBook** | `NRML` (hardcoded in Delta mapping) | Already uses `makeFormatCurrency` | `NRML` label makes no sense for crypto trades |
+| **Positions** | `NRML` or `CNC` (Delta mapping) | Already uses `makeFormatCurrency` | Labels don't convey margin mode |
+
+### 9.2 What Needs to Change
+
+The product column on these pages should display broker-appropriate labels:
+
+**Stock brokers**: No change — continue showing MIS, NRML, CNC
+
+**Crypto brokers**: Display crypto-native product types:
+
+| Current (Fake) | Should Display | Meaning |
+|----------------|---------------|---------|
+| `CNC` (spot) | `SPOT` | Spot/wallet holdings |
+| `NRML` (derivatives) | `CROSS` or `ISOLATED` | Margin mode for derivatives |
+
+### 9.3 Implementation Approach
+
+Two options:
+
+**Option A: Backend normalization (recommended)**
+
+Update Delta Exchange's `reverse_map_product_type()` and equivalent functions to return crypto-native labels:
+
+```python
+def reverse_map_product_type(br_product, is_spot=False):
+    if is_spot:
+        return "SPOT"
+    return "CROSS"  # or determine from position data
+```
+
+This keeps the frontend simple — it just displays whatever `product` string the backend returns.
+
+**Option B: Frontend display mapping**
+
+Keep backend returning NRML/CNC, but add a display mapping in the frontend:
+
+```typescript
+function displayProduct(product: string, broker_type: string): string {
+  if (broker_type !== 'crypto') return product
+  if (product === 'CNC') return 'SPOT'
+  if (product === 'NRML') return 'CROSS'
+  return product
+}
+```
+
+Option A is cleaner since the backend already has broker-specific mapping layers.
+
+### 9.4 Additional Display Differences
+
+| Element | Stock Brokers | Crypto Brokers |
+|---------|-------------|--------------|
+| **Exchange badge** | NSE, BSE, NFO, BFO, etc. | CRYPTO |
+| **Product badge** | MIS, NRML, CNC | SPOT, CROSS, ISOLATED |
+| **Quantity** | Integer (lots) | Fractional (0.001 BTC) |
+| **Currency** | INR (already handled) | USD (already handled) |
+| **Trading hours** | IST market hours | 24/7 |
+| **Symbol format** | RELIANCE, NIFTY24JAN24000CE | BTCUSD.P, ETHUSD-25MAR25-2000-C |
+
+The quantity formatting already handles fractional values since Delta Exchange uses `float` for sizes. Currency formatting is already handled by `makeFormatCurrency()`. The main gap is the product type labels.
+
+---
+
+## 10. Sandbox / Analyzer Mode Normalization
+
+### 10.1 The Problem
+
+The sandbox (analyzer) mode has exchange-specific square-off timings hardcoded for Indian stock markets in `database/sandbox_db.py`:
+
+```python
+{"config_key": "nse_bse_square_off_time", "config_value": "15:15", "description": "Square-off time for NSE/BSE MIS positions (IST)"},
+{"config_key": "cds_bcd_square_off_time", "config_value": "16:45", "description": "Square-off time for CDS/BCD MIS positions (IST)"},
+{"config_key": "mcx_square_off_time",     "config_value": "23:30", "description": "Square-off time for MCX MIS positions (IST)"},
+{"config_key": "ncdex_square_off_time",   "config_value": "17:00", "description": "Square-off time for NCDEX MIS positions (IST)"},
+```
+
+Crypto markets are **24x5** (or 24x7 depending on exchange). These IST-based square-off times are meaningless for crypto and would incorrectly auto-close crypto positions.
+
+### 10.2 What Needs to Change
+
+| Setting | Stock Broker | Crypto Broker |
+|---------|-------------|--------------|
+| MIS square-off times | NSE 15:15, MCX 23:30, etc. | **Disabled** — no auto-square-off (or configurable per-session) |
+| Fund reset time | 00:00 IST | 00:00 UTC (or IST, configurable) |
+| MIS leverage settings | Exchange-specific | Not applicable (leverage set at broker level) |
+| Trading hours | Exchange-specific windows | 24x5 or 24x7 |
+| Session expiry | 03:00 IST daily | Disabled (already handled in `authStore.ts`) |
+
+### 10.3 Sandbox Frontend Pages
+
+The sandbox settings UI (`/sandbox`) likely exposes these square-off time configurations. For crypto brokers:
+- Hide MIS square-off time settings (MIS doesn't exist for crypto)
+- Hide exchange-specific leverage settings
+- Show crypto-relevant settings (if any)
+
+### 10.4 Implementation
+
+- Add a `crypto_square_off_time` config key with a sensible default (e.g., disabled or `"none"`)
+- In the square-off scheduler service, skip scheduling for crypto exchanges
+- Frontend sandbox settings page: conditionally show/hide settings based on `broker_type`
+
+---
+
+## 11. Backward Compatibility
 
 - Existing brokers without updated `plugin.json` should fall back to showing all exchanges (current behavior)
 - The `broker_type` field defaults to `"stock"` if not specified
-- No breaking changes to API schema or order flow
+- Existing API users sending `product: "NRML"` to crypto brokers must continue to work (broker mapping layer normalizes)
+- New crypto product types (`CROSS`, `ISOLATED`, `SPOT`) are additive — they don't replace existing stock product types
 - REST API `VALID_EXCHANGES` validation remains unchanged (accepts all exchanges; broker-level filtering is a UX concern)
+- **Product labels on trading pages**: For crypto brokers, Holdings/OrderBook/TradeBook/Positions must NOT display `MIS`, `NRML`, or `CNC` — these are stock-specific terms. The backend mapping layer should return crypto-native labels (`SPOT`, `CROSS`, `ISOLATED`), and the frontend should render whatever the backend provides without stock-specific assumptions
