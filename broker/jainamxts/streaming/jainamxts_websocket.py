@@ -175,6 +175,10 @@ class JainamXTSWebSocketClient:
     def connect(self):
         """Establish Socket.IO connection with proper authentication"""
         try:
+            # Re-create Socket.IO client if it was released by a prior disconnect()
+            if self.sio is None:
+                self._setup_socketio()
+
             # First, login to market data API to get proper tokens
             if not self.marketdata_login():
                 raise Exception("Market data login failed")
@@ -208,7 +212,7 @@ class JainamXTSWebSocketClient:
             raise
 
     def disconnect(self):
-        """Disconnect from Socket.IO"""
+        """Disconnect from Socket.IO and release transport resources"""
         self.running = False
         self.connected = False
 
@@ -218,6 +222,9 @@ class JainamXTSWebSocketClient:
                 self.logger.info("Socket.IO client disconnected")
         except Exception as e:
             self.logger.warning(f"Error during Socket.IO disconnect: {e}")
+
+        # Release the socketio.Client so its engine-io transport threads can be GC'd
+        self.sio = None
 
         # Clear subscriptions
         self.subscriptions.clear()
