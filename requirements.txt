@@ -110,7 +110,7 @@ python-engineio==4.13.1
 python-multipart==0.0.22
 python-socketio==5.16.1
 python-telegram-bot==22.6
-pytz==2025.2
+pytz==2026.1.post1
 PyYAML==6.0.3
 pyzmq==27.1.0
 qrcode==8.2
