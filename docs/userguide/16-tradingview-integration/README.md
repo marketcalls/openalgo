@@ -251,7 +251,7 @@ Example:
 
 ```text
 TradingView webhook URL -> https://your-server.example.com/adanos-gate
-Middleware forwards approved signals -> https://your-openalgo-url/api/v1/placesmartorder
+Middleware forwards approved signals -> matching OpenAlgo endpoint such as /api/v1/placeorder or /api/v1/placesmartorder
 ```
 
 Typical checks:
