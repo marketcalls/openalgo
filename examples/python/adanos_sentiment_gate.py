@@ -122,7 +122,11 @@ def should_place_order(composite):
 
 def main():
     signals = get_source_signals(SYMBOL)
-    composite = build_composite(signals)
+    try:
+        composite = build_composite(signals)
+    except ValueError as exc:
+        print(f"Decision: BLOCK trade ({exc})")
+        return
 
     print(f"\nAdanos composite for {SYMBOL}")
     print("-" * 60)

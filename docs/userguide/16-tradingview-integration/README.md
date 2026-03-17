@@ -245,6 +245,15 @@ If you want to confirm TradingView alerts with external sentiment before executi
 TradingView alert -> Python sentiment gate -> Adanos API check -> OpenAlgo order
 ```
 
+In this setup, the TradingView webhook URL must point to your middleware endpoint, not directly to OpenAlgo's `/api/v1/placeorder` or `/api/v1/placesmartorder` endpoints. Sending the alert straight to OpenAlgo bypasses the sentiment gate entirely.
+
+Example:
+
+```text
+TradingView webhook URL -> https://your-server.example.com/adanos-gate
+Middleware forwards approved signals -> https://your-openalgo-url/api/v1/placesmartorder
+```
+
 Typical checks:
 
 - `average_buzz` above a minimum threshold
