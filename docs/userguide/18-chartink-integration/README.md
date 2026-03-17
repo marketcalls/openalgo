@@ -227,6 +227,27 @@ MACD histogram > 0
 Close > SMA(Close, 50)
 ```
 
+## Optional: Rank ChartInk Signals With Adanos
+
+ChartInk is excellent at finding technical candidates. Adanos can help decide which of those candidates deserve action first.
+
+Common pattern:
+
+```text
+ChartInk screener -> Python filter -> Adanos sentiment check -> OpenAlgo order
+```
+
+Useful filters:
+
+- minimum `buzz_score`
+- minimum `bullish_pct`
+- require `rising` trend on one or more sources
+- skip symbols with wide disagreement across sources
+
+This works especially well when one screener returns multiple symbols and you want a clear way to prioritize them instead of trading every hit.
+
+See: [Module 31 - Adanos Sentiment Integration](../31-adanos-sentiment-integration/README.md)
+
 ## Position Management
 
 ### Using Smart Orders

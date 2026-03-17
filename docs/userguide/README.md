@@ -43,6 +43,9 @@ This guide takes you from zero to automated trading, covering everything from ba
 - [21 - Flow Visual Builder](./21-flow-visual-builder/README.md)
 - [22 - Action Center](./22-action-center/README.md)
 
+### External Signal Intelligence (Module 31)
+- [31 - Adanos Sentiment Integration](./31-adanos-sentiment-integration/README.md)
+
 ### Monitoring & Alerts (Modules 23-26)
 - [23 - Telegram Bot](./23-telegram-bot/README.md)
 - [24 - PnL Tracker](./24-pnl-tracker/README.md)
@@ -66,6 +69,7 @@ This guide takes you from zero to automated trading, covering everything from ba
 | Test without real money | [Module 15](./15-analyzer-mode/README.md) |
 | Understand symbol formats | [Symbol Format Guide](./symbol-format/README.md) |
 | Connect TradingView | [Module 16](./16-tradingview-integration/README.md) |
+| Add external sentiment confirmation | [Module 31](./31-adanos-sentiment-integration/README.md) |
 | Build visual strategies | [Module 21](./21-flow-visual-builder/README.md) |
 | Get Telegram alerts | [Module 23](./23-telegram-bot/README.md) |
 

@@ -153,6 +153,32 @@ for pos in positions['data']:
     print(f"{pos['symbol']}: {pos['quantity']} @ {pos['average_price']}")
 ```
 
+## Optional: Use Third-Party Sentiment As A Trade Filter
+
+Python strategies are the easiest place to add external signal confirmation before execution.
+
+A common pattern is:
+
+1. generate a candidate trade from your technical logic
+2. fetch external sentiment for that symbol
+3. approve or reject the trade based on thresholds
+4. place the order only if the filter passes
+
+Adanos is one example of this pattern. It provides stock sentiment signals from Reddit, X.com, financial news, and Polymarket.
+
+Useful fields for filtering:
+
+- `buzz_score`
+- `bullish_pct`
+- `mentions` or `trade_count`
+- `trend`
+
+Example script:
+
+- [examples/python/adanos_sentiment_gate.py](../../../examples/python/adanos_sentiment_gate.py)
+
+See also: [Module 31 - Adanos Sentiment Integration](../31-adanos-sentiment-integration/README.md)
+
 ### Getting Holdings
 
 ```python

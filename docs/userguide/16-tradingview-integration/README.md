@@ -237,6 +237,25 @@ Use this JSON template in the **Message** field:
 }
 ```
 
+## Optional: Add Adanos Sentiment Confirmation
+
+If you want to confirm TradingView alerts with external sentiment before execution, place a lightweight Python middleware between TradingView and OpenAlgo:
+
+```text
+TradingView alert -> Python sentiment gate -> Adanos API check -> OpenAlgo order
+```
+
+Typical checks:
+
+- `average_buzz` above a minimum threshold
+- `bullish_avg` above a minimum threshold
+- reject symbols where multiple sources are `falling`
+- prefer symbols where source alignment is strong
+
+This is useful when you want to reduce weak breakouts or rank multiple candidates before sending them to OpenAlgo.
+
+See: [Module 31 - Adanos Sentiment Integration](../31-adanos-sentiment-integration/README.md)
+
 ## Symbol Mapping
 
 ### Equity Symbols
