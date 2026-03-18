@@ -216,16 +216,18 @@ def broadcast():
         if not config.get("broadcast_enabled", True):
             return jsonify({"status": "error", "message": "Broadcast is disabled"}), 403
 
-        # Run broadcast using the bot's event loop
-        if telegram_bot_service.bot_loop and telegram_bot_service.is_running:
-            future = asyncio.run_coroutine_threadsafe(
-                telegram_bot_service.broadcast_message(message, filters),
-                telegram_bot_service.bot_loop,
-            )
-            success_count, fail_count = future.result(timeout=30)
-        else:
-            success_count, fail_count = 0, 0
-            logger.error("Bot not running or loop not available")
+        # Send broadcast via synchronous HTTP client (eventlet-safe)
+        from services.telegram_alert_service import telegram_alert_service
+
+        users = get_all_telegram_users(filters)
+        success_count = 0
+        fail_count = 0
+        for user in users:
+            if user.get("notifications_enabled"):
+                if telegram_alert_service.send_alert_sync(user["telegram_id"], message):
+                    success_count += 1
+                else:
+                    fail_count += 1
 
         return jsonify(
             {
@@ -344,23 +346,13 @@ def send_message():
                 {"status": "error", "message": "Message too long (max 4096 characters)"}
             ), 400
 
-        # Check if bot is running
-        if not telegram_bot_service.is_running:
-            return jsonify({"status": "error", "message": "Bot is not running"}), 503
-
         # Log who sent the message for audit trail
         logger.info(f"User {username} sending message to Telegram ID {telegram_id}")
 
-        # Run notification using the bot's event loop
-        if telegram_bot_service.bot_loop and telegram_bot_service.is_running:
-            future = asyncio.run_coroutine_threadsafe(
-                telegram_bot_service.send_notification(telegram_id, message),
-                telegram_bot_service.bot_loop,
-            )
-            success = future.result(timeout=10)
-        else:
-            success = False
-            logger.error("Bot not running or loop not available")
+        # Send via synchronous HTTP client (no asyncio, eventlet-safe)
+        from services.telegram_alert_service import telegram_alert_service
+
+        success = telegram_alert_service.send_alert_sync(telegram_id, message)
 
         if success:
             logger.info(f"Message sent to Telegram ID {telegram_id}")
