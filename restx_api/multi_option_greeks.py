@@ -89,9 +89,7 @@ class MultiOptionGreeks(Resource):
             except ValidationError as err:
                 logger.warning(f"Validation error in multi option greeks request: {err.messages}")
                 return make_response(
-                    jsonify(
-                        {"status": "error", "message": "Validation failed", "errors": err.messages}
-                    ),
+                    jsonify({"status": "error", "message": f"Validation failed: {err.messages}"}),
                     400,
                 )
 
