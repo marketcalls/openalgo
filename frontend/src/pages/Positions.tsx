@@ -41,6 +41,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Table,
   TableBody,
@@ -999,14 +1000,23 @@ export default function Positions() {
                                 {calculatePnlPercent(position).toFixed(2)}%
                               </TableCell>
                               <TableCell className="w-[60px] text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  onClick={() => handleClosePosition(position)}
-                                >
-                                  <X className="h-4 w-4" />
-                                </Button>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                        onClick={() => handleClosePosition(position)}
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Close Position</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               </TableCell>
                             </TableRow>
                           ))}
