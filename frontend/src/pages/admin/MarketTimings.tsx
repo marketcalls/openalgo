@@ -258,8 +258,12 @@ export default function MarketTimingsPage() {
             </CardHeader>
             <CardContent>
               {todayTimings.length === 0 ? (
-                <div className="text-center text-muted-foreground py-4">
-                  Markets are closed today (Weekend/Holiday)
+                <div className="flex flex-col items-center justify-center text-center py-8">
+                  <Clock className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">Markets Closed</h3>
+                  <p className="text-muted-foreground">
+                    Markets are closed today (Weekend/Holiday)
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -307,8 +311,12 @@ export default function MarketTimingsPage() {
               {checkTimings !== null && (
                 <div className="border-t pt-4">
                   {checkTimings.length === 0 ? (
-                    <div className="text-center text-muted-foreground py-4">
-                      Markets are closed on {checkDate} (Weekend/Holiday)
+                    <div className="flex flex-col items-center justify-center text-center py-8">
+                      <Clock className="h-12 w-12 text-muted-foreground mb-4" />
+                      <h3 className="text-lg font-semibold mb-2">Markets Closed</h3>
+                      <p className="text-muted-foreground">
+                        Markets are closed on {checkDate} (Weekend/Holiday)
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-2">
