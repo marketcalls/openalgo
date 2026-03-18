@@ -331,3 +331,33 @@ def update_credentials():
     except Exception as e:
         logger.exception(f"Error updating broker credentials: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@broker_credentials_bp.route("/capabilities", methods=["GET"])
+@check_session_validity
+def get_capabilities():
+    """Return broker capabilities (supported exchanges, type, features) from cached plugin.json."""
+    from flask import session
+
+    from utils.plugin_loader import get_broker_capabilities
+
+    broker = session.get("broker")
+    if not broker:
+        return jsonify({"status": "error", "message": "No broker in session"}), 400
+
+    capabilities = get_broker_capabilities(broker)
+    if not capabilities:
+        # Fallback for brokers without plugin.json capabilities
+        return jsonify(
+            {
+                "status": "success",
+                "data": {
+                    "broker_name": broker,
+                    "broker_type": "IN_stock",
+                    "supported_exchanges": [],
+                    "leverage_config": False,
+                },
+            }
+        )
+
+    return jsonify({"status": "success", "data": capabilities})
