@@ -91,12 +91,13 @@ function computeSentiment(
     return '—'
 }
 
-function getSentimentStyle(s: Sentiment): string {
+function getSentimentStyle(s: Sentiment, isDark: boolean): string {
+    const textColor = isDark ? 'text-white' : 'text-slate-900'
     switch (s) {
-        case 'Long Buildup': return 'bg-green-600 text-white'
-        case 'Short Cover': return 'bg-green-400/80 text-white'
-        case 'Short Buildup': return 'bg-red-600 text-white'
-        case 'Long Unwind': return 'bg-red-400/80 text-white'
+        case 'Long Buildup': return isDark ? 'bg-green-600 text-white' : `bg-green-400 ${textColor}`
+        case 'Short Cover': return isDark ? 'bg-green-400/80 text-white' : `bg-green-200 ${textColor}`
+        case 'Short Buildup': return isDark ? 'bg-red-600 text-white' : `bg-red-400 ${textColor}`
+        case 'Long Unwind': return isDark ? 'bg-red-400/80 text-white' : `bg-red-200 ${textColor}`
         default: return 'bg-muted text-muted-foreground'
     }
 }
@@ -169,9 +170,9 @@ function getHeatmapBg(value: number, colMax: number, isDark: boolean): string {
     return isDark ? `rgba(239,68,68,${alpha})` : `rgba(220,38,38,${alpha})`
 }
 
-function getValueColor(value: number): string {
-    if (value > 0) return 'text-emerald-400'
-    if (value < 0) return 'text-rose-400'
+function getValueColor(value: number, isDark: boolean): string {
+    if (value > 0) return isDark ? 'text-emerald-400' : 'text-emerald-600'
+    if (value < 0) return isDark ? 'text-rose-400' : 'text-rose-600'
     return 'text-muted-foreground'
 }
 
@@ -976,18 +977,18 @@ export default function TrendingOI() {
                                             {colVis.total && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.pe_oi, mx.pe_oi, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.pe_oi)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.pe_oi)}</span>
                                                 </td>
                                             )}
                                             {colVis.dayChange && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.pe_oi_day_change, mx.pe_oi_day, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.pe_oi_day_change)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.pe_oi_day_change)}</span>
                                                 </td>
                                             )}
                                             {colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.pe_oi_change)}>{formatNumber(row.pe_oi_change)}</span>
+                                                    <span className={getValueColor(row.pe_oi_change, isDark)}>{formatNumber(row.pe_oi_change)}</span>
                                                 </td>
                                             )}
 
@@ -995,12 +996,12 @@ export default function TrendingOI() {
                                             {colVis.volume && colVis.total && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.pe_volume, mx.pe_volume, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.pe_volume)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.pe_volume)}</span>
                                                 </td>
                                             )}
                                             {colVis.volume && colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.pe_volume_change)}>{formatNumber(row.pe_volume_change)}</span>
+                                                    <span className={getValueColor(row.pe_volume_change, isDark)}>{formatNumber(row.pe_volume_change)}</span>
                                                 </td>
                                             )}
 
@@ -1008,18 +1009,18 @@ export default function TrendingOI() {
                                             {colVis.total && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.ce_oi, mx.ce_oi, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.ce_oi)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.ce_oi)}</span>
                                                 </td>
                                             )}
                                             {colVis.dayChange && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.ce_oi_day_change, mx.ce_oi_day, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.ce_oi_day_change)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.ce_oi_day_change)}</span>
                                                 </td>
                                             )}
                                             {colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.ce_oi_change)}>{formatNumber(row.ce_oi_change)}</span>
+                                                    <span className={getValueColor(row.ce_oi_change, isDark)}>{formatNumber(row.ce_oi_change)}</span>
                                                 </td>
                                             )}
 
@@ -1027,12 +1028,12 @@ export default function TrendingOI() {
                                             {colVis.volume && colVis.total && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.ce_volume, mx.ce_volume, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.ce_volume)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.ce_volume)}</span>
                                                 </td>
                                             )}
                                             {colVis.volume && colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.ce_volume_change)}>{formatNumber(row.ce_volume_change)}</span>
+                                                    <span className={getValueColor(row.ce_volume_change, isDark)}>{formatNumber(row.ce_volume_change)}</span>
                                                 </td>
                                             )}
 
@@ -1040,18 +1041,18 @@ export default function TrendingOI() {
                                             {colVis.total && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.pe_ce_oi, mx.pe_ce_oi, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.pe_ce_oi)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.pe_ce_oi)}</span>
                                                 </td>
                                             )}
                                             {colVis.dayChange && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.pe_ce_oi_day_change, mx.pe_ce_oi_day, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.pe_ce_oi_day_change)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.pe_ce_oi_day_change)}</span>
                                                 </td>
                                             )}
                                             {colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.pe_ce_oi_change)}>{formatNumber(row.pe_ce_oi_change)}</span>
+                                                    <span className={getValueColor(row.pe_ce_oi_change, isDark)}>{formatNumber(row.pe_ce_oi_change)}</span>
                                                 </td>
                                             )}
 
@@ -1062,14 +1063,14 @@ export default function TrendingOI() {
                                             {colVis.dayChange && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.pcr_day_change, mx.pcr_day, isDark) }}>
-                                                    <span className="text-white font-medium">
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>
                                                         {row.pcr_day_change > 0 ? '+' : ''}{row.pcr_day_change.toFixed(2)}
                                                     </span>
                                                 </td>
                                             )}
                                             {colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.pcr_change)}>
+                                                    <span className={getValueColor(row.pcr_change, isDark)}>
                                                         {row.pcr_change > 0 ? '+' : ''}{row.pcr_change.toFixed(2)}
                                                     </span>
                                                 </td>
@@ -1077,25 +1078,25 @@ export default function TrendingOI() {
 
                                             {/* ── Futures OI ── */}
                                             <td className={`px-2 py-1.5 text-center font-medium ${SUBDIV}`}>
-                                                <span className={idx > 0 ? getValueColor(row.fut_ltp - sortedData[idx - 1].fut_ltp) : ''}>
+                                                <span className={idx > 0 ? getValueColor(row.fut_ltp - sortedData[idx - 1].fut_ltp, isDark) : ''}>
                                                     {row.fut_ltp.toFixed(1)}
                                                 </span>
                                             </td>
                                             {colVis.total && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.fut_oi, mx.fut_oi, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.fut_oi)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.fut_oi)}</span>
                                                 </td>
                                             )}
                                             {colVis.dayChange && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.fut_oi_day_change, mx.fut_oi_day, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.fut_oi_day_change)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.fut_oi_day_change)}</span>
                                                 </td>
                                             )}
                                             {colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.fut_oi_change)}>{formatNumber(row.fut_oi_change)}</span>
+                                                    <span className={getValueColor(row.fut_oi_change, isDark)}>{formatNumber(row.fut_oi_change)}</span>
                                                 </td>
                                             )}
 
@@ -1103,19 +1104,19 @@ export default function TrendingOI() {
                                             {colVis.volume && colVis.total && (
                                                 <td className={`px-2 py-1.5 text-center ${SUBDIV}`}
                                                     style={{ backgroundColor: getHeatmapBg(row.fut_volume, mx.fut_volume, isDark) }}>
-                                                    <span className="text-white font-medium">{formatNumber(row.fut_volume)}</span>
+                                                    <span className={`${isDark ? 'text-white' : 'text-slate-900'} font-medium`}>{formatNumber(row.fut_volume)}</span>
                                                 </td>
                                             )}
                                             {colVis.volume && colVis.change && (
                                                 <td className={`px-2 py-1.5 text-center ${DIV}`}>
-                                                    <span className={getValueColor(row.fut_volume_change)}>{formatNumber(row.fut_volume_change)}</span>
+                                                    <span className={getValueColor(row.fut_volume_change, isDark)}>{formatNumber(row.fut_volume_change)}</span>
                                                 </td>
                                             )}
 
                                             {/* ── Sentiment ── */}
                                             {colVis.sentiment && (
                                                 <td className="px-2 py-1 text-center">
-                                                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${getSentimentStyle(sentiment)}`}>
+                                                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${getSentimentStyle(sentiment, isDark)}`}>
                                                         {sentiment}
                                                     </span>
                                                 </td>
