@@ -37,6 +37,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Table,
   TableBody,
@@ -326,19 +327,28 @@ export default function OrderBook() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant={hasActiveFilters ? 'default' : 'outline'}
-                size="sm"
-                className="relative"
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Filters
-                {hasActiveFilters && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
-                )}
-              </Button>
-            </DialogTrigger>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DialogTrigger asChild>
+                    <Button
+                      variant={hasActiveFilters ? 'default' : 'outline'}
+                      size="sm"
+                      className="relative"
+                    >
+                      <Settings2 className="h-4 w-4 mr-2" />
+                      Filters
+                      {hasActiveFilters && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                      )}
+                    </Button>
+                  </DialogTrigger>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Order Filters</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Order Filters</DialogTitle>
@@ -557,26 +567,44 @@ export default function OrderBook() {
                         </TableCell>
                         <TableCell>
                           {canCancel && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                              onClick={() => handleCancelOrder(order.orderid)}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    onClick={() => handleCancelOrder(order.orderid)}
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Cancel Order</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                           )}
                         </TableCell>
                         <TableCell>
                           {canCancel && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-blue-500 hover:text-blue-600"
-                              onClick={() => openModifyDialog(order)}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-blue-500 hover:text-blue-600"
+                                    onClick={() => openModifyDialog(order)}
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Modify Order</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                           )}
                         </TableCell>
                       </TableRow>
