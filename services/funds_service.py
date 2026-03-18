@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -76,8 +75,7 @@ def get_funds_with_auth(
 
         return True, {"status": "success", "data": funds}, 200
     except Exception as e:
-        logger.error(f"Error in broker_module.get_margin_data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.get_margin_data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
