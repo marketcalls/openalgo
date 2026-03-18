@@ -201,7 +201,7 @@ from utils.logging import (  # Import centralized logging
     highlight_url,
     log_startup_banner,
 )
-from utils.plugin_loader import load_broker_auth_functions
+from utils.plugin_loader import load_broker_auth_functions, load_broker_capabilities
 from utils.security_middleware import init_security_middleware  # Import security middleware
 from utils.socketio_error_handler import (
     init_socketio_error_handling,  # Import Socket.IO error handler
@@ -546,6 +546,7 @@ def setup_environment(app):
     with app.app_context():
         # load broker plugins (lazy - no actual imports until login)
         app.broker_auth_functions = load_broker_auth_functions()
+        load_broker_capabilities()  # cache plugin.json data in memory
 
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI

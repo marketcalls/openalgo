@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useBrokerStore } from './brokerStore'
 
 interface User {
   username: string
@@ -50,8 +51,8 @@ export const useAuthStore = create<AuthStore>()(
         if (!user || !user.loginTime) return false
 
         // Skip session expiry for crypto brokers (24/7 markets)
-        const cryptoBrokers = ['deltaexchange']
-        if (user.broker && cryptoBrokers.includes(user.broker)) {
+        const capabilities = useBrokerStore.getState().capabilities
+        if (capabilities?.broker_type === 'crypto') {
           return true
         }
 

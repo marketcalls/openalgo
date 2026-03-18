@@ -1,6 +1,7 @@
 # utils/plugin_loader.py
 
 import importlib
+import json
 import os
 
 from flask import current_app
@@ -8,6 +9,57 @@ from flask import current_app
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# In-memory cache for broker capabilities (populated once at startup)
+_broker_capabilities = {}
+
+
+def load_broker_capabilities(broker_directory="broker"):
+    """Read all broker/*/plugin.json files into memory at startup.
+
+    Returns a dict keyed by broker name with capabilities from plugin.json.
+    Only includes brokers that have a plugin.json with supported_exchanges.
+    """
+    global _broker_capabilities
+
+    broker_path = os.path.join(current_app.root_path, broker_directory)
+    capabilities = {}
+
+    for broker_name in os.listdir(broker_path):
+        broker_dir = os.path.join(broker_path, broker_name)
+        if not os.path.isdir(broker_dir) or broker_name == "__pycache__":
+            continue
+
+        plugin_file = os.path.join(broker_dir, "plugin.json")
+        if not os.path.exists(plugin_file):
+            continue
+
+        try:
+            with open(plugin_file, "r") as f:
+                plugin_data = json.load(f)
+
+            # Only include brokers with the new capability fields
+            if "supported_exchanges" in plugin_data:
+                capabilities[broker_name] = {
+                    "broker_name": broker_name,
+                    "broker_type": plugin_data.get("broker_type", "IN_stock"),
+                    "supported_exchanges": plugin_data.get("supported_exchanges", []),
+                    "leverage_config": plugin_data.get("leverage_config", False),
+                }
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Error reading plugin.json for {broker_name}: {e}")
+
+    _broker_capabilities = capabilities
+    logger.info(f"Loaded capabilities for {len(capabilities)} brokers")
+    return capabilities
+
+
+def get_broker_capabilities(broker_name):
+    """Return cached capabilities for a specific broker.
+
+    Returns None if broker not found or capabilities not loaded.
+    """
+    return _broker_capabilities.get(broker_name)
 
 
 def load_broker_auth_functions(broker_directory="broker"):
