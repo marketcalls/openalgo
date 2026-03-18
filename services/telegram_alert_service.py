@@ -309,6 +309,17 @@ class TelegramAlertService:
                 logger.info(f"Telegram notification sent to {telegram_id}")
                 return True
 
+            # If Markdown parsing fails (bad entities), retry as plain text
+            if resp.status_code == 400 and "can't parse entities" in resp.text:
+                logger.warning(
+                    f"Telegram Markdown parse error, retrying as plain text: {resp.text}"
+                )
+                payload.pop("parse_mode")
+                resp = _http_client.post(url, json=payload)
+                if resp.status_code == 200:
+                    logger.info(f"Telegram notification sent (plain text) to {telegram_id}")
+                    return True
+
             logger.error(
                 f"Telegram API error {resp.status_code}: {resp.text}"
             )
