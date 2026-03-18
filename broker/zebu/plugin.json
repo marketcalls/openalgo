@@ -4,5 +4,8 @@
     "Description": "Zebu OpenAlgo Plugin",
     "Version": "1.0",
     "Author": "Rajandran R",
-    "Author URI": "https://openalgo.in"
+    "Author URI": "https://openalgo.in",
+    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "MCX", "NSE_INDEX"],
+    "broker_type": "IN_stock",
+    "leverage_config": false
 }
