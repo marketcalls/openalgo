@@ -1,6 +1,10 @@
 """
 Telegram Alert Service for Order Notifications
-Handles asynchronous sending of order-related alerts to users via Telegram
+Handles sending of order-related alerts to users via Telegram.
+
+Uses httpx.Client (synchronous) to call the Telegram Bot API directly,
+avoiding asyncio entirely. This prevents greenlet/eventlet conflicts
+under Gunicorn + eventlet deployments.
 """
 
 import json
@@ -8,6 +12,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+import httpx
 
 from database.auth_db import get_username_by_apikey
 from database.telegram_db import (
@@ -18,36 +24,15 @@ from database.telegram_db import (
 )
 from utils.logging import get_logger
 
-# Lazy import telegram bot service to avoid import errors if telegram package not installed properly
-telegram_bot_service = None
-
-
-def _get_telegram_bot_service():
-    """Lazy load telegram bot service"""
-    global telegram_bot_service
-    if telegram_bot_service is None:
-        try:
-            from services.telegram_bot_service import telegram_bot_service as tbs
-
-            telegram_bot_service = tbs
-        except ImportError as e:
-            logger.warning(f"Telegram bot service not available: {e}")
-
-            # Create a mock object with minimal interface
-            class MockTelegramBotService:
-                is_running = False
-
-                async def send_notification(self, *args, **kwargs):
-                    return False
-
-            telegram_bot_service = MockTelegramBotService()
-    return telegram_bot_service
-
-
 logger = get_logger(__name__)
 
-# Thread pool for async operations
+# Thread pool for non-blocking dispatch
 alert_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="telegram_alert")
+
+# Synchronous HTTP client for Telegram Bot API calls (thread-safe)
+_http_client = httpx.Client(timeout=30.0)
+
+TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
 class TelegramAlertService:
@@ -287,52 +272,55 @@ class TelegramAlertService:
             logger.exception(f"Error formatting order details: {e}")
             return f"Order Type: {order_type}\nStatus: {response.get('status', 'unknown')}"
 
-    def send_alert_sync(self, telegram_id: int, message: str) -> bool:
-        """Send alert message synchronously (thread-safe)"""
+    def _get_bot_token(self) -> str | None:
+        """Get bot token from database config."""
         try:
-            # Get telegram bot service
-            bot_service = _get_telegram_bot_service()
+            config = get_bot_config()
+            if config and config.get("bot_token"):
+                return config["bot_token"]
+        except Exception as e:
+            logger.error(f"Failed to get bot token: {e}")
+        return None
 
-            # Check if bot is running
-            if not bot_service.is_running:
-                logger.debug("Telegram bot is not running, queueing notification")
-                # Queue the notification for later delivery
+    def send_alert_sync(self, telegram_id: int, message: str) -> bool:
+        """
+        Send alert via synchronous HTTP call to Telegram Bot API.
+
+        Uses httpx.Client directly — no asyncio, no greenlet boundary crossing.
+        Safe under Gunicorn + eventlet.
+        """
+        try:
+            bot_token = self._get_bot_token()
+            if not bot_token:
+                logger.error("No bot token configured, queueing notification")
                 add_notification(telegram_id, message, priority=8)
+                return False
+
+            url = f"{TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
+            payload = {
+                "chat_id": telegram_id,
+                "text": message,
+                "parse_mode": "Markdown",
+            }
+
+            resp = _http_client.post(url, json=payload)
+
+            if resp.status_code == 200:
+                logger.info(f"Telegram notification sent to {telegram_id}")
                 return True
 
-            # Check if bot has an event loop running
-            if not hasattr(bot_service, "bot_loop") or bot_service.bot_loop is None:
-                logger.error("Bot loop not available")
-                add_notification(telegram_id, message, priority=8)
-                return False
+            logger.error(
+                f"Telegram API error {resp.status_code}: {resp.text}"
+            )
+            add_notification(telegram_id, message, priority=8)
+            return False
 
-            # Schedule the async task in the bot's existing event loop
-            import asyncio
-            import concurrent.futures
-
-            try:
-                # Use run_coroutine_threadsafe to schedule in the bot's loop
-                future = asyncio.run_coroutine_threadsafe(
-                    bot_service.send_notification(telegram_id, message), bot_service.bot_loop
-                )
-                # Wait for the result (max 10 seconds)
-                success = future.result(timeout=10)
-
-                if not success:
-                    # If failed, add to queue for retry
-                    add_notification(telegram_id, message, priority=8)
-
-                logger.info(f"Telegram notification sent: {success}")
-                return success
-
-            except concurrent.futures.TimeoutError:
-                logger.error("Timeout sending telegram notification")
-                add_notification(telegram_id, message, priority=8)
-                return False
-
+        except httpx.TimeoutException:
+            logger.error("Timeout sending telegram notification")
+            add_notification(telegram_id, message, priority=8)
+            return False
         except Exception as e:
             logger.exception(f"Error sending telegram alert: {e}")
-            # Add to queue on error
             add_notification(telegram_id, message, priority=8)
             return False
 
@@ -410,13 +398,8 @@ class TelegramAlertService:
             details = self.format_order_details(order_type, order_data, response)
             message = template.format(details=details)
 
-            # Send alert asynchronously (non-blocking)
+            # Send alert in thread pool (non-blocking)
             telegram_id = telegram_user["telegram_id"]
-
-            # Get telegram bot service
-            bot_service = _get_telegram_bot_service()
-
-            # Use thread pool executor for non-blocking execution
             logger.info(f"Queueing alert via thread pool for telegram_id: {telegram_id}")
             alert_executor.submit(self.send_alert_sync, telegram_id, message)
 
