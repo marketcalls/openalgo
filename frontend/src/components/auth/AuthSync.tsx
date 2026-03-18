@@ -52,6 +52,7 @@ export function AuthSync({ children }: AuthSyncProps) {
               isLoggedIn: false,
               loginTime: null,
             })
+            clearCapabilities()
           } else {
             // Not authenticated or status is not success - clear Zustand store
             logout()
