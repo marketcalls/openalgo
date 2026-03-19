@@ -87,10 +87,11 @@ export function useOptionChainLive(
 
     // Add underlying symbol for real-time spot price
     // Use correct exchange based on whether it's an index or stock
-    // Skip for CRYPTO — bare underlying (e.g. BTC) isn't a tradeable symbol;
-    // the option chain REST API already provides the LTP via the perpetual future
+    // For CRYPTO: bare underlying (e.g. BTC) isn't tradeable — use perpetual (e.g. BTCUSDFUT)
     const underlyingExch = getUnderlyingExchange(underlying, optionExchange)
-    if (underlyingExch !== 'CRYPTO') {
+    if (underlyingExch === 'CRYPTO') {
+      symbols.push({ symbol: `${underlying}USDFUT`, exchange: underlyingExch })
+    } else {
       symbols.push({ symbol: underlying, exchange: underlyingExch })
     }
 
