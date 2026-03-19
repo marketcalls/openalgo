@@ -121,8 +121,10 @@ export default function CustomStraddle() {
 
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
-    setSelectedExchange(defaultFnoExchange)
-  }, [defaultFnoExchange])
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
 
   // Theme colors
   const colors = useMemo(() => {

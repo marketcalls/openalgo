@@ -110,8 +110,10 @@ export default function IVChart() {
 
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
-    setSelectedExchange(defaultFnoExchange)
-  }, [defaultFnoExchange])
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
 
   // Chart refs
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
