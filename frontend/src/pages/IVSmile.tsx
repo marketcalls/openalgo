@@ -57,6 +57,11 @@ export default function IVSmile() {
   const requestIdRef = useRef(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   // Fetch underlyings when exchange changes
   useEffect(() => {
     const defaults = defaultUnderlyings[selectedExchange] || []

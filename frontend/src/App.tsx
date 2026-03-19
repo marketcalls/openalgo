@@ -95,7 +95,7 @@ const Leverage = lazy(() => import('@/pages/Leverage'))
 /** Route guard: only renders children if leverage_config is true, else redirects to dashboard */
 function LeverageRoute() {
   const capabilities = useBrokerStore((s) => s.capabilities)
-  if (capabilities && !capabilities.leverage_config) {
+  if (!capabilities?.leverage_config) {
     return <Navigate to="/dashboard" replace />
   }
   return <Leverage />

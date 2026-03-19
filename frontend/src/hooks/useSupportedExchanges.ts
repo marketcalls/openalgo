@@ -20,6 +20,9 @@ const INDEX_EXCHANGES = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'CDS_IND
 /** F&O exchange codes */
 const FNO_CODES = new Set(['NFO', 'BFO', 'CRYPTO'])
 
+/** Fallback exchanges when capabilities haven't loaded yet (backward compatible) */
+const FALLBACK_EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'CRYPTO']
+
 /**
  * Central hook for broker-aware exchange filtering.
  *
@@ -36,7 +39,8 @@ export function useSupportedExchanges() {
   const capabilities = useBrokerStore((s) => s.capabilities)
 
   return useMemo(() => {
-    const supported = capabilities?.supported_exchanges ?? []
+    // Use fallback exchanges when capabilities haven't loaded yet (backward compatible)
+    const supported = capabilities?.supported_exchanges ?? FALLBACK_EXCHANGES
     const isCrypto = capabilities?.broker_type === 'crypto'
 
     // All exchanges from plugin.json
