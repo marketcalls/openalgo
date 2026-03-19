@@ -62,8 +62,10 @@ export default function OITracker() {
 
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
-    setSelectedExchange(defaultFnoExchange)
-  }, [defaultFnoExchange])
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
 
   // Fetch underlyings when exchange changes
   useEffect(() => {

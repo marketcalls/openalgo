@@ -95,8 +95,10 @@ export default function OIProfile() {
 
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
-    setSelectedExchange(defaultFnoExchange)
-  }, [defaultFnoExchange])
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
 
   // Fetch supported intervals on mount
   useEffect(() => {
