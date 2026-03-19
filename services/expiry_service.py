@@ -76,7 +76,7 @@ def get_expiry_dates(
             )
 
         # Validate exchange
-        supported_exchanges = ["NFO", "BFO", "MCX", "CDS"]
+        supported_exchanges = ["NFO", "BFO", "MCX", "CDS", "CRYPTO"]
         if exchange.upper() not in supported_exchanges:
             logger.warning(f"Unsupported exchange provided: {exchange}")
             return (
@@ -116,6 +116,8 @@ def get_expiry_dates(
                 query = query.filter(SymToken.instrumenttype.in_(["FUTCOM", "FUTENR", "FUT"]))
             elif exchange == "CDS":
                 query = query.filter(SymToken.instrumenttype.in_(["FUTCUR", "FUTIRC", "FUT"]))
+            elif exchange == "CRYPTO":
+                query = query.filter(SymToken.instrumenttype.in_(["FUT", "PERPFUT"]))
         else:  # options
             # All exchanges support CE/PE along with their specific types
             if exchange in ["NFO", "BFO"]:
@@ -124,6 +126,8 @@ def get_expiry_dates(
                 query = query.filter(SymToken.instrumenttype.in_(["OPTFUT", "CE", "PE"]))
             elif exchange == "CDS":
                 query = query.filter(SymToken.instrumenttype.in_(["OPTCUR", "OPTIRC", "CE", "PE"]))
+            elif exchange == "CRYPTO":
+                query = query.filter(SymToken.instrumenttype.in_(["CE", "PE"]))
 
         # Execute query and get results
         results = query.all()
