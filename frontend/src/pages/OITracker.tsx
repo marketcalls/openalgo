@@ -60,6 +60,11 @@ export default function OITracker() {
   const [isLoading, setIsLoading] = useState(false)
   const requestIdRef = useRef(0)
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   // Fetch underlyings when exchange changes
   useEffect(() => {
     const defaults = defaultUnderlyings[selectedExchange] || []

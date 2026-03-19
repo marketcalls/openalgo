@@ -65,6 +65,11 @@ export default function VolSurface() {
   const [isLoading, setIsLoading] = useState(false)
   const requestIdRef = useRef(0)
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   // Send NFO/BFO directly — backend resolves correct exchange for index vs stock
 
   // Theme colors

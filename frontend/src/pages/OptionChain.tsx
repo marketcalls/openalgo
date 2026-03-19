@@ -453,6 +453,11 @@ export default function OptionChain() {
     tickSize: number
   } | null>(null)
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   const optionExchange = selectedExchange
   // Send NFO/BFO directly — backend resolves correct exchange for index vs stock
   const exchange = selectedExchange

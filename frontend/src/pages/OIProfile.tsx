@@ -93,6 +93,11 @@ export default function OIProfile() {
   const [isLoading, setIsLoading] = useState(false)
   const requestIdRef = useRef(0)
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   // Fetch supported intervals on mount
   useEffect(() => {
     const fetchIntervals = async () => {

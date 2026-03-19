@@ -96,6 +96,11 @@ export default function StraddleChart() {
   const chartDataRef = useRef<StraddleChartData | null>(null)
   const seriesDataMapRef = useRef<Map<number, StraddleDataPoint>>(new Map())
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   // Send NFO/BFO directly — backend resolves correct exchange for index vs stock
 
   // Theme colors

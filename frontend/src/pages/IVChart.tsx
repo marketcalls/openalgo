@@ -108,6 +108,11 @@ export default function IVChart() {
   const [selectedDays, setSelectedDays] = useState('1')
   const [chartData, setChartData] = useState<IVChartData | null>(null)
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   // Chart refs
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const chartsRef = useRef<Map<string, ChartInstance>>(new Map())

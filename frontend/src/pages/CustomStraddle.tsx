@@ -119,6 +119,11 @@ export default function CustomStraddle() {
   const chartDataRef = useRef<CustomStraddleData | null>(null)
   const seriesDataMapRef = useRef<Map<number, PnLDataPoint>>(new Map())
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange(defaultFnoExchange)
+  }, [defaultFnoExchange])
+
   // Theme colors
   const colors = useMemo(() => {
     if (isAnalyzer) {
