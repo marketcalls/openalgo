@@ -1,0 +1,22 @@
+meta {
+  name: history (intraday)
+  type: http
+  seq: 23
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/history
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbol": "BTCUSDFUT",
+      "exchange": "CRYPTO",
+      "interval": "5m",
+      "start_date": "2026-03-01",
+      "end_date": "2026-03-20"
+  }
+}

@@ -107,9 +107,11 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
 #### Playground (`/frontend/src/pages/Playground.tsx`)
 - **Current**: Single set of API examples (stock-oriented symbol formats)
 - **Problem**: Crypto users get stock examples (RELIANCE, NIFTY) that don't work
-- **Fix**: Load completely separate example collections:
-  - Stock collection: NSE/BSE equity, NFO options/futures, MCX commodity examples
-  - Crypto collection: BTC/ETH perpetuals, crypto options, spot trading examples
+- **Done**:
+  - Bruno collections split into `collections/openalgo/IN_stock/` and `collections/openalgo/crypto/`
+  - `playground.py` loads from broker-type-specific subfolder based on session broker's `broker_type` from plugin.json capabilities
+  - Crypto collection: 48 files with BTCUSDFUT, CRYPTO exchange, NRML product (no holdings.bru, Chartink.bru, syntheticfuture.bru)
+  - Stock collection: original 62 files unchanged
 
 #### Flow Editor (`/frontend/src/pages/flow/FlowIndex.tsx`)
 - **Current**: Generic webhook automation, example payloads use stock symbols (RELIANCE, INFY)

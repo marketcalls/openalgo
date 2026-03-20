@@ -223,12 +223,14 @@ def categorize_endpoint(path):
     return "utilities"
 
 
-def load_bruno_endpoints():
-    """Load all endpoints from Bruno .bru files"""
+def load_bruno_endpoints(broker_type="IN_stock"):
+    """Load endpoints from Bruno .bru files for the given broker type (IN_stock or crypto)"""
     endpoints = {"account": [], "orders": [], "data": [], "utilities": [], "websocket": []}
 
-    # Find all .bru files in collections directory
-    collections_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "collections")
+    # Load from broker-type-specific subfolder (IN_stock or crypto)
+    collections_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "collections", "openalgo", broker_type
+    )
     bru_files = glob.glob(os.path.join(collections_path, "**", "*.bru"), recursive=True)
 
     parsed_endpoints = []
@@ -331,7 +333,14 @@ def get_collections():
 def get_endpoints():
     """Get structured list of all API endpoints from Bruno collections"""
     try:
-        endpoints = load_bruno_endpoints()
+        # Determine broker type from session
+        from utils.plugin_loader import get_broker_capabilities
+
+        broker = session.get("broker", "")
+        capabilities = get_broker_capabilities(broker)
+        broker_type = capabilities.get("broker_type", "IN_stock") if capabilities else "IN_stock"
+
+        endpoints = load_bruno_endpoints(broker_type=broker_type)
 
         # If no endpoints loaded from Bruno, return empty structure
         if not any(endpoints.values()):
