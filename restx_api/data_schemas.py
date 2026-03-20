@@ -145,8 +145,8 @@ class ExpirySchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbol = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY)
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NFO", "BFO", "MCX", "CDS"])
-    )  # Exchange (e.g., NFO, BFO, MCX, CDS)
+        required=True, validate=validate.OneOf(["NFO", "BFO", "MCX", "CDS", "CRYPTO"])
+    )  # Exchange (e.g., NFO, BFO, MCX, CDS, CRYPTO)
     instrumenttype = fields.Str(
         required=True, validate=validate.OneOf(["futures", "options"])
     )  # futures or options
@@ -237,7 +237,7 @@ class OptionSymbolRequest(Schema):
     """Schema for a single option symbol request in batch"""
 
     symbol = fields.Str(required=True)  # Option symbol (e.g., NIFTY28NOV2424000CE)
-    exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX"]))
+    exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX", "CRYPTO"]))
     underlying_symbol = fields.Str(required=False)  # Optional: Specify underlying symbol
     underlying_exchange = fields.Str(required=False)  # Optional: Specify underlying exchange
 
