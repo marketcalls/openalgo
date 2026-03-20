@@ -13,12 +13,16 @@ post {
 body:json {
   {
       "apikey": "",
-      "exchange": "CRYPTO",
-      "symbol": "BTCUSDFUT",
-      "action": "BUY",
-      "product": "NRML",
-      "pricetype": "MARKET",
-      "quantity": "1",
-      "price": "0"
+      "positions": [
+          {
+              "symbol": "BTCUSDFUT",
+              "exchange": "CRYPTO",
+              "action": "BUY",
+              "product": "NRML",
+              "pricetype": "MARKET",
+              "quantity": "1",
+              "price": "0"
+          }
+      ]
   }
 }

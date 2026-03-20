@@ -14,26 +14,26 @@ body:json {
   {
       "apikey": "",
       "strategy": "Crypto Options",
+      "underlying": "BTC",
       "exchange": "CRYPTO",
-      "symbol": "BTC",
-      "expiry_date": "27MAR26",
-      "product": "NRML",
       "legs": [
           {
+              "offset": "ATM",
               "option_type": "CE",
-              "strike_price": "85000",
               "action": "BUY",
-              "quantity": "1",
-              "pricetype": "MARKET",
-              "price": "0"
+              "quantity": 1,
+              "expiry_date": "27MAR26",
+              "product": "NRML",
+              "splitsize": 0
           },
           {
+              "offset": "ATM",
               "option_type": "PE",
-              "strike_price": "85000",
               "action": "BUY",
-              "quantity": "1",
-              "pricetype": "MARKET",
-              "price": "0"
+              "quantity": 1,
+              "expiry_date": "27MAR26",
+              "product": "NRML",
+              "splitsize": 0
           }
       ]
   }
