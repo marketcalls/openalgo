@@ -72,31 +72,37 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
 - **Current**: Hardcoded exchanges: `[NSE, NFO, BSE, BFO, CDS, MCX]` (stock only)
 - **Current Products**: `[MIS, NRML, CNC]` (stock only)
 - **Problem**: No CRYPTO exchange option; products don't apply to crypto
-- **Fix**:
-  - Stock brokers: Show `[NSE, NFO, BSE, BFO]` + MCX/CDS based on broker capability
-  - Crypto brokers: Show `[CRYPTO]` with crypto-specific products and symbol format examples
-  - Webhook payload examples should differ (stock symbols vs crypto pairs)
+- **Done**:
+  - Exchanges now from `tradingExchanges` via `useSupportedExchanges()` hook
+  - Product dropdown hidden for crypto brokers (`isCrypto`)
+  - Default symbol: `BTCUSDFUT` for crypto, `NHPC` for stock
+  - Default exchange: from broker capabilities
 
 #### GoCharting (`/frontend/src/pages/GoCharting.tsx`)
 - **Current**: Hardcoded exchanges: `[NSE, NFO, BSE, BFO, CDS, MCX]` (stock only)
 - **Current Products**: `[MIS, NRML, CNC]` (stock only)
 - **Problem**: Same as TradingView - no crypto support, stock-specific products
-- **Fix**: Same approach as TradingView - conditional exchanges and products
+- **Done**: Same approach as TradingView — `tradingExchanges` from hook, Product hidden for crypto, crypto defaults
 
 #### Historify (`/frontend/src/pages/Historify.tsx`)
 - **Current**: Hardcoded 10 exchanges including CRYPTO mixed with stock
 - **Default Exchange**: `NSE` (wrong for crypto brokers)
 - **Problem**: Crypto broker users see NSE/BSE/NFO which they can't use; stock users see CRYPTO
-- **Fix**:
+- **Fix** (pending):
   - Stock brokers: Show only their supported stock exchanges
   - Crypto brokers: Show only `CRYPTO`
   - Default exchange should match broker type
 
-#### Search / Token Search (`/frontend/src/pages/Search.tsx`)
+#### Search / Token Search (`/frontend/src/pages/Token.tsx`)
 - **Current**: 9 hardcoded exchanges including CRYPTO
 - **FNO Exchanges**: `[NFO, BFO, MCX, CDS, CRYPTO]` (mixed stock and crypto)
 - **Problem**: Stock users see CRYPTO; crypto users see 8 irrelevant stock exchanges
-- **Fix**: Filter exchange list based on broker capabilities; separate FNO filter logic
+- **Done**:
+  - Exchanges now from `allExchanges` via hook (includes _INDEX for token lookup)
+  - FNO check uses `fnoExchanges` from hook
+  - Crypto-specific search tips (BTCUSDFUT, BTCINR, BTC options)
+  - Stock-specific search tips (RELIANCE, INFY, nifty)
+  - Dynamic placeholder text based on broker type
 
 #### Playground (`/frontend/src/pages/Playground.tsx`)
 - **Current**: Single set of API examples (stock-oriented symbol formats)
@@ -125,13 +131,13 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
 
 ### 3.2 Pages That Need Exchange Filtering (Not Full Separation)
 
-| Page | File | Current Behavior | Fix Needed |
-|------|------|-----------------|------------|
-| **PlaceOrderDialog** | `components/trading/PlaceOrderDialog.tsx` | Product types based on exchange (FNO vs equity) | Add crypto product handling |
-| **Positions** | `pages/Positions.tsx` | Dynamic exchange filter from data | No change needed (already data-driven) |
-| **TradeBook** | `pages/TradeBook.tsx` | Dynamic exchange filter from data | No change needed |
-| **OrderBook** | `pages/OrderBook.tsx` | No exchange filter | No change needed |
-| **Holdings** | `pages/Holdings.tsx` | No exchange filter | No change needed |
+| Page | File | Current Behavior | Fix Done |
+|------|------|-----------------|----------|
+| **PlaceOrderDialog** | `components/trading/PlaceOrderDialog.tsx` | Product types based on exchange (FNO vs equity) | Pending — add crypto product handling |
+| **Positions** | `pages/Positions.tsx` | Dynamic exchange filter from data | Done — Product column hidden for crypto via `isCrypto` |
+| **TradeBook** | `pages/TradeBook.tsx` | Dynamic exchange filter from data | Done — Product column hidden for crypto via `isCrypto` |
+| **OrderBook** | `pages/OrderBook.tsx` | No exchange filter | Done — Product column hidden for crypto via `isCrypto` |
+| **Holdings** | `pages/Holdings.tsx` | No exchange filter | Done — Page hidden for crypto (route guard + nav filter). Crypto has no equity holdings; wallet balances shown in Positions |
 | **PnL Tracker** | `pages/PnLTracker.tsx` | Uses broker for currency formatting | Already handled |
 
 ### 3.3 Pages That Need No Changes
@@ -149,16 +155,16 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
 
 ### 3.4 Navigation & Menu Visibility
 
-**File**: `/frontend/src/config/navigation.ts`
+**File**: `/frontend/src/components/layout/Navbar.tsx`
 
-The navigation is hardcoded with no conditional rendering. The following menu items should be conditionally visible:
+Navigation menu items are now conditionally filtered in `Navbar.tsx` using `useBrokerStore` capabilities:
 
-| Menu Item | Stock Brokers | Crypto Brokers |
-|-----------|:---:|:---:|
-| Leverage | Hidden | Visible |
-| CustomStraddle | Visible | Hidden |
-| IV Chart, Vol Surface, GEX, IV Smile | Visible | Conditional (if crypto options supported) |
-| OI Tracker, Max Pain, OI Profile | Visible | Conditional |
+| Menu Item | Stock Brokers | Crypto Brokers | Implementation |
+|-----------|:---:|:---:|---|
+| Leverage | Hidden | Visible | `leverage_config === true` check + `LeverageRoute` guard |
+| Holdings | Visible | Hidden | `broker_type !== 'crypto'` check + `HoldingsRoute` guard |
+| CustomStraddle | Visible | Visible | Shown for both (crypto has options) |
+| All Tools pages | Visible | Visible | Exchange dropdown filtered by broker capabilities |
 
 ---
 
