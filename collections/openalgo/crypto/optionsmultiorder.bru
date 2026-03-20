@@ -1,0 +1,40 @@
+meta {
+  name: optionsmultiorder
+  type: http
+  seq: 32
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/optionsmultiorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Options",
+      "exchange": "CRYPTO",
+      "symbol": "BTC",
+      "expiry_date": "27MAR26",
+      "product": "NRML",
+      "legs": [
+          {
+              "option_type": "CE",
+              "strike_price": "85000",
+              "action": "BUY",
+              "quantity": "1",
+              "pricetype": "MARKET",
+              "price": "0"
+          },
+          {
+              "option_type": "PE",
+              "strike_price": "85000",
+              "action": "BUY",
+              "quantity": "1",
+              "pricetype": "MARKET",
+              "price": "0"
+          }
+      ]
+  }
+}

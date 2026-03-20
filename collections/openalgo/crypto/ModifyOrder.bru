@@ -1,0 +1,28 @@
+meta {
+  name: ModifyOrder
+  type: http
+  seq: 3
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/modifyorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Strategy",
+      "exchange": "CRYPTO",
+      "symbol": "BTCUSDFUT",
+      "action": "BUY",
+      "product": "NRML",
+      "pricetype": "LIMIT",
+      "quantity": "1",
+      "price": "84000",
+      "trigger_price": "0",
+      "disclosed_quantity": "0",
+      "orderid": "27:123456"
+  }
+}

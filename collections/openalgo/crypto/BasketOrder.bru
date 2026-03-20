@@ -1,0 +1,42 @@
+meta {
+  name: BasketOrder
+  type: http
+  seq: 7
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/basketorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Strategy",
+      "orders": [
+          {
+              "symbol": "BTCUSDFUT",
+              "exchange": "CRYPTO",
+              "action": "BUY",
+              "product": "NRML",
+              "pricetype": "MARKET",
+              "quantity": "1",
+              "price": "0",
+              "trigger_price": "0",
+              "disclosed_quantity": "0"
+          },
+          {
+              "symbol": "ETHUSDFUT",
+              "exchange": "CRYPTO",
+              "action": "BUY",
+              "product": "NRML",
+              "pricetype": "MARKET",
+              "quantity": "1",
+              "price": "0",
+              "trigger_price": "0",
+              "disclosed_quantity": "0"
+          }
+      ]
+  }
+}
