@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import type * as PlotlyTypes from 'plotly.js'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useThemeStore } from '@/stores/themeStore'
 import { ivSmileApi, type IVSmileDataResponse } from '@/api/iv-smile'
 import { Card, CardContent } from '@/components/ui/card'
@@ -25,17 +26,7 @@ import { Badge } from '@/components/ui/badge'
 import { showToast } from '@/utils/toast'
 import Plot from 'react-plotly.js'
 
-const FNO_EXCHANGES = [
-  { value: 'NFO', label: 'NFO' },
-  { value: 'BFO', label: 'BFO' },
-  { value: 'CRYPTO', label: 'CRYPTO' },
-]
-
-const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
-  NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
-  BFO: ['SENSEX', 'BANKEX'],
-  CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
-}
+// FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
 const AUTO_REFRESH_INTERVAL = 30000
 
@@ -50,13 +41,14 @@ function convertExpiryForAPI(expiry: string): string {
 
 export default function IVSmile() {
   const { mode, appMode } = useThemeStore()
+  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
   const isAnalyzer = appMode === 'analyzer'
   const isDark = mode === 'dark' || isAnalyzer
 
-  const [selectedExchange, setSelectedExchange] = useState('NFO')
-  const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
+  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState('NIFTY')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [ivData, setIvData] = useState<IVSmileDataResponse | null>(null)
@@ -65,9 +57,16 @@ export default function IVSmile() {
   const requestIdRef = useRef(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
+
   // Fetch underlyings when exchange changes
   useEffect(() => {
-    const defaults = DEFAULT_UNDERLYINGS[selectedExchange] || []
+    const defaults = defaultUnderlyings[selectedExchange] || []
     setUnderlyings(defaults)
     setSelectedUnderlying(defaults[0] || '')
     setExpiries([])
@@ -375,7 +374,7 @@ export default function IVSmile() {
               <SelectValue placeholder="Exchange" />
             </SelectTrigger>
             <SelectContent>
-              {FNO_EXCHANGES.map((ex) => (
+              {fnoExchanges.map((ex) => (
                 <SelectItem key={ex.value} value={ex.value}>
                   {ex.label}
                 </SelectItem>

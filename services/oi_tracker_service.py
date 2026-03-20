@@ -42,18 +42,15 @@ def _get_nearest_futures_price(
     try:
         if exchange.upper() in CRYPTO_EXCHANGES:
             # CRYPTO perpetuals are stored as PERPFUT — no expiry filter
-            futures = fno_search_symbols(
-                underlying=underlying,
-                exchange=exchange,
-                instrumenttype=INSTRUMENT_PERPFUT,
-                limit=1,
+            _perp = fno_search_symbols(
+                query=f"{underlying}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
             )
-            if not futures:
+            if not _perp:
                 logger.warning(f"No perpetual futures contracts found for {underlying} on {exchange}")
                 return None
 
-            fut_symbol = futures[0]["symbol"]
-            fut_exchange = futures[0]["exchange"]
+            fut_symbol = _perp[0]["symbol"]
+            fut_exchange = _perp[0]["exchange"]
 
             # CRYPTO: bypass validate_symbol_exchange (in-memory cache miss → 400)
             auth_token, broker = get_auth_token_broker(api_key)

@@ -73,11 +73,10 @@ def get_custom_straddle_simulation(
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
 
-        # Handle crypto perpetual symbol lookup
+        # Handle crypto perpetual symbol lookup (e.g. BTC → BTCUSDFUT)
         if exchange.upper() in CRYPTO_EXCHANGES:
             _perp = fno_search_symbols(
-                underlying=base_symbol, exchange=exchange,
-                instrumenttype=INSTRUMENT_PERPFUT, limit=1,
+                query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
             )
             if not _perp:
                 return False, {"status": "error", "message": f"No perpetual futures found for {base_symbol}"}, 404

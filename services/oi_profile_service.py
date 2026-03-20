@@ -50,12 +50,12 @@ def _find_futures_symbol(
         # Search for futures contract matching this expiry
         # For crypto exchanges, perpetuals (PERPFUT) serve as the underlying
         if exchange.upper() in CRYPTO_EXCHANGES:
-            futures = fno_search_symbols(
-                underlying=underlying,
-                exchange=exchange,
-                instrumenttype=INSTRUMENT_PERPFUT,
-                limit=1,
+            _perp = fno_search_symbols(
+                query=f"{underlying}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
             )
+            if not _perp:
+                return None
+            futures = [{"symbol": _perp[0]["symbol"], "exchange": _perp[0]["exchange"]}]
         else:
             futures = fno_search_symbols(
                 underlying=underlying,
