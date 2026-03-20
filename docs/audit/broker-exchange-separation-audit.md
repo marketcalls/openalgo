@@ -646,63 +646,53 @@ These four core pages display data returned by broker mapping layers. Currently 
 | **TradeBook** | `NRML` (hardcoded in Delta mapping) | Already uses `makeFormatCurrency` | `NRML` label makes no sense for crypto trades |
 | **Positions** | `NRML` or `CNC` (Delta mapping) | Already uses `makeFormatCurrency` | Labels don't convey margin mode |
 
-### 9.2 What Needs to Change
+### 9.2 Actual Findings from Delta Exchange API
 
-The product column on these pages should display broker-appropriate labels:
+Raw API response analysis (captured 2026-03-20) revealed:
 
-**Stock brokers**: No change — continue showing MIS, NRML, CNC
-
-**Crypto brokers**: Display crypto-native product types:
-
-| Current (Fake) | Should Display | Meaning |
-|----------------|---------------|---------|
-| `CNC` (spot) | `SPOT` | Spot/wallet holdings |
-| `NRML` (derivatives) | `CROSS` or `ISOLATED` | Margin mode for derivatives |
-
-### 9.3 Implementation Approach
-
-Two options:
-
-**Option A: Backend normalization (recommended)**
-
-Update Delta Exchange's `reverse_map_product_type()` and equivalent functions to return crypto-native labels:
-
-```python
-def reverse_map_product_type(br_product, is_spot=False):
-    if is_spot:
-        return "SPOT"
-    return "CROSS"  # or determine from position data
-```
-
-This keeps the frontend simple — it just displays whatever `product` string the backend returns.
-
-**Option B: Frontend display mapping**
-
-Keep backend returning NRML/CNC, but add a display mapping in the frontend:
-
-```typescript
-function displayProduct(product: string, broker_type: string): string {
-  if (broker_type !== 'crypto') return product
-  if (product === 'CNC') return 'SPOT'
-  if (product === 'NRML') return 'CROSS'
-  return product
+**Orders (`GET /v2/orders`) contain `margin_mode` field:**
+```json
+{
+  "margin_mode": "cross",
+  "product_symbol": "BTCUSD",
+  "product": {
+    "contract_type": "perpetual_futures"
+  }
 }
 ```
 
-Option A is cleaner since the backend already has broker-specific mapping layers.
+**Key finding**: `margin_mode` (`"cross"` / `"isolated"`) IS available in order responses, but it serves a different purpose than MIS/NRML/CNC:
+- MIS/NRML/CNC answers: **"how long do you hold?"** (intraday vs carry-forward vs delivery)
+- Cross/Isolated answers: **"how is your margin protected?"** (shared pool vs per-position)
+
+These concepts have no meaningful mapping between them. Crypto has no EOD square-off, no delivery concept.
+
+**Wallet (`GET /v2/wallet/balances`)**: Single unified wallet — no separate spot vs derivatives wallet. Same BTC balance is used for spot trading and derivative margin. `blocked_margin` shows how much is locked for open positions.
+
+### 9.3 Implementation Decision: Hide Product Column for Crypto
+
+Instead of mapping to CROSS/ISOLATED (which adds complexity for no functional benefit), the Product column is **hidden entirely** for crypto brokers:
+
+**Stock brokers**: Continue showing MIS, NRML, CNC (unchanged)
+**Crypto brokers**: Product column hidden — table header, cell, CSV export, and filter chips all conditionally removed using `isCrypto` from `useSupportedExchanges()` hook
+
+Pages updated:
+- `OrderBook.tsx` — Product column, CSV export, modify dialog
+- `TradeBook.tsx` — Product column, CSV export, filter dialog + chips
+- `Positions.tsx` — Product column, CSV export, filter dialog + chips
 
 ### 9.4 Additional Display Differences
 
 | Element | Stock Brokers | Crypto Brokers |
 |---------|-------------|--------------|
 | **Exchange badge** | NSE, BSE, NFO, BFO, etc. | CRYPTO |
-| **Product badge** | MIS, NRML, CNC | SPOT, CROSS, ISOLATED |
+| **Product column** | MIS, NRML, CNC (visible) | Hidden |
 | **Quantity** | Integer (lots) | Fractional (0.001 BTC) |
 | **Currency** | INR (already handled) | USD (already handled) |
 | **Trading hours** | IST market hours | 24/7 |
 | **Symbol format** | RELIANCE, NIFTY24JAN24000CE | BTCUSD.P, ETHUSD-25MAR25-2000-C |
 
-The quantity formatting already handles fractional values since Delta Exchange uses `float` for sizes. Currency formatting is already handled by `makeFormatCurrency()`. The main gap is the product type labels.
+The quantity formatting already handles fractional values since Delta Exchange uses `float` for sizes. Currency formatting is already handled by `makeFormatCurrency()`.
 
 ---
 
