@@ -4,6 +4,10 @@
 VERSION = "2.0.0.1"
 
 
-def get_version():
-    """Return the current OpenAlgo version"""
+def get_version() -> str:
+    """Return the current OpenAlgo version.
+
+    Returns:
+        str: The current version string (e.g. '2.0.0.1')
+    """
     return VERSION
