@@ -101,6 +101,15 @@ function LeverageRoute() {
   return <Leverage />
 }
 
+/** Route guard: hide Holdings for crypto brokers (no equity holdings concept) */
+function HoldingsRoute() {
+  const capabilities = useBrokerStore((s) => s.capabilities)
+  if (capabilities?.broker_type === 'crypto') {
+    return <Navigate to="/dashboard" replace />
+  }
+  return <Holdings />
+}
+
 // Admin pages
 const AdminIndex = lazy(() => import('@/pages/admin/AdminIndex'))
 const FreezeQty = lazy(() => import('@/pages/admin/FreezeQty'))
@@ -150,7 +159,7 @@ function App() {
                 <Route path="/positions" element={<Positions />} />
                 <Route path="/orderbook" element={<OrderBook />} />
                 <Route path="/tradebook" element={<TradeBook />} />
-                <Route path="/holdings" element={<Holdings />} />
+                <Route path="/holdings" element={<HoldingsRoute />} />
                 {/* Search routes - match Flask /search/* routes */}
                 <Route path="/search/token" element={<Token />} />
                 <Route path="/search" element={<Search />} />
