@@ -112,6 +112,7 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
   - `playground.py` loads from broker-type-specific subfolder based on session broker's `broker_type` from plugin.json capabilities
   - Crypto collection: 48 files with BTCUSDFUT, CRYPTO exchange, NRML product (no holdings.bru, Chartink.bru, syntheticfuture.bru)
   - Stock collection: original 62 files unchanged
+  - WebSocket presets in `MessageComposer.tsx`: dynamic symbols based on `isCrypto` (BTCUSDFUT/CRYPTO for crypto, RELIANCE/NSE for stock)
 
 #### Flow Editor (`/frontend/src/pages/flow/FlowIndex.tsx`)
 - **Current**: Generic webhook automation, example payloads use stock symbols (RELIANCE, INFY)
