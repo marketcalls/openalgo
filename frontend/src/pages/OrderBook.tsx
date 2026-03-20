@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/table'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 // Note: AlertDialog still used for Cancel All Orders
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
@@ -72,6 +73,7 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
 
 export default function OrderBook() {
   const { apiKey, user } = useAuthStore()
+  const { isCrypto } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [orders, setOrders] = useState<Order[]>([])
   const [stats, setStats] = useState<OrderStats | null>(null)
@@ -265,7 +267,7 @@ export default function OrderBook() {
         'Price',
         'Trigger',
         'Type',
-        'Product',
+        ...(isCrypto ? [] : ['Product']),
         'Order ID',
         'Status',
         'Time',
@@ -278,7 +280,7 @@ export default function OrderBook() {
         sanitizeCSV(o.price),
         sanitizeCSV(o.trigger_price),
         sanitizeCSV(o.pricetype),
-        sanitizeCSV(o.product),
+        ...(isCrypto ? [] : [sanitizeCSV(o.product)]),
         sanitizeCSV(o.orderid),
         sanitizeCSV(o.order_status),
         sanitizeCSV(o.timestamp),
@@ -504,7 +506,7 @@ export default function OrderBook() {
                     <TableHead className="w-[100px] text-right">Price</TableHead>
                     <TableHead className="w-[100px] text-right">Trigger</TableHead>
                     <TableHead className="w-[80px]">Type</TableHead>
-                    <TableHead className="w-[70px]">Product</TableHead>
+                    {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
                     <TableHead className="w-[140px]">Order ID</TableHead>
                     <TableHead className="w-[100px]">Status</TableHead>
                     <TableHead className="w-[100px]">Time</TableHead>
@@ -542,9 +544,11 @@ export default function OrderBook() {
                         <TableCell>
                           <Badge variant="secondary">{order.pricetype}</Badge>
                         </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{order.product}</Badge>
-                        </TableCell>
+                        {!isCrypto && (
+                          <TableCell>
+                            <Badge variant="outline">{order.product}</Badge>
+                          </TableCell>
+                        )}
                         <TableCell className="font-mono text-xs">{order.orderid}</TableCell>
                         <TableCell>
                           <div className={cn('flex items-center gap-1', status.color)}>
@@ -624,12 +628,14 @@ export default function OrderBook() {
                   {modifyForm.pricetype}
                 </Badge>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Product:</span>
-                <Badge variant="outline" className="text-xs">
-                  {modifyForm.product}
-                </Badge>
-              </div>
+              {!isCrypto && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Product:</span>
+                  <Badge variant="outline" className="text-xs">
+                    {modifyForm.product}
+                  </Badge>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Qty:</span>
                 <span className="font-mono text-sm font-medium">{modifyForm.quantity}</span>

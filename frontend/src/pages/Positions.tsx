@@ -54,6 +54,7 @@ import { useLivePrice } from '@/hooks/useLivePrice'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 
@@ -138,6 +139,7 @@ const PRODUCT_COLORS: Record<string, string> = {
 
 export default function Positions() {
   const { apiKey, user } = useAuthStore()
+  const { isCrypto } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [positions, setPositions] = useState<Position[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -477,7 +479,7 @@ export default function Positions() {
       const headers = [
         'Symbol',
         'Exchange',
-        'Product',
+        ...(isCrypto ? [] : ['Product']),
         'Quantity',
         'Avg Price',
         'LTP',
@@ -487,7 +489,7 @@ export default function Positions() {
       const rows = filteredPositions.map((p) => [
         sanitizeCSV(p.symbol),
         sanitizeCSV(p.exchange),
-        sanitizeCSV(p.product),
+        ...(isCrypto ? [] : [sanitizeCSV(p.product)]),
         sanitizeCSV(p.quantity),
         sanitizeCSV(p.average_price),
         sanitizeCSV(p.ltp),
@@ -684,6 +686,7 @@ export default function Positions() {
                 <div className="border-t" />
 
                 {/* Product Type */}
+                {!isCrypto && (
                 <div className="space-y-3">
                   <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Product Type
@@ -694,6 +697,7 @@ export default function Positions() {
                     <FilterChip type="product" value="NRML" label="NRML" />
                   </div>
                 </div>
+                )}
 
                 {/* Direction */}
                 <div className="space-y-3">
@@ -779,7 +783,7 @@ export default function Positions() {
               Grouped: {grouping === 'underlying' ? 'Underlying' : 'Underlying & Expiry'}
             </Badge>
           )}
-          {filters.product.map((v) => (
+          {!isCrypto && filters.product.map((v) => (
             <Badge
               key={v}
               variant="secondary"
@@ -877,7 +881,7 @@ export default function Positions() {
                   <TableRow>
                     <SortableHeader column={0} label="Symbol" className="w-[140px]" />
                     <TableHead className="w-[80px]">Exchange</TableHead>
-                    <TableHead className="w-[80px]">Product</TableHead>
+                    {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
                     <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
                     <SortableHeader column={4} label="Avg Price" className="w-[120px] text-right" />
                     <TableHead className="w-[120px] text-right">LTP</TableHead>
@@ -950,6 +954,7 @@ export default function Positions() {
                                   {position.exchange}
                                 </Badge>
                               </TableCell>
+                              {!isCrypto && (
                               <TableCell className="w-[80px]">
                                 <Badge
                                   variant="outline"
@@ -958,6 +963,7 @@ export default function Positions() {
                                   {position.product}
                                 </Badge>
                               </TableCell>
+                              )}
                               <TableCell
                                 className={cn(
                                   'w-[80px] text-right font-medium',
