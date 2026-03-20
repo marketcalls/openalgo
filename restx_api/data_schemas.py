@@ -177,8 +177,8 @@ class OptionGreeksSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbol = fields.Str(required=True)  # Option symbol (e.g., NIFTY28NOV2424000CE)
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX"])
-    )  # Exchange (NFO, BFO, CDS, MCX)
+        required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX", "CRYPTO"])
+    )  # Exchange (NFO, BFO, CDS, MCX, CRYPTO)
     interest_rate = fields.Float(
         required=False, validate=validate.Range(min=0, max=100)
     )  # Risk-free interest rate (annualized %). Optional, defaults per exchange
