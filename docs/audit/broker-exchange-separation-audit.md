@@ -166,7 +166,7 @@ The navigation is hardcoded with no conditional rendering. The following menu it
 
 ### 4.1 Add `supported_exchanges` to `plugin.json`
 
-Each broker's `plugin.json` should declare its supported exchanges:
+Each broker's `plugin.json` declares its supported exchanges, broker type, and leverage config:
 
 ```json
 {
@@ -174,8 +174,9 @@ Each broker's `plugin.json` should declare its supported exchanges:
     "Description": "Zerodha OpenAlgo Plugin",
     "Version": "1.0",
     "Author": "Rajandran R",
-    "broker_type": "stock",
-    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX"]
+    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "MCX", "NSE_INDEX", "BSE_INDEX", "MCX_INDEX"],
+    "broker_type": "IN_stock",
+    "leverage_config": false
 }
 ```
 
@@ -185,8 +186,9 @@ Each broker's `plugin.json` should declare its supported exchanges:
     "Description": "Delta Exchange OpenAlgo Plugin",
     "Version": "1.0",
     "Author": "Bashab Bhattacharjee",
+    "supported_exchanges": ["CRYPTO"],
     "broker_type": "crypto",
-    "supported_exchanges": ["CRYPTO"]
+    "leverage_config": true
 }
 ```
 
@@ -214,22 +216,16 @@ Each broker's `plugin.json` should declare its supported exchanges:
 
 ### 4.2 New Backend API Endpoint
 
-Create `GET /api/v1/broker/capabilities` that returns broker metadata to the frontend:
+Create `GET /api/broker/capabilities` that returns broker metadata to the frontend:
 
 ```json
 {
     "status": "success",
     "data": {
         "broker_name": "zerodha",
-        "broker_type": "stock",
-        "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX"],
-        "features": {
-            "options_chain": true,
-            "custom_straddle": true,
-            "leverage_config": false,
-            "currency": "INR",
-            "session_24x7": false
-        }
+        "broker_type": "IN_stock",
+        "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "MCX", "NSE_INDEX", "BSE_INDEX", "MCX_INDEX"],
+        "leverage_config": false
     }
 }
 ```
@@ -242,18 +238,12 @@ For crypto broker:
         "broker_name": "deltaexchange",
         "broker_type": "crypto",
         "supported_exchanges": ["CRYPTO"],
-        "features": {
-            "options_chain": true,
-            "custom_straddle": false,
-            "leverage_config": true,
-            "currency": "USD",
-            "session_24x7": true
-        }
+        "leverage_config": true
     }
 }
 ```
 
-**Implementation**: Read from `plugin.json` via the existing plugin loader. Cache on first load.
+**Implementation**: `utils/plugin_loader.py` reads all `plugin.json` files at startup into an in-memory dict. `blueprints/broker_credentials.py` serves `GET /api/broker/capabilities` from this cache. Zero file I/O per request.
 
 ### 4.3 Frontend Broker Capabilities Store
 
@@ -264,25 +254,19 @@ Create a new store or extend `authStore` to cache broker capabilities:
 
 interface BrokerCapabilities {
   broker_name: string
-  broker_type: 'stock' | 'crypto'
+  broker_type: 'IN_stock' | 'crypto'
   supported_exchanges: string[]
-  features: {
-    options_chain: boolean
-    custom_straddle: boolean
-    leverage_config: boolean
-    currency: 'INR' | 'USD'
-    session_24x7: boolean
-  }
+  leverage_config: boolean
 }
 ```
 
-Fetch once on login, cache for the session. All pages consume from this store instead of hardcoding exchange lists.
+Fetch once on login via `AuthSync.tsx`, cache in Zustand `brokerStore.ts`. All pages consume from `useSupportedExchanges()` hook instead of hardcoding exchange lists.
 
 ### 4.4 Page-Level Changes Summary
 
 | Page | Change Type | Description |
 |------|------------|-------------|
-| **Leverage** | Conditional Route | Only render route if `features.leverage_config === true` |
+| **Leverage** | Conditional Route | Only render route if `leverage_config === true` |
 | **TradingView** | Exchange Filter | Load exchanges from `supported_exchanges`; swap product list for crypto |
 | **GoCharting** | Exchange Filter | Same as TradingView |
 | **Historify** | Exchange Filter | Load exchanges from `supported_exchanges`; default exchange matches broker type |
@@ -441,7 +425,7 @@ export function useFnoExchanges() {
 }
 ```
 
-All 10 tool pages would import `useFnoExchanges()` instead of hardcoding their own arrays. This ensures:
+All 10 tool pages import `useSupportedExchanges()` (single combined hook at `frontend/src/hooks/useSupportedExchanges.ts`) instead of hardcoding their own arrays. This hook returns `fnoExchanges`, `tradingExchanges`, `allExchanges`, `defaultUnderlyings`, and `isCrypto`. This ensures:
 - Stock brokers see only NFO/BFO
 - Crypto brokers see only CRYPTO
 - Future crypto exchanges automatically inherit this behavior

@@ -10,6 +10,7 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useThemeStore } from '@/stores/themeStore'
 import { oiProfileApi } from '@/api/oi-profile'
 import {
@@ -39,15 +40,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { showToast } from '@/utils/toast'
 
-const FNO_EXCHANGES = [
-  { value: 'NFO', label: 'NFO' },
-  { value: 'BFO', label: 'BFO' },
-]
-
-const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
-  NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
-  BFO: ['SENSEX', 'BANKEX'],
-}
+// FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
 const LOT_SIZE_DEFAULTS: Record<string, number> = {
   NIFTY: 65, BANKNIFTY: 30, FINNIFTY: 60, MIDCPNIFTY: 120, NIFTYNXT50: 25,
@@ -88,15 +81,16 @@ function formatINR(value: number): string {
 
 export default function CustomStraddle() {
   const { mode, appMode } = useThemeStore()
+  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
   const isDarkMode = mode === 'dark'
   const isAnalyzer = appMode === 'analyzer'
 
   // Control state
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedExchange, setSelectedExchange] = useState('NFO')
-  const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
+  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState('NIFTY')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [intervals, setIntervals] = useState<string[]>(['1m', '3m', '5m', '10m', '15m', '30m', '1h'])
@@ -124,6 +118,13 @@ export default function CustomStraddle() {
   const watermarkRef = useRef<HTMLDivElement | null>(null)
   const chartDataRef = useRef<CustomStraddleData | null>(null)
   const seriesDataMapRef = useRef<Map<number, PnLDataPoint>>(new Map())
+
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
 
   // Theme colors
   const colors = useMemo(() => {
@@ -426,7 +427,7 @@ export default function CustomStraddle() {
 
   // Fetch underlyings on exchange change
   useEffect(() => {
-    const defaults = DEFAULT_UNDERLYINGS[selectedExchange] || []
+    const defaults = defaultUnderlyings[selectedExchange] || []
     setUnderlyings(defaults)
     setSelectedUnderlying(defaults[0] || '')
     setExpiries([])
@@ -556,7 +557,7 @@ export default function CustomStraddle() {
             <Select value={selectedExchange} onValueChange={setSelectedExchange}>
               <SelectTrigger className="w-[100px]"><SelectValue placeholder="Exchange" /></SelectTrigger>
               <SelectContent>
-                {FNO_EXCHANGES.map((ex) => (
+                {fnoExchanges.map((ex) => (
                   <SelectItem key={ex.value} value={ex.value}>{ex.label}</SelectItem>
                 ))}
               </SelectContent>

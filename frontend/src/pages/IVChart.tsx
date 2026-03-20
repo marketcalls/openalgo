@@ -8,6 +8,7 @@ import {
   type IChartApi,
   type ISeriesApi,
 } from 'lightweight-charts'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useThemeStore } from '@/stores/themeStore'
 import { ivChartApi, type IVChartData } from '@/api/iv-chart'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -31,17 +32,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { showToast } from '@/utils/toast'
 
-const FNO_EXCHANGES = [
-  { value: 'NFO', label: 'NFO' },
-  { value: 'BFO', label: 'BFO' },
-  { value: 'CRYPTO', label: 'CRYPTO' },
-]
-
-const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
-  NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
-  BFO: ['SENSEX', 'BANKEX'],
-  CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
-}
+// FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
 const METRICS = ['iv', 'delta', 'theta', 'vega', 'gamma'] as const
 type MetricKey = (typeof METRICS)[number]
@@ -101,20 +92,28 @@ interface ChartInstance {
 export default function IVChart() {
   const { mode } = useThemeStore()
   const isDarkMode = mode === 'dark'
+  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
 
   // Control state
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<MetricKey>('iv')
-  const [selectedExchange, setSelectedExchange] = useState('NFO')
-  const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
+  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState('NIFTY')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [intervals, setIntervals] = useState<string[]>([])
   const [selectedInterval, setSelectedInterval] = useState('5m')
   const [selectedDays, setSelectedDays] = useState('1')
   const [chartData, setChartData] = useState<IVChartData | null>(null)
+
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
 
   // Chart refs
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -326,7 +325,7 @@ export default function IVChart() {
 
   // Fetch underlyings when exchange changes
   useEffect(() => {
-    const defaults = DEFAULT_UNDERLYINGS[selectedExchange] || []
+    const defaults = defaultUnderlyings[selectedExchange] || []
     setUnderlyings(defaults)
     setSelectedUnderlying(defaults[0] || '')
     setExpiries([])
@@ -464,7 +463,7 @@ export default function IVChart() {
                 <SelectValue placeholder="Exchange" />
               </SelectTrigger>
               <SelectContent>
-                {FNO_EXCHANGES.map((ex) => (
+                {fnoExchanges.map((ex) => (
                   <SelectItem key={ex.value} value={ex.value}>
                     {ex.label}
                   </SelectItem>
