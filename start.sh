@@ -48,7 +48,7 @@ BROKER_API_SECRET_MARKET = '${BROKER_API_SECRET_MARKET:-}'
 REDIRECT_URL = '${REDIRECT_URL}'
 
 # Valid Brokers Configuration
-VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha}'
+VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,definedge,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha}'
 
 # Security Configuration
 APP_KEY = '${APP_KEY}'
@@ -191,32 +191,36 @@ export PYTHONDONTWRITEBYTECODE=1
 cd /app
 
 # ============================================
-# DATABASE MIGRATIONS
+# WEBSOCKET PROXY SERVER (with auto-restart)
 # ============================================
-# Run migrations automatically on startup (idempotent - safe to run multiple times)
-if [ -f "/app/upgrade/migrate_all.py" ]; then
-    echo "[OpenAlgo] Running database migrations..."
-    /app/.venv/bin/python /app/upgrade/migrate_all.py || echo "[OpenAlgo] Migration completed (some may have been skipped)"
-else
-    echo "[OpenAlgo] No migrations found, skipping..."
-fi
+start_websocket() {
+    echo "[OpenAlgo] Starting WebSocket proxy server on port 8765..."
+    /app/.venv/bin/python -m websocket_proxy.server &
+    WEBSOCKET_PID=$!
+    echo "[OpenAlgo] WebSocket proxy server started with PID $WEBSOCKET_PID"
+}
 
-# ============================================
-# WEBSOCKET PROXY SERVER
-# ============================================
-echo "[OpenAlgo] Starting WebSocket proxy server on port 8765..."
-/app/.venv/bin/python -m websocket_proxy.server &
-WEBSOCKET_PID=$!
-echo "[OpenAlgo] WebSocket proxy server started with PID $WEBSOCKET_PID"
+watchdog_websocket() {
+    while true; do
+        if ! kill -0 $WEBSOCKET_PID 2>/dev/null; then
+            echo "[OpenAlgo] WebSocket proxy crashed, restarting..."
+            start_websocket
+        fi
+        sleep 5
+    done
+}
+
+start_websocket
+watchdog_websocket &
+WATCHDOG_PID=$!
 
 # ============================================
 # CLEANUP HANDLER
 # ============================================
 cleanup() {
     echo "[OpenAlgo] Shutting down..."
-    if [ ! -z "$WEBSOCKET_PID" ]; then
-        kill $WEBSOCKET_PID 2>/dev/null
-    fi
+    kill $WATCHDOG_PID 2>/dev/null
+    kill $WEBSOCKET_PID 2>/dev/null
     exit 0
 }
 
@@ -230,16 +234,11 @@ trap cleanup SIGTERM SIGINT
 APP_PORT="${PORT:-5000}"
 
 echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
-
-# Create gunicorn worker temp directory (must be inside container, not mounted volume)
-mkdir -p /tmp/gunicorn_workers
-
 exec /app/.venv/bin/gunicorn \
     --worker-class eventlet \
     --workers 1 \
     --bind 0.0.0.0:${APP_PORT} \
-    --timeout 300 \
+    --timeout 120 \
     --graceful-timeout 30 \
-    --worker-tmp-dir /tmp/gunicorn_workers \
     --log-level warning \
     app:app
