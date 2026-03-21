@@ -232,6 +232,28 @@ def get_last_download_time(broker):
         session.close()
 
 
+def get_last_downloaded_broker():
+    """Get the broker that most recently downloaded master contracts successfully.
+
+    Since the symtoken table is shared (no broker column), only the most recent
+    broker's data is valid. This helps detect broker switches that require re-download.
+    """
+    session = SessionLocal()
+    try:
+        status = (
+            session.query(MasterContractStatus)
+            .filter(MasterContractStatus.last_download_time.isnot(None))
+            .order_by(MasterContractStatus.last_download_time.desc())
+            .first()
+        )
+        return status.broker if status else None
+    except Exception as e:
+        logger.exception(f"Error getting last downloaded broker: {str(e)}")
+        return None
+    finally:
+        session.close()
+
+
 def update_download_stats(broker, duration_seconds, exchange_stats=None):
     """Update download statistics after successful download"""
     session = SessionLocal()
