@@ -240,11 +240,12 @@ export default function Holdings() {
             size="sm"
             onClick={() => fetchHoldings(true)}
             disabled={isRefreshing}
+            aria-label="Refresh holdings"
           >
             <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV}>
+          <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export holdings">
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
