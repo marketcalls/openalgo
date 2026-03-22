@@ -1,5 +1,14 @@
-# Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Dhan Margin API https://dhanhq.co/docs/v2/funds/
+"""Dhan broker margin data mapping module.
+
+Transforms margin calculation requests between OpenAlgo's format and
+Dhan's v2 margin calculator API format. Parses margin responses to
+extract total, SPAN, and exposure margin values with aggregation
+support for multi-leg strategies.
+
+See:
+    - OpenAlgo API docs: https://openalgo.in/docs
+    - Dhan Funds/Margin docs: https://dhanhq.co/docs/v2/funds/
+"""
 
 from broker.dhan.mapping.transform_data import map_exchange_type, map_order_type, map_product_type
 from database.token_db import get_token

@@ -1,3 +1,9 @@
+"""Dhan API base URL configuration module.
+
+Provides the base URL constant and URL construction utility for building
+complete Dhan API endpoint URLs.
+"""
+
 # Dhan API Base URL Configuration
 
 # Base URL for Dhan API endpoints

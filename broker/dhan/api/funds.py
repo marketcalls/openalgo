@@ -1,3 +1,10 @@
+"""Dhan broker funds and margin data module.
+
+Provides functionality for fetching account balance, margin utilization,
+collateral values, and realized/unrealized P&L from the Dhan v2 API
+fund limits and position endpoints.
+"""
+
 # api/funds.py
 
 import json

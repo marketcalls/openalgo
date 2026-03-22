@@ -1,3 +1,11 @@
+"""Dhan broker master contract database module.
+
+Manages the download, processing, and storage of Dhan's instrument
+master contract data from the scrip master CSV. Handles symbol
+normalization, exchange segment mapping, NSE/BSE index symbol
+standardization, and bulk database insertion.
+"""
+
 # database/master_contract_db.py
 
 import gzip
