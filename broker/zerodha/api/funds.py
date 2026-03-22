@@ -1,3 +1,10 @@
+"""Zerodha (Kite) broker funds and margin data module.
+
+Provides functionality for fetching account balance, margin utilization,
+collateral values, and realized/unrealized P&L from the Zerodha Kite
+Connect margins and positions APIs.
+"""
+
 # api/funds.py
 
 import os

@@ -1,3 +1,11 @@
+"""Zerodha (Kite) broker order data mapping module.
+
+Transforms order, trade, position, and holdings data between Zerodha's
+Kite Connect API response format and OpenAlgo's standardized internal
+format. Handles symbol resolution, product type mapping, and statistics
+calculation.
+"""
+
 import json
 
 from database.token_db import get_oa_symbol, get_symbol

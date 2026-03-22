@@ -1,3 +1,11 @@
+"""Zerodha (Kite) broker master contract database module.
+
+Manages the download, processing, and storage of Zerodha's instrument
+master contract data from the Kite Connect instruments API. Handles
+symbol normalization, exchange mapping, index symbol mapping, and
+bulk database insertion for efficient symbol resolution.
+"""
+
 #database/master_contract_db.py
 
 import os

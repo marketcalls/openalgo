@@ -1,3 +1,10 @@
+"""Zerodha (Kite) broker order management module.
+
+Provides functions for placing, modifying, and cancelling orders through
+the Zerodha Kite Connect REST API. Also includes smart order routing
+and position management utilities.
+"""
+
 import http.client
 import json
 import os
@@ -75,22 +82,68 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
 
 
 def get_order_book(auth):
+    """Retrieve the order book for the current trading session.
+
+    Args:
+        auth (str): The Kite API access token.
+
+    Returns:
+        dict: Order book data from the Kite API.
+    """
     return get_api_response("/orders", auth)
 
 
 def get_trade_book(auth):
+    """Retrieve the trade book for the current trading session.
+
+    Args:
+        auth (str): The Kite API access token.
+
+    Returns:
+        dict: Trade book data from the Kite API.
+    """
     return get_api_response("/trades", auth)
 
 
 def get_positions(auth):
+    """Retrieve all open positions (day and net) for the current session.
+
+    Args:
+        auth (str): The Kite API access token.
+
+    Returns:
+        dict: Positions data with 'day' and 'net' sub-arrays.
+    """
     return get_api_response("/portfolio/positions", auth)
 
 
 def get_holdings(auth):
+    """Retrieve the demat holdings portfolio.
+
+    Args:
+        auth (str): The Kite API access token.
+
+    Returns:
+        dict: Holdings data from the Kite API.
+    """
     return get_api_response("/portfolio/holdings", auth)
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
+    """Get the net quantity for a specific open position.
+
+    Converts the OpenAlgo symbol to Zerodha's broker format and searches
+    the net positions for a matching entry.
+
+    Args:
+        tradingsymbol (str): The trading symbol in OpenAlgo format.
+        exchange (str): The exchange segment (e.g., 'NSE', 'NFO').
+        product (str): The product type in Zerodha format (e.g., 'MIS', 'CNC').
+        auth (str): The Kite API access token.
+
+    Returns:
+        str: The net quantity as a string, or '0' if not found.
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
 
@@ -112,6 +165,20 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
 
 def place_order_api(data, auth):
+    """Place a new order through the Zerodha Kite API.
+
+    Transforms order data from OpenAlgo format to Kite format and
+    submits a regular order via URL-encoded POST request.
+
+    Args:
+        data (dict): Order parameters including 'symbol', 'exchange',
+            'action', 'quantity', 'pricetype', 'product', and
+            optionally 'price' and 'trigger_price'.
+        auth (str): The Kite API access token.
+
+    Returns:
+        tuple: A 3-tuple of (response, response_data, orderid).
+    """
     AUTH_TOKEN = auth
 
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
@@ -171,6 +238,19 @@ def place_order_api(data, auth):
 
 
 def place_smartorder_api(data, auth):
+    """Place a smart order that adjusts quantity based on current position.
+
+    Compares the desired position_size with the current open position
+    and places a BUY or SELL order for the difference.
+
+    Args:
+        data (dict): Order parameters including 'symbol', 'exchange',
+            'product', 'action', 'quantity', and 'position_size'.
+        auth (str): The Kite API access token.
+
+    Returns:
+        tuple: A 3-tuple of (response, response_data, orderid).
+    """
     AUTH_TOKEN = auth
 
     # Initialize default return values
@@ -244,6 +324,18 @@ def place_smartorder_api(data, auth):
 
 
 def close_all_positions(current_api_key, auth):
+    """Close all open positions by placing opposite market orders.
+
+    Iterates through all net positions and places market orders
+    to square off each one. Positions with zero quantity are skipped.
+
+    Args:
+        current_api_key (str): The OpenAlgo API key for order placement.
+        auth (str): The Kite API access token.
+
+    Returns:
+        tuple: A 2-tuple of (response_dict, status_code).
+    """
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
@@ -334,6 +426,20 @@ def cancel_order(orderid, auth):
 
 
 def modify_order(data, auth):
+    """Modify an existing pending order.
+
+    Updates order parameters such as price, quantity, and order type
+    for a regular order that has not yet been executed.
+
+    Args:
+        data (dict): Modified order parameters including 'orderid',
+            'symbol', 'exchange', 'pricetype', 'product', 'price',
+            and 'quantity'.
+        auth (str): The Kite API access token.
+
+    Returns:
+        tuple: A 2-tuple of (response_dict, status_code).
+    """
     AUTH_TOKEN = auth
 
     newdata = transform_modify_order_data(data)  # You need to implement this function
@@ -391,6 +497,18 @@ def modify_order(data, auth):
 
 
 def cancel_all_orders_api(data, auth):
+    """Cancel all open and trigger-pending orders.
+
+    Retrieves the order book, filters for orders in 'OPEN' or
+    'TRIGGER PENDING' state, and cancels each one individually.
+
+    Args:
+        data (dict): Request data (currently unused).
+        auth (str): The Kite API access token.
+
+    Returns:
+        tuple: A 2-tuple of (canceled_orders, failed_cancellations).
+    """
     AUTH_TOKEN = auth
     # Get the order book
     order_book_response = get_order_book(AUTH_TOKEN)

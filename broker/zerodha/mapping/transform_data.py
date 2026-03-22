@@ -1,5 +1,13 @@
-# Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Zerodha Broking Parameters https://kite.trade/docs/connect/v3/
+"""Zerodha (Kite) broker order data transformation module.
+
+Maps OpenAlgo API request parameters to Zerodha's Kite Connect API format
+for order placement and modification. Handles symbol resolution, order type
+mapping, and product type mapping.
+
+See:
+    - OpenAlgo API docs: https://openalgo.in/docs
+    - Kite Connect docs: https://kite.trade/docs/connect/v3/
+"""
 
 from database.token_db import get_br_symbol
 
