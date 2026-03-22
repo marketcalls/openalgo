@@ -32,7 +32,12 @@ def generate_consent(dhan_client_id):
 
         client = get_httpx_client()
 
-        headers = {"app_id": BROKER_API_KEY, "app_secret": BROKER_API_SECRET}
+        headers = {
+            "app_id": BROKER_API_KEY, 
+            "app_secret": BROKER_API_SECRET,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
 
         # Build URL with client_id parameter - REQUIRED by Dhan API
         url = f"{AUTH_BASE_URL}/app/generate-consent"
@@ -95,6 +100,8 @@ def consume_consent(token_id):
             "app_id": BROKER_API_KEY,
             "app_secret": BROKER_API_SECRET,
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
         }
 
         url = f"{AUTH_BASE_URL}/app/consumeApp-consent"

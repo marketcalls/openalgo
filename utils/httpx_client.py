@@ -190,6 +190,12 @@ def _create_http_client() -> httpx.Client:
                 max_connections=100,  # Increased from 50 for 10+ concurrent strategies
                 keepalive_expiry=30.0,  # Reduced from 120s to recycle stale connections faster
             ),
+            # Add common browser headers to avoid CloudFront/WAF blocks
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
             # Add verify parameter to handle SSL/TLS issues in standalone mode
             verify=True,  # Can be set to False for debugging SSL issues (not recommended for production)
             # Add event hooks for latency tracking

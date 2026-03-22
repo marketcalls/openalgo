@@ -156,7 +156,12 @@ def generate_consent(dhan_client_id=None):
         response = client.post(
             f"{AUTH_BASE_URL}/app/generate-consent",
             params={"client_id": dhan_client_id},
-            headers={"app_id": app_id, "app_secret": app_secret},
+            headers={
+                "app_id": app_id, 
+                "app_secret": app_secret,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            },
         )
 
         if response.status_code != 200:
@@ -200,7 +205,13 @@ def consume_consent(token_id):
         response = client.post(
             f"{AUTH_BASE_URL}/app/consumeApp-consent",
             params={"tokenId": token_id},
-            headers={"app_id": app_id, "app_secret": app_secret},
+            headers={
+                "app_id": app_id, 
+                "app_secret": app_secret,
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            },
         )
 
         if response.status_code != 200:
@@ -237,7 +248,12 @@ def generate_partner_consent():
         client = _get_client()
         response = client.post(
             f"{AUTH_BASE_URL}/partner/generate-consent",
-            headers={"partner_id": partner_id, "partner_secret": partner_secret},
+            headers={
+                "partner_id": partner_id, 
+                "partner_secret": partner_secret,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            },
         )
 
         if response.status_code != 200:
@@ -281,7 +297,13 @@ def consume_partner_consent(token_id):
         response = client.post(
             f"{AUTH_BASE_URL}/partner/consume-consent",
             params={"tokenId": token_id},
-            headers={"partner_id": partner_id, "partner_secret": partner_secret},
+            headers={
+                "partner_id": partner_id, 
+                "partner_secret": partner_secret,
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            },
         )
 
         if response.status_code != 200:
