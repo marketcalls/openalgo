@@ -1,3 +1,10 @@
+"""Angel One broker order data mapping module.
+
+Transforms order, trade, position, and holdings data between Angel One's
+API response format and OpenAlgo's standardized internal format. Handles
+symbol resolution, product type mapping, and statistics calculation.
+"""
+
 import json
 
 from database.token_db import get_oa_symbol, get_symbol
@@ -102,6 +109,19 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
+    """Transform Angel One order data to OpenAlgo's standardized format.
+
+    Converts raw order dictionaries from the Angel One API into a
+    simplified format with consistent field names for display.
+
+    Args:
+        orders (dict or list): A single order dict or list of order dicts
+            from the Angel One API.
+
+    Returns:
+        list: List of transformed order dictionaries with standardized
+            field names (symbol, exchange, action, quantity, price, etc.).
+    """
     # Directly handling a dictionary assuming it's the structure we expect
     if isinstance(orders, dict):
         # Convert the single dictionary into a list of one dictionary
@@ -196,6 +216,15 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """Transform Angel One trade book data to OpenAlgo's standardized format.
+
+    Args:
+        tradebook_data (list): List of trade dictionaries from the Angel One API.
+
+    Returns:
+        list: List of transformed trade dictionaries with standardized
+            field names (symbol, exchange, product, action, quantity, etc.).
+    """
     transformed_data = []
     for trade in tradebook_data:
         transformed_trade = {
@@ -214,10 +243,27 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
+    """Map position data using the same logic as order data mapping.
+
+    Args:
+        position_data (dict): Raw position data from the Angel One API.
+
+    Returns:
+        list: List of position dictionaries with mapped symbols and products.
+    """
     return map_order_data(position_data)
 
 
 def transform_positions_data(positions_data):
+    """Transform Angel One position data to OpenAlgo's standardized format.
+
+    Args:
+        positions_data (list): List of position dictionaries from the API.
+
+    Returns:
+        list: List of transformed position dictionaries with standardized
+            field names (symbol, exchange, product, quantity, pnl, etc.).
+    """
     transformed_data = []
     for position in positions_data:
         transformed_position = {
@@ -234,6 +280,16 @@ def transform_positions_data(positions_data):
 
 
 def transform_holdings_data(holdings_data):
+    """Transform Angel One holdings data to OpenAlgo's standardized format.
+
+    Args:
+        holdings_data (dict): Holdings data dict containing a 'holdings' list
+            from the Angel One API.
+
+    Returns:
+        list: List of transformed holding dictionaries with standardized
+            field names (symbol, exchange, quantity, product, pnl, etc.).
+    """
     transformed_data = []
     for holdings in holdings_data["holdings"]:
         transformed_position = {
@@ -290,6 +346,16 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
+    """Calculate aggregate portfolio statistics from holdings data.
+
+    Args:
+        holdings_data (dict): Holdings data containing a 'totalholding' dict
+            with aggregated portfolio values.
+
+    Returns:
+        dict: Portfolio statistics including totalholdingvalue,
+            totalinvvalue, totalprofitandloss, and totalpnlpercentage.
+    """
     if holdings_data["totalholding"] is None:
         totalholdingvalue = 0
         totalinvvalue = 0

@@ -1,3 +1,9 @@
+"""Angel One broker authentication module.
+
+Handles authentication with the Angel One (formerly Angel Broking) REST API
+using client credentials and TOTP-based two-factor authentication.
+"""
+
 import json
 import os
 
@@ -7,8 +13,22 @@ from utils.httpx_client import get_httpx_client
 
 
 def authenticate_broker(clientcode, broker_pin, totp_code):
-    """
-    Authenticate with the broker and return the auth token.
+    """Authenticate with Angel One and obtain a JWT session token.
+
+    Sends a login request to the Angel One API with the user's client code,
+    PIN, and TOTP code. On success, returns both the JWT auth token and
+    the feed token for WebSocket market data streaming.
+
+    Args:
+        clientcode (str): The Angel One client code (user ID).
+        broker_pin (str): The user's trading PIN/password.
+        totp_code (str): The time-based one-time password for 2FA.
+
+    Returns:
+        tuple: A 3-tuple of (auth_token, feed_token, error):
+            - auth_token (str or None): JWT token for API authentication.
+            - feed_token (str or None): Token for WebSocket feed access.
+            - error (str or None): Error message if authentication failed.
     """
     api_key = os.getenv("BROKER_API_KEY")
 

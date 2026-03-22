@@ -1,3 +1,10 @@
+"""Angel One broker order management module.
+
+Provides functions for placing, modifying, and cancelling orders through
+the Angel One REST API. Also includes smart order routing and position
+management utilities.
+"""
+
 import json
 import os
 import time
@@ -19,6 +26,22 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
+    """Make an authenticated API request to Angel One with retry support.
+
+    Handles connection pooling, rate limiting, empty responses, and JSON
+    parsing errors with automatic retries.
+
+    Args:
+        endpoint (str): The API endpoint path (e.g., '/rest/secure/...').
+        auth (str): The JWT authentication token.
+        method (str, optional): HTTP method. Defaults to 'GET'.
+        payload (str, optional): JSON request body. Defaults to ''.
+        max_retries (int, optional): Maximum number of retry attempts. Defaults to 2.
+
+    Returns:
+        dict: Parsed JSON response from the API, or an error dict with
+            'status' and 'message' keys on failure.
+    """
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
 
@@ -80,22 +103,71 @@ def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
 
 
 def get_order_book(auth):
+    """Retrieve the order book for the current trading session.
+
+    Args:
+        auth (str): The JWT authentication token.
+
+    Returns:
+        dict: Order book data from the Angel One API.
+    """
     return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook", auth)
 
 
 def get_trade_book(auth):
+    """Retrieve the trade book for the current trading session.
+
+    Args:
+        auth (str): The JWT authentication token.
+
+    Returns:
+        dict: Trade book data from the Angel One API.
+    """
     return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook", auth)
 
 
 def get_positions(auth):
+    """Retrieve all open positions for the current trading session.
+
+    Args:
+        auth (str): The JWT authentication token.
+
+    Returns:
+        dict: Positions data from the Angel One API.
+    """
     return get_api_response("/rest/secure/angelbroking/order/v1/getPosition", auth)
 
 
 def get_holdings(auth):
+    """Retrieve the demat holdings portfolio.
+
+    Args:
+        auth (str): The JWT authentication token.
+
+    Returns:
+        dict: Holdings data from the Angel One API.
+    """
     return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding", auth)
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
+    """Get the net quantity for a specific open position.
+
+    Converts the OpenAlgo trading symbol to broker format and searches
+    through all open positions for a matching symbol, exchange, and
+    product type combination.
+
+    Args:
+        tradingsymbol (str): The trading symbol in OpenAlgo format.
+        exchange (str): The exchange segment (e.g., 'NSE', 'NFO').
+        producttype (str): The product type in broker format
+            (e.g., 'INTRADAY', 'DELIVERY', 'CARRYFORWARD').
+        auth (str): The JWT authentication token.
+
+    Returns:
+        str: The net quantity of the matching position, or '0' if
+            no matching position is found.
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
@@ -118,6 +190,23 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 
 def place_order_api(data, auth):
+    """Place a new order through the Angel One API.
+
+    Transforms the order data from OpenAlgo format to Angel One format,
+    then submits the order to the broker's place order endpoint.
+
+    Args:
+        data (dict): Order parameters including 'symbol', 'exchange',
+            'action', 'quantity', 'pricetype', 'product', and
+            optionally 'price' and 'trigger_price'.
+        auth (str): The JWT authentication token.
+
+    Returns:
+        tuple: A 3-tuple of (response, response_data, orderid):
+            - response: The raw httpx Response object.
+            - response_data (dict): Parsed JSON response.
+            - orderid (str or None): The order ID if successful.
+    """
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     data["apikey"] = BROKER_API_KEY
@@ -179,6 +268,23 @@ def place_order_api(data, auth):
 
 
 def place_smartorder_api(data, auth):
+    """Place a smart order that adjusts quantity based on current position.
+
+    Compares the desired position_size with the current open position
+    and places a BUY or SELL order for the difference. This enables
+    target-based position management (e.g., go from +100 to -50).
+
+    Args:
+        data (dict): Order parameters including 'symbol', 'exchange',
+            'product', 'action', 'quantity', and 'position_size'.
+        auth (str): The JWT authentication token.
+
+    Returns:
+        tuple: A 3-tuple of (response, response_data, orderid):
+            - response: The raw httpx Response object (None if no API call).
+            - response_data (dict): Result dict with 'status' and 'message'.
+            - orderid (str or None): The order ID if an order was placed.
+    """
     AUTH_TOKEN = auth
 
     # If no API call is made in this function then res will return None
@@ -264,6 +370,20 @@ def place_smartorder_api(data, auth):
 
 
 def close_all_positions(current_api_key, auth):
+    """Close all open positions by placing opposite market orders.
+
+    Iterates through all open positions and places market orders
+    to square off each one. Positions with zero net quantity are skipped.
+
+    Args:
+        current_api_key (str): The OpenAlgo API key for order placement.
+        auth (str): The JWT authentication token.
+
+    Returns:
+        tuple: A 2-tuple of (response_dict, status_code):
+            - response_dict (dict): Result with 'status' and 'message'.
+            - status_code (int): HTTP status code (200 on success).
+    """
     # Fetch the current open positions
     AUTH_TOKEN = auth
 
@@ -315,6 +435,18 @@ def close_all_positions(current_api_key, auth):
 
 
 def cancel_order(orderid, auth):
+    """Cancel a pending order by its order ID.
+
+    Args:
+        orderid (str): The order ID to cancel.
+        auth (str): The JWT authentication token.
+
+    Returns:
+        tuple: A 2-tuple of (response_dict, status_code):
+            - response_dict (dict): Result with 'status' and optionally
+                'orderid' (on success) or 'message' (on failure).
+            - status_code (int): HTTP status code.
+    """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
@@ -368,6 +500,23 @@ def cancel_order(orderid, auth):
 
 
 def modify_order(data, auth):
+    """Modify an existing pending order.
+
+    Updates order parameters such as price, quantity, and order type
+    for an existing order that has not yet been executed.
+
+    Args:
+        data (dict): Modified order parameters including 'orderid',
+            'symbol', 'exchange', 'pricetype', 'product', 'price',
+            and 'quantity'.
+        auth (str): The JWT authentication token.
+
+    Returns:
+        tuple: A 2-tuple of (response_dict, status_code):
+            - response_dict (dict): Result with 'status' and 'orderid'
+                or 'message'.
+            - status_code (int): HTTP status code.
+    """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
@@ -417,6 +566,21 @@ def modify_order(data, auth):
 
 
 def cancel_all_orders_api(data, auth):
+    """Cancel all open and trigger-pending orders.
+
+    Retrieves the order book, filters for orders in 'open' or
+    'trigger pending' state, and cancels each one individually.
+
+    Args:
+        data (dict): Request data (currently unused but kept for
+            API consistency).
+        auth (str): The JWT authentication token.
+
+    Returns:
+        tuple: A 2-tuple of (canceled_orders, failed_cancellations):
+            - canceled_orders (list): List of successfully cancelled order IDs.
+            - failed_cancellations (list): List of order IDs that failed to cancel.
+    """
     # Get the order book
 
     AUTH_TOKEN = auth

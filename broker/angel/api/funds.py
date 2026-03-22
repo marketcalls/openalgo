@@ -1,3 +1,9 @@
+"""Angel One broker funds and margin data module.
+
+Provides functionality for fetching account balance, margin utilization,
+collateral values, and realized/unrealized P&L from the Angel One RMS API.
+"""
+
 # api/funds.py
 
 import json

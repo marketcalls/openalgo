@@ -1,3 +1,10 @@
+"""Angel One broker market data module.
+
+Provides the BrokerData class for fetching real-time quotes, multi-symbol
+quotes, historical OHLCV candlestick data, open interest history, and
+market depth from the Angel One REST API.
+"""
+
 import json
 import os
 import time
