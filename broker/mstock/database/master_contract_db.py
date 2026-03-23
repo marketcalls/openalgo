@@ -242,7 +242,8 @@ def fetch_and_process_mstock_indices():
         token_df["instrumenttype"] = "INDEX"
         token_df["tick_size"] = 0.05
 
-        # Standardize common symbol names (similar to aliceblue)
+        # Standardize NSE index symbols that differ from OpenAlgo standard format
+        # Only map symbols where mstock name differs; unlisted symbols pass through as-is
         token_df["symbol"] = token_df["symbol"].replace(
             {
                 "NIFTY50": "NIFTY",
@@ -250,7 +251,16 @@ def fetch_and_process_mstock_indices():
                 "NIFTYFINSERVICE": "FINNIFTY",
                 "NIFTYBANK": "BANKNIFTY",
                 "NIFTYMIDSELECT": "MIDCPNIFTY",
-                "INDIAVIX": "INDIAVIX",
+                "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+                "NIFTYMCAP50": "NIFTYMIDCAP50",
+                "NIFTYMIDSMALLCAP400": "NIFTYMIDSML400",
+                "NIFTYSMALLCAP100": "NIFTYSMLCAP100",
+                "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+                "NIFTYSMALLCAP50": "NIFTYSMLCAP50",
+                "NIFTY100EQUALWEIGHT": "NIFTY100EQLWGT",
+                "NIFTY100LOWVOLATILITY30": "NIFTY100LOWVOL30",
+                "NIFTYMID100FREE": "NIFTYMIDCAP100",
+                "HANGSENGBEES-NAV": "HANGSENGBEESNAV",
             }
         )
 
@@ -367,6 +377,53 @@ def process_mstock_json(json_data):
             df.loc[mask_bse_index, "exchange"] = "BSE_INDEX"
             logger.info(
                 f"Mapped {mask_bse_index.sum()} BSE index tokens to BSE_INDEX from master contract"
+            )
+
+            # Normalize BSE Index symbols to OpenAlgo standard format
+            bse_index_symbol_map = {
+                "SNSX50": "SENSEX50",
+                "SNXT50": "BSESENSEXNEXT50",
+                "MID150": "BSE150MIDCAPINDEX",
+                "LMI250": "BSE250LARGEMIDCAPINDEX",
+                "MSL400": "BSE400MIDSMALLCAPINDEX",
+                "AUTO": "BSEAUTO",
+                "BSE CG": "BSECAPITALGOODS",
+                "BSECG": "BSECAPITALGOODS",
+                "CARBON": "BSECARBONEX",
+                "BSE CD": "BSECONSUMERDURABLES",
+                "BSECD": "BSECONSUMERDURABLES",
+                "CPSE": "BSECPSE",
+                "DOL100": "BSEDOLLEX100",
+                "DOL200": "BSEDOLLEX200",
+                "DOL30": "BSEDOLLEX30",
+                "ENERGY": "BSEENERGY",
+                "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+                "FINSER": "BSEFINANCIALSERVICES",
+                "GREENX": "BSEGREENEX",
+                "BSE HC": "BSEHEALTHCARE",
+                "BSEHC": "BSEHEALTHCARE",
+                "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+                "INDSTR": "BSEINDUSTRIALS",
+                "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+                "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+                "BSEIPO": "BSEIPO",
+                "LRGCAP": "BSELARGECAP",
+                "METAL": "BSEMETAL",
+                "MIDCAP": "BSEMIDCAP",
+                "MIDSEL": "BSEMIDCAPSELECTINDEX",
+                "OILGAS": "BSEOIL&GAS",
+                "POWER": "BSEPOWER",
+                "BSEPSU": "BSEPSU",
+                "REALTY": "BSEREALTY",
+                "SMLCAP": "BSESMALLCAP",
+                "SMLSEL": "BSESMALLCAPSELECTINDEX",
+                "SMEIPO": "BSESMEIPO",
+                "TECK": "BSETECK",
+                "TELCOM": "BSETELECOM",
+            }
+            mask_bse_idx = df["exchange"] == "BSE_INDEX"
+            df.loc[mask_bse_idx, "symbol"] = (
+                df.loc[mask_bse_idx, "name"].replace(bse_index_symbol_map)
             )
     except Exception as e:
         logger.warning(f"Could not fetch BSE index tokens for mapping: {e}")
