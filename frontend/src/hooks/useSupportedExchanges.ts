@@ -11,6 +11,8 @@ export interface ExchangeOption {
 const UNDERLYINGS: Record<string, string[]> = {
   NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
   BFO: ['SENSEX', 'BANKEX'],
+  MCX: ['GOLDM', 'CRUDEOIL', 'SILVERM', 'NATURALGAS', 'COPPER'],
+  CDS: ['USDINR', 'EURINR', 'GBPINR', 'JPYINR'],
   CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
 }
 
