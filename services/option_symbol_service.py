@@ -593,7 +593,23 @@ def get_option_symbol(
         # Construct the symbol to fetch quotes for
         # For MCX/CDS: no spot symbol exists, so use the full futures symbol for LTP
         # For NSE/BSE: use base symbol (spot/index symbol exists)
-        if embedded_expiry:
+        # For CRYPTO: use perpetual future (e.g. BTC → BTCUSDFUT)
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            from database.token_db_enhanced import fno_search_symbols
+            from utils.constants import INSTRUMENT_PERPFUT
+
+            _perp = fno_search_symbols(
+                query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            quote_symbol = _perp[0]["symbol"]
+            quote_exchange = exchange.upper()
+        elif embedded_expiry:
             if exchange.upper() in ["MCX", "CDS"]:
                 quote_symbol = underlying.upper()
             else:

@@ -1,0 +1,22 @@
+meta {
+  name: history (EOD)
+  type: http
+  seq: 24
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/history
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbol": "BTCUSDFUT",
+      "exchange": "CRYPTO",
+      "interval": "D",
+      "start_date": "2025-01-01",
+      "end_date": "2026-03-20"
+  }
+}

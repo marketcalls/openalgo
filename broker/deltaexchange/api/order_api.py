@@ -161,11 +161,13 @@ def get_order_book(auth):
         
         # 1. Fetch open orders
         open_result = get_api_response("/v2/orders", auth, method="GET", params={"state": "open"})
+        logger.debug(f"[DeltaExchange] /v2/orders (open) count={len(open_result.get('result', []))}")
         if open_result.get("success"):
             all_orders.extend(open_result.get("result", []))
-            
+
         # 2. Fetch historical orders
         hist_result = get_api_response("/v2/orders/history", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/orders/history count={len(hist_result.get('result', []))}")
         if hist_result.get("success"):
             all_orders.extend(hist_result.get("result", []))
             
@@ -200,6 +202,7 @@ def get_trade_book(auth):
         today_date = datetime.now(ist).date()
         
         result = get_api_response("/v2/fills", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/fills count={len(result.get('result', []))}")
         if result.get("success"):
             all_trades = result.get("result", [])
             today_trades = []
@@ -241,6 +244,7 @@ def get_positions(auth):
     # 1. Derivative positions (perpetual futures, options)
     try:
         result = get_api_response("/v2/positions/margined", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/positions/margined count={len(result.get('result', []))}")
         if result.get("success"):
             positions.extend(result.get("result", []))
         else:
@@ -251,6 +255,7 @@ def get_positions(auth):
     # 2. Spot holdings from wallet balances
     try:
         wallet_result = get_api_response("/v2/wallet/balances", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/wallet/balances count={len(wallet_result.get('result', []))}")
         if wallet_result.get("success"):
             for asset in wallet_result.get("result", []):
                 if not isinstance(asset, dict):

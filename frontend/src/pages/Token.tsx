@@ -1,6 +1,7 @@
 import { Info, Search } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -23,21 +24,10 @@ interface SearchResult {
   strike?: number
 }
 
-const EXCHANGES = [
-  { value: 'NSE', label: 'NSE - National Stock Exchange' },
-  { value: 'NFO', label: 'NFO - NSE Futures & Options' },
-  { value: 'BSE', label: 'BSE - Bombay Stock Exchange' },
-  { value: 'BFO', label: 'BFO - BSE Futures & Options' },
-  { value: 'CDS', label: 'CDS - Currency Derivatives' },
-  { value: 'MCX', label: 'MCX - Multi Commodity Exchange' },
-  { value: 'NSE_INDEX', label: 'NSE_INDEX - National Stock Exchange Index' },
-  { value: 'BSE_INDEX', label: 'BSE_INDEX - Bombay Stock Exchange Index' },
-  { value: 'CRYPTO', label: 'CRYPTO - Delta Exchange India' },
-]
-
-const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO']
+// EXCHANGES and FNO_EXCHANGES are now dynamic — provided by useSupportedExchanges() hook
 
 export default function Token() {
+  const { allExchanges, fnoExchanges, isCrypto } = useSupportedExchanges()
   const navigate = useNavigate()
   const [symbol, setSymbol] = useState('')
   const [exchange, setExchange] = useState('')
@@ -59,7 +49,7 @@ export default function Token() {
   const inputWrapperRef = useRef<HTMLDivElement>(null)
   const fnoRequestIdRef = useRef(0)
 
-  const isFnoExchange = FNO_EXCHANGES.includes(exchange)
+  const isFnoExchange = fnoExchanges.some((ex) => ex.value === exchange)
 
   const hasFnoFilters = underlying || expiry || instrumentType || strikeMin || strikeMax
 
@@ -263,7 +253,7 @@ export default function Token() {
                 <Input
                   id="symbol"
                   type="text"
-                  placeholder="e.g., nifty, RELIANCE, 2885"
+                  placeholder={isCrypto ? 'e.g., BTC, BTCUSDFUT, ETH' : 'e.g., nifty, RELIANCE, 2885'}
                   value={symbol}
                   onChange={(e) => {
                     setSymbol(e.target.value)
@@ -332,7 +322,7 @@ export default function Token() {
                   <SelectValue placeholder="Select Exchange" />
                 </SelectTrigger>
                 <SelectContent>
-                  {EXCHANGES.map((ex) => (
+                  {allExchanges.map((ex) => (
                     <SelectItem key={ex.value} value={ex.value}>
                       {ex.label}
                     </SelectItem>
@@ -452,41 +442,68 @@ export default function Token() {
         <Info className="h-4 w-4" />
         <AlertTitle>Search Tips</AlertTitle>
         <AlertDescription className="space-y-3 mt-2">
-          <div>
-            <div className="font-semibold mb-1">Stock Search:</div>
-            <ul className="ml-2 space-y-0.5 text-sm">
-              <li>
-                By symbol: <code className="bg-muted px-2 py-0.5 rounded">RELIANCE</code>,{' '}
-                <code className="bg-muted px-2 py-0.5 rounded">INFY</code>
-              </li>
-              <li>
-                By company name:{' '}
-                <code className="bg-muted px-2 py-0.5 rounded">Reliance Industries</code>
-              </li>
-              <li>
-                By token number: <code className="bg-muted px-2 py-0.5 rounded">2885</code>
-              </li>
-            </ul>
-          </div>
-          <div>
-            <div className="font-semibold mb-1">Futures & Options:</div>
-            <ul className="ml-2 space-y-0.5 text-sm">
-              <li>
-                Futures: <code className="bg-muted px-2 py-0.5 rounded">nifty oct fut</code>,{' '}
-                <code className="bg-muted px-2 py-0.5 rounded">banknifty dec fut</code>
-              </li>
-              <li>
-                Call Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 25000 ce</code>
-              </li>
-              <li>
-                Put Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 24000 pe</code>
-              </li>
-            </ul>
-          </div>
-          <div className="text-xs text-muted-foreground mt-2">
-            <strong>Tip:</strong> Select the appropriate exchange (NFO for F&O, NSE for stocks) for
-            accurate results
-          </div>
+          {isCrypto ? (
+            <>
+              <div>
+                <div className="font-semibold mb-1">Crypto Search:</div>
+                <ul className="ml-2 space-y-0.5 text-sm">
+                  <li>
+                    Perpetual Futures: <code className="bg-muted px-2 py-0.5 rounded">BTCUSDFUT</code>,{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">ETHUSDFUT</code>
+                  </li>
+                  <li>
+                    Spot: <code className="bg-muted px-2 py-0.5 rounded">BTCINR</code>,{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">ETHINR</code>
+                  </li>
+                  <li>
+                    Options: <code className="bg-muted px-2 py-0.5 rounded">BTC 80000 CE</code>,{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">ETH 2000 PE</code>
+                  </li>
+                </ul>
+              </div>
+              <div className="text-xs text-muted-foreground mt-2">
+                <strong>Tip:</strong> Use F&O filters to narrow by underlying, expiry, and strike price
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <div className="font-semibold mb-1">Stock Search:</div>
+                <ul className="ml-2 space-y-0.5 text-sm">
+                  <li>
+                    By symbol: <code className="bg-muted px-2 py-0.5 rounded">RELIANCE</code>,{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">INFY</code>
+                  </li>
+                  <li>
+                    By company name:{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">Reliance Industries</code>
+                  </li>
+                  <li>
+                    By token number: <code className="bg-muted px-2 py-0.5 rounded">2885</code>
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <div className="font-semibold mb-1">Futures & Options:</div>
+                <ul className="ml-2 space-y-0.5 text-sm">
+                  <li>
+                    Futures: <code className="bg-muted px-2 py-0.5 rounded">nifty oct fut</code>,{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">banknifty dec fut</code>
+                  </li>
+                  <li>
+                    Call Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 25000 ce</code>
+                  </li>
+                  <li>
+                    Put Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 24000 pe</code>
+                  </li>
+                </ul>
+              </div>
+              <div className="text-xs text-muted-foreground mt-2">
+                <strong>Tip:</strong> Select the appropriate exchange (NFO for F&O, NSE for stocks) for
+                accurate results
+              </div>
+            </>
+          )}
         </AlertDescription>
       </Alert>
     </div>
