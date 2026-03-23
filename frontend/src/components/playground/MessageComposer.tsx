@@ -282,7 +282,7 @@ export function MessageComposer({
         editorRef.current?.focus()
       }, 100)
     },
-    [onChange, apiKey]
+    [onChange, apiKey, isCrypto]
   )
 
   const handleSend = useCallback(() => {

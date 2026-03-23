@@ -17,8 +17,8 @@ const UNDERLYINGS: Record<string, string[]> = {
 /** Index exchanges excluded from trading/FNO lists */
 const INDEX_EXCHANGES = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'CDS_INDEX'])
 
-/** F&O exchange codes */
-const FNO_CODES = new Set(['NFO', 'BFO', 'CRYPTO'])
+/** F&O exchange codes (includes MCX/CDS which also have options) */
+const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO'])
 
 /** Fallback exchanges when capabilities haven't loaded yet (backward compatible) */
 const FALLBACK_EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'CRYPTO']
