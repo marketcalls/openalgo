@@ -31,7 +31,7 @@ class FlattradeWebSocket:
     # Message types
     MSG_TYPE_CONNECT = "a"
     MSG_TYPE_HEARTBEAT = "h"
-    MSG_TYPE_AUTH_ACK = "ck"
+    MSG_TYPE_AUTH_ACK = "ak"
     MSG_TYPE_TOUCHLINE_SUB = "t"
     MSG_TYPE_TOUCHLINE_UNSUB = "u"
     MSG_TYPE_DEPTH_SUB = "d"
@@ -56,7 +56,7 @@ class FlattradeWebSocket:
         Args:
             user_id: User ID for authentication
             actid: Account ID for authentication
-            accesstoken: Access token for authentication
+            accesstoken: Session token for authentication
             on_message: Callback for incoming messages
             on_error: Callback for connection errors
             on_close: Callback for connection close
