@@ -110,6 +110,17 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
+    """Transform raw Shoonya order data to the OpenAlgo standardized format.
+
+    Maps Shoonya field names (tsym, exch, trantype, norenordno, etc.)
+    to OpenAlgo field names (symbol, exchange, action, orderid, etc.).
+
+    Args:
+        orders: A list of order dicts from Shoonya.
+
+    Returns:
+        list[dict]: Transformed orders with standardized field names.
+    """
     transformed_orders = []
 
     for order in orders:
@@ -196,6 +207,14 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """Transform raw Shoonya trade data to the OpenAlgo standardized format.
+
+    Args:
+        tradebook_data: List of trade dicts from the Shoonya trade book.
+
+    Returns:
+        list[dict]: Transformed trades with standardized field names.
+    """
     transformed_data = []
     for trade in tradebook_data:
         # Parse the timestamp from Shoonya format "HH:MM:SS DD-MM-YYYY" to just "HH:MM:SS"
@@ -261,6 +280,17 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    """Transform raw Shoonya position data to OpenAlgo standardized format.
+
+    Calculates net quantity, average price, and computes P&L using the
+    last traded price (lp).
+
+    Args:
+        positions_data: List of position dicts from Shoonya.
+
+    Returns:
+        list[dict]: Positions with standardized fields.
+    """
     transformed_data = []
     for position in positions_data:
         # Get position values
@@ -399,8 +429,13 @@ def calculate_portfolio_statistics(holdings_data):
 
 
 def transform_holdings_data(holdings_data):
-    """
-    Transforms holdings data according to Shoonya API specifications.
+    """Transforms holdings data according to Shoonya API specifications.
+    
+    Args:
+        holdings_data: List of raw holding dicts from Shoonya.
+        
+    Returns:
+        list[dict]: Standardized holdings data for OpenAlgo.
     """
     transformed_data = []
     if isinstance(holdings_data, list):
