@@ -98,6 +98,18 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
+    """Transform raw Kotak order data to the OpenAlgo standardized format.
+
+    Maps Kotak field names (trdSym, exSeg, trnsTp, etc.) to OpenAlgo
+    field names (symbol, exchange, action, etc.) and normalizes price
+    type codes.
+
+    Args:
+        orders: A list of order dicts from Kotak, or a single dict.
+
+    Returns:
+        list[dict]: Transformed orders with standardized field names.
+    """
     # Directly handling a dictionary assuming it's the structure we expect
     if isinstance(orders, dict):
         # Convert the single dictionary into a list of one dictionary
@@ -201,6 +213,16 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """Transform raw Kotak trade data to the OpenAlgo standardized format.
+
+    Computes trade_value as ``fldQty * avgPrc`` for each trade.
+
+    Args:
+        tradebook_data: List of trade dicts from the Kotak trade book.
+
+    Returns:
+        list[dict]: Transformed trades with standardized field names.
+    """
     transformed_data = []
 
     for trade in tradebook_data:
@@ -220,10 +242,33 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
+    """Map position data from Kotak format to OpenAlgo format.
+
+    Delegates to :func:`map_order_data` since positions share the
+    same data structure in the Kotak API.
+
+    Args:
+        position_data: Raw position data dict from Kotak API.
+
+    Returns:
+        list[dict] or dict: Mapped position data.
+    """
     return map_order_data(position_data)
 
 
 def transform_positions_data(positions_data):
+    """Transform raw Kotak position data to OpenAlgo standardized format.
+
+    Calculates net quantity as ``(flBuyQty - flSellQty) + (cfBuyQty - cfSellQty)``
+    and computes average price based on the direction of the position.
+
+    Args:
+        positions_data: List of position dicts from Kotak.
+
+    Returns:
+        list[dict]: Positions with symbol, exchange, product, quantity,
+            and average_price fields.
+    """
     transformed_data = []
     for position in positions_data:
         transformed_position = {
@@ -254,6 +299,18 @@ def transform_positions_data(positions_data):
 
 
 def transform_holdings_data(holdings_data):
+    """Transform raw Kotak holdings data to OpenAlgo standardized format.
+
+    Computes P&L as ``mktValue - holdingCost`` and percentage P&L
+    relative to holding cost.
+
+    Args:
+        holdings_data: List of holding dicts from the Kotak portfolio API.
+
+    Returns:
+        list[dict]: Holdings with symbol, exchange, quantity, product,
+            pnl, and pnlpercent fields.
+    """
     transformed_data = []
     logger.info("Holdings Data")
     logger.info(f"{holdings_data}")
@@ -329,6 +386,17 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
+    """Calculate aggregate portfolio statistics from holdings data.
+
+    Args:
+        holdings_data: List of holding dicts containing 'mktValue'
+            and 'holdingCost' fields.
+
+    Returns:
+        dict: Portfolio statistics with keys 'totalholdingvalue',
+            'totalinvvalue', 'totalprofitandloss', and
+            'totalpnlpercentage'.
+    """
     totalholdingvalue = sum(item["mktValue"] for item in holdings_data)
     totalinvvalue = sum(item["holdingCost"] for item in holdings_data)
     totalprofitandloss = sum(item["mktValue"] - item["holdingCost"] for item in holdings_data)

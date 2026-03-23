@@ -21,8 +21,21 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth_token, method="GET", payload=""):
-    """
-    Updated for Kotak Neo API v2 - uses dynamic baseUrl, httpx connection pooling, and new header structure
+    """Make an authenticated API request to the Kotak Neo API v2.
+
+    Uses the dynamic base URL extracted from the composite auth token,
+    httpx connection pooling, and Kotak Neo header structure (Sid, Auth,
+    neo-fin-key).
+
+    Args:
+        endpoint: API endpoint path (e.g., '/quick/user/orders').
+        auth_token: Composite token in the format
+            'trading_token:::trading_sid:::base_url:::access_token'.
+        method: HTTP method to use. Defaults to 'GET'.
+        payload: URL-encoded request body string. Defaults to ''.
+
+    Returns:
+        dict: Parsed JSON response from the Kotak API.
     """
     session_token, session_sid, base_url, access_token = auth_token.split(":::")
 
@@ -51,22 +64,70 @@ def get_api_response(endpoint, auth_token, method="GET", payload=""):
 
 
 def get_order_book(auth_token):
+    """Retrieve the order book for the authenticated user.
+
+    Args:
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        dict: Order book data containing all orders for the session.
+    """
     return get_api_response("/quick/user/orders", auth_token)
 
 
 def get_trade_book(auth_token):
+    """Retrieve the trade book for the authenticated user.
+
+    Args:
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        dict: Trade book data containing all executed trades.
+    """
     return get_api_response("/quick/user/trades", auth_token)
 
 
 def get_positions(auth_token):
+    """Retrieve current positions for the authenticated user.
+
+    Args:
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        dict: Position data including buy/sell quantities and P&L.
+    """
     return get_api_response("/quick/user/positions", auth_token)
 
 
 def get_holdings(auth_token):
+    """Retrieve portfolio holdings for the authenticated user.
+
+    Args:
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        dict: Holdings data with instrument details and valuations.
+    """
     return get_api_response("/portfolio/v1/holdings", auth_token)
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth_token):
+    """Get the net open position quantity for a specific symbol.
+
+    Converts the OpenAlgo symbol to Kotak broker format and searches
+    through positions. Net quantity is calculated as:
+    ``(flBuyQty - flSellQty) + (cfBuyQty - cfSellQty)``.
+
+    Args:
+        tradingsymbol: Trading symbol in OpenAlgo format.
+        exchange: Exchange in OpenAlgo format (e.g., 'NSE', 'NFO').
+        producttype: Product type in Kotak format (e.g., 'CNC', 'MIS').
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        int: Net quantity of the open position. Positive for long,
+            negative for short, 0 if no position found.
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth_token)
@@ -91,6 +152,23 @@ def get_open_position(tradingsymbol, exchange, producttype, auth_token):
 
 
 def place_order_api(data, auth_token):
+    """Place a new order through the Kotak Neo API.
+
+    Transforms the OpenAlgo order data to Kotak format, URL-encodes the
+    payload, and sends it to the order placement endpoint.
+
+    Args:
+        data: Order parameters including 'symbol', 'exchange', 'action',
+            'quantity', 'pricetype', 'product', and optional 'price'
+            and 'trigger_price'.
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        tuple: (response, response_data, orderid) where response is the
+            httpx Response object (or None on error), response_data is
+            the parsed JSON dict, and orderid is the order number string
+            or None if placement failed.
+    """
     session_token, session_sid, base_url, access_token = auth_token.split(":::")
 
     # Debug logging for baseUrl
@@ -135,6 +213,21 @@ def place_order_api(data, auth_token):
 
 
 def place_smartorder_api(data, auth_token):
+    """Place a smart order that automatically manages position sizing.
+
+    Compares the target ``position_size`` with the current open position
+    and calculates the required action (BUY/SELL) and quantity to reach
+    the desired position.
+
+    Args:
+        data: Order parameters including 'symbol', 'exchange', 'product',
+            'action', 'quantity', and 'position_size'.
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        tuple: (response, response_data, orderid). Returns None for
+            response if no API call was needed.
+    """
     # If no API call is made in this function then res will return None
     res = None
 
@@ -218,6 +311,19 @@ def place_smartorder_api(data, auth_token):
 
 
 def close_all_positions(current_api_key, auth_token):
+    """Close all open positions by placing opposite market orders.
+
+    Iterates through all current positions and places MARKET orders
+    to square off each non-zero position.
+
+    Args:
+        current_api_key: The OpenAlgo API key for the current user.
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        tuple: (response_dict, status_code) with a success or
+            'No Open Positions Found' message.
+    """
     # Fetch the current open positions
     positions_response = get_positions(auth_token)
     # logger.info(f"{positions_response}")
@@ -276,6 +382,16 @@ def close_all_positions(current_api_key, auth_token):
 
 
 def cancel_order(orderid, auth_token):
+    """Cancel an existing order by its order number.
+
+    Args:
+        orderid: The Kotak order number to cancel.
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        tuple: (response_dict, status_code). On success, returns the
+            cancelled order ID with status 200.
+    """
     session_token, session_sid, base_url, access_token = auth_token.split(":::")
 
     # Get the shared httpx client with connection pooling
@@ -313,6 +429,21 @@ def cancel_order(orderid, auth_token):
 
 
 def modify_order(data, auth_token):
+    """Modify an existing order's price, quantity, or other parameters.
+
+    Transforms the modification data to Kotak format and sends it
+    to the order modification endpoint.
+
+    Args:
+        data: Modification parameters including 'orderid', 'symbol',
+            'exchange', 'quantity', 'price', 'pricetype', 'product',
+            and 'action'.
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        tuple: (response_dict, status_code). On success, returns the
+            modified order ID with status 200.
+    """
     session_token, session_sid, base_url, access_token = auth_token.split(":::")
 
     # Debug logging for baseUrl
@@ -367,6 +498,19 @@ def modify_order(data, auth_token):
 
 
 def cancel_all_orders_api(data, auth_token):
+    """Cancel all open and trigger-pending orders.
+
+    Fetches the order book, filters for orders with status 'open' or
+    'trigger pending', and cancels each one.
+
+    Args:
+        data: Additional request data (unused, kept for API consistency).
+        auth_token: Composite Kotak authentication token.
+
+    Returns:
+        tuple: (canceled_orders, failed_cancellations) — two lists of
+            order IDs that were successfully or unsuccessfully cancelled.
+    """
     # Get the order book
     order_book_response = get_order_book(auth_token)
 
