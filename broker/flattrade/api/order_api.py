@@ -25,7 +25,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     data = f'{{"uid": "{api_key}", "actid": "{api_key}"}}'
 
-    if endpoint == "/PiConnectTP/Holdings":
+    if endpoint == "/PiConnectAPI/Holdings":
         data = f'{{"uid": "{api_key}", "actid": "{api_key}", "prd": "C"}}'
 
     payload = "jData=" + data + "&jKey=" + AUTH_TOKEN
@@ -33,7 +33,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     # Get the shared httpx client
     client = get_httpx_client()
 
-    if endpoint == "/PiConnectTP/Holdings":
+    if endpoint == "/PiConnectAPI/Holdings":
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
     else:
         headers = {"Content-Type": "application/json"}
@@ -46,25 +46,25 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
 
 def get_order_book(auth):
-    response = get_api_response("/PiConnectTP/OrderBook", auth, method="POST")
+    response = get_api_response("/PiConnectAPI/OrderBook", auth, method="POST")
     logger.debug(f"Flattrade OrderBook Response: {response}")
     return response
 
 
 def get_trade_book(auth):
-    response = get_api_response("/PiConnectTP/TradeBook", auth, method="POST")
+    response = get_api_response("/PiConnectAPI/TradeBook", auth, method="POST")
     logger.debug(f"Flattrade TradeBook Response: {response}")
     return response
 
 
 def get_positions(auth):
-    response = get_api_response("/PiConnectTP/PositionBook", auth, method="POST")
+    response = get_api_response("/PiConnectAPI/PositionBook", auth, method="POST")
     logger.debug(f"Flattrade PositionBook Response: {response}")
     return response
 
 
 def get_holdings(auth):
-    response = get_api_response("/PiConnectTP/Holdings", auth, method="POST")
+    response = get_api_response("/PiConnectAPI/Holdings", auth, method="POST")
     logger.debug(f"Flattrade Holdings Response: {response}")
     return response
 
@@ -114,7 +114,7 @@ def place_order_api(data, auth):
     # Get the shared httpx client
     client = get_httpx_client()
 
-    url = "https://piconnect.flattrade.in/PiConnectTP/PlaceOrder"
+    url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
     res = client.post(url, content=payload, headers=headers)
     response_data = res.json()
 
@@ -278,7 +278,7 @@ def cancel_order(orderid, auth):
     # Get the shared httpx client and send the request
     client = get_httpx_client()
 
-    url = "https://piconnect.flattrade.in/PiConnectTP/CancelOrder"
+    url = "https://piconnect.flattrade.in/PiConnectAPI/CancelOrder"
     res = client.post(url, content=payload, headers=headers)
     data = res.json()
     logger.info(f"{data}")
@@ -316,7 +316,7 @@ def modify_order(data, auth):
     # Get the shared httpx client
     client = get_httpx_client()
 
-    url = "https://piconnect.flattrade.in/PiConnectTP/ModifyOrder"
+    url = "https://piconnect.flattrade.in/PiConnectAPI/ModifyOrder"
     res = client.post(url, content=payload, headers=headers)
     response = res.json()
 
