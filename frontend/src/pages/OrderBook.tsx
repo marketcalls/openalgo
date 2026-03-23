@@ -331,7 +331,6 @@ export default function OrderBook() {
                 variant={hasActiveFilters ? 'default' : 'outline'}
                 size="sm"
                 className="relative"
-                aria-label="Filter orders"
               >
                 <Settings2 className="h-4 w-4 mr-2" />
                 Filters
@@ -375,18 +374,17 @@ export default function OrderBook() {
             size="sm"
             onClick={() => fetchOrders(true)}
             disabled={isRefreshing}
-            aria-label="Refresh orders"
           >
             <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export orders">
+          <Button variant="outline" size="sm" onClick={exportToCSV}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={openOrders.length === 0} aria-label="Cancel all orders">
+              <Button variant="destructive" size="sm" disabled={openOrders.length === 0}>
                 <X className="h-4 w-4 mr-2" />
                 Cancel All
               </Button>
@@ -564,7 +562,7 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
                               onClick={() => handleCancelOrder(order.orderid)}
-                              aria-label="Cancel order"
+                              aria-label={`Cancel order ${order.orderid}`}
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -577,7 +575,7 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-blue-500 hover:text-blue-600"
                               onClick={() => openModifyDialog(order)}
-                              aria-label="Modify order"
+                              aria-label={`Modify order for ${order.symbol}`}
                             >
                               <Pencil className="h-4 w-4" />
                             </Button>

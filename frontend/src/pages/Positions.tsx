@@ -628,7 +628,6 @@ export default function Positions() {
                 variant={hasActiveFilters ? 'default' : 'outline'}
                 size="sm"
                 className="relative"
-                aria-label="Position settings and filters"
               >
                 <Settings2 className="h-4 w-4 mr-2" />
                 Settings
@@ -737,20 +736,19 @@ export default function Positions() {
             size="sm"
             onClick={() => fetchPositions(true)}
             disabled={isRefreshing}
-            aria-label="Refresh positions"
           >
             <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
             Refresh
           </Button>
 
-          <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export positions">
+          <Button variant="outline" size="sm" onClick={exportToCSV}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
 
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={stats.total === 0} aria-label="Close all positions">
+              <Button variant="destructive" size="sm" disabled={stats.total === 0}>
                 <X className="h-4 w-4 mr-2" />
                 Close All
               </Button>
@@ -1006,6 +1004,7 @@ export default function Positions() {
                                   size="sm"
                                   className="text-destructive hover:text-destructive hover:bg-destructive/10"
                                   onClick={() => handleClosePosition(position)}
+                                  aria-label={`Close ${position.symbol} position`}
                                 >
                                   <X className="h-4 w-4" />
                                 </Button>
