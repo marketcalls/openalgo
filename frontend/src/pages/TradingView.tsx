@@ -98,7 +98,8 @@ export default function TradingView() {
   }, [])
 
   // Get webhook URL from host config or fallback to window.location.origin
-  const webhookUrl = hostConfig ? `${hostConfig.host_server}/api/v1/placesmartorder` : `${window.location.origin}/api/v1/placesmartorder`
+  const endpoint = alertMode === 'strategy' ? '/api/v1/placesmartorder' : '/api/v1/placeorder'
+  const webhookUrl = hostConfig ? `${hostConfig.host_server}${endpoint}` : `${window.location.origin}${endpoint}`
 
   // Debounced search
   const performSearch = useCallback(
