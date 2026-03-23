@@ -4,7 +4,7 @@ name = "openalgoUI"
 version = "2.0.0.1"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
-  "aniso8601==9.0.1",
+  "aniso8601==10.0.1",
   "annotated-types==0.7.0",
   "anyio==4.12.1",
   "appnope==0.1.4",
