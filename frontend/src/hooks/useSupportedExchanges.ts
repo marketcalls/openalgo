@@ -11,14 +11,16 @@ export interface ExchangeOption {
 const UNDERLYINGS: Record<string, string[]> = {
   NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
   BFO: ['SENSEX', 'BANKEX'],
+  MCX: ['GOLDM', 'CRUDEOIL', 'SILVERM', 'NATURALGAS', 'COPPER'],
+  CDS: ['USDINR', 'EURINR', 'GBPINR', 'JPYINR'],
   CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
 }
 
 /** Index exchanges excluded from trading/FNO lists */
 const INDEX_EXCHANGES = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'CDS_INDEX'])
 
-/** F&O exchange codes */
-const FNO_CODES = new Set(['NFO', 'BFO', 'CRYPTO'])
+/** F&O exchange codes (includes MCX/CDS which also have options) */
+const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO'])
 
 /** Fallback exchanges when capabilities haven't loaded yet (backward compatible) */
 const FALLBACK_EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'CRYPTO']

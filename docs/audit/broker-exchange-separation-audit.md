@@ -72,38 +72,47 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
 - **Current**: Hardcoded exchanges: `[NSE, NFO, BSE, BFO, CDS, MCX]` (stock only)
 - **Current Products**: `[MIS, NRML, CNC]` (stock only)
 - **Problem**: No CRYPTO exchange option; products don't apply to crypto
-- **Fix**:
-  - Stock brokers: Show `[NSE, NFO, BSE, BFO]` + MCX/CDS based on broker capability
-  - Crypto brokers: Show `[CRYPTO]` with crypto-specific products and symbol format examples
-  - Webhook payload examples should differ (stock symbols vs crypto pairs)
+- **Done**:
+  - Exchanges now from `tradingExchanges` via `useSupportedExchanges()` hook
+  - Product dropdown hidden for crypto brokers (`isCrypto`)
+  - Default symbol: `BTCUSDFUT` for crypto, `NHPC` for stock
+  - Default exchange: from broker capabilities
 
 #### GoCharting (`/frontend/src/pages/GoCharting.tsx`)
 - **Current**: Hardcoded exchanges: `[NSE, NFO, BSE, BFO, CDS, MCX]` (stock only)
 - **Current Products**: `[MIS, NRML, CNC]` (stock only)
 - **Problem**: Same as TradingView - no crypto support, stock-specific products
-- **Fix**: Same approach as TradingView - conditional exchanges and products
+- **Done**: Same approach as TradingView — `tradingExchanges` from hook, Product hidden for crypto, crypto defaults
 
 #### Historify (`/frontend/src/pages/Historify.tsx`)
 - **Current**: Hardcoded 10 exchanges including CRYPTO mixed with stock
 - **Default Exchange**: `NSE` (wrong for crypto brokers)
 - **Problem**: Crypto broker users see NSE/BSE/NFO which they can't use; stock users see CRYPTO
-- **Fix**:
+- **Fix** (pending):
   - Stock brokers: Show only their supported stock exchanges
   - Crypto brokers: Show only `CRYPTO`
   - Default exchange should match broker type
 
-#### Search / Token Search (`/frontend/src/pages/Search.tsx`)
+#### Search / Token Search (`/frontend/src/pages/Token.tsx`)
 - **Current**: 9 hardcoded exchanges including CRYPTO
 - **FNO Exchanges**: `[NFO, BFO, MCX, CDS, CRYPTO]` (mixed stock and crypto)
 - **Problem**: Stock users see CRYPTO; crypto users see 8 irrelevant stock exchanges
-- **Fix**: Filter exchange list based on broker capabilities; separate FNO filter logic
+- **Done**:
+  - Exchanges now from `allExchanges` via hook (includes _INDEX for token lookup)
+  - FNO check uses `fnoExchanges` from hook
+  - Crypto-specific search tips (BTCUSDFUT, BTCINR, BTC options)
+  - Stock-specific search tips (RELIANCE, INFY, nifty)
+  - Dynamic placeholder text based on broker type
 
 #### Playground (`/frontend/src/pages/Playground.tsx`)
 - **Current**: Single set of API examples (stock-oriented symbol formats)
 - **Problem**: Crypto users get stock examples (RELIANCE, NIFTY) that don't work
-- **Fix**: Load completely separate example collections:
-  - Stock collection: NSE/BSE equity, NFO options/futures, MCX commodity examples
-  - Crypto collection: BTC/ETH perpetuals, crypto options, spot trading examples
+- **Done**:
+  - Bruno collections split into `collections/openalgo/IN_stock/` and `collections/openalgo/crypto/`
+  - `playground.py` loads from broker-type-specific subfolder based on session broker's `broker_type` from plugin.json capabilities
+  - Crypto collection: 48 files with BTCUSDFUT, CRYPTO exchange, NRML product (no holdings.bru, Chartink.bru, syntheticfuture.bru)
+  - Stock collection: original 62 files unchanged
+  - WebSocket presets in `MessageComposer.tsx`: dynamic symbols based on `isCrypto` (BTCUSDFUT/CRYPTO for crypto, RELIANCE/NSE for stock)
 
 #### Flow Editor (`/frontend/src/pages/flow/FlowIndex.tsx`)
 - **Current**: Generic webhook automation, example payloads use stock symbols (RELIANCE, INFY)
@@ -125,13 +134,13 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
 
 ### 3.2 Pages That Need Exchange Filtering (Not Full Separation)
 
-| Page | File | Current Behavior | Fix Needed |
-|------|------|-----------------|------------|
-| **PlaceOrderDialog** | `components/trading/PlaceOrderDialog.tsx` | Product types based on exchange (FNO vs equity) | Add crypto product handling |
-| **Positions** | `pages/Positions.tsx` | Dynamic exchange filter from data | No change needed (already data-driven) |
-| **TradeBook** | `pages/TradeBook.tsx` | Dynamic exchange filter from data | No change needed |
-| **OrderBook** | `pages/OrderBook.tsx` | No exchange filter | No change needed |
-| **Holdings** | `pages/Holdings.tsx` | No exchange filter | No change needed |
+| Page | File | Current Behavior | Fix Done |
+|------|------|-----------------|----------|
+| **PlaceOrderDialog** | `components/trading/PlaceOrderDialog.tsx` | Product types based on exchange (FNO vs equity) | Pending — add crypto product handling |
+| **Positions** | `pages/Positions.tsx` | Dynamic exchange filter from data | Done — Product column hidden for crypto via `isCrypto` |
+| **TradeBook** | `pages/TradeBook.tsx` | Dynamic exchange filter from data | Done — Product column hidden for crypto via `isCrypto` |
+| **OrderBook** | `pages/OrderBook.tsx` | No exchange filter | Done — Product column hidden for crypto via `isCrypto` |
+| **Holdings** | `pages/Holdings.tsx` | No exchange filter | Done — Page hidden for crypto (route guard + nav filter). Crypto has no equity holdings; wallet balances shown in Positions |
 | **PnL Tracker** | `pages/PnLTracker.tsx` | Uses broker for currency formatting | Already handled |
 
 ### 3.3 Pages That Need No Changes
@@ -149,16 +158,16 @@ The frontend gets `user.broker` (broker name string) from the auth store but has
 
 ### 3.4 Navigation & Menu Visibility
 
-**File**: `/frontend/src/config/navigation.ts`
+**File**: `/frontend/src/components/layout/Navbar.tsx`
 
-The navigation is hardcoded with no conditional rendering. The following menu items should be conditionally visible:
+Navigation menu items are now conditionally filtered in `Navbar.tsx` using `useBrokerStore` capabilities:
 
-| Menu Item | Stock Brokers | Crypto Brokers |
-|-----------|:---:|:---:|
-| Leverage | Hidden | Visible |
-| CustomStraddle | Visible | Hidden |
-| IV Chart, Vol Surface, GEX, IV Smile | Visible | Conditional (if crypto options supported) |
-| OI Tracker, Max Pain, OI Profile | Visible | Conditional |
+| Menu Item | Stock Brokers | Crypto Brokers | Implementation |
+|-----------|:---:|:---:|---|
+| Leverage | Hidden | Visible | `leverage_config === true` check + `LeverageRoute` guard |
+| Holdings | Visible | Hidden | `broker_type !== 'crypto'` check + `HoldingsRoute` guard |
+| CustomStraddle | Visible | Visible | Shown for both (crypto has options) |
+| All Tools pages | Visible | Visible | Exchange dropdown filtered by broker capabilities |
 
 ---
 
@@ -646,63 +655,53 @@ These four core pages display data returned by broker mapping layers. Currently 
 | **TradeBook** | `NRML` (hardcoded in Delta mapping) | Already uses `makeFormatCurrency` | `NRML` label makes no sense for crypto trades |
 | **Positions** | `NRML` or `CNC` (Delta mapping) | Already uses `makeFormatCurrency` | Labels don't convey margin mode |
 
-### 9.2 What Needs to Change
+### 9.2 Actual Findings from Delta Exchange API
 
-The product column on these pages should display broker-appropriate labels:
+Raw API response analysis (captured 2026-03-20) revealed:
 
-**Stock brokers**: No change — continue showing MIS, NRML, CNC
-
-**Crypto brokers**: Display crypto-native product types:
-
-| Current (Fake) | Should Display | Meaning |
-|----------------|---------------|---------|
-| `CNC` (spot) | `SPOT` | Spot/wallet holdings |
-| `NRML` (derivatives) | `CROSS` or `ISOLATED` | Margin mode for derivatives |
-
-### 9.3 Implementation Approach
-
-Two options:
-
-**Option A: Backend normalization (recommended)**
-
-Update Delta Exchange's `reverse_map_product_type()` and equivalent functions to return crypto-native labels:
-
-```python
-def reverse_map_product_type(br_product, is_spot=False):
-    if is_spot:
-        return "SPOT"
-    return "CROSS"  # or determine from position data
-```
-
-This keeps the frontend simple — it just displays whatever `product` string the backend returns.
-
-**Option B: Frontend display mapping**
-
-Keep backend returning NRML/CNC, but add a display mapping in the frontend:
-
-```typescript
-function displayProduct(product: string, broker_type: string): string {
-  if (broker_type !== 'crypto') return product
-  if (product === 'CNC') return 'SPOT'
-  if (product === 'NRML') return 'CROSS'
-  return product
+**Orders (`GET /v2/orders`) contain `margin_mode` field:**
+```json
+{
+  "margin_mode": "cross",
+  "product_symbol": "BTCUSD",
+  "product": {
+    "contract_type": "perpetual_futures"
+  }
 }
 ```
 
-Option A is cleaner since the backend already has broker-specific mapping layers.
+**Key finding**: `margin_mode` (`"cross"` / `"isolated"`) IS available in order responses, but it serves a different purpose than MIS/NRML/CNC:
+- MIS/NRML/CNC answers: **"how long do you hold?"** (intraday vs carry-forward vs delivery)
+- Cross/Isolated answers: **"how is your margin protected?"** (shared pool vs per-position)
+
+These concepts have no meaningful mapping between them. Crypto has no EOD square-off, no delivery concept.
+
+**Wallet (`GET /v2/wallet/balances`)**: Single unified wallet — no separate spot vs derivatives wallet. Same BTC balance is used for spot trading and derivative margin. `blocked_margin` shows how much is locked for open positions.
+
+### 9.3 Implementation Decision: Hide Product Column for Crypto
+
+Instead of mapping to CROSS/ISOLATED (which adds complexity for no functional benefit), the Product column is **hidden entirely** for crypto brokers:
+
+**Stock brokers**: Continue showing MIS, NRML, CNC (unchanged)
+**Crypto brokers**: Product column hidden — table header, cell, CSV export, and filter chips all conditionally removed using `isCrypto` from `useSupportedExchanges()` hook
+
+Pages updated:
+- `OrderBook.tsx` — Product column, CSV export, modify dialog
+- `TradeBook.tsx` — Product column, CSV export, filter dialog + chips
+- `Positions.tsx` — Product column, CSV export, filter dialog + chips
 
 ### 9.4 Additional Display Differences
 
 | Element | Stock Brokers | Crypto Brokers |
 |---------|-------------|--------------|
 | **Exchange badge** | NSE, BSE, NFO, BFO, etc. | CRYPTO |
-| **Product badge** | MIS, NRML, CNC | SPOT, CROSS, ISOLATED |
+| **Product column** | MIS, NRML, CNC (visible) | Hidden |
 | **Quantity** | Integer (lots) | Fractional (0.001 BTC) |
 | **Currency** | INR (already handled) | USD (already handled) |
 | **Trading hours** | IST market hours | 24/7 |
 | **Symbol format** | RELIANCE, NIFTY24JAN24000CE | BTCUSD.P, ETHUSD-25MAR25-2000-C |
 
-The quantity formatting already handles fractional values since Delta Exchange uses `float` for sizes. Currency formatting is already handled by `makeFormatCurrency()`. The main gap is the product type labels.
+The quantity formatting already handles fractional values since Delta Exchange uses `float` for sizes. Currency formatting is already handled by `makeFormatCurrency()`.
 
 ---
 

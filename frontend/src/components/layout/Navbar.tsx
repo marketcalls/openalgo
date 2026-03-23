@@ -39,6 +39,7 @@ export function Navbar() {
   // Filter menu items based on broker capabilities
   const filteredProfileMenuItems = profileMenuItems.filter((item) => {
     if (item.href === '/leverage') return capabilities?.leverage_config === true
+    if (item.href === '/holdings') return capabilities?.broker_type !== 'crypto'
     return true
   })
 

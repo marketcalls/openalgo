@@ -1,0 +1,21 @@
+meta {
+  name: openposition
+  type: http
+  seq: 16
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/openposition
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Strategy",
+      "exchange": "CRYPTO",
+      "symbol": "BTCUSDFUT",
+      "product": "NRML"
+  }
+}
