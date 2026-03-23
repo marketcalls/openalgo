@@ -80,7 +80,7 @@ openalgo==1.0.46
 ordered-set==4.1.0
 orjson==3.11.7
 packaging==24.1
-pandas==2.3.3
+pandas==3.0.1
 pyarrow==23.0.1
 fastparquet==2025.12.0
 parso==0.8.6
