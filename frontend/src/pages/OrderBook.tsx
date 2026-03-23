@@ -53,15 +53,40 @@ import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
 
 function formatTime(timestamp: string): string {
-  try {
-    return new Date(timestamp).toLocaleTimeString('en-IN', {
+  if (!timestamp) return '-'
+
+  // Try native Date parsing first (handles ISO and standard formats)
+  let date = new Date(timestamp)
+
+  // If invalid, try "HH:MM:SS DD-MM-YYYY" (Flattrade/Shoonya/Zebu/Firstock norentm format)
+  if (Number.isNaN(date.getTime())) {
+    const norentm = timestamp.match(/^(\d{2}:\d{2}:\d{2})\s+(\d{2})-(\d{2})-(\d{4})$/)
+    if (norentm) {
+      date = new Date(`${norentm[4]}-${norentm[3]}-${norentm[2]}T${norentm[1]}`)
+    }
+  }
+
+  // If invalid, try "DD-MM-YYYY HH:MM:SS"
+  if (Number.isNaN(date.getTime())) {
+    const ddmmyyyy = timestamp.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}:\d{2}:\d{2})$/)
+    if (ddmmyyyy) {
+      date = new Date(`${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}T${ddmmyyyy[4]}`)
+    }
+  }
+
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleTimeString('en-IN', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
     })
-  } catch {
-    return timestamp
   }
+
+  // Last resort: extract HH:MM:SS if embedded in the string
+  const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
+  if (timeMatch) return timeMatch[1]
+
+  return timestamp
 }
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; label: string }> = {
