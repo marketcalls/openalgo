@@ -601,7 +601,13 @@ def get_option_symbol(
             _perp = fno_search_symbols(
                 query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
             )
-            quote_symbol = _perp[0]["symbol"] if _perp else base_symbol
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            quote_symbol = _perp[0]["symbol"]
             quote_exchange = exchange.upper()
         elif embedded_expiry:
             if exchange.upper() in ["MCX", "CDS"]:
