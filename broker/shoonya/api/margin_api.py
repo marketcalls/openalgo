@@ -9,15 +9,20 @@ logger = get_logger(__name__)
 
 
 def calculate_margin_api(positions, auth):
-    """
-    Calculate margin requirement for a basket of positions using Shoonya Span Calculator API.
+    """Calculate margin requirement for a basket of positions using Shoonya Span Calculator API.
+
+    Transforms positions into the Shoonya expected format, calls the
+    NorenWClientTP/SpanCalc API with the given positions, and parses
+    the JSON response.
 
     Args:
-        positions: List of positions in OpenAlgo format
-        auth: Authentication token (jKey) for Shoonya
+        positions (list[dict]): List of position dicts in OpenAlgo format.
+        auth (str): Authentication token (jKey) for Shoonya.
 
     Returns:
-        Tuple of (response, response_data)
+        tuple: (response, response_data). `response` is an httpx Response
+            (or a MockResponse on certain errors), and `response_data`
+            is the parsed margin response in OpenAlgo standard format.
     """
     AUTH_TOKEN = auth
 
