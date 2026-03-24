@@ -1,6 +1,5 @@
 import threading
 import time as time_module
-import traceback
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from importlib import import_module
@@ -183,7 +182,7 @@ def dynamic_import(broker, module_name, function_names):
             module_functions[name] = getattr(module, name)
         return module_functions
     except (ImportError, AttributeError) as e:
-        logger.error(
+        logger.exception(
             f"Error importing functions {function_names} from {module_name} for broker {broker}: {e}"
         )
         return None
@@ -1103,5 +1102,4 @@ def get_pnl_data():
 
     except Exception as e:
         logger.error(f"Error calculating intraday PnL: {e}")
-        traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
