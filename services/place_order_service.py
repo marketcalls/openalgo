@@ -1,6 +1,5 @@
 import copy
 import importlib
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
@@ -39,7 +38,7 @@ def import_broker_module(broker_name: str) -> Any | None:
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 
@@ -197,7 +196,6 @@ def place_order_with_auth(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
     except Exception as e:
         logger.error(f"Error in broker_module.place_order_api: {e}")
-        traceback.print_exc()
         error_response = {
             "status": "error",
             "message": "Failed to place order due to internal error",

@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import Auth, db_session, get_auth_token_broker, verify_api_key
@@ -53,7 +52,7 @@ def import_broker_module(broker_name: str) -> Any | None:
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 
@@ -114,7 +113,6 @@ def get_depth_with_auth(
         return True, {"status": "success", "data": depth}, 200
     except Exception as e:
         logger.error(f"Error in broker_module.get_depth: {e}")
-        traceback.print_exc()
         return False, {"status": "error", "message": str(e)}, 500
 
 

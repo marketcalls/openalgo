@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -58,7 +57,7 @@ def import_broker_module(broker_name: str) -> dict[str, Any] | None:
             "transform_holdings_data": mapping_module.transform_holdings_data,
         }
     except (ImportError, AttributeError) as error:
-        logger.error(f"Error importing broker modules: {error}")
+        logger.exception(f"Error importing broker modules: {error}")
         return None
 
 
@@ -137,7 +136,6 @@ def get_holdings_with_auth(
         )
     except Exception as e:
         logger.error(f"Error processing holdings data: {e}")
-        traceback.print_exc()
         return False, {"status": "error", "message": str(e)}, 500
 
 

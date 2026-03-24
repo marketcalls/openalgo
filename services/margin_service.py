@@ -1,6 +1,5 @@
 import copy
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from database.apilog_db import async_log_order, executor
@@ -30,7 +29,7 @@ def import_broker_module(broker_name: str) -> Any | None:
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 
@@ -199,7 +198,6 @@ def calculate_margin_with_auth(
         return False, error_response, 501
     except Exception as e:
         logger.error(f"Error in broker_module.calculate_margin_api: {e}")
-        traceback.print_exc()
         error_response = {
             "status": "error",
             "message": "Failed to calculate margin due to internal error",

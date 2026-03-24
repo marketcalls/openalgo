@@ -1,7 +1,6 @@
 import copy
 import importlib
 import time
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
@@ -64,7 +63,7 @@ def import_broker_module(broker_name: str) -> Any | None:
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 
@@ -255,7 +254,6 @@ def place_smart_order_with_auth(
 
     except Exception as e:
         logger.error(f"Error in broker_module.place_smartorder_api: {e}")
-        traceback.print_exc()
         error_response = {
             "status": "error",
             "message": "Failed to place smart order due to internal error",
@@ -271,8 +269,7 @@ def place_smart_order_with_auth(
     try:
         time.sleep(float(smart_order_delay))
     except Exception:
-        logger.error(f"Invalid SMART_ORDER_DELAY value: {smart_order_delay}")
-        traceback.print_exc()
+        logger.exception(f"Invalid SMART_ORDER_DELAY value: {smart_order_delay}")
 
     if res and res.status == 200:
         return True, order_response_data, 200
