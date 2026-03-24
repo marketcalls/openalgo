@@ -138,7 +138,7 @@ const PRODUCT_COLORS: Record<string, string> = {
   NRML: 'bg-slate-500/20 text-slate-600 border-slate-500/30',
 }
 
-export default function Positions() {
+function PositionsPage() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
@@ -587,7 +587,6 @@ export default function Positions() {
   })
 
   return (
-    <ErrorBoundary>
     <div className="space-y-6">
       {/* Stale Data Warning */}
       {showStaleWarning && (
@@ -1046,6 +1045,13 @@ export default function Positions() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+export default function Positions() {
+  return (
+    <ErrorBoundary>
+      <PositionsPage />
     </ErrorBoundary>
   )
 }

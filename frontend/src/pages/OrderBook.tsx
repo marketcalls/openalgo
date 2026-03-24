@@ -97,7 +97,7 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
   open: { icon: Clock, color: 'text-blue-500', label: 'open' },
 }
 
-export default function OrderBook() {
+function OrderBookPage() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
@@ -344,7 +344,6 @@ export default function OrderBook() {
   )
 
   return (
-    <ErrorBoundary>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -774,6 +773,13 @@ export default function OrderBook() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+export default function OrderBook() {
+  return (
+    <ErrorBoundary>
+      <OrderBookPage />
     </ErrorBoundary>
   )
 }

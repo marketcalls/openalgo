@@ -59,7 +59,7 @@ function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' |
   return 'secondary'
 }
 
-export default function Dashboard() {
+function DashboardPage() {
   const [marginData, setMarginData] = useState<MarginData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -271,7 +271,6 @@ export default function Dashboard() {
   }
 
   return (
-    <ErrorBoundary>
     <div className="space-y-6 md:space-y-12">
       {/* Dashboard Header */}
       <div className="flex flex-col lg:flex-row lg:items-start gap-4">
@@ -472,6 +471,13 @@ export default function Dashboard() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function Dashboard() {
+  return (
+    <ErrorBoundary>
+      <DashboardPage />
     </ErrorBoundary>
   )
 }

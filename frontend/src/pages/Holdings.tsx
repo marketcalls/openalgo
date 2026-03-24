@@ -36,7 +36,7 @@ function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
-export default function Holdings() {
+function HoldingsPage() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [holdings, setHoldings] = useState<Holding[]>([])
@@ -199,7 +199,6 @@ export default function Holdings() {
   const isProfit = (value: number) => value >= 0
 
   return (
-    <ErrorBoundary>
     <div className="space-y-6">
       {/* Stale Data Warning */}
       {showStaleWarning && (
@@ -420,6 +419,13 @@ export default function Holdings() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+export default function Holdings() {
+  return (
+    <ErrorBoundary>
+      <HoldingsPage />
     </ErrorBoundary>
   )
 }
