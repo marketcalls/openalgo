@@ -315,7 +315,7 @@ class MstockWebSocket:
                             try:
                                 response_data = json.loads(response)
                                 logger.debug(f"Parsed JSON response: {response_data}")
-                            except:
+                            except (json.JSONDecodeError, ValueError):
                                 logger.debug(f"Non-JSON string response: {response}")
                             # Continue to wait for binary quote data
                         else:
@@ -359,13 +359,11 @@ class MstockWebSocket:
         Returns:
             dict: Parsed quote data
         """
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.fetch_quote_async(token, exchange_type, mode))
+            return loop.run_until_complete(self.fetch_quote_async(token, exchange_type, mode))
+        finally:
+            loop.close()
 
     # ==================== Streaming Mode Methods ====================
 
@@ -439,13 +437,11 @@ class MstockWebSocket:
         Args:
             data_callback: Callback function(quote_data) called when data is received
         """
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.connect_stream_async(data_callback))
+            return loop.run_until_complete(self.connect_stream_async(data_callback))
+        finally:
+            loop.close()
 
     async def subscribe_stream_async(
         self, correlation_id: str, token: str, exchange_type: int, mode: int
