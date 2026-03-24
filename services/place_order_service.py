@@ -285,6 +285,14 @@ def place_order(
         # Also add apikey to order_data for validation
         order_data["apikey"] = api_key
 
+    # Check daily risk limits before proceeding
+    if api_key:
+        from services.risk_limit_service import check_risk_limits
+
+        is_blocked, reason = check_risk_limits(api_key)
+        if is_blocked:
+            return False, {"status": "error", "message": f"Order blocked: {reason}"}, 403
+
     # Check if order should be routed to Action Center (semi-auto mode)
     # Only check for API-based calls, not internal calls
     if api_key and not (auth_token and broker):

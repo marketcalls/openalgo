@@ -328,6 +328,14 @@ def place_smart_order(
     if api_key:
         order_data["apikey"] = api_key
 
+    # Check daily risk limits before proceeding
+    if api_key:
+        from services.risk_limit_service import check_risk_limits
+
+        is_blocked, reason = check_risk_limits(api_key)
+        if is_blocked:
+            return False, {"status": "error", "message": f"Order blocked: {reason}"}, 403
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         # Check if order should be routed to Action Center (semi-auto mode)

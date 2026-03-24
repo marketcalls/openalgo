@@ -183,6 +183,7 @@ from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
+from database.risk_limits_db import init_db as ensure_risk_limits_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
@@ -590,6 +591,7 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
+                ("Risk Limits DB", ensure_risk_limits_tables_exists),
             ]
 
             db_init_start = time.time()

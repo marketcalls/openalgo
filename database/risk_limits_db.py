@@ -1,0 +1,134 @@
+# database/risk_limits_db.py
+# Per-user daily risk limits: profit target, loss limit, trade limit.
+# Follows the same pattern as leverage_db.py / settings_db.py.
+
+import os
+from datetime import date, datetime
+
+from cachetools import TTLCache
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.pool import NullPool
+
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Short TTL — limits are read on every order but rarely written
+_risk_limits_cache = TTLCache(maxsize=50, ttl=300)  # 5 min
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL and "sqlite" in DATABASE_URL:
+    engine = create_engine(
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+    )
+else:
+    engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
+
+db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+Base = declarative_base()
+Base.query = db_session.query_property()
+
+
+class RiskLimits(Base):
+    __tablename__ = "risk_limits"
+
+    id = Column(Integer, primary_key=True)
+    user = Column(String(50), unique=True, nullable=False)
+    enabled = Column(Boolean, default=False)
+    daily_profit_target = Column(Float, nullable=True)  # None = no limit
+    daily_loss_limit = Column(Float, nullable=True)  # Stored as positive number
+    daily_trade_limit = Column(Integer, nullable=True)  # None = no limit
+    breached = Column(Boolean, default=False)  # Latch: True once tripped today
+    breached_reason = Column(String(100), nullable=True)
+    breached_at = Column(DateTime, nullable=True)
+    last_reset_date = Column(Date, nullable=True)  # Auto-reset on new trading day
+
+
+def init_db():
+    """Initialize the risk_limits table."""
+    from database.db_init_helper import init_db_with_logging
+
+    init_db_with_logging(Base, engine, "Risk Limits DB", logger)
+
+
+def get_risk_limits(user: str) -> RiskLimits | None:
+    """Get risk limits for a user (cached)."""
+    cache_key = f"risk_limits:{user}"
+    if cache_key in _risk_limits_cache:
+        return _risk_limits_cache[cache_key]
+
+    try:
+        row = RiskLimits.query.filter_by(user=user).first()
+        _risk_limits_cache[cache_key] = row
+        return row
+    except Exception as e:
+        logger.exception(f"Error fetching risk limits for {user}: {e}")
+        return None
+
+
+def upsert_risk_limits(
+    user: str,
+    enabled: bool,
+    daily_profit_target: float | None,
+    daily_loss_limit: float | None,
+    daily_trade_limit: int | None,
+) -> bool:
+    """Create or update risk limits for a user. Clears cache."""
+    try:
+        row = RiskLimits.query.filter_by(user=user).first()
+        if row is None:
+            row = RiskLimits(user=user)
+            db_session.add(row)
+
+        row.enabled = enabled
+        row.daily_profit_target = daily_profit_target
+        row.daily_loss_limit = daily_loss_limit
+        row.daily_trade_limit = daily_trade_limit
+        db_session.commit()
+
+        # Invalidate cache
+        _risk_limits_cache.pop(f"risk_limits:{user}", None)
+        return True
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error upserting risk limits for {user}: {e}")
+        return False
+
+
+def set_breached(user: str, reason: str) -> None:
+    """Set the breached latch for a user."""
+    try:
+        row = RiskLimits.query.filter_by(user=user).first()
+        if row and not row.breached:
+            row.breached = True
+            row.breached_reason = reason
+            row.breached_at = datetime.now()
+            row.last_reset_date = date.today()
+            db_session.commit()
+            _risk_limits_cache.pop(f"risk_limits:{user}", None)
+            logger.info(f"Risk limit breached for {user}: {reason}")
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error setting breached for {user}: {e}")
+
+
+def reset_if_new_day(user: str) -> bool:
+    """Reset breached latch if it's a new trading day. Returns True if reset happened."""
+    try:
+        row = RiskLimits.query.filter_by(user=user).first()
+        if row and row.breached and row.last_reset_date and row.last_reset_date < date.today():
+            row.breached = False
+            row.breached_reason = None
+            row.breached_at = None
+            db_session.commit()
+            _risk_limits_cache.pop(f"risk_limits:{user}", None)
+            logger.info(f"Risk limits auto-reset for {user} (new day)")
+            return True
+        return False
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error resetting risk limits for {user}: {e}")
+        return False
