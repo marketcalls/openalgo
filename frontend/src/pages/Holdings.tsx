@@ -30,6 +30,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+import { ErrorBoundary } from '@/components/error-boundary/ErrorBoundary'
 
 function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
@@ -198,6 +199,7 @@ export default function Holdings() {
   const isProfit = (value: number) => value >= 0
 
   return (
+    <ErrorBoundary>
     <div className="space-y-6">
       {/* Stale Data Warning */}
       {showStaleWarning && (
@@ -418,5 +420,6 @@ export default function Holdings() {
         </CardContent>
       </Card>
     </div>
+    </ErrorBoundary>
   )
 }

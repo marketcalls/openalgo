@@ -57,6 +57,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
+import { ErrorBoundary } from '@/components/error-boundary/ErrorBoundary'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -586,6 +587,7 @@ export default function Positions() {
   })
 
   return (
+    <ErrorBoundary>
     <div className="space-y-6">
       {/* Stale Data Warning */}
       {showStaleWarning && (
@@ -1044,5 +1046,6 @@ export default function Positions() {
         </CardContent>
       </Card>
     </div>
+    </ErrorBoundary>
   )
 }
