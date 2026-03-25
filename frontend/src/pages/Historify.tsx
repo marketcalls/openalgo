@@ -88,6 +88,7 @@ import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
+import { ExpiredFnoTab } from './historify/ExpiredFnoTab'
 
 // Types
 interface SearchResult {
@@ -1609,6 +1610,11 @@ export default function Historify() {
                 <span className="hidden sm:inline">Export/Import</span>
                 <span className="sm:hidden">Export</span>
               </TabsTrigger>
+              <TabsTrigger value="expired-fno" className="gap-1.5 data-[state=active]:bg-muted">
+                <TrendingUp className="h-4 w-4" />
+                <span className="hidden sm:inline">Expired F&amp;O</span>
+                <span className="sm:hidden">F&amp;O</span>
+              </TabsTrigger>
             </TabsList>
           </div>
 
@@ -2464,6 +2470,11 @@ export default function Historify() {
                   </CardContent>
                 </Card>
               </div>
+            </TabsContent>
+
+            {/* Expired F&O Tab */}
+            <TabsContent value="expired-fno" className="h-full m-0 p-4 overflow-auto">
+              <ExpiredFnoTab socket={socket} />
             </TabsContent>
           </div>
         </Tabs>

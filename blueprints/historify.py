@@ -1598,3 +1598,247 @@ def get_schedule_executions(schedule_id):
         logger.error(f"Error getting executions: {e}")
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# =============================================================================
+# Expired F&O Endpoints
+# =============================================================================
+
+
+@historify_bp.route("/api/broker/capabilities", methods=["GET"])
+@check_session_validity
+def broker_historify_capabilities():
+    """Return historify capabilities for all brokers (from plugin.json cache)."""
+    try:
+        from utils.plugin_loader import get_all_broker_historify_capabilities
+        brokers = get_all_broker_historify_capabilities()
+        return jsonify({"status": "success", "brokers": brokers}), 200
+    except Exception as e:
+        logger.error(f"Error fetching broker capabilities: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/capability", methods=["GET"])
+@check_session_validity
+def expired_fno_capability():
+    """Check if the user's active broker supports expired F&O data downloads."""
+    try:
+        from broker.upstox.api.expired_data import SUPPORTED_UNDERLYINGS
+        from services.expired_fno_service import EXPIRED_FNO_CAPABLE_BROKERS
+
+        # Use broker from session — set at login, always accurate regardless of API key status
+        broker = session.get("broker", "").lower()
+        supported = broker in EXPIRED_FNO_CAPABLE_BROKERS
+
+        return jsonify({
+            "status": "success",
+            "supported": supported,
+            "broker": broker or None,
+            "note": "Requires Upstox Plus Plan" if supported else None,
+            "supported_underlyings": SUPPORTED_UNDERLYINGS if supported else [],
+            "supports_custom_underlying": supported,
+        }), 200
+    except Exception as e:
+        logger.error(f"Error checking expired F&O capability: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/expiries", methods=["POST"])
+@check_session_validity
+def fetch_expired_expiries():
+    """Phase 1: Fetch and cache expiry dates from Upstox for an underlying."""
+    try:
+        from database.auth_db import get_api_key_for_tradingview
+        from services.expired_fno_service import fetch_expiries
+
+        data = request.get_json() or {}
+        underlying = data.get("underlying", "").upper()
+        if not underlying:
+            return jsonify({"status": "error", "message": "underlying is required"}), 400
+
+        user = session.get("user")
+        api_key = get_api_key_for_tradingview(user)
+        if not api_key:
+            return jsonify(
+                {"status": "error", "message": "No API key found. Please generate one first."}
+            ), 400
+
+        success, response, status_code = fetch_expiries(underlying, api_key)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error fetching expired expiries: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/expiries", methods=["GET"])
+@check_session_validity
+def get_expired_expiries():
+    """Get cached expiry dates for an underlying from DuckDB."""
+    try:
+        from services.expired_fno_service import get_cached_expiries
+
+        underlying = request.args.get("underlying", "").upper()
+        if not underlying:
+            return jsonify({"status": "error", "message": "underlying is required"}), 400
+
+        success, response, status_code = get_cached_expiries(underlying)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting cached expiries: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/contracts", methods=["POST"])
+@check_session_validity
+def fetch_expired_contracts():
+    """Phase 2: Fetch and cache contracts for a specific expiry from Upstox."""
+    try:
+        from database.auth_db import get_api_key_for_tradingview
+        from services.expired_fno_service import fetch_contracts_for_expiry
+
+        data = request.get_json() or {}
+        underlying = data.get("underlying", "").upper()
+        # Accept both single expiry_date (legacy) and expiry_dates list
+        expiry_dates = data.get("expiry_dates") or data.get("expiry_date")
+        contract_types = data.get("contract_types", ["CE", "PE", "FUT"])
+
+        if not underlying or not expiry_dates:
+            return jsonify(
+                {"status": "error", "message": "underlying and expiry_dates are required"}
+            ), 400
+
+        user = session.get("user")
+        api_key = get_api_key_for_tradingview(user)
+        if not api_key:
+            return jsonify(
+                {"status": "error", "message": "No API key found. Please generate one first."}
+            ), 400
+
+        success, response, status_code = fetch_contracts_for_expiry(
+            underlying, expiry_dates, contract_types, api_key
+        )
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error fetching expired contracts: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/contracts", methods=["GET"])
+@check_session_validity
+def get_expired_contracts():
+    """Get cached contracts for an underlying + expiry from DuckDB."""
+    try:
+        from services.expired_fno_service import get_cached_contracts
+
+        underlying = request.args.get("underlying", "").upper()
+        # Support ?expiry_dates=2024-03-28,2024-04-25 or legacy ?expiry_date=2024-03-28
+        expiry_dates_raw = request.args.get("expiry_dates") or request.args.get("expiry_date", "")
+        expiry_dates = [e.strip() for e in expiry_dates_raw.split(",") if e.strip()] if expiry_dates_raw else []
+
+        if not underlying or not expiry_dates:
+            return jsonify(
+                {"status": "error", "message": "underlying and expiry_dates are required"}
+            ), 400
+
+        success, response, status_code = get_cached_contracts(underlying, expiry_dates)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting cached contracts: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/jobs", methods=["GET"])
+@check_session_validity
+def list_expired_fno_jobs():
+    """List recent expired F&O download jobs."""
+    try:
+        from services.expired_fno_service import list_jobs
+
+        status = request.args.get("status")
+        limit = request.args.get("limit", 20, type=int)
+        success, response, status_code = list_jobs(status, limit)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error listing expired F&O jobs: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/jobs", methods=["POST"])
+@check_session_validity
+def start_expired_fno_job():
+    """Phase 3: Start a background download job for expired F&O contracts."""
+    try:
+        from database.auth_db import get_api_key_for_tradingview
+        from services.expired_fno_service import start_expired_fno_download
+
+        data = request.get_json() or {}
+        underlying = data.get("underlying", "").upper()
+        # Accept both expiry_dates list and legacy expiry_date single value
+        expiry_dates = data.get("expiry_dates") or data.get("expiry_date")  # None = all expiries
+        contract_types = data.get("contract_types", ["CE", "PE", "FUT"])
+        look_back = data.get("look_back", "6M")
+        incremental = data.get("incremental", True)
+
+        if not underlying:
+            return jsonify({"status": "error", "message": "underlying is required"}), 400
+
+        user = session.get("user")
+        api_key = get_api_key_for_tradingview(user)
+        if not api_key:
+            return jsonify(
+                {"status": "error", "message": "No API key found. Please generate one first."}
+            ), 400
+
+        success, response, status_code = start_expired_fno_download(
+            underlying, expiry_dates, contract_types, api_key,
+            look_back=look_back, incremental=incremental,
+        )
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error starting expired F&O job: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/jobs/<job_id>", methods=["GET"])
+@check_session_validity
+def get_expired_fno_job_status(job_id):
+    """Get status and progress of an expired F&O download job."""
+    try:
+        from services.expired_fno_service import get_job_status
+
+        success, response, status_code = get_job_status(job_id)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting expired F&O job status: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/jobs/<job_id>/cancel", methods=["POST"])
+@check_session_validity
+def cancel_expired_fno_job(job_id):
+    """Request cancellation of a running expired F&O download job."""
+    try:
+        from services.expired_fno_service import cancel_job
+
+        success, response, status_code = cancel_job(job_id)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error cancelling expired F&O job: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/expired/stats", methods=["GET"])
+@check_session_validity
+def get_expired_fno_stats():
+    """Get summary statistics for all expired F&O data in DuckDB."""
+    try:
+        from services.expired_fno_service import get_stats
+
+        success, response, status_code = get_stats()
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting expired F&O stats: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500

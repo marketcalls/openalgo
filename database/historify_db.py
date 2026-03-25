@@ -240,6 +240,58 @@ def init_database():
             )
         """)
 
+        # Expired F&O Tables - for tracking expired options/futures contract downloads
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expired_fno_expiries (
+                id INTEGER PRIMARY KEY,
+                upstox_key VARCHAR NOT NULL,
+                openalgo_symbol VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                expiry_date DATE NOT NULL,
+                is_weekly BOOLEAN DEFAULT FALSE,
+                contracts_fetched BOOLEAN DEFAULT FALSE,
+                data_fetched BOOLEAN DEFAULT FALSE,
+                fetched_at TIMESTAMP,
+                UNIQUE (upstox_key, expiry_date)
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expired_fno_contracts (
+                expired_instrument_key VARCHAR PRIMARY KEY,
+                upstox_key VARCHAR NOT NULL,
+                openalgo_symbol VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                expiry_date DATE NOT NULL,
+                contract_type VARCHAR NOT NULL,
+                strike_price DOUBLE,
+                trading_symbol VARCHAR NOT NULL,
+                lot_size INTEGER,
+                data_fetched BOOLEAN DEFAULT FALSE,
+                candle_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT current_timestamp
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expired_fno_jobs (
+                id VARCHAR PRIMARY KEY,
+                underlying VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                expiry_date VARCHAR,
+                contract_types VARCHAR,
+                interval VARCHAR NOT NULL DEFAULT '1m',
+                status VARCHAR NOT NULL,
+                total_contracts INTEGER DEFAULT 0,
+                completed_contracts INTEGER DEFAULT 0,
+                failed_contracts INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT current_timestamp,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                error_message VARCHAR
+            )
+        """)
+
         # Create indexes for common query patterns
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_market_data_timestamp
@@ -268,6 +320,32 @@ def init_database():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_historify_schedule_executions_schedule_id
             ON historify_schedule_executions (schedule_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_expired_expiries_key
+            ON expired_fno_expiries (upstox_key, expiry_date)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_expired_contracts_key
+            ON expired_fno_contracts (upstox_key, expiry_date)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_expired_contracts_symbol
+            ON expired_fno_contracts (openalgo_symbol)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_expired_jobs_status
+            ON expired_fno_jobs (status)
+        """)
+
+        # Reset any jobs left in 'running'/'pending' state from a previous session.
+        # These are orphaned — their background threads were killed on app restart.
+        conn.execute("""
+            UPDATE expired_fno_jobs
+            SET status = 'failed',
+                error_message = 'Interrupted by server restart',
+                completed_at = current_timestamp
+            WHERE status IN ('running', 'pending')
         """)
 
         logger.debug("Historify database initialized successfully")
@@ -3399,3 +3477,515 @@ def get_active_schedules() -> list[dict[str, Any]]:
     except Exception as e:
         logger.exception(f"Error getting active schedules: {e}")
         return []
+
+
+# =============================================================================
+# Expired F&O Operations
+# =============================================================================
+
+
+def upsert_expired_fno_expiries(rows: list[dict[str, Any]]) -> int:
+    """
+    Insert or update expiry records for expired F&O instruments.
+
+    Args:
+        rows: List of dicts with keys: upstox_key, openalgo_symbol, exchange,
+              expiry_date, is_weekly
+
+    Returns:
+        Number of records inserted/updated
+    """
+    if not rows:
+        return 0
+
+    try:
+        with get_connection() as conn:
+            for row in rows:
+                existing = conn.execute(
+                    "SELECT id FROM expired_fno_expiries WHERE upstox_key = ? AND expiry_date = ?",
+                    [row["upstox_key"], row["expiry_date"]],
+                ).fetchone()
+
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE expired_fno_expiries
+                        SET openalgo_symbol = ?, exchange = ?, is_weekly = ?, fetched_at = current_timestamp
+                        WHERE upstox_key = ? AND expiry_date = ?
+                        """,
+                        [
+                            row["openalgo_symbol"],
+                            row["exchange"],
+                            row.get("is_weekly", False),
+                            row["upstox_key"],
+                            row["expiry_date"],
+                        ],
+                    )
+                else:
+                    result = conn.execute(
+                        "SELECT COALESCE(MAX(id), 0) + 1 FROM expired_fno_expiries"
+                    ).fetchone()
+                    next_id = result[0] if result else 1
+                    conn.execute(
+                        """
+                        INSERT INTO expired_fno_expiries
+                        (id, upstox_key, openalgo_symbol, exchange, expiry_date, is_weekly, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?, current_timestamp)
+                        """,
+                        [
+                            next_id,
+                            row["upstox_key"],
+                            row["openalgo_symbol"],
+                            row["exchange"],
+                            row["expiry_date"],
+                            row.get("is_weekly", False),
+                        ],
+                    )
+
+        return len(rows)
+    except Exception as e:
+        logger.exception(f"Error upserting expired F&O expiries: {e}")
+        return 0
+
+
+def get_expired_fno_expiries(upstox_key: str) -> list[dict[str, Any]]:
+    """
+    Get cached expiry dates for an instrument.
+
+    Args:
+        upstox_key: Upstox instrument key (e.g., "NSE_INDEX|Nifty 50")
+
+    Returns:
+        List of expiry records ordered by expiry_date DESC
+    """
+    try:
+        with get_connection() as conn:
+            result = conn.execute(
+                """
+                SELECT id, upstox_key, openalgo_symbol, exchange, expiry_date,
+                       is_weekly, contracts_fetched, data_fetched, fetched_at
+                FROM expired_fno_expiries
+                WHERE upstox_key = ?
+                ORDER BY expiry_date DESC
+                """,
+                [upstox_key],
+            ).fetchdf()
+
+            if result.empty:
+                return []
+
+            records = result.to_dict("records")
+            for r in records:
+                for k, v in r.items():
+                    if hasattr(v, "isoformat"):
+                        iso_str = v.isoformat()
+                        # Return date-only fields as YYYY-MM-DD (pandas Timestamp.isoformat()
+                        # includes time "T00:00:00" which Upstox API rejects as invalid date)
+                        r[k] = iso_str.split("T")[0] if k == "expiry_date" else iso_str
+                    elif v != v:  # NaN check
+                        r[k] = None
+            return records
+
+    except Exception as e:
+        logger.exception(f"Error getting expired F&O expiries: {e}")
+        return []
+
+
+def get_expired_fno_expiry_stats(upstox_key: str) -> dict[str, dict]:
+    """Per-expiry contract counts keyed by expiry_date string (YYYY-MM-DD)."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute(
+                """SELECT expiry_date::VARCHAR as expiry_date,
+                          COUNT(*) as total_contracts,
+                          SUM(CASE WHEN data_fetched THEN 1 ELSE 0 END) as downloaded_contracts
+                   FROM expired_fno_contracts
+                   WHERE upstox_key = ?
+                   GROUP BY expiry_date""",
+                [upstox_key],
+            ).fetchdf()
+            if result.empty:
+                return {}
+            return {
+                row["expiry_date"]: {
+                    "total_contracts": int(row["total_contracts"]),
+                    "downloaded_contracts": int(row["downloaded_contracts"]),
+                }
+                for _, row in result.iterrows()
+            }
+    except Exception as e:
+        logger.exception(f"Error fetching expiry stats: {e}")
+        return {}
+
+
+def upsert_expired_fno_contracts(contracts: list[dict[str, Any]]) -> int:
+    """
+    Insert or update expired F&O contract records.
+
+    Args:
+        contracts: List of dicts with contract metadata
+
+    Returns:
+        Number of records inserted/updated
+    """
+    if not contracts:
+        return 0
+
+    try:
+        with get_connection() as conn:
+            for c in contracts:
+                existing = conn.execute(
+                    "SELECT expired_instrument_key FROM expired_fno_contracts WHERE expired_instrument_key = ?",
+                    [c["expired_instrument_key"]],
+                ).fetchone()
+
+                if not existing:
+                    conn.execute(
+                        """
+                        INSERT INTO expired_fno_contracts
+                        (expired_instrument_key, upstox_key, openalgo_symbol, exchange,
+                         expiry_date, contract_type, strike_price, trading_symbol, lot_size)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            c["expired_instrument_key"],
+                            c["upstox_key"],
+                            c["openalgo_symbol"],
+                            c["exchange"],
+                            c["expiry_date"],
+                            c["contract_type"],
+                            c.get("strike_price"),
+                            c["trading_symbol"],
+                            c.get("lot_size"),
+                        ],
+                    )
+
+            # Mark ALL unique expiry dates in this batch as contracts_fetched
+            if contracts:
+                unique_expiries = {(c["upstox_key"], c["expiry_date"]) for c in contracts}
+                for upstox_key_val, expiry_date_val in unique_expiries:
+                    conn.execute(
+                        """
+                        UPDATE expired_fno_expiries
+                        SET contracts_fetched = TRUE
+                        WHERE upstox_key = ? AND expiry_date = ?
+                        """,
+                        [upstox_key_val, expiry_date_val],
+                    )
+
+        return len(contracts)
+    except Exception as e:
+        logger.exception(f"Error upserting expired F&O contracts: {e}")
+        return 0
+
+
+def get_expired_fno_contracts(
+    upstox_key: str, expiry_date: str
+) -> list[dict[str, Any]]:
+    """
+    Get cached contracts for an instrument + expiry combination.
+
+    Args:
+        upstox_key: Upstox instrument key
+        expiry_date: Expiry date in YYYY-MM-DD format
+
+    Returns:
+        List of contract records
+    """
+    try:
+        with get_connection() as conn:
+            result = conn.execute(
+                """
+                SELECT expired_instrument_key, upstox_key, openalgo_symbol, exchange,
+                       expiry_date, contract_type, strike_price, trading_symbol, lot_size,
+                       data_fetched, candle_count, created_at
+                FROM expired_fno_contracts
+                WHERE upstox_key = ? AND expiry_date = ?
+                ORDER BY contract_type, strike_price
+                """,
+                [upstox_key, expiry_date],
+            ).fetchdf()
+
+            if result.empty:
+                return []
+
+            records = result.to_dict("records")
+            for r in records:
+                for k, v in r.items():
+                    if hasattr(v, "isoformat"):
+                        iso_str = v.isoformat()
+                        r[k] = iso_str.split("T")[0] if k == "expiry_date" else iso_str
+                    elif v != v:
+                        r[k] = None
+            return records
+
+    except Exception as e:
+        logger.exception(f"Error getting expired F&O contracts: {e}")
+        return []
+
+
+def mark_expired_fno_contract_done(
+    expired_instrument_key: str, candle_count: int
+) -> None:
+    """Mark an expired F&O contract as data downloaded."""
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE expired_fno_contracts
+                SET data_fetched = TRUE, candle_count = ?
+                WHERE expired_instrument_key = ?
+                """,
+                [candle_count, expired_instrument_key],
+            )
+    except Exception as e:
+        logger.exception(f"Error marking contract done: {e}")
+
+
+def create_expired_fno_job(job: dict[str, Any]) -> bool:
+    """
+    Create a new expired F&O download job record.
+
+    Args:
+        job: Dict with job fields (id, underlying, exchange, expiry_date,
+             contract_types, interval, status, total_contracts)
+
+    Returns:
+        True on success
+    """
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO expired_fno_jobs
+                (id, underlying, exchange, expiry_date, contract_types, interval,
+                 status, total_contracts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    job["id"],
+                    job["underlying"],
+                    job["exchange"],
+                    job.get("expiry_date"),
+                    job.get("contract_types"),
+                    job.get("interval", "1m"),
+                    job["status"],
+                    job.get("total_contracts", 0),
+                ],
+            )
+        return True
+    except Exception as e:
+        logger.exception(f"Error creating expired F&O job: {e}")
+        return False
+
+
+def update_expired_fno_job(job_id: str, updates: dict[str, Any]) -> None:
+    """Update fields on an expired F&O job record."""
+    try:
+        allowed = {
+            "status", "total_contracts", "completed_contracts",
+            "failed_contracts", "started_at", "completed_at", "error_message",
+        }
+        fields = {k: v for k, v in updates.items() if k in allowed}
+        if not fields:
+            return
+
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [job_id]
+
+        with get_connection() as conn:
+            conn.execute(
+                f"UPDATE expired_fno_jobs SET {set_clause} WHERE id = ?",
+                values,
+            )
+    except Exception as e:
+        logger.exception(f"Error updating expired F&O job {job_id}: {e}")
+
+
+def get_expired_fno_job(job_id: str) -> dict[str, Any] | None:
+    """Get a single expired F&O job by ID."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute(
+                "SELECT * FROM expired_fno_jobs WHERE id = ?", [job_id]
+            ).fetchdf()
+
+            if result.empty:
+                return None
+
+            r = result.to_dict("records")[0]
+            for k, v in r.items():
+                if hasattr(v, "isoformat"):
+                    r[k] = v.isoformat() if v is not None else None
+                elif v != v:
+                    r[k] = None
+            return r
+
+    except Exception as e:
+        logger.exception(f"Error getting expired F&O job: {e}")
+        return None
+
+
+def get_all_expired_fno_jobs(status: str = None, limit: int = 20) -> list[dict[str, Any]]:
+    """Get recent expired F&O jobs, optionally filtered by status."""
+    try:
+        with get_connection() as conn:
+            if status:
+                result = conn.execute(
+                    """SELECT id, underlying, exchange, expiry_date, contract_types,
+                              interval, status, total_contracts, completed_contracts,
+                              failed_contracts, created_at, started_at, completed_at,
+                              error_message
+                       FROM expired_fno_jobs WHERE status = ?
+                       ORDER BY created_at DESC LIMIT ?""",
+                    [status, limit],
+                ).fetchdf()
+            else:
+                result = conn.execute(
+                    """SELECT id, underlying, exchange, expiry_date, contract_types,
+                              interval, status, total_contracts, completed_contracts,
+                              failed_contracts, created_at, started_at, completed_at,
+                              error_message
+                       FROM expired_fno_jobs
+                       ORDER BY created_at DESC LIMIT ?""",
+                    [limit],
+                ).fetchdf()
+            if result.empty:
+                return []
+            for col in ["created_at", "started_at", "completed_at"]:
+                if col in result.columns:
+                    result[col] = result[col].apply(
+                        lambda x: x.isoformat() if pd.notna(x) else None
+                    )
+            return result.to_dict("records")
+    except Exception as e:
+        logger.exception(f"Error fetching expired F&O jobs: {e}")
+        return []
+
+
+def get_pending_expired_fno_contracts(
+    upstox_key: str,
+    expiry_dates: list[str] | str | None,
+    contract_types: list[str],
+    include_downloaded: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Get contracts for download (pending, or all when include_downloaded=True).
+
+    Args:
+        upstox_key: Upstox instrument key
+        expiry_dates: One or more expiry dates (YYYY-MM-DD), or None for all expiries
+        contract_types: List of contract types to include (e.g., ["CE","PE","FUT"])
+        include_downloaded: If True, also return contracts already downloaded
+                            (used for incremental updates)
+
+    Returns:
+        List of contract records
+    """
+    try:
+        with get_connection() as conn:
+            type_placeholders = ", ".join("?" for _ in contract_types)
+            params: list[Any] = [upstox_key]
+
+            expiry_clause = ""
+            if expiry_dates:
+                # Normalise: accept single string or list
+                if isinstance(expiry_dates, str):
+                    expiry_dates = [expiry_dates]
+                # Strip time component (DuckDB DATE returns "YYYY-MM-DDT00:00:00" via pandas)
+                expiry_dates = [d.split("T")[0] for d in expiry_dates]
+                if len(expiry_dates) == 1:
+                    expiry_clause = "AND expiry_date = ?"
+                    params.append(expiry_dates[0])
+                else:
+                    ph = ", ".join("?" for _ in expiry_dates)
+                    expiry_clause = f"AND expiry_date IN ({ph})"
+                    params.extend(expiry_dates)
+
+            fetched_clause = "" if include_downloaded else "AND data_fetched = FALSE"
+            params.extend(contract_types)
+
+            result = conn.execute(
+                f"""
+                SELECT expired_instrument_key, upstox_key, openalgo_symbol, exchange,
+                       expiry_date, contract_type, strike_price, data_fetched, candle_count
+                FROM expired_fno_contracts
+                WHERE upstox_key = ?
+                  {expiry_clause}
+                  AND contract_type IN ({type_placeholders})
+                  {fetched_clause}
+                ORDER BY expiry_date DESC, contract_type, strike_price
+                """,
+                params,
+            ).fetchdf()
+
+            if result.empty:
+                return []
+
+            records = result.to_dict("records")
+            for r in records:
+                for k, v in r.items():
+                    if hasattr(v, "isoformat"):
+                        iso_str = v.isoformat()
+                        r[k] = iso_str.split("T")[0] if k == "expiry_date" else iso_str
+                    elif v != v:
+                        r[k] = None
+            return records
+
+    except Exception as e:
+        logger.exception(f"Error getting pending contracts: {e}")
+        return []
+
+
+def get_last_candle_timestamp(symbol: str, exchange: str, interval: str) -> int | None:
+    """
+    Return the last stored candle Unix timestamp for a symbol, or None if no data exists.
+
+    Used for incremental updates: fetch only candles after this timestamp.
+    """
+    try:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT last_timestamp FROM data_catalog WHERE symbol = ? AND exchange = ? AND interval = ?",
+                [symbol.upper(), exchange.upper(), interval],
+            ).fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+    except Exception as e:
+        logger.exception(f"Error getting last candle timestamp for {symbol}: {e}")
+        return None
+
+
+def get_expired_fno_stats() -> dict[str, Any]:
+    """Get summary statistics for expired F&O data."""
+    try:
+        with get_connection() as conn:
+            expiries_count = conn.execute(
+                "SELECT COUNT(*) FROM expired_fno_expiries"
+            ).fetchone()[0]
+
+            contracts_count = conn.execute(
+                "SELECT COUNT(*) FROM expired_fno_contracts"
+            ).fetchone()[0]
+
+            downloaded_count = conn.execute(
+                "SELECT COUNT(*) FROM expired_fno_contracts WHERE data_fetched = TRUE"
+            ).fetchone()[0]
+
+            total_candles = conn.execute(
+                "SELECT COALESCE(SUM(candle_count), 0) FROM expired_fno_contracts"
+            ).fetchone()[0]
+
+            return {
+                "total_expiries": int(expiries_count),
+                "total_contracts": int(contracts_count),
+                "downloaded_contracts": int(downloaded_count),
+                "total_candles": int(total_candles),
+            }
+    except Exception as e:
+        logger.exception(f"Error getting expired F&O stats: {e}")
+        return {
+            "total_expiries": 0,
+            "total_contracts": 0,
+            "downloaded_contracts": 0,
+            "total_candles": 0,
+        }

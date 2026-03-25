@@ -45,6 +45,11 @@ def load_broker_capabilities(broker_directory="broker"):
                     "broker_type": plugin_data.get("broker_type", "IN_stock"),
                     "supported_exchanges": plugin_data.get("supported_exchanges", []),
                     "leverage_config": plugin_data.get("leverage_config", False),
+                    "capabilities": plugin_data.get("capabilities", {
+                        "futures_historical": "none",
+                        "options_historical": "none",
+                        "expired_contracts": "none",
+                    }),
                 }
         except (json.JSONDecodeError, IOError) as e:
             logger.error(f"Error reading plugin.json for {broker_name}: {e}")
@@ -60,6 +65,25 @@ def get_broker_capabilities(broker_name):
     Returns None if broker not found or capabilities not loaded.
     """
     return _broker_capabilities.get(broker_name)
+
+
+def get_all_broker_historify_capabilities():
+    """Return historify capabilities for all loaded brokers, sorted by name.
+
+    Each entry contains only the broker_name and capabilities block.
+    Used by the /historify/api/broker/capabilities endpoint.
+    """
+    return [
+        {
+            "broker": broker_name,
+            "capabilities": info.get("capabilities", {
+                "futures_historical": "none",
+                "options_historical": "none",
+                "expired_contracts": "none",
+            }),
+        }
+        for broker_name, info in sorted(_broker_capabilities.items())
+    ]
 
 
 def load_broker_auth_functions(broker_directory="broker"):
