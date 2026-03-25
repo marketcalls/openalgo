@@ -275,7 +275,7 @@ class MotilalWebSocket:
                     if "status" in data and data.get("status") == "ERROR":
                         error_msg = data.get("message", "Unknown error")
                         logger.error(f"Motilal WebSocket error: {error_msg}")
-                except:
+                except (json.JSONDecodeError, ValueError):
                     pass
 
         except Exception as e:
