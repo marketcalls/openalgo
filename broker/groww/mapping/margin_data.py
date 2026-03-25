@@ -13,10 +13,16 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def map_margin_exchange(exchange):
-    """
-    Maps the OpenAlgo Exchange to Groww Exchange values for margin API.
-    Groww only accepts NSE/BSE - segment (CASH/FNO) is passed separately.
+def map_margin_exchange(exchange: str) -> str:
+    """Map the OpenAlgo Exchange to Groww Exchange values for margin API.
+    
+    Groww only accepts NSE/BSE. The segment (CASH/FNO) is handled separately.
+
+    Args:
+        exchange (str): OpenAlgo standard exchange format.
+
+    Returns:
+        str: Groww specific exchange segment code.
     """
     exchange_mapping = {
         "NSE": "NSE",
@@ -27,17 +33,16 @@ def map_margin_exchange(exchange):
     return exchange_mapping.get(exchange.upper(), "NSE")
 
 
-def transform_margin_positions(positions):
-    """
-    Transform OpenAlgo margin positions to Groww margin format.
+def transform_margin_positions(positions: list) -> tuple:
+    """Transform OpenAlgo margin positions to Groww margin format.
 
     Args:
-        positions: List of positions in OpenAlgo format
+        positions (list): List of position dictionaries in OpenAlgo format.
 
     Returns:
-        Tuple of (segment, transformed_positions_list)
-        - segment: "CASH" or "FNO"
-        - transformed_positions_list: List of positions in Groww format
+        tuple: A tuple containing:
+            - segment (str): "CASH" or "FNO".
+            - transformed_positions_list (list): List of positions in Groww format.
     """
     transformed_positions = []
     segment = None
@@ -94,15 +99,14 @@ def transform_margin_positions(positions):
     return segment, transformed_positions
 
 
-def parse_margin_response(response_data):
-    """
-    Parse Groww margin response to OpenAlgo standard format.
+def parse_margin_response(response_data: dict) -> dict:
+    """Parse Groww margin response to OpenAlgo standard format.
 
     Args:
-        response_data: Raw response from Groww API
+        response_data (dict): Raw response from Groww margin API.
 
     Returns:
-        Standardized margin response
+        dict: Standardized margin response mapping OpenAlgo API specification.
     """
     try:
         if not response_data or not isinstance(response_data, dict):

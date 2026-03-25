@@ -45,17 +45,37 @@ class SymToken(Base):
 
 
 def init_db():
+    """Initialize the master contract database tables.
+
+    Creates the symtoken table and associated indices if they
+    do not already exist.
+    """
     logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 
 def delete_symtoken_table():
+    """Delete all records from the symtoken table.
+
+    Clears existing instrument data to prepare for a fresh
+    master contract download.
+    """
     logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 
-def copy_from_dataframe(df):
+def copy_from_dataframe(df: pd.DataFrame):
+    """Bulk insert instrument records from a DataFrame into the database.
+
+    Filters out records with tokens that already exist in the database
+    to avoid duplicates, then performs a bulk insert of new records
+    in batches to optimize memory and prevent SQLite locks.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing instrument data with columns
+            matching the SymToken model fields.
+    """
     logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
@@ -436,7 +456,19 @@ def download_groww_instrument_data(output_path):
         raise
 
 
-def reformat_symbol(row):
+def reformat_symbol(row: pd.Series) -> str:
+    """Reformat a trading symbol based on its instrument type.
+
+    Parses symbols from Groww's format and reconstructs them
+    into the OpenAlgo standard format for FUT, CE, and PE.
+
+    Args:
+        row (pd.Series): DataFrame row containing 'trading_symbol',
+            'instrument_type', 'expiry_date', and 'groww_symbol'.
+
+    Returns:
+        str: Reformatted standard symbol.
+    """
     # Use trading symbol as base instead of name
     symbol = row["trading_symbol"]
     instrument_type = row["instrument_type"]
@@ -474,7 +506,18 @@ def reformat_symbol(row):
 
 
 # Define the function to apply conditions
-def assign_values(row):
+def assign_values(row: pd.Series) -> str:
+    """Determine the standard exchange segment based on row data.
+
+    Maps combinations of exchange and segment to standard OpenAlgo 
+    exchange codes like NFO, BFO, NSE_INDEX, etc.
+
+    Args:
+        row (pd.Series): A row from the instrument DataFrame.
+
+    Returns:
+        str: Mapped standard exchange string.
+    """
     # Paytm Exchange Mappings are simply NSE and BSE. No other complications
     # Handle futures
     if row["exchange"] == "NSE" and row["segment"] == "FNO":
@@ -761,6 +804,16 @@ def delete_groww_temp_data(output_path):
 
 
 def master_contract_download():
+    """Download and process the full Groww master contract.
+
+    Downloads the instrument CSV from Groww's API, processes and
+    normalizes the data (handling specific standard symbol formats and
+    exchange mappings), replaces the existing symtoken table, and emits 
+    a SocketIO event on completion.
+
+    Returns:
+        SocketIO emission indicating 'success' or 'error'.
+    """
     logger.info("Downloading Master Contract")
 
     output_path = "tmp"

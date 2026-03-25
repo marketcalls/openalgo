@@ -11,14 +11,15 @@ logger = get_logger(__name__)
 def generate_checksum(api_secret, timestamp):
     """
     Generate checksum using API secret and timestamp.
+    
     Checksum = SHA256(secret + timestamp)
 
     Args:
-        api_secret: The API secret from Groww
-        timestamp: Unix timestamp in epoch seconds (as string)
+        api_secret (str): The API secret from Groww.
+        timestamp (str): Unix timestamp in epoch seconds.
 
     Returns:
-        str: Generated checksum (hex digest)
+        str: Generated checksum (hex digest).
     """
     input_str = api_secret + timestamp
     sha256 = hashlib.sha256()
@@ -29,14 +30,15 @@ def generate_checksum(api_secret, timestamp):
 def get_access_token_via_checksum(api_key, api_secret):
     """
     Get access token using API key and secret with checksum-based flow.
+    
     Implements the authentication flow per Groww API documentation.
 
     Args:
-        api_key: The API key from Groww
-        api_secret: The API secret from Groww
+        api_key (str): The API key from Groww.
+        api_secret (str): The API secret from Groww.
 
     Returns:
-        tuple: (access_token, error_message)
+        tuple: (access_token (str) or None, error_message (str) or None).
     """
     try:
         # Generate current timestamp in epoch seconds
@@ -88,13 +90,14 @@ def get_access_token_via_checksum(api_key, api_secret):
 def authenticate_broker(code):
     """
     Authenticate with Groww using API key and secret with checksum-based flow.
+    
     The 'code' parameter is not used as authentication relies on environment variables.
 
     Args:
-        code: Not used in checksum flow, kept for compatibility
+        code (str): Not used in checksum flow, kept for API compatibility.
 
     Returns:
-        tuple: (access_token, error_message)
+        tuple: (access_token (str) or None, error_message (str) or None).
     """
     try:
         BROKER_API_KEY = os.getenv("BROKER_API_KEY")
