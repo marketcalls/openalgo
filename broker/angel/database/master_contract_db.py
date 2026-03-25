@@ -107,9 +107,13 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
-def download_json_angel_data(url, output_path):
+def download_json_angel_data(url: str, output_path: str):
     """
     Downloads a JSON file from the specified URL and saves it to the specified path.
+
+    Args:
+        url (str): The URL to download the JSON from.
+        output_path (str): The file path to save the JSON to.
     """
     logger.info("Downloading JSON data")
     response = requests.get(url, timeout=10)  # timeout after 10 seconds
@@ -173,14 +177,15 @@ def convert_date(date_str):
         return date_str
 
 
-def process_angel_json(path):
+def process_angel_json(path: str) -> pd.DataFrame:
     """
     Processes the Angel JSON file to fit the existing database schema.
+    
     Args:
-    path (str): The file path of the downloaded JSON data.
+        path (str): The file path of the downloaded JSON data.
 
     Returns:
-    DataFrame: The processed DataFrame ready to be inserted into the database.
+        pd.DataFrame: The processed DataFrame ready to be inserted into the database.
     """
     # Read JSON data into a DataFrame
     df = pd.read_json(path)
