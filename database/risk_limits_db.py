@@ -71,7 +71,8 @@ def init_db():
                     conn.commit()
                     logger.info("Migration: Added 'trade_count_date' column to risk_limits table")
     except Exception as e:
-        logger.debug(f"Migration check for risk_limits columns: {e}")
+        logger.error(f"Risk Limits migration FAILED — trade count columns may be missing: {e}")
+        raise
 
 
 def get_risk_limits(user: str) -> RiskLimits | None:
