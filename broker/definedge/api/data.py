@@ -46,7 +46,7 @@ def get_quotes(symbol, exchange, auth_token):
 
         token_id = get_token(symbol, exchange)
 
-        logger.info(f"Getting quotes for {symbol} ({exchange}) with token: {token_id}")
+        logger.debug(f"Getting quotes for {symbol} ({exchange}) with token: {token_id}")
 
         # Handle index symbols - map to their respective exchanges
         api_exchange = exchange
@@ -176,7 +176,7 @@ class BrokerData:
             # Use the updated get_quotes function with correct endpoint
             response = get_quotes(symbol, exchange, self.auth_token)
 
-            logger.info(f"Raw quotes response: {response}")
+            logger.debug(f"Raw quotes response: {response}")
 
             if response.get("status") == "error":
                 raise Exception(response.get("message", "Unknown error"))
@@ -270,8 +270,11 @@ class BrokerData:
             url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{api_exchange}/{token}"
             headers = {"Authorization": api_session_key}
 
-            # Use httpx.get for sync requests
-            http_response = httpx.get(url, headers=headers, timeout=10.0)
+            # Use shared httpx client for connection pooling
+            from utils.httpx_client import get_httpx_client
+
+            client = get_httpx_client()
+            http_response = client.get(url, headers=headers, timeout=10.0)
 
             if http_response.status_code != 200:
                 return {
@@ -710,10 +713,10 @@ class BrokerData:
 
                     # Check if we have valid data
                     if chunk_df.empty:
-                        logger.info(
-                            f"Debug - No valid data after parsing CSV for {timeframe} timeframe"
+                        logger.debug(
+                            f"No valid data after parsing CSV for {timeframe} timeframe"
                         )
-                        logger.info("Debug - This might be due to incorrect date parsing")
+                        logger.debug("This might be due to incorrect date parsing")
                         current_start = current_end + timedelta(days=1)
                         continue
 

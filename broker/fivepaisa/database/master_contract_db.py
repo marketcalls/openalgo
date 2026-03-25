@@ -249,18 +249,104 @@ def process_5paisa_csv(path):
     new_df["lotsize"] = filtered_df["LotSize"]
     new_df["instrumenttype"] = filtered_df["Series"]
     new_df["tick_size"] = filtered_df["TickSize"]
-    # Common Index Symbol Formats
+    # Common Index Symbol Normalization
 
-    new_df["symbol"] = new_df["symbol"].replace(
+    # Step 1: Normalize NSE_INDEX symbols - uppercase and remove spaces/hyphens
+    nse_idx_mask = new_df["exchange"] == "NSE_INDEX"
+    new_df.loc[nse_idx_mask, "symbol"] = (
+        new_df.loc[nse_idx_mask, "symbol"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+
+    # Step 2: Normalize BSE_INDEX symbols - uppercase and remove spaces/hyphens
+    bse_idx_mask = new_df["exchange"] == "BSE_INDEX"
+    new_df.loc[bse_idx_mask, "symbol"] = (
+        new_df.loc[bse_idx_mask, "symbol"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+
+    # Step 3: Explicit rename map for symbols whose cleaned form differs from OpenAlgo standard
+    # Only apply to index exchanges to avoid renaming non-index symbols (e.g., ENERGY, FIN on NSE/BSE)
+    idx_rename_mask = new_df["exchange"].isin(["NSE_INDEX", "BSE_INDEX"])
+    new_df.loc[idx_rename_mask, "symbol"] = new_df.loc[idx_rename_mask, "symbol"].replace(
         {
-            "Nifty Next 50": "NIFTYNXT50",
-            "MIDCPNifty": "MIDCPNIFTY",
-            "India VIX": "INDIAVIX",
-            "BSE BANKEX": "BANKEX",
-            "BSE SENSEX 50": "SENSEX50",
+            # NSE Index symbols (post-cleanup: uppercase, no spaces/hyphens)
+            "NIFTY50": "NIFTY",
+            "NIFTYNEXT50": "NIFTYNXT50",
+            "NIFTYFINSERVICE": "FINNIFTY",
+            "NIFTYFINANCIALSERVICES": "FINNIFTY",
+            "NIFTYFIN": "FINNIFTY",
+            "NIFTYBANK": "BANKNIFTY",
+            "NIFTYMIDSELECT": "MIDCPNIFTY",
+            "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+            "NIFTYMCAP50": "NIFTYMIDCAP50",
+            "NIFTYMIDSMALLCAP400": "NIFTYMIDSML400",
+            "NIFTYSMALLCAP100": "NIFTYSMLCAP100",
+            "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+            "NIFTYSMALLCAP50": "NIFTYSMLCAP50",
+            "NIFTY100EQUALWEIGHT": "NIFTY100EQLWGT",
+            "NIFTY100LOWVOLATILITY30": "NIFTY100LOWVOL30",
+            "NIFTYMID100FREE": "NIFTYMIDCAP100",
+            # BSE Index symbols - short forms (raw SymbolRoot without BSE prefix)
+            "SNSX50": "SENSEX50",
+            "SNXT50": "BSESENSEXNEXT50",
+            "MID150": "BSE150MIDCAPINDEX",
+            "LMI250": "BSE250LARGEMIDCAPINDEX",
+            "MSL400": "BSE400MIDSMALLCAPINDEX",
+            "ENERGY": "BSEENERGY",
+            "FIN": "BSEFINANCIALSERVICES",
+            "FINSER": "BSEFINANCIALSERVICES",
+            "INDSTR": "BSEINDUSTRIALS",
+            "LRGCAP": "BSELARGECAP",
+            "MIDSEL": "BSEMIDCAPSELECTINDEX",
+            "SMLSEL": "BSESMALLCAPSELECTINDEX",
+            "TELCOM": "BSETELECOM",
+            # BSE Index symbols - BSE-prefixed forms (after cleanup of "BSE XXX" SymbolRoots)
+            "BSESENSEX50": "SENSEX50",
+            "BSEBANKEX": "BANKEX",
+            "BSEAUTO": "BSEAUTO",
+            "BSECAPGOOD": "BSECAPITALGOODS",
+            "BSECG": "BSECAPITALGOODS",
+            "BSECARBON": "BSECARBONEX",
+            "BSECONSDUR": "BSECONSUMERDURABLES",
+            "BSECD": "BSECONSUMERDURABLES",
+            "BSECPSE": "BSECPSE",
+            "BSEDOL100": "BSEDOLLEX100",
+            "BSEDOL200": "BSEDOLLEX200",
+            "BSEDOL30": "BSEDOLLEX30",
+            "BSEFMCG": "BSEFASTMOVINGCONSUMERGOODS",
+            "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+            "BSEGREENX": "BSEGREENEX",
+            "BSEHEALTHC": "BSEHEALTHCARE",
+            "BSEHC": "BSEHEALTHCARE",
+            "BSEINDIA150": "BSE150MIDCAPINDEX",
+            "BSEINFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+            "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+            "BSEIPO": "BSEIPO",
+            "BSEMETAL": "BSEMETAL",
+            "BSEMIDCAP": "BSEMIDCAP",
+            "BSEOIL&GAS": "BSEOIL&GAS",
+            "BSEPOWER": "BSEPOWER",
+            "BSEPSU": "BSEPSU",
+            "BSEPBI": "BSEPSU",
+            "BSEREALTY": "BSEREALTY",
+            "BSESMLCAP": "BSESMALLCAP",
+            "BSESMEIPO": "BSESMEIPO",
+            "BSETECK": "BSETECK",
+            "BSEPSUBANK": "BSEPSU",
         }
     )
-    # Return the processed DataFrame
+
+    # Step 4: Remove duplicate index symbols (keep first occurrence)
+    idx_mask = new_df["exchange"].isin(["NSE_INDEX", "BSE_INDEX"])
+    idx_df = new_df[idx_mask]
+    non_idx_df = new_df[~idx_mask]
+    idx_df = idx_df.drop_duplicates(subset=["symbol", "exchange"], keep="first")
+    new_df = pd.concat([non_idx_df, idx_df], ignore_index=True)
 
     return new_df
 
