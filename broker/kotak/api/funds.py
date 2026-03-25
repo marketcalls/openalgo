@@ -9,11 +9,18 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def get_margin_data(auth_token):
+def get_margin_data(auth_token: str) -> dict:
     """
     Fetch margin data from the broker's API using the provided auth token.
 
-    Auth token format: trading_token:::trading_sid:::base_url:::access_token
+    Args:
+        auth_token (str): Composite authentication token in the format
+            'trading_token:::trading_sid:::base_url:::access_token'.
+
+    Returns:
+        dict: Processed margin data containing available cash, collateral,
+            M2M unrealized, M2M realized, and utilized debits. Returns an
+            empty dict if the request fails.
     """
     try:
         # Parse auth token components
