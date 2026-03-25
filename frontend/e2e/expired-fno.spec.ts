@@ -13,9 +13,23 @@ import { expect, test } from '@playwright/test'
 // The running Flask app (not the Vite dev server)
 const BASE = 'http://127.0.0.1:5000'
 
+// ── Shared helper: skip the whole suite if Flask is not running ───────────────
+
+async function skipIfFlaskDown(request: Parameters<Parameters<typeof test.beforeAll>[0]>[0]) {
+  try {
+    await request.get(`${BASE}/`, { timeout: 3000 })
+  } catch {
+    test.skip(true, 'Flask server not running — skipping suite in CI')
+  }
+}
+
 // ── API route tests (no auth — expect redirect/401/session error, NOT 404) ──
 
 test.describe('Expired F&O — API Routes Exist', () => {
+  test.beforeAll(async ({ request }) => {
+    await skipIfFlaskDown(request)
+  })
+
   test('GET /historify/api/expired/capability — route registered', async ({ request }) => {
     const res = await request.get(`${BASE}/historify/api/expired/capability`)
     // Should redirect to login (302) or return JSON — never 404
@@ -85,6 +99,10 @@ test.describe('Expired F&O — API Routes Exist', () => {
 // ── UI tests — load React app and check Historify tab ────────────────────────
 
 test.describe('Expired F&O — React UI', () => {
+  test.beforeAll(async ({ request }) => {
+    await skipIfFlaskDown(request)
+  })
+
   test('Historify page loads from Flask', async ({ page }) => {
     const res = await page.goto(`${BASE}/react`)
     expect(res?.status()).not.toBe(500)
@@ -133,6 +151,10 @@ test.describe('Expired F&O — React UI', () => {
 // ── DuckDB schema tests via Python ────────────────────────────────────────────
 
 test.describe('Expired F&O — DuckDB Schema', () => {
+  test.beforeAll(async ({ request }) => {
+    await skipIfFlaskDown(request)
+  })
+
   test('all three new tables exist in DuckDB', async ({ request }) => {
     // Hit the stats endpoint — it queries all three tables
     // Without auth it will redirect, but the DB itself was initialized on app start
@@ -175,6 +197,14 @@ test.describe('Expired F&O — DuckDB Schema', () => {
         expect(json.data).toHaveProperty('total_candles')
         expect(typeof json.data.total_expiries).toBe('number')
         expect(typeof json.data.total_contracts).toBe('number')
+      } else {
+        // Non-200 with session: should be a structured error response, not a bare 5xx
+        expect(res.status()).not.toBe(500)
+        const json = await res.json().catch(() => null)
+        if (json !== null) {
+          expect(json).toHaveProperty('status')
+          expect(json.status).toBe('error')
+        }
       }
     } else {
       // No session — just verify no 500 errors
@@ -187,6 +217,10 @@ test.describe('Expired F&O — DuckDB Schema', () => {
 // ── Capability endpoint validation ───────────────────────────────────────────
 
 test.describe('Expired F&O — Capability Check', () => {
+  test.beforeAll(async ({ request }) => {
+    await skipIfFlaskDown(request)
+  })
+
   test('capability endpoint returns valid JSON structure when authenticated', async ({
     request,
     page,
@@ -241,6 +275,10 @@ test.describe('Expired F&O — Capability Check', () => {
 // ── Smoke test: app is up and Historify blueprint works ──────────────────────
 
 test.describe('Expired F&O — Integration Smoke', () => {
+  test.beforeAll(async ({ request }) => {
+    await skipIfFlaskDown(request)
+  })
+
   test('OpenAlgo app is running and responding', async ({ request }) => {
     const res = await request.get(`${BASE}/`)
     expect([200, 302]).toContain(res.status())

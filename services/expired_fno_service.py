@@ -716,10 +716,11 @@ def _process_expired_fno_job(
         # Only write final status if job was not cancelled mid-run
         if job_id not in _cancelled_jobs:
             final_status = "completed" if failed == 0 else ("failed" if completed == 0 else "completed")
-            update_expired_fno_job(
-                job_id,
-                {"status": final_status, "completed_at": _now_iso()},
-            )
+            update_kwargs: dict[str, Any] = {"status": final_status, "completed_at": _now_iso()}
+            if failed > 0 and completed > 0:
+                # Partial: some succeeded, some failed — note failures in error_message
+                update_kwargs["error_message"] = f"{failed} contract(s) failed to download"
+            update_expired_fno_job(job_id, update_kwargs)
             try:
                 socketio.emit(
                     "historify_job_complete",

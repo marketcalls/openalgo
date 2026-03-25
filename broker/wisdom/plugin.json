@@ -17,7 +17,7 @@
     ],
     "broker_type": "IN_stock",
     "leverage_config": false,
-    "capabilities": {
+    "historify_capabilities": {
         "futures_historical": "limited",
         "options_historical": "none",
         "expired_contracts": "none"

@@ -106,45 +106,52 @@ class _SyncUpstoxRateLimiter:
 
     def acquire(self) -> None:
         """Block until a rate-limit slot is available."""
-        with self._lock:
-            now = time.monotonic()
-
-            # Evict timestamps outside each window
-            for name, (_, duration) in self._limits.items():
-                window = self._windows[name]
-                while window and now - window[0] > duration:
-                    window.popleft()
-
-            # Determine required wait across all windows
-            wait_time = 0.0
-            for name, (limit, duration) in self._limits.items():
-                window = self._windows[name]
-                effective_limit = int(limit / self._backoff_factor)
-                if len(window) >= effective_limit:
-                    oldest = window[0]
-                    wait_needed = duration - (now - oldest) + 0.01
-                    wait_time = max(wait_time, wait_needed)
-
-            if wait_time > 0:
-                logger.debug(f"Rate limit: waiting {wait_time:.2f}s")
-                time.sleep(wait_time)
+        while True:
+            with self._lock:
                 now = time.monotonic()
 
-            # Record this request
-            for window in self._windows.values():
-                window.append(now)
+                # Evict timestamps outside each window
+                for name, (_, duration) in self._limits.items():
+                    window = self._windows[name]
+                    while window and now - window[0] > duration:
+                        window.popleft()
+
+                # Determine required wait across all windows
+                wait_time = 0.0
+                for name, (limit, duration) in self._limits.items():
+                    window = self._windows[name]
+                    effective_limit = int(limit / self._backoff_factor)
+                    if len(window) >= effective_limit:
+                        oldest = window[0]
+                        wait_needed = duration - (now - oldest) + 0.01
+                        wait_time = max(wait_time, wait_needed)
+
+                if wait_time <= 0:
+                    # Slot available — record this request and return
+                    now = time.monotonic()
+                    for window in self._windows.values():
+                        window.append(now)
+                    return
+
+            # Sleep OUTSIDE the lock so other threads are not blocked
+            logger.debug(f"Rate limit: waiting {wait_time:.2f}s")
+            time.sleep(wait_time)
 
     def on_response(self, status_code: int, retry_after: int = 60) -> None:
         """Adjust backoff factor based on API response status."""
+        do_sleep = False
         with self._lock:
             if status_code == 429:
                 self._error_count += 1
                 self._backoff_factor = min(2.0, 1.0 + self._error_count * 0.1)
                 logger.warning(f"Rate limit hit (429), backing off {retry_after}s")
-                time.sleep(retry_after)
+                do_sleep = True
             elif status_code < 400 and self._error_count > 0:
                 self._error_count -= 1
                 self._backoff_factor = max(1.0, self._backoff_factor - 0.05)
+        # Sleep OUTSIDE the lock so other threads are not blocked
+        if do_sleep:
+            time.sleep(retry_after)
 
 
 # Module-level shared rate limiter instance

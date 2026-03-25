@@ -3522,6 +3522,12 @@ def upsert_expired_fno_expiries(rows: list[dict[str, Any]]) -> int:
                         ],
                     )
                 else:
+                    # NOTE: MAX(id)+1 is race-prone under concurrent inserts in most
+                    # databases.  DuckDB uses exclusive file-level locking so only one
+                    # writer can hold a connection at a time, which serialises these
+                    # inserts and makes this pattern safe in practice.  A SEQUENCE
+                    # would be cleaner but requires DuckDB >= 0.8; we keep this approach
+                    # for broad version compatibility.
                     result = conn.execute(
                         "SELECT COALESCE(MAX(id), 0) + 1 FROM expired_fno_expiries"
                     ).fetchone()
@@ -3882,6 +3888,11 @@ def get_pending_expired_fno_contracts(
     Returns:
         List of contract records
     """
+    # Guard: empty contract_types would generate invalid SQL `IN ()`.
+    # Default to all contract types when none are specified.
+    if not contract_types:
+        contract_types = ['CE', 'PE', 'FUT']
+
     try:
         with get_connection() as conn:
             type_placeholders = ", ".join("?" for _ in contract_types)

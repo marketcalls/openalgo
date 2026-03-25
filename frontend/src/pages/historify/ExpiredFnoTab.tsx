@@ -119,6 +119,16 @@ export function ExpiredFnoTab({ socket }: Props) {
 
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // ── Clear polling interval on unmount ────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (jobPollRef.current) {
+        clearInterval(jobPollRef.current)
+        jobPollRef.current = null
+      }
+    }
+  }, [])
+
   // ── Load capability on mount ─────────────────────────────────────────────
   useEffect(() => {
     getExpiredFnoCapability()
@@ -142,6 +152,12 @@ export function ExpiredFnoTab({ socket }: Props) {
   useEffect(() => {
     if (!socket) return
 
+    // Capture the effective underlying at the time the effect runs so the
+    // callback closure always sees the current value (avoids TDZ risk when
+    // effectiveUnderlying is declared later in the component body).
+    const capturedUnderlying =
+      underlyingMode === 'index' ? underlying : stockInput.trim().toUpperCase()
+
     const onProgress = (data: {
       job_id: string
       job_type: string
@@ -164,8 +180,8 @@ export function ExpiredFnoTab({ socket }: Props) {
       }
       loadStats()
       loadJobs()
-      if (effectiveUnderlying && selectedExpiries.size > 0) {
-        loadCachedContracts(effectiveUnderlying, Array.from(selectedExpiries))
+      if (capturedUnderlying && selectedExpiries.size > 0) {
+        loadCachedContracts(capturedUnderlying, Array.from(selectedExpiries))
       }
     }
 
@@ -175,7 +191,7 @@ export function ExpiredFnoTab({ socket }: Props) {
       socket.off('historify_progress', onProgress)
       socket.off('historify_job_complete', onComplete)
     }
-  }, [socket, activeJob, underlying, selectedExpiries])
+  }, [socket, activeJob, underlying, underlyingMode, stockInput, selectedExpiries])
 
   // ── Job list helpers ──────────────────────────────────────────────────────
   async function loadJobs() {
@@ -548,6 +564,7 @@ export function ExpiredFnoTab({ socket }: Props) {
                       <label
                         htmlFor={`exp-${e.expiry_date}`}
                         className="flex items-center gap-2 text-sm cursor-pointer select-none flex-1"
+                        onClick={(ev) => ev.stopPropagation()}
                       >
                         <span className="font-mono">{e.expiry_date}</span>
                         {e.is_weekly && (
