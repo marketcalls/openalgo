@@ -207,3 +207,16 @@ export async function getExpiredFnoStats(): Promise<ExpiredFnoStats> {
   )
   return response.data.data
 }
+
+export interface FnoStock {
+  symbol: string
+  exchange: string
+}
+
+/** Get NSE F&O eligible equity stocks for bulk import into watchlist. */
+export async function getFnoStocks(): Promise<FnoStock[]> {
+  const response = await webClient.get<{ status: string; data: FnoStock[]; count: number }>(
+    '/historify/api/fno/stocks'
+  )
+  return response.data.data
+}

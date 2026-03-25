@@ -1842,3 +1842,18 @@ def get_expired_fno_stats():
     except Exception as e:
         logger.error(f"Error getting expired F&O stats: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/fno/stocks", methods=["GET"])
+@check_session_validity
+def get_fno_stocks():
+    """Return NSE F&O eligible equity stocks for bulk import."""
+    try:
+        from services.historify_service import get_fno_stock_list
+
+        success, response, status_code = get_fno_stock_list()
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting FNO stock list: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500

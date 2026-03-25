@@ -52,6 +52,7 @@ import {
   getExpiredFnoCapability,
   getExpiredFnoStats,
   getExpiries,
+  getFnoStocks,
   getJobStatus,
   listExpiredFnoJobs,
   startDownloadJob,
@@ -63,6 +64,7 @@ import type {
   ExpiredFnoCapability,
   ExpiredFnoJob,
   ExpiredFnoStats,
+  FnoStock,
   LookBack,
 } from '@/api/expiredFno'
 
@@ -91,6 +93,10 @@ export function ExpiredFnoTab({ socket }: Props) {
   const [underlying, setUnderlying] = useState('')           // index dropdown value
   const [underlyingMode, setUnderlyingMode] = useState<'index' | 'stock'>('index')
   const [stockInput, setStockInput] = useState('')           // free-text for stocks
+  const [fnoStockList, setFnoStockList] = useState<FnoStock[]>([])
+  const [fnoStockListLoaded, setFnoStockListLoaded] = useState(false)
+  const [stockDropdownOpen, setStockDropdownOpen] = useState(false)
+  const [stockSearchQuery, setStockSearchQuery] = useState('')
   const [expiries, setExpiries] = useState<ExpiredExpiry[]>([])
   const [fetchingExpiries, setFetchingExpiries] = useState(false)
 
@@ -128,6 +134,20 @@ export function ExpiredFnoTab({ socket }: Props) {
       }
     }
   }, [])
+
+  // ── Load F&O stock list when Stocks mode is active ───────────────────────
+  useEffect(() => {
+    if (underlyingMode === 'stock' && !fnoStockListLoaded) {
+      getFnoStocks()
+        .then((stocks) => {
+          setFnoStockList(stocks)
+          setFnoStockListLoaded(true)
+        })
+        .catch(() => {
+          // silent fail — plain text input still works
+        })
+    }
+  }, [underlyingMode, fnoStockListLoaded])
 
   // ── Load capability on mount ─────────────────────────────────────────────
   useEffect(() => {
@@ -476,17 +496,49 @@ export function ExpiredFnoTab({ socket }: Props) {
               ) : (
                 <div className="space-y-1.5">
                   <Label>Stock Symbol</Label>
-                  <Input
-                    className="w-44 uppercase"
-                    placeholder="e.g. RELIANCE"
-                    value={stockInput}
-                    onChange={(e) => {
-                      setStockInput(e.target.value.toUpperCase())
-                      setExpiries([])
-                      setSelectedExpiries(new Set())
-                      setContracts([])
-                    }}
-                  />
+                  <div className="relative w-44">
+                    <Input
+                      className="w-full uppercase"
+                      placeholder="e.g. RELIANCE"
+                      value={stockInput}
+                      onChange={(e) => {
+                        const val = e.target.value.toUpperCase()
+                        setStockInput(val)
+                        setStockSearchQuery(val)
+                        setStockDropdownOpen(val.length > 0 && fnoStockList.length > 0)
+                        setExpiries([])
+                        setSelectedExpiries(new Set())
+                        setContracts([])
+                      }}
+                      onFocus={() => {
+                        if (fnoStockList.length > 0) {
+                          setStockSearchQuery(stockInput)
+                          setStockDropdownOpen(true)
+                        }
+                      }}
+                      onBlur={() => setTimeout(() => setStockDropdownOpen(false), 150)}
+                    />
+                    {stockDropdownOpen && (
+                      <div className="absolute z-50 w-full mt-1 bg-background border border-border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                        {fnoStockList
+                          .filter((s) => s.symbol.includes(stockSearchQuery.toUpperCase()))
+                          .slice(0, 20)
+                          .map((s) => (
+                            <div
+                              key={s.symbol}
+                              className="px-3 py-1.5 text-sm cursor-pointer hover:bg-accent"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                setStockInput(s.symbol)
+                                setStockDropdownOpen(false)
+                              }}
+                            >
+                              {s.symbol}
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     NSE F&O stock symbol (master contracts required)
                   </p>
