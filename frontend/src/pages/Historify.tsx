@@ -89,8 +89,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import { ExpiredFnoTab } from './historify/ExpiredFnoTab'
-import { getFnoStocks } from '@/api/expiredFno'
-import type { FnoStock } from '@/api/expiredFno'
 
 // Types
 interface SearchResult {
@@ -326,13 +324,6 @@ export default function Historify() {
   const [bulkAddText, setBulkAddText] = useState('')
   const [isBulkAdding, setIsBulkAdding] = useState(false)
 
-  // F&O Stocks import dialog state
-  const [fnoStocksOpen, setFnoStocksOpen] = useState(false)
-  const [fnoStockList, setFnoStockList] = useState<FnoStock[]>([])
-  const [fnoStocksLoading, setFnoStocksLoading] = useState(false)
-  const [fnoStocksFilter, setFnoStocksFilter] = useState('')
-  const [fnoStocksSelected, setFnoStocksSelected] = useState<Set<string>>(new Set())
-  const [isAddingFnoStocks, setIsAddingFnoStocks] = useState(false)
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
   const [uploadSymbol, setUploadSymbol] = useState('')
   const [uploadExchange, setUploadExchange] = useState('NSE')
@@ -963,56 +954,6 @@ export default function Historify() {
       showToast.error('Failed to bulk add symbols', 'historify')
     } finally {
       setIsBulkAdding(false)
-    }
-  }
-
-  // F&O Stocks import functions
-  const loadFnoStockList = async () => {
-    if (fnoStockList.length > 0) return // already loaded
-    setFnoStocksLoading(true)
-    try {
-      const stocks = await getFnoStocks()
-      setFnoStockList(stocks)
-    } catch {
-      showToast.error('Failed to load F&O stock list', 'historify')
-    } finally {
-      setFnoStocksLoading(false)
-    }
-  }
-
-  const handleAddFnoStocks = async () => {
-    if (fnoStocksSelected.size === 0) {
-      showToast.warning('Select at least one stock', 'historify')
-      return
-    }
-    setIsAddingFnoStocks(true)
-    try {
-      const selected = fnoStockList
-        .filter((s) => fnoStocksSelected.has(s.symbol))
-        .map((s) => ({ symbol: s.symbol, exchange: s.exchange }))
-
-      const csrfToken = await fetchCSRFToken()
-      const response = await fetch('/historify/api/watchlist/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
-        credentials: 'include',
-        body: JSON.stringify({ symbols: selected }),
-      })
-      const data = await response.json()
-      if (data.status === 'success') {
-        showToast.success(`Added ${data.added ?? selected.length} stocks to watchlist`, 'historify')
-        setFnoStocksOpen(false)
-        setFnoStocksSelected(new Set())
-        setFnoStocksFilter('')
-        loadWatchlist()
-        loadStats()
-      } else {
-        showToast.error(data.message || 'Failed to add stocks', 'historify')
-      }
-    } catch {
-      showToast.error('Failed to add stocks', 'historify')
-    } finally {
-      setIsAddingFnoStocks(false)
     }
   }
 
@@ -1966,17 +1907,6 @@ export default function Historify() {
                     <Button variant="outline" onClick={() => setBulkAddDialogOpen(true)} className="h-9">
                       <ListPlus className="h-4 w-4 mr-1" />
                       Bulk
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="h-9 gap-1"
-                      onClick={() => {
-                        setFnoStocksOpen(true)
-                        loadFnoStockList()
-                      }}
-                    >
-                      <TrendingUp className="h-4 w-4" />
-                      F&O Stocks
                     </Button>
                   </div>
                 </CardContent>
@@ -3171,94 +3101,6 @@ NIFTY24DEC25000CE,NFO"
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* F&O Stocks Import Dialog */}
-      <Dialog open={fnoStocksOpen} onOpenChange={(open) => { setFnoStocksOpen(open); if (!open) { setFnoStocksFilter(''); setFnoStocksSelected(new Set()) } }}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>NSE F&amp;O Stocks</DialogTitle>
-            <DialogDescription>
-              Select stocks to add to your Historify watchlist. All {fnoStockList.length} NSE F&amp;O eligible stocks are listed.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              placeholder="Search symbol..."
-              value={fnoStocksFilter}
-              onChange={(e) => setFnoStocksFilter(e.target.value.toUpperCase())}
-              className="h-8 text-sm"
-            />
-            <div className="flex items-center gap-2 text-xs">
-              <button
-                type="button"
-                className="text-primary hover:underline"
-                onClick={() => setFnoStocksSelected(new Set(fnoStockList.map((s) => s.symbol)))}
-              >
-                All
-              </button>
-              <span className="text-muted-foreground">·</span>
-              <button
-                type="button"
-                className="text-primary hover:underline"
-                onClick={() => setFnoStocksSelected(new Set())}
-              >
-                None
-              </button>
-              <span className="ml-auto text-muted-foreground">
-                {fnoStocksSelected.size} selected
-              </span>
-            </div>
-            {fnoStocksLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              </div>
-            ) : (
-              <ScrollArea className="h-72 rounded border">
-                <div className="p-2 grid grid-cols-3 gap-1">
-                  {fnoStockList
-                    .filter((s) => s.symbol.includes(fnoStocksFilter))
-                    .map((s) => (
-                      <label
-                        key={s.symbol}
-                        className="flex items-center gap-1.5 px-2 py-1 rounded text-sm cursor-pointer hover:bg-accent select-none"
-                      >
-                        <Checkbox
-                          checked={fnoStocksSelected.has(s.symbol)}
-                          onCheckedChange={(checked) => {
-                            setFnoStocksSelected((prev) => {
-                              const next = new Set(prev)
-                              if (checked) next.add(s.symbol)
-                              else next.delete(s.symbol)
-                              return next
-                            })
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="h-3.5 w-3.5"
-                        />
-                        <span className="font-mono text-xs">{s.symbol}</span>
-                      </label>
-                    ))}
-                </div>
-              </ScrollArea>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setFnoStocksOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleAddFnoStocks}
-              disabled={fnoStocksSelected.size === 0 || isAddingFnoStocks}
-            >
-              {isAddingFnoStocks ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Adding...</>
-              ) : (
-                <>Add {fnoStocksSelected.size > 0 ? fnoStocksSelected.size : ''} to Watchlist</>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Bulk Watchlist Delete Confirmation Dialog */}
       <AlertDialog open={bulkWatchlistDeleteDialogOpen} onOpenChange={setBulkWatchlistDeleteDialogOpen}>
