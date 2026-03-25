@@ -445,26 +445,95 @@ def process_definedge_allmaster_csv(path):
         processed_df.loc[mcx_index_mask, "expiry"] = ""
         processed_df.loc[mcx_index_mask, "strike"] = 1.0
 
-        # Common index symbol mapping
-        index_mapping = {
-            "Nifty 50": "NIFTY",
-            "NIFTY50": "NIFTY",
-            "Nifty Next 50": "NIFTYNXT50",
-            "Nifty Fin Service": "FINNIFTY",
-            "FINNIFTY": "FINNIFTY",
-            "Nifty Bank": "BANKNIFTY",
-            "BANKNIFTY": "BANKNIFTY",
-            "NIFTY MID SELECT": "MIDCPNIFTY",
-            "MIDCPNIFTY": "MIDCPNIFTY",
-            "India VIX": "INDIAVIX",
-            "INDIAVIX": "INDIAVIX",
-            "SENSEX": "SENSEX",
-            "SENSEX50": "SENSEX50",
-            "SNSX50": "SENSEX50",  # BSE index mapping
-        }
+        # Common Index Symbol Normalization
 
-        for old_name, new_name in index_mapping.items():
-            processed_df.loc[processed_df["symbol"] == old_name, "symbol"] = new_name
+        # Step 1: Normalize NSE_INDEX symbols - uppercase and remove spaces/hyphens
+        nse_idx_mask = processed_df["exchange"] == "NSE_INDEX"
+        processed_df.loc[nse_idx_mask, "symbol"] = (
+            processed_df.loc[nse_idx_mask, "symbol"]
+            .str.upper()
+            .str.replace(" ", "", regex=False)
+            .str.replace("-", "", regex=False)
+        )
+
+        # Step 2: Normalize BSE_INDEX symbols - uppercase and remove spaces/hyphens
+        bse_idx_mask = processed_df["exchange"] == "BSE_INDEX"
+        processed_df.loc[bse_idx_mask, "symbol"] = (
+            processed_df.loc[bse_idx_mask, "symbol"]
+            .str.upper()
+            .str.replace(" ", "", regex=False)
+            .str.replace("-", "", regex=False)
+        )
+
+        # Step 3: Explicit rename map for symbols whose cleaned form differs from OpenAlgo standard
+        # Only apply to index exchanges to avoid renaming non-index symbols (e.g., ENERGY, FIN on NSE/BSE)
+        idx_rename_mask = processed_df["exchange"].isin(["NSE_INDEX", "BSE_INDEX"])
+        processed_df.loc[idx_rename_mask, "symbol"] = processed_df.loc[idx_rename_mask, "symbol"].replace(
+            {
+                # NSE Index symbols (post-cleanup: uppercase, no spaces/hyphens)
+                "NIFTY50": "NIFTY",
+                "NIFTYNEXT50": "NIFTYNXT50",
+                "NIFTYFINSERVICE": "FINNIFTY",
+                "NIFTYFINANCIALSERVICES": "FINNIFTY",
+                "NIFTYFIN": "FINNIFTY",
+                "NIFTYBANK": "BANKNIFTY",
+                "NIFTYMIDSELECT": "MIDCPNIFTY",
+                "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+                "NIFTYMCAP50": "NIFTYMIDCAP50",
+                "NIFTYMIDSMALLCAP400": "NIFTYMIDSML400",
+                "NIFTYSMALLCAP100": "NIFTYSMLCAP100",
+                "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+                "NIFTYSMALLCAP50": "NIFTYSMLCAP50",
+                "NIFTY100EQUALWEIGHT": "NIFTY100EQLWGT",
+                "NIFTY100LOWVOLATILITY30": "NIFTY100LOWVOL30",
+                "NIFTYMID100FREE": "NIFTYMIDCAP100",
+                "HANGSENGBEESNAV": "HANGSENGBEESNAV",
+                # BSE Index symbols - short forms (raw without BSE prefix)
+                "SNSX50": "SENSEX50",
+                "SNXT50": "BSESENSEXNEXT50",
+                "MID150": "BSE150MIDCAPINDEX",
+                "LMI250": "BSE250LARGEMIDCAPINDEX",
+                "MSL400": "BSE400MIDSMALLCAPINDEX",
+                "ENERGY": "BSEENERGY",
+                "FIN": "BSEFINANCIALSERVICES",
+                "FINSER": "BSEFINANCIALSERVICES",
+                "INDSTR": "BSEINDUSTRIALS",
+                "LRGCAP": "BSELARGECAP",
+                "MIDSEL": "BSEMIDCAPSELECTINDEX",
+                "SMLSEL": "BSESMALLCAPSELECTINDEX",
+                "TELCOM": "BSETELECOM",
+                # BSE Index symbols - BSE-prefixed forms (after cleanup of "BSE XXX" raw names)
+                "BSESENSEX50": "SENSEX50",
+                "BSEBANKEX": "BANKEX",
+                "BSECAPGOOD": "BSECAPITALGOODS",
+                "BSECG": "BSECAPITALGOODS",
+                "BSECARBON": "BSECARBONEX",
+                "BSECONSDUR": "BSECONSUMERDURABLES",
+                "BSECD": "BSECONSUMERDURABLES",
+                "BSEDOL100": "BSEDOLLEX100",
+                "BSEDOL200": "BSEDOLLEX200",
+                "BSEDOL30": "BSEDOLLEX30",
+                "BSEFMCG": "BSEFASTMOVINGCONSUMERGOODS",
+                "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+                "BSEGREENX": "BSEGREENEX",
+                "BSEHEALTHC": "BSEHEALTHCARE",
+                "BSEHC": "BSEHEALTHCARE",
+                "BSEINDIA150": "BSE150MIDCAPINDEX",
+                "BSEINFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+                "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+                "BSESMLCAP": "BSESMALLCAP",
+                "BSESMEIPO": "BSESMEIPO",
+                "BSEPBI": "BSEPSU",
+                "BSEPSUBANK": "BSEPSU",
+            }
+        )
+
+        # Step 4: Remove duplicate index symbols (keep first occurrence)
+        idx_mask = processed_df["exchange"].isin(["NSE_INDEX", "BSE_INDEX"])
+        idx_df = processed_df[idx_mask]
+        non_idx_df = processed_df[~idx_mask]
+        idx_df = idx_df.drop_duplicates(subset=["symbol", "exchange"], keep="first")
+        processed_df = pd.concat([non_idx_df, idx_df], ignore_index=True)
 
         # NFO (Futures and Options) formatting
         # Convert expiry date format from DDMMYYYY to DD-MMM-YY (AliceBlue format)
