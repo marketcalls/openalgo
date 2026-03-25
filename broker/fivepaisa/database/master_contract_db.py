@@ -270,7 +270,9 @@ def process_5paisa_csv(path):
     )
 
     # Step 3: Explicit rename map for symbols whose cleaned form differs from OpenAlgo standard
-    new_df["symbol"] = new_df["symbol"].replace(
+    # Only apply to index exchanges to avoid renaming non-index symbols (e.g., ENERGY, FIN on NSE/BSE)
+    idx_rename_mask = new_df["exchange"].isin(["NSE_INDEX", "BSE_INDEX"])
+    new_df.loc[idx_rename_mask, "symbol"] = new_df.loc[idx_rename_mask, "symbol"].replace(
         {
             # NSE Index symbols (post-cleanup: uppercase, no spaces/hyphens)
             "NIFTY50": "NIFTY",
