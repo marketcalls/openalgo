@@ -6,7 +6,7 @@ import os
 from datetime import date, datetime
 
 from cachetools import TTLCache
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -51,10 +51,27 @@ class RiskLimits(Base):
 
 
 def init_db():
-    """Initialize the risk_limits table."""
+    """Initialize the risk_limits table and migrate new columns if needed."""
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Risk Limits DB", logger)
+
+    # Migrate: add trade count columns if table exists but columns are missing
+    try:
+        inspector = inspect(engine)
+        if "risk_limits" in inspector.get_table_names():
+            existing_cols = {c["name"] for c in inspector.get_columns("risk_limits")}
+            with engine.connect() as conn:
+                if "daily_trade_count" not in existing_cols:
+                    conn.execute(text("ALTER TABLE risk_limits ADD COLUMN daily_trade_count INTEGER DEFAULT 0"))
+                    conn.commit()
+                    logger.info("Migration: Added 'daily_trade_count' column to risk_limits table")
+                if "trade_count_date" not in existing_cols:
+                    conn.execute(text("ALTER TABLE risk_limits ADD COLUMN trade_count_date DATE"))
+                    conn.commit()
+                    logger.info("Migration: Added 'trade_count_date' column to risk_limits table")
+    except Exception as e:
+        logger.debug(f"Migration check for risk_limits columns: {e}")
 
 
 def get_risk_limits(user: str) -> RiskLimits | None:
@@ -158,23 +175,32 @@ def reset_if_new_day(user: str) -> bool:
 
 
 def increment_and_get_trade_count(user: str) -> int:
-    """Atomically increment trade count in DB and return the new value."""
+    """Atomically increment trade count in DB using SQL and return the new value."""
     try:
         today = date.today()
-        row = RiskLimits.query.filter_by(user=user).first()
-        if row is None:
+
+        # Atomic UPDATE with SQL expression — no read-modify-write race
+        result = db_session.execute(
+            text(
+                "UPDATE risk_limits "
+                "SET daily_trade_count = CASE "
+                "  WHEN trade_count_date IS NULL OR trade_count_date < :today THEN 1 "
+                "  ELSE COALESCE(daily_trade_count, 0) + 1 "
+                "END, "
+                "trade_count_date = :today "
+                "WHERE \"user\" = :user"
+            ),
+            {"today": today, "user": user},
+        )
+        db_session.commit()
+
+        if result.rowcount == 0:
             return 0
 
-        # Reset count if new day
-        if row.trade_count_date is None or row.trade_count_date < today:
-            row.daily_trade_count = 1
-            row.trade_count_date = today
-        else:
-            row.daily_trade_count = (row.daily_trade_count or 0) + 1
-
-        db_session.commit()
+        # Read back the new count
+        row = RiskLimits.query.filter_by(user=user).first()
         _risk_limits_cache.pop(f"risk_limits:{user}", None)
-        return row.daily_trade_count
+        return row.daily_trade_count if row else 0
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error incrementing trade count for {user}: {e}")
