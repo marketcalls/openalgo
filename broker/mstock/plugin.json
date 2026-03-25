@@ -7,5 +7,10 @@
     "Author URI": "https://openalgo.in",
     "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "NSE_INDEX", "BSE_INDEX"],
     "broker_type": "IN_stock",
-    "leverage_config": false
+    "leverage_config": false,
+    "capabilities": {
+        "futures_historical": "limited",
+        "options_historical": "none",
+        "expired_contracts": "none"
+    }
 }

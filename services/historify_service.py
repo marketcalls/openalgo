@@ -45,6 +45,51 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# =============================================================================
+# NSE F&O Stock List Constants
+# =============================================================================
+
+_STATIC_NSE_FNO_STOCKS = [
+    "AARTIIND", "ABB", "ABBOTINDIA", "ABCAPITAL", "ABFRL", "ACC", "ADANIENT",
+    "ADANIPORTS", "ALKEM", "AMBUJACEM", "ANGELONE", "APLAPOLLO", "APOLLOHOSP",
+    "APOLLOTYRE", "ASHOKLEY", "ASIANPAINT", "ASTRAL", "ATUL", "AUBANK",
+    "AUROPHARMA", "AXISBANK", "BAJAJ-AUTO", "BAJAJFINSV", "BAJFINANCE",
+    "BALKRISIND", "BANDHANBNK", "BANKBARODA", "BATAINDIA", "BEL", "BERGEPAINT",
+    "BHARATFORG", "BHARTIARTL", "BHEL", "BIOCON", "BOSCHLTD", "BPCL",
+    "BRITANNIA", "BSE", "BSOFT", "CANBK", "CANFINHOME", "CHAMBLFERT",
+    "CHOLAFIN", "CIPLA", "COALINDIA", "COFORGE", "COLPAL", "CONCOR",
+    "COROMANDEL", "CROMPTON", "CUB", "CUMMINSIND", "CYIENT", "DABUR",
+    "DALBHARAT", "DEEPAKNTR", "DELTACORP", "DIVISLAB", "DIXON", "DLF",
+    "DMART", "DRREDDY", "EICHERMOT", "ESCORTS", "EXIDEIND", "FEDERALBNK",
+    "GAIL", "GLENMARK", "GMRINFRA", "GNFC", "GODREJCP", "GODREJPROP",
+    "GRANULES", "GRASIM", "GSPL", "GUJGASLTD", "HAL", "HAVELLS", "HCLTECH",
+    "HDFCAMC", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDCOPPER",
+    "HINDPETRO", "HINDUNILVR", "ICICIBANK", "ICICIGI", "ICICIPRULI", "IDEA",
+    "IDFC", "IDFCFIRSTB", "IEX", "IGL", "INDHOTEL", "INDIACEM", "INDIAMART",
+    "INDUSINDBK", "INDUSTOWER", "INFY", "IOC", "IPCALAB", "IRCTC", "ITC",
+    "JINDALSTEL", "JKCEMENT", "JSWENERGY", "JSWSTEEL", "JUBLFOOD", "KOTAKBANK",
+    "L&TFH", "LALPATHLAB", "LAURUSLABS", "LICHSGFIN", "LICI", "LTIM",
+    "LTTS", "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", "MARICO", "MARUTI",
+    "MAXHEALTH", "MCX", "METROPOLIS", "MFSL", "MGL", "MOTHERSON",
+    "MPHASIS", "MRF", "MUTHOOTFIN", "NAM-INDIA", "NATIONALUM", "NAUKRI",
+    "NAVINFLUOR", "NESTLEIND", "NMDC", "NTPC", "OBEROIRLTY", "OIL",
+    "ONGC", "PAGEIND", "PEL", "PERSISTENT", "PETRONET", "PFC", "PIDILITIND",
+    "PIIND", "PNB", "POLYCAB", "POWERGRID", "PVRINOX", "RAMCOCEM",
+    "RBLBANK", "RECLTD", "RELIANCE", "SAIL", "SBICARD", "SBILIFE", "SBIN",
+    "SHREECEM", "SHRIRAMFIN", "SIEMENS", "SRF", "SUNPHARMA", "SUNTV",
+    "SUPREMEIND", "SYNGENE", "TATACOMM", "TATACHEM", "TATACONSUM",
+    "TATAMOTORS", "TATAPOWER", "TATASTEEL", "TCS", "TECHM", "TIINDIA",
+    "TITAN", "TORNTPHARM", "TORNTPOWER", "TRENT", "TVSMOTOR", "UBL",
+    "ULTRACEMCO", "UNIONBANK", "UPL", "VEDL", "VOLTAS", "WIPRO",
+    "ZYDUSLIFE",
+]
+
+# Known index underlyings to exclude from the stock list
+_INDEX_UNDERLYINGS = {
+    "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
+    "SENSEX", "BANKEX", "SENSEX50", "USDINR", "EURINR", "GBPINR", "JPYINR",
+}
+
 
 def validate_symbol(symbol: str, exchange: str) -> tuple[bool, str]:
     """
@@ -2179,6 +2224,50 @@ def get_catalog_grouped_service(group_by: str = "underlying") -> tuple[bool, dic
     except Exception as e:
         logger.exception(f"Error getting grouped catalog: {e}")
         return False, {"status": "error", "message": str(e)}, 500
+
+
+# =============================================================================
+# NSE F&O Stock List
+# =============================================================================
+
+
+def get_fno_stock_list() -> tuple[bool, dict, int]:
+    """Return NSE F&O eligible equity stocks.
+
+    Merges a static curated list with any additional stocks found in the
+    local master contracts DB (NFO underlyings minus known indices).
+    Falls back to the static list alone if the DB query fails.
+    """
+    try:
+        # Attempt dynamic lookup from master contracts
+        dynamic_stocks: set[str] = set()
+        try:
+            from database.token_db import get_all_tokens_by_exchange
+            # get distinct underlying symbols from NFO contracts
+            tokens = get_all_tokens_by_exchange("NFO")
+            for token in tokens:
+                name = getattr(token, "name", "") or ""
+                symbol = name.split("FUT")[0].split("CE")[0].split("PE")[0].strip()
+                if symbol and symbol not in _INDEX_UNDERLYINGS:
+                    dynamic_stocks.add(symbol)
+        except Exception:
+            pass  # silently fall back to static list
+
+        merged = sorted(set(_STATIC_NSE_FNO_STOCKS) | dynamic_stocks)
+        stocks = [{"symbol": s, "exchange": "NSE"} for s in merged]
+
+        return (
+            True,
+            {"status": "success", "data": stocks, "count": len(stocks)},
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Error building FNO stock list: {e}")
+        return (
+            False,
+            {"status": "error", "message": str(e)},
+            500,
+        )
 
 
 # =============================================================================

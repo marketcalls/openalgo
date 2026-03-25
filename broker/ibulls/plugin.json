@@ -1,11 +1,24 @@
 {
     "Plugin Name": "IBulls",
     "Plugin URI": "https://openalgo.in",
-    "Description":"IBulls Plugin",
+    "Description": "IBulls Plugin",
     "Version": "1.0",
     "Author": "Kalaivani",
     "Author URI": "https://openalgo.in",
-    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "MCX", "NSE_INDEX", "BSE_INDEX"],
+    "supported_exchanges": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "MCX",
+        "NSE_INDEX",
+        "BSE_INDEX"
+    ],
     "broker_type": "IN_stock",
-    "leverage_config": false
+    "leverage_config": false,
+    "capabilities": {
+        "futures_historical": "limited",
+        "options_historical": "none",
+        "expired_contracts": "none"
+    }
 }

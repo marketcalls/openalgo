@@ -5,7 +5,19 @@
     "Version": "1.0",
     "Author": "Deepanshu Goyal",
     "Author URI": "https://openalgo.in",
-    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "NSE_INDEX", "BSE_INDEX"],
+    "supported_exchanges": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "NSE_INDEX",
+        "BSE_INDEX"
+    ],
     "broker_type": "IN_stock",
-    "leverage_config": false
+    "leverage_config": false,
+    "capabilities": {
+        "futures_historical": "none",
+        "options_historical": "none",
+        "expired_contracts": "none"
+    }
 }
