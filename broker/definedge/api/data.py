@@ -46,7 +46,7 @@ def get_quotes(symbol, exchange, auth_token):
 
         token_id = get_token(symbol, exchange)
 
-        logger.info(f"Getting quotes for {symbol} ({exchange}) with token: {token_id}")
+        logger.debug(f"Getting quotes for {symbol} ({exchange}) with token: {token_id}")
 
         # Handle index symbols - map to their respective exchanges
         api_exchange = exchange
@@ -176,7 +176,7 @@ class BrokerData:
             # Use the updated get_quotes function with correct endpoint
             response = get_quotes(symbol, exchange, self.auth_token)
 
-            logger.info(f"Raw quotes response: {response}")
+            logger.debug(f"Raw quotes response: {response}")
 
             if response.get("status") == "error":
                 raise Exception(response.get("message", "Unknown error"))
@@ -710,10 +710,10 @@ class BrokerData:
 
                     # Check if we have valid data
                     if chunk_df.empty:
-                        logger.info(
-                            f"Debug - No valid data after parsing CSV for {timeframe} timeframe"
+                        logger.debug(
+                            f"No valid data after parsing CSV for {timeframe} timeframe"
                         )
-                        logger.info("Debug - This might be due to incorrect date parsing")
+                        logger.debug("This might be due to incorrect date parsing")
                         current_start = current_end + timedelta(days=1)
                         continue
 
