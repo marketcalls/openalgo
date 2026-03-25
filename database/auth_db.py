@@ -467,11 +467,21 @@ def get_first_available_api_key():
     """
     Get the first available decrypted API key from the database.
     Used for background services that don't have session context.
+
+    Only returns keys for users who have an active (non-revoked) auth session
+    with a broker configured. This prevents returning orphaned API keys for
+    deleted users or users with revoked sessions.
     """
     try:
-        api_key_obj = ApiKeys.query.first()
-        if api_key_obj and api_key_obj.api_key_encrypted:
-            return decrypt_token(api_key_obj.api_key_encrypted)
+        # Join api_keys with auth to only return keys for users with active sessions
+        api_keys = ApiKeys.query.all()
+        for api_key_obj in api_keys:
+            if not api_key_obj.api_key_encrypted:
+                continue
+            # Check if this user has an active auth session with a broker
+            auth_obj = Auth.query.filter_by(name=api_key_obj.user_id).first()
+            if auth_obj and not auth_obj.is_revoked and auth_obj.broker:
+                return decrypt_token(api_key_obj.api_key_encrypted)
         return None
     except Exception as e:
         logger.exception(f"Error getting first available API key: {e}")
@@ -642,8 +652,12 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                 logger.debug(f"Auth token cached for user_id: {user_id}")
                 return result
             else:
-                logger.warning(f"No valid auth token or broker found for user_id '{user_id}'.")
-                return (None, None, None) if include_feed_token else (None, None)
+                # Cache the negative result to prevent repeated DB queries and log spam
+                # (e.g., orphaned users with revoked sessions polled by background services)
+                negative_result = (None, None, None) if include_feed_token else (None, None)
+                auth_cache[cache_key] = negative_result
+                logger.warning(f"No valid auth token or broker found for user_id '{user_id}'. Cached negative result.")
+                return negative_result
         except Exception as e:
             logger.exception(f"Error while querying the database for auth token and broker: {e}")
             return (None, None, None) if include_feed_token else (None, None)
