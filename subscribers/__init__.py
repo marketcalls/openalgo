@@ -4,7 +4,7 @@ Subscriber registration — wires all subscribers to the event bus at app startu
 Call register_all() once during app initialization.
 """
 
-from subscribers import log_subscriber, socketio_subscriber, telegram_subscriber
+from subscribers import log_subscriber, risk_limit_subscriber, socketio_subscriber, telegram_subscriber
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -18,6 +18,7 @@ def register_all():
     bus.subscribe("order.placed", log_subscriber.on_order_placed, "log:order_placed")
     bus.subscribe("order.placed", socketio_subscriber.on_order_placed, "socketio:order_placed")
     bus.subscribe("order.placed", telegram_subscriber.on_order_placed, "telegram:order_placed")
+    bus.subscribe("order.placed", risk_limit_subscriber.on_order_placed, "risk:order_placed")
 
     # --- order.failed ---
     bus.subscribe("order.failed", log_subscriber.on_order_failed, "log:order_failed")
@@ -58,6 +59,7 @@ def register_all():
     bus.subscribe("position.closed", log_subscriber.on_position_closed, "log:position_closed")
     bus.subscribe("position.closed", socketio_subscriber.on_position_closed, "socketio:position_closed")
     bus.subscribe("position.closed", telegram_subscriber.on_position_closed, "telegram:position_closed")
+    bus.subscribe("position.closed", risk_limit_subscriber.on_position_closed, "risk:position_closed")
 
     # --- basket.completed ---
     bus.subscribe("basket.completed", log_subscriber.on_basket_completed, "log:basket_completed")

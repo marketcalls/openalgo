@@ -18,6 +18,7 @@ import {
   RotateCcw,
   Send,
   Shield,
+  ShieldAlert,
   Sun,
   User,
   Volume2,
@@ -319,6 +320,17 @@ export default function ProfilePage() {
   const [isSavingNgrok, setIsSavingNgrok] = useState(false)
   const [showRestartDialog, setShowRestartDialog] = useState(false)
 
+  // Risk limits state
+  const [riskEnabled, setRiskEnabled] = useState(false)
+  const [dailyProfitTarget, setDailyProfitTarget] = useState('')
+  const [dailyLossLimit, setDailyLossLimit] = useState('')
+  const [dailyTradeLimit, setDailyTradeLimit] = useState('')
+  const [riskBreached, setRiskBreached] = useState(false)
+  const [riskBreachedReason, setRiskBreachedReason] = useState<string | null>(null)
+  const [isSavingRisk, setIsSavingRisk] = useState(false)
+  const [isResettingRisk, setIsResettingRisk] = useState(false)
+  const [isLoadingRisk, setIsLoadingRisk] = useState(true)
+
   // Permissions state
   const [permissionsData, setPermissionsData] = useState<PermissionsData | null>(null)
   const [isLoadingPermissions, setIsLoadingPermissions] = useState(false)
@@ -330,8 +342,82 @@ export default function ProfilePage() {
   useEffect(() => {
     fetchProfileData()
     fetchBrokerCredentials()
+    fetchRiskLimits()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const fetchRiskLimits = async () => {
+    setIsLoadingRisk(true)
+    try {
+      const response = await webClient.get<{
+        enabled: boolean
+        daily_profit_target: number | null
+        daily_loss_limit: number | null
+        daily_trade_limit: number | null
+        breached: boolean
+        breached_reason: string | null
+      }>('/settings/risk-limits')
+      const d = response.data
+      setRiskEnabled(d.enabled)
+      setDailyProfitTarget(d.daily_profit_target != null ? String(d.daily_profit_target) : '')
+      setDailyLossLimit(d.daily_loss_limit != null ? String(d.daily_loss_limit) : '')
+      setDailyTradeLimit(d.daily_trade_limit != null ? String(d.daily_trade_limit) : '')
+      setRiskBreached(d.breached)
+      setRiskBreachedReason(d.breached_reason)
+    } catch {
+      // Ignore — risk limits may not be configured yet
+    } finally {
+      setIsLoadingRisk(false)
+    }
+  }
+
+  const handleSaveRiskLimits = async () => {
+    // Validate: if enabled, at least one limit must be set
+    if (riskEnabled && !dailyProfitTarget && !dailyLossLimit && !dailyTradeLimit) {
+      showToast.error('Please set at least one risk limit value', 'admin')
+      return
+    }
+    setIsSavingRisk(true)
+    try {
+      const response = await webClient.post<{ success?: boolean; error?: string; message?: string }>(
+        '/settings/risk-limits',
+        {
+          enabled: riskEnabled,
+          daily_profit_target: dailyProfitTarget ? Number(dailyProfitTarget) : null,
+          daily_loss_limit: dailyLossLimit ? Number(dailyLossLimit) : null,
+          daily_trade_limit: dailyTradeLimit ? Number(dailyTradeLimit) : null,
+        }
+      )
+      if (response.data.success) {
+        showToast.success(response.data.message || 'Risk limits saved', 'admin')
+      } else {
+        showToast.error(response.data.error || 'Failed to save', 'admin')
+      }
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string } } }
+      showToast.error(err.response?.data?.error || 'Failed to save risk limits', 'admin')
+    } finally {
+      setIsSavingRisk(false)
+    }
+  }
+
+  const handleResetRiskBreach = async () => {
+    setIsResettingRisk(true)
+    try {
+      const response = await webClient.post<{ success?: boolean; message?: string }>(
+        '/settings/risk-limits/reset'
+      )
+      if (response.data.success) {
+        showToast.success(response.data.message || 'Breach reset', 'admin')
+        setRiskBreached(false)
+        setRiskBreachedReason(null)
+      }
+    } catch {
+      showToast.error('Failed to reset breach', 'admin')
+    } finally {
+      setIsResettingRisk(false)
+    }
+  }
 
   const fetchProfileData = async () => {
     try {
@@ -772,7 +858,7 @@ export default function ProfilePage() {
           fetchPermissions()
         }
       }}>
-        <TabsList className="grid w-full grid-cols-7">
+        <TabsList className="grid w-full grid-cols-8">
           <TabsTrigger value="account" className="gap-1">
             <Lock className="h-4 w-4" />
             <span className="hidden sm:inline">Account</span>
@@ -780,6 +866,10 @@ export default function ProfilePage() {
           <TabsTrigger value="broker" className="gap-1">
             <Key className="h-4 w-4" />
             <span className="hidden sm:inline">Broker</span>
+          </TabsTrigger>
+          <TabsTrigger value="risk" className="gap-1">
+            <ShieldAlert className="h-4 w-4" />
+            <span className="hidden sm:inline">Risk</span>
           </TabsTrigger>
           <TabsTrigger value="alerts" className="gap-1">
             <Bell className="h-4 w-4" />
@@ -2226,6 +2316,96 @@ export default function ProfilePage() {
                   </AlertDescription>
                 </Alert>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Risk Limits Tab */}
+        <TabsContent value="risk" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Daily Risk Limits</CardTitle>
+              <CardDescription>
+                Set daily profit target, loss limit, and trade count. When any limit is breached,
+                all positions are closed and further orders are blocked for the day.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {riskBreached && (
+                <Alert variant="destructive">
+                  <ShieldAlert className="h-4 w-4" />
+                  <AlertTitle>Risk Limit Breached</AlertTitle>
+                  <AlertDescription className="flex items-center justify-between">
+                    <span>{riskBreachedReason || 'A daily risk limit was triggered.'}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleResetRiskBreach}
+                      disabled={isResettingRisk}
+                    >
+                      {isResettingRisk ? 'Resetting...' : 'Reset Breach'}
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="risk-enabled" className="text-base font-medium">Enable Risk Limits</Label>
+                  <p className="text-sm text-muted-foreground">Block orders when daily limits are hit</p>
+                </div>
+                <Switch
+                  id="risk-enabled"
+                  checked={riskEnabled}
+                  onCheckedChange={setRiskEnabled}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="profit-target">Daily Profit Target (₹)</Label>
+                  <Input
+                    id="profit-target"
+                    type="number"
+                    min="0"
+                    step="100"
+                    placeholder="e.g. 5000"
+                    value={dailyProfitTarget}
+                    onChange={(e) => setDailyProfitTarget(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">Close all when realized PnL reaches this</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="loss-limit">Daily Loss Limit (₹)</Label>
+                  <Input
+                    id="loss-limit"
+                    type="number"
+                    min="0"
+                    step="100"
+                    placeholder="e.g. 2000"
+                    value={dailyLossLimit}
+                    onChange={(e) => setDailyLossLimit(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">Close all when loss exceeds this amount</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="trade-limit">Daily Trade Limit</Label>
+                  <Input
+                    id="trade-limit"
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="e.g. 10"
+                    value={dailyTradeLimit}
+                    onChange={(e) => setDailyTradeLimit(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">Max number of orders per day</p>
+                </div>
+              </div>
+
+              <Button onClick={handleSaveRiskLimits} disabled={isSavingRisk || isLoadingRisk}>
+                {isSavingRisk ? 'Saving...' : 'Save Risk Limits'}
+              </Button>
             </CardContent>
           </Card>
         </TabsContent>

@@ -51,16 +51,14 @@ export type SubscriptionMode = 'LTP' | 'Quote' | 'Depth'
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'authenticating' | 'authenticated' | 'paused'
 
-export interface StateListener {
-  (state: {
+export type StateListener = (state: {
     connectionState: ConnectionState
     isConnected: boolean
     isAuthenticated: boolean
     isPaused: boolean
     isFallbackMode: boolean
     error: string | null
-  }): void
-}
+  }) => void
 
 export type DataCallback = (data: SymbolData) => void
 
@@ -435,7 +433,7 @@ export class MarketDataManager {
           this.reconnectAttempts < this.maxReconnectAttempts
         ) {
           this.reconnectAttempts++
-          const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000) // Exponential backoff, max 30s
+          const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 30000) // Exponential backoff, max 30s
           this.reconnectTimeout = setTimeout(() => this.connect(), delay)
         } else if (
           this.reconnectAttempts >= this.maxReconnectAttempts ||
