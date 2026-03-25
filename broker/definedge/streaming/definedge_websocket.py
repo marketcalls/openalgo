@@ -111,6 +111,9 @@ class DefinedGeWebSocket:
                 time.sleep(0.1)
 
             if not self.connected:
+                # Clean up the orphaned socket/thread on timeout
+                if self.ws:
+                    self.ws.close()
                 raise Exception("WebSocket connection timeout")
 
             logger.info("DefinedGe WebSocket connected successfully")
@@ -179,8 +182,13 @@ class DefinedGeWebSocket:
         if self.should_reconnect and self.reconnect_attempts < self.max_reconnect_attempts:
             self.reconnect_attempts += 1
             logger.info(f"Attempting to reconnect... (attempt {self.reconnect_attempts})")
-            time.sleep(self.reconnect_delay)
-            self.connect()
+
+            def delayed_reconnect():
+                time.sleep(self.reconnect_delay)
+                if self.should_reconnect:
+                    self.connect()
+
+            threading.Thread(target=delayed_reconnect, daemon=True).start()
         elif not self.should_reconnect:
             logger.info("Auto-reconnect disabled - not attempting reconnection")
 

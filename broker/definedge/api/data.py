@@ -270,8 +270,11 @@ class BrokerData:
             url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{api_exchange}/{token}"
             headers = {"Authorization": api_session_key}
 
-            # Use httpx.get for sync requests
-            http_response = httpx.get(url, headers=headers, timeout=10.0)
+            # Use shared httpx client for connection pooling
+            from utils.httpx_client import get_httpx_client
+
+            client = get_httpx_client()
+            http_response = client.get(url, headers=headers, timeout=10.0)
 
             if http_response.status_code != 200:
                 return {
