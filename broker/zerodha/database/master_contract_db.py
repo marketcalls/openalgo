@@ -56,15 +56,34 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
+    """Initialize the master contract database tables.
+
+    Creates the symtoken table and associated indices if they
+    do not already exist.
+    """
     logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
+    """Delete all records from the symtoken table.
+
+    Clears existing instrument data to prepare for a fresh
+    master contract download.
+    """
     logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
-def copy_from_dataframe(df):
+def copy_from_dataframe(df: pd.DataFrame):
+    """Bulk insert instrument records from a DataFrame into the database.
+
+    Filters out records with tokens that already exist in the database
+    to avoid duplicates, then performs a bulk insert of new records.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing instrument data with columns
+            matching the SymToken model fields.
+    """
     logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
@@ -141,7 +160,18 @@ def download_csv_zerodha_data(output_path):
         raise
 
 
-def reformat_symbol(row):
+def reformat_symbol(row: pd.Series) -> str:
+    """Reformat a trading symbol based on its instrument type.
+
+    Rearranges symbol components for FUT and CE/PE instrument types.
+
+    Args:
+        row (pd.Series): A DataFrame row containing 'symbol' and
+            'instrumenttype' columns.
+
+    Returns:
+        str: The reformatted symbol string.
+    """
     symbol = row['symbol']
     instrument_type = row['instrumenttype']
     
@@ -162,9 +192,15 @@ def reformat_symbol(row):
 
 
 
-def process_zerodha_csv(path):
+def process_zerodha_csv(path: str) -> pd.DataFrame:
     """
     Processes the Zerodha CSV file to fit the existing database schema and performs exchange name mapping.
+
+    Args:
+        path (str): The file path of the downloaded CSV data.
+
+    Returns:
+        pd.DataFrame: The processed DataFrame ready to be inserted into the database.
     """
     logger.info("Processing Zerodha CSV Data")
     df = pd.read_csv(path)
@@ -342,7 +378,12 @@ def process_zerodha_csv(path):
     return df
     
 
-def delete_zerodha_temp_data(output_path):
+def delete_zerodha_temp_data(output_path: str):
+    """Delete the temporary master contract data file.
+
+    Args:
+        output_path (str): Path to the temporary file to delete.
+    """
     try:
         # Check if the file exists
         if os.path.exists(output_path):
@@ -356,6 +397,16 @@ def delete_zerodha_temp_data(output_path):
 
 
 def master_contract_download():
+    """Download and process the full Zerodha master contract.
+
+    Downloads the instrument CSV from Zerodha's API, processes and
+    normalizes the data (symbol formats, exchange names, expiry dates),
+    replaces the existing symtoken table, and emits a SocketIO event
+    on completion.
+
+    Returns:
+        SocketIO emission with status 'success' or 'error'.
+    """
     logger.info("Downloading Master Contract")
     
 
@@ -379,5 +430,14 @@ def master_contract_download():
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 
-def search_symbols(symbol, exchange):
+def search_symbols(symbol: str, exchange: str) -> list:
+    """Search for symbols matching a pattern in the master contract database.
+
+    Args:
+        symbol (str): Symbol pattern to search for (supports SQL LIKE wildcards).
+        exchange (str): Exact exchange segment to filter by.
+
+    Returns:
+        list[SymToken]: List of matching SymToken records.
+    """
     return SymToken.query.filter(SymToken.symbol.like(f'%{symbol}%'), SymToken.exchange == exchange).all()

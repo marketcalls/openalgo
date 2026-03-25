@@ -94,7 +94,15 @@ def calculate_order_statistics(order_data):
     }
 
 
-def transform_order_data(orders):
+def transform_order_data(orders: list) -> list:
+    """Transforms Zerodha order data to OpenAlgo standard format.
+
+    Args:
+        orders: List of order dictionaries from Zerodha API.
+
+    Returns:
+        list: Transformed list of orders.
+    """
     # Directly handling a dictionary assuming it's the structure we expect
     if isinstance(orders, dict):
         # Convert the single dictionary into a list of one dictionary
@@ -140,11 +148,27 @@ def transform_order_data(orders):
     return transformed_orders
 
 
-def map_trade_data(trade_data):
+def map_trade_data(trade_data: dict) -> dict:
+    """Process trade data to use OpenAlgo standard symbols.
+
+    Args:
+        trade_data: Raw trade data dictionary.
+
+    Returns:
+        dict: Processed trade data.
+    """
     return map_order_data(trade_data)
 
 
-def transform_tradebook_data(tradebook_data):
+def transform_tradebook_data(tradebook_data: list) -> list:
+    """Transforms Zerodha trade book data to OpenAlgo standard format.
+
+    Args:
+        tradebook_data (list): List of trades from Zerodha API.
+
+    Returns:
+        list: Transformed list of trades.
+    """
     transformed_data = []
     for trade in tradebook_data:
         transformed_trade = {
@@ -201,7 +225,15 @@ def map_position_data(position_data):
     return position_data
 
 
-def transform_positions_data(positions_data):
+def transform_positions_data(positions_data: list) -> list:
+    """Transforms Zerodha positions data to OpenAlgo standard format.
+
+    Args:
+        positions_data (list): List of positions from Zerodha.
+
+    Returns:
+        list: Transformed list of positions.
+    """
     transformed_data = []
 
     for position in positions_data:
@@ -221,7 +253,15 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 
-def transform_holdings_data(holdings_data):
+def transform_holdings_data(holdings_data: list) -> list:
+    """Transforms Zerodha holdings data to OpenAlgo standard format.
+
+    Args:
+        holdings_data (list): List of holdings.
+
+    Returns:
+        list: Transformed list of holdings.
+    """
     transformed_data = []
     for holdings in holdings_data:
         # Handle zero average price case
@@ -280,7 +320,15 @@ def map_portfolio_data(portfolio_data):
     return portfolio_data
 
 
-def calculate_portfolio_statistics(holdings_data):
+def calculate_portfolio_statistics(holdings_data: list) -> dict:
+    """Calculate portfolio statistics based on holdings data.
+
+    Args:
+        holdings_data (list): The list of formatted holdings.
+
+    Returns:
+        dict: Dictionary containing totalholdingvalue, totalinvvalue, etc.
+    """
     totalholdingvalue = sum(item["last_price"] * item["quantity"] for item in holdings_data)
     totalinvvalue = sum(item["average_price"] * item["quantity"] for item in holdings_data)
     totalprofitandloss = sum(item["pnl"] for item in holdings_data)
