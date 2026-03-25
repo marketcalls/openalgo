@@ -1,19 +1,17 @@
 # services/risk_limit_service.py
 # Runtime risk-limit checks: gate on every order, PnL evaluation after closes.
 
-import threading
-from collections import defaultdict
-from datetime import date
-
 from database.auth_db import get_auth_token_broker, verify_api_key
-from database.risk_limits_db import get_risk_limits, reset_if_new_day, set_breached
+from database.risk_limits_db import (
+    get_db_trade_count,
+    get_risk_limits,
+    increment_and_get_trade_count,
+    reset_if_new_day,
+    set_breached,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-# In-memory trade counter: {user: {date: count}}
-_trade_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-_trade_lock = threading.Lock()
 
 
 def check_risk_limits(api_key: str) -> tuple[bool, str]:
@@ -41,7 +39,7 @@ def check_risk_limits(api_key: str) -> tuple[bool, str]:
 
         # Check trade count limit
         if row.daily_trade_limit is not None:
-            count = get_trade_count(user)
+            count = get_db_trade_count(user)
             if count >= row.daily_trade_limit:
                 reason = f"Daily trade limit reached ({count}/{row.daily_trade_limit})"
                 set_breached(user, reason)
@@ -91,18 +89,8 @@ def evaluate_pnl_after_close(api_key: str) -> None:
 
 
 def increment_trade_count(user: str) -> int:
-    """Increment and return the trade count for today."""
-    today = str(date.today())
-    with _trade_lock:
-        _trade_counts[user][today] += 1
-        return _trade_counts[user][today]
-
-
-def get_trade_count(user: str) -> int:
-    """Get trade count for today."""
-    today = str(date.today())
-    with _trade_lock:
-        return _trade_counts[user].get(today, 0)
+    """Atomically increment and return the trade count for today (DB-backed)."""
+    return increment_and_get_trade_count(user)
 
 
 def _compute_realized_pnl(api_key: str) -> float | None:
@@ -120,9 +108,10 @@ def _compute_realized_pnl(api_key: str) -> float | None:
             return None
 
         positions = positions_fn(auth_token)
-        if not positions or not isinstance(positions, list):
+        if positions is None or not isinstance(positions, list):
             return None
 
+        # Empty list is valid — means 0 PnL (all positions closed)
         total_pnl = 0.0
         for pos in positions:
             pnl = pos.get("pnl", 0)

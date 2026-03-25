@@ -329,6 +329,7 @@ export default function ProfilePage() {
   const [riskBreachedReason, setRiskBreachedReason] = useState<string | null>(null)
   const [isSavingRisk, setIsSavingRisk] = useState(false)
   const [isResettingRisk, setIsResettingRisk] = useState(false)
+  const [isLoadingRisk, setIsLoadingRisk] = useState(true)
 
   // Permissions state
   const [permissionsData, setPermissionsData] = useState<PermissionsData | null>(null)
@@ -346,6 +347,7 @@ export default function ProfilePage() {
   }, [])
 
   const fetchRiskLimits = async () => {
+    setIsLoadingRisk(true)
     try {
       const response = await webClient.get<{
         enabled: boolean
@@ -364,6 +366,8 @@ export default function ProfilePage() {
       setRiskBreachedReason(d.breached_reason)
     } catch {
       // Ignore — risk limits may not be configured yet
+    } finally {
+      setIsLoadingRisk(false)
     }
   }
 
@@ -2399,7 +2403,7 @@ export default function ProfilePage() {
                 </div>
               </div>
 
-              <Button onClick={handleSaveRiskLimits} disabled={isSavingRisk}>
+              <Button onClick={handleSaveRiskLimits} disabled={isSavingRisk || isLoadingRisk}>
                 {isSavingRisk ? 'Saving...' : 'Save Risk Limits'}
               </Button>
             </CardContent>

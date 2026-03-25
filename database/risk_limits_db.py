@@ -7,6 +7,7 @@ from datetime import date, datetime
 
 from cachetools import TTLCache
 from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -45,6 +46,8 @@ class RiskLimits(Base):
     breached_reason = Column(String(100), nullable=True)
     breached_at = Column(DateTime, nullable=True)
     last_reset_date = Column(Date, nullable=True)  # Auto-reset on new trading day
+    daily_trade_count = Column(Integer, default=0)  # DB-backed trade counter
+    trade_count_date = Column(Date, nullable=True)  # Date of current trade count
 
 
 def init_db():
@@ -82,6 +85,14 @@ def upsert_risk_limits(
         if row is None:
             row = RiskLimits(user=user)
             db_session.add(row)
+            try:
+                db_session.flush()
+            except IntegrityError:
+                # Concurrent insert — retry as update
+                db_session.rollback()
+                row = RiskLimits.query.filter_by(user=user).first()
+                if row is None:
+                    return False
 
         row.enabled = enabled
         row.daily_profit_target = daily_profit_target
@@ -116,19 +127,68 @@ def set_breached(user: str, reason: str) -> None:
 
 
 def reset_if_new_day(user: str) -> bool:
-    """Reset breached latch if it's a new trading day. Returns True if reset happened."""
+    """Reset breached latch and trade count if it's a new trading day. Returns True if reset happened."""
     try:
         row = RiskLimits.query.filter_by(user=user).first()
-        if row and row.breached and row.last_reset_date and row.last_reset_date < date.today():
+        if not row:
+            return False
+        today = date.today()
+        reset_needed = False
+
+        if row.breached and row.last_reset_date and row.last_reset_date < today:
             row.breached = False
             row.breached_reason = None
             row.breached_at = None
+            reset_needed = True
+
+        if row.trade_count_date and row.trade_count_date < today:
+            row.daily_trade_count = 0
+            row.trade_count_date = today
+            reset_needed = True
+
+        if reset_needed:
             db_session.commit()
             _risk_limits_cache.pop(f"risk_limits:{user}", None)
             logger.info(f"Risk limits auto-reset for {user} (new day)")
-            return True
-        return False
+        return reset_needed
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error resetting risk limits for {user}: {e}")
         return False
+
+
+def increment_and_get_trade_count(user: str) -> int:
+    """Atomically increment trade count in DB and return the new value."""
+    try:
+        today = date.today()
+        row = RiskLimits.query.filter_by(user=user).first()
+        if row is None:
+            return 0
+
+        # Reset count if new day
+        if row.trade_count_date is None or row.trade_count_date < today:
+            row.daily_trade_count = 1
+            row.trade_count_date = today
+        else:
+            row.daily_trade_count = (row.daily_trade_count or 0) + 1
+
+        db_session.commit()
+        _risk_limits_cache.pop(f"risk_limits:{user}", None)
+        return row.daily_trade_count
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error incrementing trade count for {user}: {e}")
+        return 0
+
+
+def get_db_trade_count(user: str) -> int:
+    """Get the current day's trade count from DB."""
+    try:
+        today = date.today()
+        row = RiskLimits.query.filter_by(user=user).first()
+        if row is None or row.trade_count_date is None or row.trade_count_date < today:
+            return 0
+        return row.daily_trade_count or 0
+    except Exception as e:
+        logger.exception(f"Error getting trade count for {user}: {e}")
+        return 0

@@ -27,6 +27,8 @@ def on_order_placed(event) -> None:
 def on_position_closed(event) -> None:
     """Evaluate PnL after a position close to check profit/loss limits."""
     try:
+        if getattr(event, "mode", None) != "live":
+            return
         api_key = getattr(event, "api_key", None)
         if not api_key:
             return

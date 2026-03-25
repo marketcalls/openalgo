@@ -110,7 +110,10 @@ def set_risk_limits_route():
 
         data = request.get_json(silent=True) or {}
 
-        enabled = bool(data.get("enabled", False))
+        raw_enabled = data.get("enabled", False)
+        if not isinstance(raw_enabled, bool):
+            return jsonify({"error": "enabled must be a boolean"}), 400
+        enabled = raw_enabled
         daily_profit_target = data.get("daily_profit_target")
         daily_loss_limit = data.get("daily_loss_limit")
         daily_trade_limit = data.get("daily_trade_limit")
