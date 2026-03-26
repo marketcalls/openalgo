@@ -150,6 +150,7 @@ from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.master_contract_status import (
     master_contract_status_bp,  # Import the master contract status blueprint
 )
+from blueprints.ml_advisor import ml_advisor_bp  # Import the ML advisor blueprint
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
@@ -190,6 +191,7 @@ from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
+from database.ai_db import init_ai_db as ensure_ai_tables_exists
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from restx_api import api, api_v1_bp
@@ -590,6 +592,7 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
+                ("AI DB", ensure_ai_tables_exists),
             ]
 
             db_init_start = time.time()
@@ -790,6 +793,12 @@ def shutdown_database_sessions(exception=None):
         health_session.remove()
     except Exception as e:
         logger.error(f"Error removing health_session: {e}")
+
+    try:
+        from database.ai_db import AiSession
+        AiSession.remove()
+    except Exception as e:
+        logger.error(f"Error removing ai_session: {e}")
 
 
 # Integrate the WebSocket proxy server with the Flask app

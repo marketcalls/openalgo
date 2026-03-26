@@ -4,7 +4,7 @@ Subscriber registration — wires all subscribers to the event bus at app startu
 Call register_all() once during app initialization.
 """
 
-from subscribers import log_subscriber, socketio_subscriber, telegram_subscriber
+from subscribers import ai_subscriber, log_subscriber, socketio_subscriber, telegram_subscriber
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -83,5 +83,8 @@ def register_all():
     bus.subscribe("analyzer.error", log_subscriber.on_analyzer_error, "log:analyzer_error")
     bus.subscribe("analyzer.error", socketio_subscriber.on_analyzer_error, "socketio:analyzer_error")
     bus.subscribe("analyzer.error", telegram_subscriber.on_analyzer_error, "telegram:analyzer_error")
+
+    # --- AI agent events ---
+    ai_subscriber.register_ai_subscribers()
 
     logger.info("EventBus: all subscribers registered")
