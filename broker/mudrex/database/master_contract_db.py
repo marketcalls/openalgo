@@ -5,10 +5,13 @@ Fetches all tradeable perpetual futures from ``GET /fapi/v1/futures``
 (paginated via offset/limit) and stores them in the shared ``symtoken``
 table keyed by ``exchange = 'CRYPTO_FUT'`` and ``brexchange = 'MUDREX'``.
 
-Symbol mapping convention:
-    token      = Mudrex ``id`` (UUID string, e.g. "01903a7b-bf65-707d-...")
-    brsymbol   = Mudrex/Bybit symbol (e.g. "BTCUSDT")
-    symbol     = OpenAlgo canonical (same as brsymbol for Mudrex perps)
+Symbol mapping follows the same OpenAlgo crypto perpetual convention as
+Delta Exchange (``broker/deltaexchange/database/master_contract_db``): native
+contract symbol + ``FUT`` suffix for ``PERPFUT``.
+
+    token      = Mudrex ``id`` (UUID string)
+    brsymbol   = Mudrex/Bybit API symbol (e.g. "BTCUSDT")
+    symbol     = OpenAlgo canonical perp (e.g. "BTCUSDTFUT")
 """
 
 import os
@@ -168,6 +171,17 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _to_openalgo_perp_symbol(mudrex_native: str) -> str:
+    """Map Mudrex linear perp ticker to OpenAlgo canonical (Delta PERPFUT: native + FUT)."""
+    s = (mudrex_native or "").strip()
+    if not s:
+        return s
+    upper = s.upper()
+    if upper.endswith("FUT"):
+        return upper
+    return f"{upper}FUT"
+
+
 def fetch_mudrex_futures(auth: str | None = None) -> tuple[list[dict], bool]:
     """Fetch all tradeable futures from Mudrex ``GET /futures`` with offset pagination.
 
@@ -223,16 +237,18 @@ def process_mudrex_futures(assets: list[dict]) -> pd.DataFrame:
     rows = []
     for a in assets:
         asset_id = a.get("id", "")
-        symbol = a.get("symbol", "")
-        name = a.get("name", symbol)
+        native = (a.get("symbol") or "").strip()
+        name = a.get("name", native)
 
-        if not asset_id or not symbol:
+        if not asset_id or not native:
             continue
+
+        canonical = _to_openalgo_perp_symbol(native)
 
         rows.append({
             "token": str(asset_id),
-            "symbol": symbol,
-            "brsymbol": symbol,
+            "symbol": canonical,
+            "brsymbol": native,
             "name": name,
             "exchange": "CRYPTO_FUT",
             "brexchange": "MUDREX",

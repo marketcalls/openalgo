@@ -1,6 +1,11 @@
 """
 Mapping OpenAlgo API request parameters to Mudrex API format.
 
+OpenAlgo symbols for this broker use ``CRYPTO_FUT`` with perpetual canonical
+ticks aligned to Delta-style crypto mapping (native ticker + ``FUT``), e.g.
+``CRYPTO_FUT:BTCUSDTFUT``. Native Mudrex/Bybit symbols live in ``brsymbol``;
+``get_br_symbol`` resolves canonical → native for REST/Bybit.
+
 Mudrex place-order endpoint: POST /futures/{asset_id}/order
     order_type   : "LONG" | "SHORT"   (position direction)
     trigger_type : "MARKET" | "LIMIT"
@@ -97,15 +102,24 @@ def transform_data(data: dict, token: str) -> dict:
     trigger_type = map_order_type(data["pricetype"])
     order_type = map_action(data["action"])
 
+    raw_price = data.get("price")
+    try:
+        order_price = float(raw_price) if raw_price not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        order_price = 0.0
+
+    # Mudrex expects ``order_price`` for both MARKET and LIMIT (see Mudrex API).
+    # MARKET may use 0 until ``place_order_api`` fills from last traded price.
     payload: dict = {
         "leverage": float(data.get("leverage", 1)),
         "quantity": float(data["quantity"]),
         "order_type": order_type,
         "trigger_type": trigger_type,
+        "order_price": order_price,
     }
 
-    if trigger_type == "LIMIT":
-        payload["order_price"] = float(data.get("price", 0))
+    if trigger_type == "LIMIT" and order_price <= 0:
+        raise ValueError("LIMIT order requires a positive price")
 
     if data.get("reduce_only") is True:
         payload["reduce_only"] = True

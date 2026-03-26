@@ -1,14 +1,15 @@
 """
 Rate-limited HTTP client wrapper for all Mudrex API calls.
 
-Current limit: 2 req/s (configurable via MUDREX_RATE_LIMIT env var; will
-increase to 10/s when Mudrex raises the ceiling).
+Inter-request spacing defaults to 2 req/s (Mudrex plan; may increase to 10/s).
+Tune ``requests_per_second`` in ``broker/mudrex/broker_config.json`` (same
+pattern as broker-local settings elsewhere — avoid per-broker keys in ``.env``).
 
 Uses ``threading.Lock`` + monotonic clock to enforce minimum inter-request
-spacing, and applies exponential back-off on HTTP 429 responses.
+spacing, and applies exponential back-off on HTTP 429 responses (similar to
+Delta Exchange order retry behaviour).
 """
 
-import os
 import random
 import threading
 import time
@@ -18,13 +19,16 @@ from urllib.parse import urlencode
 import httpx
 
 from broker.mudrex.api.baseurl import get_auth_headers, get_url
+from broker.mudrex.broker_config import mudrex_requests_per_second
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-_rate_limit: float = float(os.getenv("MUDREX_RATE_LIMIT", "2"))
-_min_interval: float = 1.0 / _rate_limit if _rate_limit > 0 else 0.0
+
+def _min_interval() -> float:
+    rps = mudrex_requests_per_second()
+    return 1.0 / rps if rps > 0 else 0.0
 
 _lock = threading.Lock()
 _last_call: float = 0.0
@@ -34,11 +38,11 @@ _RETRY_BASE = 1.0
 
 
 def _enforce_rate_limit() -> None:
-    """Block the calling thread until at least ``_min_interval`` has elapsed."""
+    """Block the calling thread until at least one min-interval has elapsed."""
     global _last_call
     with _lock:
         now = time.monotonic()
-        wait = _min_interval - (now - _last_call)
+        wait = _min_interval() - (now - _last_call)
         if wait > 0:
             logger.debug(f"[Mudrex] Rate limiter sleeping {wait:.3f}s")
             time.sleep(wait)

@@ -14,13 +14,15 @@ const UNDERLYINGS: Record<string, string[]> = {
   MCX: ['GOLDM', 'CRUDEOIL', 'SILVERM', 'NATURALGAS', 'COPPER'],
   CDS: ['USDINR', 'EURINR', 'GBPINR', 'JPYINR'],
   CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
+  // Crypto perpetuals-only brokers (e.g. Mudrex) — same default underlyings as CRYPTO for tools
+  CRYPTO_FUT: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
 }
 
 /** Index exchanges excluded from trading/FNO lists */
 const INDEX_EXCHANGES = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'CDS_INDEX'])
 
 /** F&O exchange codes (includes MCX/CDS which also have options) */
-const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO'])
+const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO', 'CRYPTO_FUT'])
 
 /** Fallback exchanges when capabilities haven't loaded yet (backward compatible) */
 const FALLBACK_EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'CRYPTO']

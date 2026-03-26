@@ -14,13 +14,14 @@ Limitations:
     - SL/SL-M at the order level is NOT supported; use position-level risk
       orders instead (POST /futures/positions/{id}/riskorder).
     - Isolated margin only.
-    - Rate limit: 2 req/s (configurable via MUDREX_RATE_LIMIT env var).
+    - REST pacing: configure ``broker/mudrex/broker_config.json`` (not ``.env``).
 """
 
 import os
 import time
 
 from broker.mudrex.api.mudrex_http import mudrex_request
+from broker.mudrex.broker_config import mudrex_close_position_delay_ms
 from broker.mudrex.mapping.transform_data import (
     map_action,
     map_order_type,
@@ -32,8 +33,6 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_toke
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-_CLOSE_DELAY_MS = int(os.getenv("MUDREX_CLOSE_POSITION_DELAY_MS", "500"))
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +162,19 @@ def place_order_api(data: dict, auth: str):
         payload["leverage"] = float(leverage)
     elif "leverage" not in payload or payload["leverage"] == 0:
         payload["leverage"] = 1
+
+    # MARKET orders: Mudrex still requires ``order_price``; use LTP if none passed.
+    pt = str(data.get("pricetype", "MARKET")).upper()
+    if pt == "MARKET" and float(payload.get("order_price", 0) or 0) <= 0:
+        try:
+            from broker.mudrex.api.data import BrokerData
+
+            quotes = BrokerData(secret).get_quotes(symbol, data.get("exchange", "CRYPTO_FUT"))
+            ltp = float(quotes.get("ltp") or 0)
+            if ltp > 0:
+                payload["order_price"] = ltp
+        except Exception as exc:
+            logger.warning("[Mudrex] MARKET order: could not set order_price from quote: %s", exc)
 
     endpoint = f"/futures/{br_symbol}/order?is_symbol"
     logger.info(f"[Mudrex] POST {endpoint} payload={payload}")
@@ -327,15 +339,15 @@ def cancel_all_orders_api(data: dict, auth: str):
 def close_all_positions(current_api_key: str, auth: str):
     """Close all open positions via POST /futures/positions/{id}/close.
 
-    Respects rate limit by sleeping ``MUDREX_CLOSE_POSITION_DELAY_MS`` between
-    calls.
+    Sleeps ``close_position_delay_ms`` from ``broker_config.json`` between
+    close calls so bursts stay within Mudrex limits (HTTP client also paces).
     """
     positions = get_positions(auth)
     if not positions:
         return {"message": "No Open Positions Found"}, 200
 
     secret = _auth_secret(auth)
-    delay_s = _CLOSE_DELAY_MS / 1000.0
+    delay_s = mudrex_close_position_delay_ms() / 1000.0
     failed: list[dict[str, str]] = []
     attempted = 0
 
