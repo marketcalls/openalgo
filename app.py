@@ -476,17 +476,28 @@ def create_app():
 
     @app.errorhandler(404)
     def not_found_error(error):
-        from flask import request
+        from flask import request, session
 
         from database.traffic_db import Error404Tracker
         from utils.ip_helper import get_real_ip
 
-        # Track the 404 error
         client_ip = get_real_ip()
         path = request.path
 
-        # Track 404 error for security monitoring
-        Error404Tracker.track_404(client_ip, path)
+        # Skip 404 tracking for authenticated users (prevents self-ban during
+        # login flows, broker OAuth callbacks, or normal navigation to
+        # React routes that don't have explicit Flask endpoints)
+        is_authenticated = session.get("logged_in", False)
+
+        # Skip tracking for common browser/crawler requests that are not attack probes
+        safe_prefixes = (
+            "/favicon", "/robots.txt", "/sitemap", "/manifest",
+            "/sw.js", "/.well-known", "/apple-touch-icon",
+            "/service-worker", "/workbox",
+        )
+
+        if not is_authenticated and not path.startswith(safe_prefixes):
+            Error404Tracker.track_404(client_ip, path)
 
         # Serve React app (React Router handles 404)
         return serve_react_app()

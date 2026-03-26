@@ -49,7 +49,7 @@ class Config:
     MODE_DEPTH = 3
 
     # Message types (same as Noren/Flattrade)
-    MSG_AUTH = "ck"
+    MSG_AUTH = "ak"
     MSG_TOUCHLINE_FULL = "tf"
     MSG_TOUCHLINE_PARTIAL = "tk"
     MSG_DEPTH_FULL = "df"
@@ -344,23 +344,23 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = broker_name
 
         # Get Zebu credentials from environment
-        # For Zebu, BROKER_API_KEY should contain the vendor code (e.g., 'Z56004')
-        # This vendor code is used as both actid and uid in WebSocket authentication
+        # BROKER_API_KEY format: userid:::client_id (e.g., Z56004:::Z56004_U)
+        # userid is used as both actid and uid in WebSocket authentication
 
-        api_key = os.getenv("BROKER_API_KEY", "")
+        full_api_key = os.getenv("BROKER_API_KEY", "")
 
-        if api_key:
-            # Use the BROKER_API_KEY (vendor code) as the account ID
-            # For Zebu, the vendor code like 'Z56004' is used as actid and uid
-            self.actid = api_key
-            self.logger.info(f"Using Zebu vendor code from BROKER_API_KEY: {self.actid}")
+        if full_api_key and ":::" in full_api_key:
+            # Extract trading user ID (before :::)
+            self.actid = full_api_key.split(":::")[0]
+            self.logger.info(f"Using Zebu user ID from BROKER_API_KEY: {self.actid}")
+        elif full_api_key:
+            # Legacy format without ::: separator
+            self.actid = full_api_key
+            self.logger.warning(f"BROKER_API_KEY missing ':::' separator, using as-is: {self.actid}")
         else:
             # Fallback to user_id if no API key is set
             self.actid = user_id
             self.logger.warning(f"No BROKER_API_KEY found. Using user_id '{user_id}' as actid.")
-            self.logger.warning(
-                "Please set BROKER_API_KEY=Z56004 (or your vendor code) in .env file"
-            )
 
         # Get auth token from database
         self.susertoken = get_auth_token(user_id)

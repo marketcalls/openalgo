@@ -61,11 +61,12 @@ def migrate_settings_table():
 
         # Define the security columns that should exist
         security_columns = [
-            ("security_404_threshold", "INTEGER DEFAULT 20"),
-            ("security_404_ban_duration", "INTEGER DEFAULT 24"),
-            ("security_api_threshold", "INTEGER DEFAULT 10"),
-            ("security_api_ban_duration", "INTEGER DEFAULT 48"),
-            ("security_repeat_offender_limit", "INTEGER DEFAULT 3"),
+            ("security_auto_ban_enabled", "BOOLEAN DEFAULT 0"),
+            ("security_404_threshold", "INTEGER DEFAULT 100"),
+            ("security_404_ban_duration", "INTEGER DEFAULT 0"),
+            ("security_api_threshold", "INTEGER DEFAULT 100"),
+            ("security_api_ban_duration", "INTEGER DEFAULT 0"),
+            ("security_repeat_offender_limit", "INTEGER DEFAULT 2"),
         ]
 
         columns_added = 0
