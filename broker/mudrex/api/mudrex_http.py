@@ -13,10 +13,11 @@ import random
 import threading
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
-from broker.mudrex.api.baseurl import BASE_URL, get_auth_headers, get_url
+from broker.mudrex.api.baseurl import get_auth_headers, get_url
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -71,8 +72,7 @@ def mudrex_request(
     url = get_url(endpoint)
 
     if params:
-        qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-        url = f"{url}?{qs}"
+        url = f"{url}?{urlencode(sorted(params.items()))}"
 
     body: str | None = None
     if payload is not None:

@@ -92,7 +92,12 @@ def delete_symtoken_table():
     db_session.commit()
 
 
-def copy_from_dataframe(df: pd.DataFrame) -> None:
+def copy_from_dataframe(df: pd.DataFrame) -> tuple[int, bool]:
+    """Bulk-insert symtoken rows. Returns ``(rows_inserted, all_expected_rows_inserted)``.
+
+    If any chunk fails after retry, returns ``complete=False`` so callers do not
+    report success with a partially empty table.
+    """
     logger.info("Performing Bulk Insert")
     data_dict = df.to_dict(orient="records")
 
@@ -113,6 +118,8 @@ def copy_from_dataframe(df: pd.DataFrame) -> None:
 
     chunk_size = 500
     total_inserted = 0
+    chunk_failures = 0
+    expected = len(filtered_data_dict)
 
     try:
         if filtered_data_dict:
@@ -134,6 +141,7 @@ def copy_from_dataframe(df: pd.DataFrame) -> None:
                     except Exception as retry_error:
                         logger.error(f"Failed to insert chunk after retry: {retry_error}")
                         db_session.rollback()
+                        chunk_failures += 1
                         continue
                 time.sleep(0.005)
             logger.info(f"Bulk insert completed with {total_inserted} new records.")
@@ -142,6 +150,15 @@ def copy_from_dataframe(df: pd.DataFrame) -> None:
     except Exception as e:
         logger.exception(f"Error during bulk insert: {e}")
         db_session.rollback()
+        return total_inserted, False
+
+    complete = chunk_failures == 0 and total_inserted == expected
+    if not complete and expected > 0:
+        logger.error(
+            f"[Mudrex] Incomplete symtoken insert: inserted={total_inserted}, "
+            f"expected={expected}, chunk_failures={chunk_failures}"
+        )
+    return total_inserted, complete
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -272,7 +289,19 @@ def master_contract_download():
             )
 
         delete_symtoken_table()
-        copy_from_dataframe(token_df)
+        inserted, complete = copy_from_dataframe(token_df)
+        if not complete or inserted < len(token_df):
+            return socketio.emit(
+                "master_contract_download",
+                {
+                    "status": "error",
+                    "message": (
+                        f"Master contract insert incomplete ({inserted}/{len(token_df)} rows). "
+                        "Try downloading again; symtoken may be partial."
+                    ),
+                },
+            )
+
         return socketio.emit(
             "master_contract_download",
             {

@@ -336,6 +336,8 @@ def close_all_positions(current_api_key: str, auth: str):
 
     secret = _auth_secret(auth)
     delay_s = _CLOSE_DELAY_MS / 1000.0
+    failed: list[dict[str, str]] = []
+    attempted = 0
 
     for pos in positions:
         if not isinstance(pos, dict):
@@ -344,16 +346,32 @@ def close_all_positions(current_api_key: str, auth: str):
         if not position_id:
             continue
 
+        attempted += 1
         endpoint = f"/futures/positions/{position_id}/close"
         logger.info(f"[Mudrex] POST {endpoint}")
         result = mudrex_request(endpoint, method="POST", auth=secret)
 
         if not result.get("success"):
             errors = result.get("errors", [])
-            msg = errors[0].get("text", str(errors)) if errors else str(result)
-            logger.error(f"[Mudrex] Failed to close position {position_id}: {msg}")
+            err_text = errors[0].get("text", str(errors)) if errors else str(result)
+            logger.error(f"[Mudrex] Failed to close position {position_id}: {err_text}")
+            failed.append({"position_id": position_id, "error": err_text})
 
         if delay_s > 0:
             time.sleep(delay_s)
+
+    if failed:
+        closed_ok = attempted - len(failed)
+        return (
+            {
+                "status": "error",
+                "message": (
+                    f"{len(failed)} of {attempted} close request(s) failed "
+                    f"({closed_ok} succeeded)"
+                ),
+                "failed": failed,
+            },
+            500,
+        )
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200

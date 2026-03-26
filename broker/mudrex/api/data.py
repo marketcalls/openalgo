@@ -236,54 +236,100 @@ class BrokerData:
         chunk_days = self.CHUNK_DAYS.get(interval, 0)
 
         if chunk_days <= 0:
-            all_candles = self._fetch_kline_page(br_symbol, bybit_interval, start_ms, end_ms)
+            all_candles = self._fetch_kline_range_paginated(
+                br_symbol, bybit_interval, start_ms, end_ms
+            )
         else:
             chunk_ms = chunk_days * 86400 * 1000
             cursor = start_ms
             while cursor < end_ms:
                 chunk_end = min(cursor + chunk_ms, end_ms)
-                batch = self._fetch_kline_page(br_symbol, bybit_interval, cursor, chunk_end)
+                batch = self._fetch_kline_range_paginated(
+                    br_symbol, bybit_interval, cursor, chunk_end
+                )
                 all_candles.extend(batch)
                 cursor = chunk_end + 1
 
         if not all_candles:
-            return pd.DataFrame(columns=["close", "high", "low", "open", "volume", "oi"])
+            return pd.DataFrame(
+                columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
+            )
 
         df = pd.DataFrame(all_candles)
-        df = df.sort_values("timestamp").drop_duplicates(subset=["timestamp"])
-        df = df.rename(columns={"timestamp": "date"})
+        df = (
+            df.sort_values("timestamp")
+            .drop_duplicates(subset=["timestamp"])
+            .reset_index(drop=True)
+        )
         df["oi"] = 0
-        return df[["close", "high", "low", "open", "volume", "oi"]]
+        # Match Delta / history_service contract: include epoch-ms ``timestamp`` for joins/resampling
+        return df[["timestamp", "open", "high", "low", "close", "volume", "oi"]]
 
-    def _fetch_kline_page(
+    _MAX_KLINE_PER_REQUEST = 200
+    _MAX_KLINE_PAGES = 500  # safety cap (~100k bars per range)
+
+    def _fetch_kline_range_paginated(
         self, symbol: str, interval: str, start_ms: int, end_ms: int
     ) -> list[dict]:
-        """Fetch up to 200 klines from Bybit for a single chunk."""
-        resp = _bybit_get("/v5/market/kline", params={
-            "category": "linear",
-            "symbol": symbol,
-            "interval": interval,
-            "start": str(start_ms),
-            "end": str(end_ms),
-            "limit": "200",
-        })
+        """Fetch all klines in ``[start_ms, end_ms]`` from Bybit.
 
-        result = resp.get("result", {})
-        raw_list = result.get("list", [])
+        Bybit caps each request at 200 candles; responses are newest-first.
+        Paginate by moving ``end`` backward until the oldest candle reaches
+        ``start_ms`` or the API returns no further rows.
+        """
+        all_candles: list[dict] = []
+        cur_end = end_ms
 
-        candles = []
-        for item in raw_list:
-            if len(item) < 6:
-                continue
-            candles.append({
-                "timestamp": int(item[0]),
-                "open":   _f(item[1]),
-                "high":   _f(item[2]),
-                "low":    _f(item[3]),
-                "close":  _f(item[4]),
-                "volume": _f(item[5]),
-            })
-        return candles
+        for _page in range(self._MAX_KLINE_PAGES):
+            resp = _bybit_get(
+                "/v5/market/kline",
+                params={
+                    "category": "linear",
+                    "symbol": symbol,
+                    "interval": interval,
+                    "start": str(start_ms),
+                    "end": str(cur_end),
+                    "limit": str(self._MAX_KLINE_PER_REQUEST),
+                },
+            )
+
+            result = resp.get("result", {})
+            raw_list = result.get("list", [])
+            if not raw_list:
+                break
+
+            page_candles: list[dict] = []
+            for item in raw_list:
+                if len(item) < 6:
+                    continue
+                ts = int(item[0])
+                if ts < start_ms or ts > end_ms:
+                    continue
+                page_candles.append({
+                    "timestamp": ts,
+                    "open":   _f(item[1]),
+                    "high":   _f(item[2]),
+                    "low":    _f(item[3]),
+                    "close":  _f(item[4]),
+                    "volume": _f(item[5]),
+                })
+
+            if not page_candles:
+                break
+
+            all_candles.extend(page_candles)
+            min_ts = min(c["timestamp"] for c in page_candles)
+
+            if min_ts <= start_ms:
+                break
+            if len(raw_list) < self._MAX_KLINE_PER_REQUEST:
+                break
+
+            cur_end = min_ts - 1
+            if cur_end < start_ms:
+                break
+
+        return all_candles
 
     # ── get_option_chain ──────────────────────────────────────────────────
 
