@@ -438,17 +438,24 @@ def broker_callback(broker, para=None):
         forward_url = "broker.html"
 
     elif broker == "zebu":
-        if request.method == "GET":
-            # Redirect to React TOTP page
-            return redirect("/broker/zebu/totp")
-
-        elif request.method == "POST":
-            userid = request.form.get("userid")
-            password = request.form.get("password")
-            totp_code = request.form.get("totp")
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
+        code = request.args.get("code")
+        if code:
+            logger.debug(f"Zebu broker - OAuth callback with code: {code}")
+            auth_token, error_message = auth_function(code)
             forward_url = "broker.html"
+        else:
+            # Initial visit — redirect to Zebu OAuth login page
+            logger.info("Redirecting to Zebu OAuth login page")
+            # BROKER_API_KEY format: userid:::client_id
+            full_api_key = os.getenv("BROKER_API_KEY")
+            if not full_api_key:
+                return handle_auth_failure(
+                    "BROKER_API_KEY not configured in environment",
+                    forward_url="broker.html",
+                )
+            client_id = full_api_key.split(":::")[1]  # OAuth client_id
+            zebu_login_url = f"https://go.mynt.in/OAuthlogin/authorize/oauth?client_id={client_id}"
+            return redirect(zebu_login_url)
 
     elif broker == "shoonya":
         if request.method == "GET":
