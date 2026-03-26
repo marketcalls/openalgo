@@ -40,6 +40,18 @@ export interface IndicatorValues {
   vwap?: number
 }
 
+/** Advanced signals from SMC, candlestick, harmonic, etc. */
+export interface AdvancedSignals {
+  smc: Record<string, boolean>
+  candlestick: string[]
+  cpr: Record<string, number>
+  fibonacci: { long: number; short: number }
+  harmonic: { bullish: number; bearish: number }
+  divergence: { rsi_bullish: number; rsi_bearish: number }
+  volume: { exhaustion: number; vwap_bb_confluence: number }
+  ml_confidence: { buy: number; sell: number }
+}
+
 /** Full analysis result from /api/v1/agent/analyze */
 export interface AIAnalysisResult {
   symbol: string
@@ -52,6 +64,7 @@ export interface AIAnalysisResult {
   sub_scores: SubScores
   indicators: IndicatorValues
   data_points: number
+  advanced?: AdvancedSignals
 }
 
 /** Scan result for one symbol from /api/v1/agent/scan */
