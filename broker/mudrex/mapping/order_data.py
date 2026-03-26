@@ -119,7 +119,8 @@ def calculate_order_statistics(order_data):
                 total_sell += 1
 
             status = order.get("orderStatus", "").lower()
-            if status in ("complete", "filled"):
+            # Align with Delta-style stats: closed/filled → complete
+            if status in ("complete", "filled", "closed"):
                 total_complete += 1
                 order["orderStatus"] = "complete"
             elif status in ("open", "pending"):
