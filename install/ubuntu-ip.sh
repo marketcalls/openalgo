@@ -351,7 +351,7 @@ check_status "Failed to install dependencies"
 
 # Ensure gunicorn and eventlet are installed
 log_message "Ensuring gunicorn and eventlet are installed..." "$BLUE"
-sudo bash -c "$ACTIVATE_CMD && uv pip install gunicorn eventlet"
+sudo bash -c "$ACTIVATE_CMD && uv pip install 'gunicorn>=25.0,<26' eventlet"
 check_status "Failed to install gunicorn/eventlet"
 
 # Configure .env file
