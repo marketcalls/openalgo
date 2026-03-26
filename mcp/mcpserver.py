@@ -1116,5 +1116,76 @@ def analyzer_toggle(mode: bool) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+# AI ANALYSIS TOOLS
+
+@mcp.tool()
+def analyze_stock(
+    symbol: str,
+    exchange: str = "NSE",
+    interval: str = "1d",
+) -> str:
+    """
+    Run AI-powered technical analysis on a stock symbol.
+    Returns signal (STRONG_BUY/BUY/HOLD/SELL/STRONG_SELL), confidence,
+    composite score, market regime, and 20+ indicator values.
+
+    Uses OpenAlgo history API to fetch data, then runs VAYU analysis engine.
+
+    Args:
+        symbol: Stock symbol (e.g., 'RELIANCE', 'SBIN', 'INFY')
+        exchange: Exchange ('NSE', 'BSE')
+        interval: Timeframe ('1m', '5m', '15m', '1h', '1d')
+    """
+    import requests
+    try:
+        # Call the AI analysis endpoint on OpenAlgo server
+        response = requests.post(
+            f"{host}/api/v1/agent/analyze",
+            json={"apikey": api_key, "symbol": symbol, "exchange": exchange, "interval": interval},
+            timeout=30,
+        )
+        return json.dumps(response.json(), indent=2)
+    except Exception as e:
+        return f"Error analyzing {symbol}: {str(e)}"
+
+
+@mcp.tool()
+def scan_stocks(
+    symbols: List[str],
+    exchange: str = "NSE",
+    interval: str = "1d",
+) -> str:
+    """
+    Scan multiple stocks and return signals for each.
+    Maximum 20 symbols per scan. Returns signal, confidence, and score for each.
+
+    Args:
+        symbols: List of stock symbols (e.g., ['RELIANCE', 'SBIN', 'INFY'])
+        exchange: Exchange ('NSE', 'BSE')
+        interval: Timeframe ('1d', '1h', '15m')
+    """
+    import requests
+    try:
+        response = requests.post(
+            f"{host}/api/v1/agent/scan",
+            json={"apikey": api_key, "symbols": symbols, "exchange": exchange, "interval": interval},
+            timeout=60,
+        )
+        return json.dumps(response.json(), indent=2)
+    except Exception as e:
+        return f"Error scanning stocks: {str(e)}"
+
+
+@mcp.tool()
+def get_ai_status() -> str:
+    """Check if the AI analysis engine is active and healthy."""
+    import requests
+    try:
+        response = requests.get(f"{host}/api/v1/agent/status", timeout=5)
+        return json.dumps(response.json(), indent=2)
+    except Exception as e:
+        return f"Error checking AI status: {str(e)}"
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
