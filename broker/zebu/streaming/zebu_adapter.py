@@ -327,6 +327,7 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = False
         self.lock = threading.Lock()
         self.reconnect_attempts = 0
+        self._reconnect_timer = None
 
     def _setup_normalizers(self):
         """Initialize data normalizers"""
@@ -402,19 +403,67 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def disconnect(self) -> None:
         """Disconnect from Zebu WebSocket endpoint"""
-        self.running = False
+        with self.lock:
+            self.running = False
+            self.connected = False
+
+            # Cancel any pending reconnection timer
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+                self._reconnect_timer = None
 
         if self.ws_client:
             self.ws_client.stop()
 
-        # Clean up market data cache
+        # Clean up market data cache and subscriptions
         self.market_cache.clear()
+        self.subscriptions.clear()
+        self.token_to_symbol.clear()
+        self.ws_subscription_refs.clear()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
 
-        self.connected = False
         self.logger.info("Disconnected from Zebu WebSocket")
+
+    def cleanup(self) -> None:
+        """Clean up all resources — safety net for missed disconnect calls"""
+        if getattr(self, "_cleaned_up", False):
+            return
+        self._cleaned_up = True
+
+        try:
+            self.running = False
+
+            with self.lock:
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
+
+            if self.ws_client:
+                try:
+                    self.ws_client.stop()
+                except Exception as e:
+                    self.logger.error(f"Error stopping WebSocket during cleanup: {e}")
+                finally:
+                    self.ws_client = None
+
+            self.market_cache.clear()
+            self.subscriptions.clear()
+            self.token_to_symbol.clear()
+            self.ws_subscription_refs.clear()
+            self.cleanup_zmq()
+            self.connected = False
+            self.logger.info("Zebu adapter cleanup complete")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup on garbage collection"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE, depth_level: int = 5
@@ -699,23 +748,49 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _schedule_reconnection(self) -> None:
         """Schedule reconnection with exponential backoff"""
-        if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
-            self.logger.error("Maximum reconnection attempts reached")
-            self.running = False
-            return
+        with self.lock:
+            if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
+                self.logger.error("Maximum reconnection attempts reached")
+                self.running = False
+                return
 
-        delay = min(
-            Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts), Config.MAX_RECONNECT_DELAY
-        )
+            delay = min(
+                Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts),
+                Config.MAX_RECONNECT_DELAY,
+            )
 
-        self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
-        threading.Timer(delay, self._attempt_reconnection).start()
+            self.logger.info(
+                f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})"
+            )
+
+            # Cancel existing timer if present
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+
+            self._reconnect_timer = threading.Timer(delay, self._attempt_reconnection)
+            self._reconnect_timer.daemon = True
+            self._reconnect_timer.start()
 
     def _attempt_reconnection(self) -> None:
         """Attempt to reconnect to WebSocket"""
+        with self.lock:
+            self._reconnect_timer = None
+
+            if not self.running:
+                self.logger.debug("Reconnection skipped - adapter no longer running")
+                return
+
         self.reconnect_attempts += 1
 
         try:
+            # Clean up old WebSocket client to prevent FD leaks
+            if self.ws_client:
+                self.logger.debug("Cleaning up old WebSocket client before reconnection")
+                try:
+                    self.ws_client.stop()
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
+
             # Recreate WebSocket client
             self.ws_client = ZebuWebSocket(
                 user_id=self.actid,  # Both user_id and actid should be the Zebu account ID

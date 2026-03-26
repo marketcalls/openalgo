@@ -177,6 +177,8 @@ class ZebuWebSocket:
                 self.ws.close()
             except Exception as e:
                 self.logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self.ws = None
 
     def _wait_for_thread_completion(self) -> None:
         """Wait for WebSocket thread to complete"""
@@ -184,6 +186,7 @@ class ZebuWebSocket:
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
+        self.ws_thread = None
 
     # WebSocket Event Handlers
     def _on_open(self, ws) -> None:
@@ -325,9 +328,12 @@ class ZebuWebSocket:
 
     def _stop_heartbeat(self) -> None:
         """Stop heartbeat monitoring thread"""
-        # Thread will stop when self.running becomes False
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             self.logger.debug("Waiting for heartbeat thread to stop")
+            self._heartbeat_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if self._heartbeat_thread.is_alive():
+                self.logger.warning("Heartbeat thread did not terminate within timeout")
+        self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
