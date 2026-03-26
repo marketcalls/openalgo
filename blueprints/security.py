@@ -1,4 +1,6 @@
+import ipaddress
 import logging
+import re
 from datetime import datetime
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
@@ -9,6 +11,23 @@ from limiter import limiter
 from utils.session import check_session_validity
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_ip(ip_string):
+    """Validate that a string is a valid IPv4 or IPv6 address."""
+    try:
+        ipaddress.ip_address(ip_string)
+        return True
+    except ValueError:
+        return False
+
+
+def _sanitize_host(host):
+    """Validate and sanitize a hostname for safe use in queries."""
+    # Only allow valid hostname characters (letters, digits, hyphens, dots)
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$', host):
+        return None
+    return host
 
 security_bp = Blueprint("security_bp", __name__, url_prefix="/security")
 
@@ -112,6 +131,10 @@ def ban_ip():
         if not ip_address:
             return jsonify({"error": "IP address is required"}), 400
 
+        # Validate IP address format
+        if not _validate_ip(ip_address):
+            return jsonify({"error": "Invalid IP address format"}), 400
+
         # Prevent banning localhost
         if ip_address in ["127.0.0.1", "::1", "localhost"]:
             return jsonify({"error": "Cannot ban localhost"}), 400
@@ -132,7 +155,7 @@ def ban_ip():
 
     except Exception as e:
         logger.exception(f"Error banning IP: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "An internal error occurred"}), 500
 
 
 @security_bp.route("/unban", methods=["POST"])
@@ -157,7 +180,7 @@ def unban_ip():
 
     except Exception as e:
         logger.exception(f"Error unbanning IP: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "An internal error occurred"}), 500
 
 
 @security_bp.route("/ban-host", methods=["POST"])
@@ -175,11 +198,7 @@ def ban_host():
             return jsonify({"error": "Host is required"}), 400
 
         # Check if this looks like an IP address
-        import re
-
-        ip_pattern = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
-
-        if ip_pattern.match(host):
+        if _validate_ip(host):
             # It's an IP address, ban it directly
             success = IPBan.ban_ip(
                 ip_address=host,
@@ -193,11 +212,16 @@ def ban_host():
             else:
                 return jsonify({"error": f"Failed to ban IP: {host}"}), 500
 
+        # Validate hostname to prevent LIKE injection (e.g., '%' matching all)
+        sanitized_host = _sanitize_host(host)
+        if not sanitized_host:
+            return jsonify({"error": "Invalid hostname format"}), 400
+
         # Get IPs from recent traffic logs that match this host
         from database.traffic_db import TrafficLog
 
         matching_logs = (
-            TrafficLog.query.filter(TrafficLog.host.like(f"%{host}%"))
+            TrafficLog.query.filter(TrafficLog.host.like(f"%{sanitized_host}%"))
             .distinct(TrafficLog.client_ip)
             .all()
         )
@@ -232,7 +256,7 @@ def ban_host():
 
     except Exception as e:
         logger.exception(f"Error banning host: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "An internal error occurred"}), 500
 
 
 @security_bp.route("/clear-404", methods=["POST"])
@@ -259,7 +283,7 @@ def clear_404_tracker():
     except Exception as e:
         logger.exception(f"Error clearing 404 tracker: {e}")
         logs_session.rollback()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "An internal error occurred"}), 500
 
 
 @security_bp.route("/api/data", methods=["GET"])
@@ -379,7 +403,7 @@ def security_stats():
 
     except Exception as e:
         logger.exception(f"Error getting security stats: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "An internal error occurred"}), 500
 
 
 @security_bp.route("/settings", methods=["POST"])
@@ -391,26 +415,29 @@ def update_security_settings():
         data = request.get_json()
 
         # Validate input ranges
-        threshold_404 = int(data.get("threshold_404", 20))
-        ban_duration_404 = int(data.get("ban_duration_404", 24))
-        threshold_api = int(data.get("threshold_api", 10))
-        ban_duration_api = int(data.get("ban_duration_api", 48))
-        repeat_offender_limit = int(data.get("repeat_offender_limit", 3))
+        auto_ban_enabled = bool(data.get("auto_ban_enabled", False))
+        threshold_404 = int(data.get("threshold_404", 100))
+        ban_duration_404 = int(data.get("ban_duration_404", 0))
+        threshold_api = int(data.get("threshold_api", 100))
+        ban_duration_api = int(data.get("ban_duration_api", 0))
+        repeat_offender_limit = int(data.get("repeat_offender_limit", 2))
 
         # Validate reasonable ranges
         if threshold_404 < 1 or threshold_404 > 1000:
             return jsonify({"error": "404 threshold must be between 1 and 1000"}), 400
-        if ban_duration_404 < 1 or ban_duration_404 > 8760:  # Max 1 year
-            return jsonify({"error": "Ban duration must be between 1 hour and 1 year"}), 400
+        # 0 = permanent ban, 1-8760 = hours
+        if ban_duration_404 != 0 and (ban_duration_404 < 1 or ban_duration_404 > 8760):
+            return jsonify({"error": "Ban duration must be Permanent (0) or between 1 hour and 1 year"}), 400
         if threshold_api < 1 or threshold_api > 100:
             return jsonify({"error": "API threshold must be between 1 and 100"}), 400
-        if ban_duration_api < 1 or ban_duration_api > 8760:
-            return jsonify({"error": "Ban duration must be between 1 hour and 1 year"}), 400
+        if ban_duration_api != 0 and (ban_duration_api < 1 or ban_duration_api > 8760):
+            return jsonify({"error": "Ban duration must be Permanent (0) or between 1 hour and 1 year"}), 400
         if repeat_offender_limit < 1 or repeat_offender_limit > 10:
             return jsonify({"error": "Repeat offender limit must be between 1 and 10"}), 400
 
         # Update settings
         set_security_settings(
+            auto_ban_enabled=auto_ban_enabled,
             threshold_404=threshold_404,
             ban_duration_404=ban_duration_404,
             threshold_api=threshold_api,
@@ -419,7 +446,7 @@ def update_security_settings():
         )
 
         logger.info(
-            f"Security settings updated: 404={threshold_404}/{ban_duration_404}h, API={threshold_api}/{ban_duration_api}h, Repeat={repeat_offender_limit}"
+            f"Security settings updated: auto_ban={auto_ban_enabled}, 404={threshold_404}/{ban_duration_404}h, API={threshold_api}/{ban_duration_api}h, Repeat={repeat_offender_limit}"
         )
 
         return jsonify(
@@ -427,6 +454,7 @@ def update_security_settings():
                 "success": True,
                 "message": "Security settings updated successfully",
                 "settings": {
+                    "auto_ban_enabled": auto_ban_enabled,
                     "404_threshold": threshold_404,
                     "404_ban_duration": ban_duration_404,
                     "api_threshold": threshold_api,
@@ -441,7 +469,7 @@ def update_security_settings():
         return jsonify({"error": "Invalid numeric value provided"}), 400
     except Exception as e:
         logger.exception(f"Error updating security settings: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "An internal error occurred"}), 500
 
 
 @security_bp.teardown_app_request
