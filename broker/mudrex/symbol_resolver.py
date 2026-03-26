@@ -23,9 +23,11 @@ def resolve_mudrex_brsymbol(symbol: str, exchange: str | None) -> str:
     ex = (exchange or "").upper()
     sym = (symbol or "").strip()
 
+    seen: set[str] = set()
     for candidate_ex in (ex, "CRYPTO_FUT", "CRYPTO"):
-        if not candidate_ex:
+        if not candidate_ex or candidate_ex in seen:
             continue
+        seen.add(candidate_ex)
         br = get_br_symbol(sym, candidate_ex)
         if br:
             return br
