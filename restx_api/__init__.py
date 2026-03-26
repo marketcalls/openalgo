@@ -53,6 +53,7 @@ from .ticker import api as ticker_ns
 from .tradebook import api as tradebook_ns
 from .aaum import api as aaum_ns
 from .ai_agent import api as ai_agent_ns
+from .llm_api import api as llm_api_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path="/placeorder")
@@ -97,3 +98,4 @@ api.add_namespace(market_timings_ns, path="/market/timings")
 api.add_namespace(pnl_symbols_ns, path="/pnl")
 api.add_namespace(aaum_ns, path="/aaum")
 api.add_namespace(ai_agent_ns, path="/agent")
+api.add_namespace(llm_api_ns, path="/llm")
