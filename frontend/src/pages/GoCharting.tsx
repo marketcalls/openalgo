@@ -179,8 +179,7 @@ export default function GoCharting() {
   // Auto-generate JSON when values change
   useEffect(() => {
     generateJson(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [generateJson])
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
