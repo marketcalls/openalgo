@@ -278,7 +278,7 @@ for ((i=1; i<=INSTANCES; i++)); do
     check_status "Failed to install dependencies"
 
     # Ensure gunicorn and eventlet
-    sudo bash -c "$ACTIVATE_CMD && uv pip install gunicorn eventlet"
+    sudo bash -c "$ACTIVATE_CMD && uv pip install 'gunicorn>=25.0,<26' eventlet"
 
     # Configure .env file
     log_message "Configuring environment file..." "$BLUE"

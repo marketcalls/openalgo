@@ -678,7 +678,7 @@ check_status "Failed to install Python dependencies"
 log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'gunicorn=='"; then
     log_message "Installing gunicorn..." "$YELLOW"
-    sudo $UV_CMD pip install --python $VENV_PATH/bin/python gunicorn
+    sudo $UV_CMD pip install --python $VENV_PATH/bin/python "gunicorn>=25.0,<26"
     check_status "Failed to install gunicorn"
 fi
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'eventlet=='"; then

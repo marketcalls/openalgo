@@ -241,5 +241,6 @@ exec /app/.venv/bin/gunicorn \
     --timeout 300 \
     --graceful-timeout 30 \
     --worker-tmp-dir /tmp/gunicorn_workers \
+    --no-control-socket \
     --log-level warning \
     app:app
