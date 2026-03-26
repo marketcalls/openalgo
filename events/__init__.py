@@ -1,5 +1,6 @@
 """Event types for the OpenAlgo event bus."""
 
+from events.ai_events import AgentAnalysisEvent, AgentErrorEvent, AgentOrderEvent
 from events.analyzer_events import AnalyzerErrorEvent
 from events.base import OrderEvent
 from events.batch_events import (
@@ -21,6 +22,9 @@ from events.position_events import AllOrdersCancelledEvent, PositionClosedEvent
 
 __all__ = [
     "OrderEvent",
+    "AgentAnalysisEvent",
+    "AgentOrderEvent",
+    "AgentErrorEvent",
     "OrderPlacedEvent",
     "OrderFailedEvent",
     "SmartOrderNoActionEvent",
