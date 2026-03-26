@@ -419,6 +419,14 @@ def broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "mudrex":
+        if request.method == "GET":
+            return redirect("/broker/mudrex/totp")
+        api_secret = (request.form.get("api_secret") or "").strip()
+        logger.debug("Mudrex broker - validating API secret from login form")
+        auth_token, error_message = auth_function(api_secret)
+        forward_url = "broker.html"
+
     elif broker == "dhan_sandbox":
         code = "dhan_sandbox"
         logger.debug(f"Dhan Sandbox broker - The code is {code}")
