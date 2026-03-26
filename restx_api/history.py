@@ -1,5 +1,4 @@
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
