@@ -76,8 +76,18 @@ def map_order_data(order_data):
 
             order["quantity"] = _safe_float(order.get("quantity"))
             order["price"] = _safe_float(order.get("price"))
-            order["triggerPrice"] = 0.0
+            # Some responses expose conditional trigger/risk prices under different keys.
+            order["triggerPrice"] = _safe_float(
+                order.get("trigger_price", order.get("stoploss_price", order.get("stop_price")))
+            )
             order["updateTime"] = order.get("updated_at", order.get("created_at", ""))
+            order["reduceOnly"] = bool(order.get("reduce_only", False))
+            order["postOnly"] = bool(order.get("post_only", False))
+            order["clientOrderId"] = order.get("client_order_id", "")
+            order["trailAmount"] = _safe_float(order.get("trail_amount"))
+            order["stopTriggerMethod"] = order.get("stop_trigger_method", "")
+            order["bracketStopLossPrice"] = order.get("stoploss_price", "")
+            order["bracketTakeProfitPrice"] = order.get("takeprofit_price", "")
 
         return order_data
 
@@ -284,9 +294,14 @@ def map_position_data(position_data):
 
             pos["netQty"] = net_qty
             pos["avgCostPrice"] = _safe_float(pos.get("entry_price"))
-            pos["lastTradedPrice"] = 0.0
-            pos["marketValue"] = 0.0
-            pos["pnlAbsolute"] = 0.0
+            pos["lastTradedPrice"] = _safe_float(
+                pos.get("mark_price", pos.get("last_price", pos.get("price")))
+            )
+            pos["marketValue"] = _safe_float(pos.get("notional_value"))
+            # Keep parity with Delta: total pnl = realised + unrealised when present.
+            realised = _safe_float(pos.get("realized_pnl", pos.get("realised_pnl")))
+            unrealised = _safe_float(pos.get("unrealized_pnl", pos.get("unrealised_pnl", pos.get("pnl"))))
+            pos["pnlAbsolute"] = realised + unrealised
 
             lot_size = 1.0
             if sym_from_db:

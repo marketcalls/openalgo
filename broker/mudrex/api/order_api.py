@@ -29,7 +29,8 @@ from broker.mudrex.mapping.transform_data import (
     transform_data,
     transform_modify_order_data,
 )
-from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
+from broker.mudrex.symbol_resolver import resolve_mudrex_brsymbol
+from database.token_db import get_oa_symbol, get_symbol, get_token
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -112,7 +113,7 @@ def get_open_position(tradingsymbol: str, exchange: str, product: str, auth: str
 
     Positive = long, negative = short, "0" = flat.
     """
-    br_symbol = get_br_symbol(tradingsymbol, exchange) or tradingsymbol
+    br_symbol = resolve_mudrex_brsymbol(tradingsymbol, exchange)
     positions = get_positions(auth)
 
     for pos in positions:
@@ -141,7 +142,7 @@ def place_order_api(data: dict, auth: str):
     secret = _auth_secret(auth)
 
     symbol = data.get("symbol", "")
-    br_symbol = get_br_symbol(symbol, data.get("exchange", "CRYPTO_FUT")) or symbol
+    br_symbol = resolve_mudrex_brsymbol(symbol, data.get("exchange", "CRYPTO_FUT"))
 
     try:
         payload = transform_data(data, "")

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from broker.mudrex.api.mudrex_http import mudrex_request
-from database.token_db import get_br_symbol
+from broker.mudrex.symbol_resolver import resolve_mudrex_brsymbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -123,7 +123,7 @@ class BrokerData:
             volume     ← 1d_volume (or volume)
             prev_close ← last_day_price
         """
-        br_symbol = get_br_symbol(symbol, exchange) or symbol
+        br_symbol = resolve_mudrex_brsymbol(symbol, exchange)
         logger.info(f"[Mudrex] get_quotes: {symbol} → {br_symbol}")
 
         data = mudrex_request(
@@ -153,7 +153,7 @@ class BrokerData:
 
         Bybit endpoint: GET /v5/market/orderbook?category=linear&symbol={}&limit=5
         """
-        br_symbol = get_br_symbol(symbol, exchange) or symbol
+        br_symbol = resolve_mudrex_brsymbol(symbol, exchange)
         logger.info(f"[Mudrex] get_depth via Bybit: {symbol} → {br_symbol}")
 
         resp = _bybit_get("/v5/market/orderbook", params={
@@ -219,7 +219,7 @@ class BrokerData:
 
         Bybit returns newest-first; we reverse to ascending order.
         """
-        br_symbol = get_br_symbol(symbol, exchange) or symbol
+        br_symbol = resolve_mudrex_brsymbol(symbol, exchange)
         bybit_interval = self.TIMEFRAME_MAP.get(interval)
         if bybit_interval is None:
             raise ValueError(f"Unsupported interval: {interval}")

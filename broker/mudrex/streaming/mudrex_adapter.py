@@ -29,7 +29,7 @@ from typing import Any
 import websocket
 
 from database.auth_db import get_auth_token
-from database.token_db import get_br_symbol
+from broker.mudrex.symbol_resolver import resolve_mudrex_brsymbol
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
@@ -114,7 +114,7 @@ class MudrexWebSocketAdapter(BaseBrokerWebSocketAdapter):
         mode: int = 2,
         depth_level: int = 1,
     ) -> dict[str, Any]:
-        br_symbol = get_br_symbol(symbol, exchange) or symbol
+        br_symbol = resolve_mudrex_brsymbol(symbol, exchange)
         corr_id = f"{symbol}_{exchange}_{mode}"
 
         with self._lock:
