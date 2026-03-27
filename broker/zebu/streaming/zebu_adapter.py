@@ -412,8 +412,9 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer.cancel()
                 self._reconnect_timer = None
 
-        if self.ws_client:
-            self.ws_client.stop()
+            if self.ws_client:
+                self.ws_client.stop()
+                self.ws_client = None
 
         # Clean up market data cache and subscriptions
         self.market_cache.clear()

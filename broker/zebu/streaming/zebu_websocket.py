@@ -32,6 +32,7 @@ class ZebuWebSocket:
     HEARTBEAT_TIMEOUT = 120
     PING_INTERVAL = 30
     PING_TIMEOUT = 10
+    HEARTBEAT_JOIN_TIMEOUT = 3
 
     # Message types (OAuth WebSocket API)
     MSG_TYPE_CONNECT = "a"
@@ -182,9 +183,10 @@ class ZebuWebSocket:
 
     def _wait_for_thread_completion(self) -> None:
         """Wait for WebSocket thread to complete"""
-        if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
-            if self.ws_thread.is_alive():
+        ws_thread = self.ws_thread
+        if ws_thread and ws_thread.is_alive():
+            ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
         self.ws_thread = None
 
@@ -327,11 +329,12 @@ class ZebuWebSocket:
         self.logger.debug("Heartbeat thread started")
 
     def _stop_heartbeat(self) -> None:
-        """Stop heartbeat monitoring thread"""
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+        """Stop heartbeat monitoring thread and wait for it to terminate"""
+        hb_thread = self._heartbeat_thread
+        if hb_thread and hb_thread.is_alive():
             self.logger.debug("Waiting for heartbeat thread to stop")
-            self._heartbeat_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
-            if self._heartbeat_thread.is_alive():
+            hb_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
+            if hb_thread.is_alive():
                 self.logger.warning("Heartbeat thread did not terminate within timeout")
         self._heartbeat_thread = None
 
