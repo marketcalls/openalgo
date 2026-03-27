@@ -162,6 +162,143 @@ The MCP server provides the following categories of tools:
 - `analyzer_toggle` - Toggle between analyze (simulated) and live trading mode
 - `calculate_margin` - Calculate margin requirements for positions
 
+### Paper Trading (Sandbox)
+- `paper_trading_status` - Check if paper trading mode is active
+- `paper_trading_enable` - Enable paper trading (orders simulated)
+- `paper_trading_disable` - Disable paper trading (live orders)
+- `paper_pnl` - Get paper trading P&L by symbol
+- `paper_reset` - Reset paper portfolio
+
+### Strategy Management
+- `list_strategies` - List all webhook strategies
+- `get_strategy` - Get strategy details
+- `toggle_strategy` - Enable/disable a strategy
+- `list_python_strategies` - List Python strategies with run status
+- `get_python_strategy` - Get Python strategy details
+- `start_python_strategy` - Start a Python strategy
+- `stop_python_strategy` - Stop a Python strategy
+- `get_strategy_logs` - Get strategy execution logs
+
+### Historical Data (Historify)
+- `historify_catalog` - List available data by exchange/symbol
+- `historify_download` - Download OHLCV data for a symbol
+- `historify_stats` - Get database statistics
+- `historify_data` - Get stored historical data
+
+### Options Analytics
+- `oi_tracker` - OI data with CE/PE bars and PCR
+- `max_pain_chart` - Max Pain strike calculation
+- `iv_chart` - Implied Volatility historical data
+- `iv_smile` - IV Smile curve across strikes
+- `straddle_data` - ATM Straddle with Spot/Synthetic Futures
+- `gex_dashboard` - Gamma Exposure analysis
+
+### ML & Intelligence
+- `ml_recommend` - ML-powered trading recommendation
+- `market_analysis` - Full trend + momentum + OI report
+
+### Testing & Verification
+- `health_check` - Full system health check
+- `broker_status` - Broker connection and capabilities
+- `websocket_status` - WebSocket server status
+- `master_contract_status` - Master contract readiness
+- `test_api` - Test any API endpoint directly
+
+---
+
+## HTTP Bridge (for Ollama, Custom Agents, REST Clients)
+
+The HTTP bridge exposes all 82 MCP tools as REST endpoints, allowing any HTTP client to use them.
+
+### Start the HTTP Bridge
+
+```bash
+python mcp/http_bridge.py YOUR_API_KEY http://127.0.0.1:5000 --port 5100
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Welcome + tool count |
+| GET | `/tools` | List all tools (OpenAI function-calling schema) |
+| POST | `/tools/{name}` | Call a tool with JSON body |
+| GET | `/health` | Bridge health check |
+
+### Authentication
+
+Pass your API key via `X-API-Key` header:
+
+```bash
+curl -H "X-API-Key: YOUR_KEY" http://localhost:5100/tools/health_check -X POST
+```
+
+### Examples
+
+```bash
+# List all available tools
+curl http://localhost:5100/tools
+
+# Analyze a stock
+curl -X POST http://localhost:5100/tools/analyze_stock \
+  -H "X-API-Key: YOUR_KEY" \
+  -d '{"symbol": "RELIANCE", "exchange": "NSE"}'
+
+# Enable paper trading
+curl -X POST http://localhost:5100/tools/paper_trading_enable \
+  -H "X-API-Key: YOUR_KEY"
+
+# Place a paper order (with sandbox mode on)
+curl -X POST http://localhost:5100/tools/place_order \
+  -H "X-API-Key: YOUR_KEY" \
+  -d '{"symbol": "RELIANCE", "quantity": 10, "action": "BUY"}'
+
+# Get OI data for NIFTY
+curl -X POST http://localhost:5100/tools/oi_tracker \
+  -H "X-API-Key: YOUR_KEY" \
+  -d '{"symbol": "NIFTY"}'
+
+# Get Max Pain
+curl -X POST http://localhost:5100/tools/max_pain_chart \
+  -H "X-API-Key: YOUR_KEY" \
+  -d '{"symbol": "BANKNIFTY"}'
+
+# Test any endpoint
+curl -X POST http://localhost:5100/tools/test_api \
+  -H "X-API-Key: YOUR_KEY" \
+  -d '{"method": "GET", "endpoint": "/api/v1/agent/status"}'
+```
+
+### Ollama Tool Calling
+
+The `/tools` endpoint returns OpenAI function-calling compatible schema. Configure Ollama to use it:
+
+```python
+import ollama
+
+# Get tool definitions from bridge
+import requests
+tools = requests.get("http://localhost:5100/tools").json()["tools"]
+
+# Use with Ollama
+response = ollama.chat(
+    model="qwen3.5:9b",
+    messages=[{"role": "user", "content": "Analyze RELIANCE stock"}],
+    tools=tools,
+)
+
+# Execute tool calls via bridge
+for call in response.message.tool_calls:
+    result = requests.post(
+        f"http://localhost:5100/tools/{call.function.name}",
+        headers={"X-API-Key": "YOUR_KEY"},
+        json=call.function.arguments,
+    )
+    print(result.json())
+```
+
+---
+
 ## Usage Examples
 
 Once configured, you can ask your AI assistant to:
