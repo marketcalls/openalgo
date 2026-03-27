@@ -25,7 +25,7 @@ import requests
 
 # Configuration
 BASE_URL = "http://127.0.0.1:5000"
-API_KEY = "32000a64b815aab3cfa1fec36aac7732ce3474381cd0b7607fde446335a3ea61"
+API_KEY = "7653f710c940cdf1d757b5a7d808a60f43bc7e9c0239065435861da2869ec0fc"
 
 # Underlying and expiry — update as needed
 UNDERLYING = "NIFTY"

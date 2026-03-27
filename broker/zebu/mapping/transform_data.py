@@ -128,7 +128,7 @@ def transform_modify_order_data(data, token):
         "exch": data["exchange"],
         "norenordno": data["orderid"],
         "prctyp": map_order_type(data["pricetype"]),
-        "prc": str(data["price"]),
+        "prc": "0" if data["pricetype"] == "MARKET" else str(data.get("price", "0")),
         "qty": str(data["quantity"]),
         "tsym": symbol,
         "ret": "DAY",
