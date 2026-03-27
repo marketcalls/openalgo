@@ -22,6 +22,9 @@ def transform_data(data, token, auth_token=None):
         auth_token: Authentication token for fetching quotes (passed from order_api)
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
+    # Handle special characters in symbol
+    if symbol and "&" in symbol:
+        symbol = symbol.replace("&", "%26")
 
     # Default values
     price = str(data.get("price", "0"))
@@ -115,31 +118,29 @@ def transform_data(data, token, auth_token=None):
 
 
 def transform_modify_order_data(data, token):
-    # For MARKET orders, price should be "0"
-    price = "0" if data["pricetype"] == "MARKET" else str(data.get("price", "0"))
+    # Handle special characters in symbol
+    symbol = data["symbol"]
+    if symbol and "&" in symbol:
+        symbol = symbol.replace("&", "%26")
 
-    # Build the modify order payload according to Zebu API spec
-    modify_payload = {
+    result = {
         "uid": data["apikey"],
         "exch": data["exchange"],
         "norenordno": data["orderid"],
-        "tsym": data["symbol"],  # Symbol is required and can't be modified
-        "qty": str(data["quantity"]),  # Total quantity (not just pending)
-        "prc": price,  # Price (0 for market orders)
         "prctyp": map_order_type(data["pricetype"]),
-        "ret": "DAY",  # Retention type
-        "dscqty": str(data.get("disclosed_quantity", "0")),
+        "prc": "0" if data["pricetype"] == "MARKET" else str(data.get("price", "0")),
+        "qty": str(data["quantity"]),
+        "tsym": symbol,
+        "ret": "DAY",
+        "dscqty": str(data.get("disclosed_quantity") or 0),
     }
 
-    # Add trigger price only for SL orders
+    # Only include trigger price for SL/SL-M orders
+    # Sending trgprc=0 for LIMIT orders causes "Trigger price invalid - 0.00" error
     if data["pricetype"] in ["SL", "SL-M"]:
-        modify_payload["trgprc"] = str(data.get("trigger_price", "0"))
+        result["trgprc"] = str(data.get("trigger_price") or 0)
 
-    # Add market protection only for market orders
-    if data["pricetype"] in ["MARKET", "SL-M"]:
-        modify_payload["mkt_protection"] = "0"
-
-    return modify_payload
+    return result
 
 
 def map_order_type(pricetype):
