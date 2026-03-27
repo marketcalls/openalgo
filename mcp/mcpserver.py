@@ -1187,5 +1187,248 @@ def get_ai_status() -> str:
         return f"Error checking AI status: {str(e)}"
 
 
+# ═══════════════════════════════════════════════════════════════
+# EXTENDED TOOLS — Paper Trading, Strategies, Historify,
+# Options Analytics, ML Intelligence, Testing
+# ═══════════════════════════════════════════════════════════════
+
+from tools import paper_trading, strategies, historify, options_analytics, ml_intelligence, testing
+
+
+# --- PAPER TRADING (SANDBOX) ---
+
+@mcp.tool()
+def paper_trading_status() -> str:
+    """Check if paper trading (sandbox) mode is enabled. Returns current analyzer mode status."""
+    return paper_trading.paper_trading_status(host)
+
+@mcp.tool()
+def paper_trading_enable() -> str:
+    """Enable paper trading mode. All orders will be simulated, not sent to the real broker."""
+    return paper_trading.paper_trading_enable(host)
+
+@mcp.tool()
+def paper_trading_disable() -> str:
+    """Disable paper trading. WARNING: After this, orders execute with real money."""
+    return paper_trading.paper_trading_disable(host)
+
+@mcp.tool()
+def paper_pnl() -> str:
+    """Get paper trading P&L breakdown by symbol (sandbox mode only)."""
+    return paper_trading.paper_pnl(host, api_key)
+
+@mcp.tool()
+def paper_reset() -> str:
+    """Reset paper trading portfolio. Clears all simulated positions and P&L."""
+    return paper_trading.paper_reset(host)
+
+
+# --- STRATEGY MANAGEMENT ---
+
+@mcp.tool()
+def list_strategies() -> str:
+    """List all webhook-based trading strategies with their enabled status."""
+    return strategies.list_strategies(host)
+
+@mcp.tool()
+def get_strategy(strategy_id: str) -> str:
+    """Get details of a specific webhook strategy.
+    Args:
+        strategy_id: The strategy ID to look up
+    """
+    return strategies.get_strategy(host, strategy_id)
+
+@mcp.tool()
+def toggle_strategy(strategy_id: str) -> str:
+    """Enable or disable a webhook strategy.
+    Args:
+        strategy_id: The strategy ID to toggle
+    """
+    return strategies.toggle_strategy(host, strategy_id)
+
+@mcp.tool()
+def list_python_strategies() -> str:
+    """List all Python trading strategies with run status, PID, and schedule info."""
+    return strategies.list_python_strategies(host)
+
+@mcp.tool()
+def get_python_strategy(strategy_id: str) -> str:
+    """Get details and source code of a Python strategy.
+    Args:
+        strategy_id: The Python strategy ID
+    """
+    return strategies.get_python_strategy(host, strategy_id)
+
+@mcp.tool()
+def start_python_strategy(strategy_id: str) -> str:
+    """Start a Python trading strategy.
+    Args:
+        strategy_id: The Python strategy ID to start
+    """
+    return strategies.start_python_strategy(host, strategy_id)
+
+@mcp.tool()
+def stop_python_strategy(strategy_id: str) -> str:
+    """Stop a running Python trading strategy.
+    Args:
+        strategy_id: The Python strategy ID to stop
+    """
+    return strategies.stop_python_strategy(host, strategy_id)
+
+@mcp.tool()
+def get_strategy_logs(strategy_id: str) -> str:
+    """Get execution logs for a Python strategy.
+    Args:
+        strategy_id: The Python strategy ID
+    """
+    return strategies.get_strategy_logs(host, strategy_id)
+
+
+# --- HISTORIFY (HISTORICAL DATA) ---
+
+@mcp.tool()
+def historify_catalog() -> str:
+    """List all available historical data grouped by exchange and symbol."""
+    return historify.historify_catalog(host)
+
+@mcp.tool()
+def historify_download(symbol: str, exchange: str = "NSE", interval: str = "1d") -> str:
+    """Download historical OHLCV data for a symbol from the broker into local database.
+    Args:
+        symbol: Stock symbol (e.g., 'RELIANCE')
+        exchange: Exchange ('NSE', 'BSE', 'NFO')
+        interval: Timeframe ('1m', '5m', '15m', '1h', '1d')
+    """
+    return historify.historify_download(host, symbol, exchange, interval)
+
+@mcp.tool()
+def historify_stats() -> str:
+    """Get Historify database statistics — total symbols, data points, storage size."""
+    return historify.historify_stats(host)
+
+@mcp.tool()
+def historify_data(symbol: str, exchange: str = "NSE", interval: str = "1d",
+                   start_date: str | None = None, end_date: str | None = None) -> str:
+    """Get stored historical OHLCV data for a symbol.
+    Args:
+        symbol: Stock symbol (e.g., 'RELIANCE')
+        exchange: Exchange ('NSE', 'BSE')
+        interval: Timeframe ('1m', '5m', '15m', '1h', '1d')
+        start_date: Start date YYYY-MM-DD (optional)
+        end_date: End date YYYY-MM-DD (optional)
+    """
+    return historify.historify_data(host, symbol, exchange, interval, start_date, end_date)
+
+
+# --- OPTIONS ANALYTICS ---
+
+@mcp.tool()
+def oi_tracker(symbol: str, expiry: str | None = None) -> str:
+    """Get Open Interest data with CE/PE OI bars, PCR, and ATM strike marker.
+    Args:
+        symbol: Underlying (e.g., 'NIFTY', 'BANKNIFTY', 'RELIANCE')
+        expiry: Expiry date YYYY-MM-DD (optional, uses nearest)
+    """
+    return options_analytics.oi_tracker(host, symbol, expiry)
+
+@mcp.tool()
+def max_pain_chart(symbol: str, expiry: str | None = None) -> str:
+    """Calculate Max Pain strike — the price where option writers lose the least.
+    Args:
+        symbol: Underlying (e.g., 'NIFTY', 'BANKNIFTY')
+        expiry: Expiry date YYYY-MM-DD (optional)
+    """
+    return options_analytics.max_pain_chart(host, symbol, expiry)
+
+@mcp.tool()
+def iv_chart(symbol: str, interval: str = "1d") -> str:
+    """Get Implied Volatility historical chart data.
+    Args:
+        symbol: Option or underlying symbol
+        interval: Timeframe ('1d', '1h', '15m')
+    """
+    return options_analytics.iv_chart(host, symbol, interval)
+
+@mcp.tool()
+def iv_smile(symbol: str, expiry: str | None = None) -> str:
+    """Get IV Smile curve — Call/Put IV across strikes with ATM IV and skew.
+    Args:
+        symbol: Underlying (e.g., 'NIFTY')
+        expiry: Expiry date (optional)
+    """
+    return options_analytics.iv_smile(host, symbol, expiry)
+
+@mcp.tool()
+def straddle_data(symbol: str, expiry: str | None = None) -> str:
+    """Get ATM Straddle data with rolling strike, Spot, and Synthetic Futures overlay.
+    Args:
+        symbol: Underlying (e.g., 'NIFTY', 'BANKNIFTY')
+        expiry: Expiry date (optional)
+    """
+    return options_analytics.straddle_data(host, symbol, expiry)
+
+@mcp.tool()
+def gex_dashboard(symbol: str, expiry: str | None = None) -> str:
+    """Get Gamma Exposure (GEX) — OI Walls, Net GEX per strike, top gamma strikes.
+    Args:
+        symbol: Underlying (e.g., 'NIFTY', 'BANKNIFTY')
+        expiry: Expiry date (optional)
+    """
+    return options_analytics.gex_dashboard(host, symbol, expiry)
+
+
+# --- ML & INTELLIGENCE ---
+
+@mcp.tool()
+def ml_recommend(symbol: str) -> str:
+    """Get ML-powered trading recommendation with confidence and risk assessment.
+    Args:
+        symbol: Stock symbol (e.g., 'RELIANCE', 'SBIN')
+    """
+    return ml_intelligence.ml_recommend(host, symbol)
+
+@mcp.tool()
+def market_analysis(symbol: str, exchange: str = "NSE") -> str:
+    """Get full market analysis — trend + momentum + OI unified report.
+    Args:
+        symbol: Stock symbol (e.g., 'RELIANCE')
+        exchange: Exchange ('NSE', 'BSE')
+    """
+    return ml_intelligence.market_analysis(host, symbol, exchange, api_key)
+
+
+# --- TESTING & VERIFICATION ---
+
+@mcp.tool()
+def health_check() -> str:
+    """Run full system health check — server, broker, WebSocket, master contracts."""
+    return testing.health_check(host)
+
+@mcp.tool()
+def broker_status() -> str:
+    """Check broker connection status and supported capabilities."""
+    return testing.broker_status(host)
+
+@mcp.tool()
+def websocket_status() -> str:
+    """Check WebSocket server status for real-time data streaming."""
+    return testing.websocket_status(host)
+
+@mcp.tool()
+def master_contract_status() -> str:
+    """Check if master contracts (instrument lists) are ready for trading."""
+    return testing.master_contract_status(host)
+
+@mcp.tool()
+def test_api(method: str, endpoint: str, body: dict | None = None) -> str:
+    """Test any OpenAlgo API endpoint directly.
+    Args:
+        method: HTTP method ('GET' or 'POST')
+        endpoint: API path (e.g., '/api/v1/agent/status')
+        body: JSON body for POST requests (optional)
+    """
+    return testing.test_api(host, method, endpoint, api_key, body)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
