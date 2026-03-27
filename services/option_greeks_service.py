@@ -791,6 +791,8 @@ def get_multi_option_greeks(
                 success_count += 1
             else:
                 failed_count += 1
+                calc_response.setdefault("symbol", symbol)
+                calc_response.setdefault("exchange", exchange)
             results.append(calc_response)
         except Exception as e:
             logger.exception(f"Error calculating Greeks for {symbol}: {e}")
