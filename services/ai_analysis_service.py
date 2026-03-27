@@ -12,6 +12,8 @@ from ai.signals_advanced import generate_advanced_signals
 from ai.trade_setup import compute_trade_setup
 from ai.chart_data_builder import build_chart_overlays
 from ai.decision_engine import make_decision
+from ai.trend_analysis import compute_trend_score
+from ai.momentum_analysis import compute_momentum_score
 from events import AgentAnalysisEvent, AgentErrorEvent
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -145,15 +147,32 @@ def analyze_symbol(
             logger.warning(f"Chart overlays skipped for {symbol}: {e}")
             chart_overlays = {"lines": [], "bands": [], "markers": [], "levels": []}
 
-        # Step 5b: Make trading decision
+        # Step 5b: Make trading decision using full analysis modules
         try:
-            trend_dir = "bullish" if latest_indicators.get("supertrend_dir", 0) == 1 else (
-                "bearish" if latest_indicators.get("supertrend_dir", 0) == -1 else "neutral"
-            )
-            momentum = "bullish" if latest_indicators.get("macd_hist", 0) > 0 else (
-                "bearish" if latest_indicators.get("macd_hist", 0) < 0 else "neutral"
-            )
+            # Use dedicated trend/momentum analysis (not crude heuristics)
+            try:
+                trend_report = compute_trend_score(df_with_indicators)
+                trend_dir = trend_report.direction
+            except Exception:
+                trend_dir = "bullish" if latest_indicators.get("supertrend_dir", 0) == 1 else (
+                    "bearish" if latest_indicators.get("supertrend_dir", 0) == -1 else "neutral"
+                )
+
+            try:
+                momentum_report = compute_momentum_score(df_with_indicators)
+                momentum = momentum_report.bias
+            except Exception:
+                momentum = "bullish" if latest_indicators.get("macd_hist", 0) > 0 else (
+                    "bearish" if latest_indicators.get("macd_hist", 0) < 0 else "neutral"
+                )
+
             ml = advanced.get("ml_confidence", {}) if isinstance(advanced, dict) else {}
+
+            # OI data (if available from advanced signals)
+            oi_data = advanced.get("oi", {}) if isinstance(advanced, dict) else {}
+            oi_bias = oi_data.get("bias", "neutral") if isinstance(oi_data, dict) else "neutral"
+            oi_pcr = oi_data.get("pcr_oi", 0) if isinstance(oi_data, dict) else 0
+
             decision = make_decision(
                 signal=signal_result["signal"],
                 score=signal_result["score"],
@@ -164,6 +183,8 @@ def analyze_symbol(
                 advanced_signals=advanced if isinstance(advanced, dict) else {},
                 ml_buy=ml.get("buy", 0),
                 ml_sell=ml.get("sell", 0),
+                oi_bias=oi_bias,
+                oi_pcr=oi_pcr,
             )
             decision_dict = {
                 "action": decision.action,

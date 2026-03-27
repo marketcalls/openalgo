@@ -30,6 +30,7 @@ def make_decision(
     trend_direction: str, momentum_bias: str,
     trade_setup: dict, advanced_signals: dict,
     ml_buy: float, ml_sell: float,
+    oi_bias: str = "neutral", oi_pcr: float = 0,
     account_balance: float = 100000,
     risk_percent: float = 1.0,
 ) -> TradingDecision:
@@ -51,11 +52,21 @@ def make_decision(
     elif momentum_bias == "bearish" and is_sell: supporting.append("Momentum: Bearish")
     elif momentum_bias != "neutral": opposing.append(f"Momentum: {momentum_bias}")
 
+    # OI (Open Interest) bias from option chain
+    if oi_bias == "bullish" and is_buy:
+        supporting.append(f"OI: Bullish (PCR {oi_pcr:.2f})")
+    elif oi_bias == "bearish" and is_sell:
+        supporting.append(f"OI: Bearish (PCR {oi_pcr:.2f})")
+    elif oi_bias != "neutral":
+        opposing.append(f"OI: {oi_bias} (PCR {oi_pcr:.2f})")
+
     if ml_buy > 60 and is_buy: supporting.append(f"ML: Buy {ml_buy:.0f}%")
     elif ml_sell > 60 and is_sell: supporting.append(f"ML: Sell {ml_sell:.0f}%")
 
     smc = advanced_signals.get("smc", {})
-    if any("bullish" in k for k in smc): supporting.append("SMC: Bullish structure")
+    if any("bullish" in k for k in smc):
+        if is_buy: supporting.append("SMC: Bullish structure")
+        else: opposing.append("SMC: Bullish structure")
     if any("bearish" in k for k in smc):
         if is_sell: supporting.append("SMC: Bearish structure")
         else: opposing.append("SMC: Bearish structure")
@@ -72,19 +83,22 @@ def make_decision(
     decision_score = confidence * 0.4 + agreement * 100 * 0.3 + abs(score) * 100 * 0.3
     decision_score = min(decision_score, 100)
 
-    # Action
-    if is_hold or decision_score < 30:
+    # Action: BUY/SELL signals always produce actionable recommendation
+    # Only HOLD signal produces WAIT
+    if is_hold:
         action = "WAIT"
         conf_label = "No Setup"
-    elif decision_score > 70:
+    elif is_buy or is_sell:
+        if decision_score > 70:
+            conf_label = "High Conviction"
+        elif decision_score > 50:
+            conf_label = "Medium Conviction"
+        else:
+            conf_label = "Low Conviction"
         action = "BUY NOW" if is_buy else "SELL NOW"
-        conf_label = "High Conviction"
-    elif decision_score > 50:
-        action = "BUY NOW" if is_buy else "SELL NOW"
-        conf_label = "Medium Conviction"
     else:
-        action = "BUY NOW" if is_buy else "SELL NOW"
-        conf_label = "Low Conviction"
+        action = "WAIT"
+        conf_label = "No Setup"
 
     # Trade params from setup
     entry = trade_setup.get("entry", 0)
