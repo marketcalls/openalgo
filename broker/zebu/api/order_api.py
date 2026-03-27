@@ -55,7 +55,9 @@ def get_trade_book(auth):
 
 
 def get_positions(auth):
-    return get_api_response("/NorenWClientAPI/PositionBook", auth, method="POST")
+    positions = get_api_response("/NorenWClientAPI/PositionBook", auth, method="POST")
+    logger.info(f"PositionBook raw response: {positions}")
+    return positions
 
 
 def get_holdings(auth):
@@ -284,7 +286,7 @@ def cancel_order(orderid, auth):
     # Send the request using httpx
     res = client.post(url, content=payload, headers=headers)
     data = json.loads(res.text)
-    logger.info(f"{data}")
+    logger.info(f"CancelOrder Response: {data}")
 
     # Check if the request was successful
     if data.get("stat") == "Ok":
