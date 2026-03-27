@@ -48,7 +48,7 @@ class AnalyzeResource(Resource):
             return {"status": "error", "message": "An unexpected error occurred"}, 500
 
         if not result.success:
-            return {"status": "error", "message": result.error}
+            return {"status": "error", "message": result.error}, 422
 
         return {
             "status": "success",
@@ -63,6 +63,10 @@ class AnalyzeResource(Resource):
                 "sub_scores": result.sub_scores,
                 "indicators": result.latest_indicators,
                 "advanced": result.advanced_signals,
+                "trade_setup": result.trade_setup,
+                "chart_overlays": result.chart_overlays,
+                "decision": result.decision,
+                "candles": result.candles,
                 "data_points": result.data_points,
             },
         }
@@ -96,6 +100,12 @@ class ScanResource(Resource):
                     "confidence": result.confidence,
                     "score": result.score,
                     "regime": result.regime,
+                    "trade_setup": {
+                        "entry": result.trade_setup.get("entry", 0),
+                        "stop_loss": result.trade_setup.get("stop_loss", 0),
+                        "target_1": result.trade_setup.get("target_1", 0),
+                        "risk_reward_1": result.trade_setup.get("risk_reward_1", 0),
+                    },
                     "error": result.error,
                 })
             except Exception as e:
