@@ -65,6 +65,85 @@ export interface AIAnalysisResult {
   indicators: IndicatorValues
   data_points: number
   advanced?: AdvancedSignals
+  trade_setup?: TradeSetupData
+  candles?: CandleData[]
+  chart_overlays?: ChartOverlays
+  decision?: TradingDecision
+}
+
+/** Trade setup with entry, SL, targets */
+export interface TradeSetupData {
+  action: string
+  entry: number
+  stop_loss: number
+  target_1: number
+  target_2: number
+  target_3: number
+  sl_distance: number
+  sl_percent: number
+  risk_reward_1: number
+  risk_reward_2: number
+  risk_reward_3: number
+  suggested_qty: number
+  risk_amount: number
+  reason: string
+}
+
+/** OHLCV candle for chart */
+export interface CandleData {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+/** Chart overlay line (EMA, SMA, Supertrend) */
+export interface ChartOverlayLine {
+  id: string
+  label: string
+  color: string
+  data: { time: number; value: number }[]
+}
+
+/** Chart overlay band (Bollinger) */
+export interface ChartOverlayBand {
+  id: string
+  label: string
+  color: string
+  data: { time: number; upper: number; lower: number }[]
+}
+
+/** Chart overlay level (CPR, Entry/SL/Target) */
+export interface ChartOverlayLevel {
+  price: number
+  color: string
+  label: string
+}
+
+/** All chart overlays from backend */
+export interface ChartOverlays {
+  lines: ChartOverlayLine[]
+  bands: ChartOverlayBand[]
+  markers: unknown[]
+  levels: ChartOverlayLevel[]
+}
+
+/** Trading decision from decision engine */
+export interface TradingDecision {
+  action: string
+  confidence_label: string
+  entry: number
+  stop_loss: number
+  target: number
+  quantity: number
+  risk_amount: number
+  risk_reward: number
+  reason: string
+  risk_warning: string
+  supporting_signals: string[]
+  opposing_signals: string[]
+  score: number
 }
 
 /** Scan result for one symbol from /api/v1/agent/scan */
@@ -75,6 +154,12 @@ export interface ScanResult {
   score: number
   regime: MarketRegime | null
   error: string | null
+  trade_setup?: {
+    entry: number
+    stop_loss: number
+    target_1: number
+    risk_reward_1: number
+  }
 }
 
 /** AI agent status from /api/v1/agent/status */
