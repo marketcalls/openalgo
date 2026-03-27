@@ -403,6 +403,10 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def disconnect(self) -> None:
         """Disconnect from Zebu WebSocket endpoint"""
+        # Capture ws_client ref and update state under lock,
+        # but call stop() outside the lock to avoid deadlock
+        # (stop() joins the WS thread whose callbacks acquire self.lock)
+        ws_ref = None
         with self.lock:
             self.running = False
             self.connected = False
@@ -412,8 +416,11 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer.cancel()
                 self._reconnect_timer = None
 
-        if self.ws_client:
-            self.ws_client.stop()
+            ws_ref = self.ws_client
+            self.ws_client = None
+
+        if ws_ref:
+            ws_ref.stop()
 
         # Clean up market data cache and subscriptions
         self.market_cache.clear()

@@ -114,6 +114,7 @@ class BrokerData:
                 "prev_close": float(response.get("c", 0)) if "c" in response else 0,
                 "volume": int(response.get("v", 0)),
                 "oi": int(response.get("oi", 0)),
+                "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
             }
 
         except Exception as e:
