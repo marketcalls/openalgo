@@ -153,6 +153,8 @@ dependencies = [
   "zipp==3.23.0",
   "zmq==0.0.0",
   "ta>=0.11.0",
+  "gymnasium>=1.2.3",
+  "stable-baselines3>=2.7.1",
 ]
 
 [build-system]
