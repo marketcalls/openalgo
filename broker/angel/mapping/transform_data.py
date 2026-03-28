@@ -6,7 +6,14 @@ from database.token_db import get_br_symbol
 
 def transform_data(data, token):
     """
-    Transforms the new API request structure to the current expected structure.
+    Transforms the API request structure to the Angel Broking expected structure.
+
+    Args:
+        data (dict): The original order data payload from OpenAlgo.
+        token (str): The symbol token corresponding to the instrument.
+
+    Returns:
+        dict: A dictionary containing the transformed order data ready for Angel Broking API.
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
     # Basic mapping
@@ -35,6 +42,16 @@ def transform_data(data, token):
 
 
 def transform_modify_order_data(data, token):
+    """
+    Transforms modify order data into Angel Broking format.
+
+    Args:
+        data (dict): The modify order data payload from OpenAlgo.
+        token (str): The symbol token corresponding to the instrument.
+
+    Returns:
+        dict: A dictionary containing the transformed order modification data.
+    """
     return {
         "variety": map_variety(data["pricetype"]),
         "orderid": data["orderid"],
@@ -53,7 +70,13 @@ def transform_modify_order_data(data, token):
 
 def map_order_type(pricetype):
     """
-    Maps the new pricetype to the existing order type.
+    Maps OpenAlgo price types to Angel Broking order types.
+
+    Args:
+        pricetype (str): The OpenAlgo price type (e.g., MARKET, LIMIT).
+
+    Returns:
+        str: The corresponding Angel Broking order type.
     """
     order_type_mapping = {
         "MARKET": "MARKET",
@@ -66,7 +89,13 @@ def map_order_type(pricetype):
 
 def map_product_type(product):
     """
-    Maps the new product type to the existing product type.
+    Maps OpenAlgo product types to Angel Broking product types.
+
+    Args:
+        product (str): The OpenAlgo product type (e.g., CNC, NRML, MIS).
+
+    Returns:
+        str: The corresponding Angel Broking product type.
     """
     product_type_mapping = {
         "CNC": "DELIVERY",
@@ -78,7 +107,13 @@ def map_product_type(product):
 
 def map_variety(pricetype):
     """
-    Maps the pricetype to the existing order variety.
+    Maps OpenAlgo price types to Angel Broking order variety.
+
+    Args:
+        pricetype (str): The OpenAlgo price type (e.g., MARKET, LIMIT, SL).
+
+    Returns:
+        str: The corresponding Angel Broking order variety.
     """
     variety_mapping = {"MARKET": "NORMAL", "LIMIT": "NORMAL", "SL": "STOPLOSS", "SL-M": "STOPLOSS"}
     return variety_mapping.get(pricetype, "NORMAL")  # Default to DELIVERY if not found
@@ -86,7 +121,13 @@ def map_variety(pricetype):
 
 def reverse_map_product_type(product):
     """
-    Maps the new product type to the existing product type.
+    Reverses mapping from Angel Broking product types to OpenAlgo product types.
+
+    Args:
+        product (str): The Angel Broking product type.
+
+    Returns:
+        str: The corresponding OpenAlgo product type (CNC, NRML, MIS).
     """
     reverse_product_type_mapping = {
         "DELIVERY": "CNC",

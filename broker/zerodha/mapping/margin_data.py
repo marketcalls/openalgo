@@ -12,10 +12,10 @@ def transform_margin_positions(positions):
     Transform OpenAlgo margin position format to Zerodha margin format.
 
     Args:
-        positions: List of positions in OpenAlgo format
+        positions (list): List of positions in OpenAlgo format.
 
     Returns:
-        List of positions in Zerodha format
+        list: List of positions in Zerodha format for margin calculation.
     """
     transformed_positions = []
     skipped_positions = []
@@ -84,8 +84,13 @@ def map_product_type(product):
     """
     Maps OpenAlgo product type to Zerodha product type.
 
-    OpenAlgo: CNC, NRML, MIS
-    Zerodha: CNC, NRML, MIS (Direct mapping - no transformation needed)
+    Both OpenAlgo and Zerodha use CNC, NRML, MIS. Direct mapping is applied.
+
+    Args:
+        product (str): Product type from OpenAlgo.
+
+    Returns:
+        str: Product type for Zerodha.
     """
     product_type_mapping = {
         "CNC": "CNC",
@@ -99,8 +104,13 @@ def map_order_type(pricetype):
     """
     Maps OpenAlgo price type to Zerodha order type.
 
-    OpenAlgo: MARKET, LIMIT, SL, SL-M
-    Zerodha: MARKET, LIMIT, SL, SL-M (Direct mapping - no transformation needed)
+    Both OpenAlgo and Zerodha use MARKET, LIMIT, SL, SL-M. Direct mapping applied.
+
+    Args:
+        pricetype (str): Price type from OpenAlgo.
+
+    Returns:
+        str: Order type for Zerodha.
     """
     order_type_mapping = {"MARKET": "MARKET", "LIMIT": "LIMIT", "SL": "SL", "SL-M": "SL-M"}
     return order_type_mapping.get(pricetype, "MARKET")
@@ -134,10 +144,10 @@ def parse_margin_response(response_data):
     For true individual margins, each position must be queried separately first.
 
     Args:
-        response_data: Raw response from Zerodha API
+        response_data (dict): Raw response from Zerodha API.
 
     Returns:
-        Standardized margin response matching OpenAlgo format
+        dict: Standardized margin response matching OpenAlgo format.
     """
     try:
         if not response_data or not isinstance(response_data, dict):
