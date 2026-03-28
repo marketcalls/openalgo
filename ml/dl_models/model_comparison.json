@@ -1,0 +1,26 @@
+[
+  {
+    "model": "XGBoost",
+    "accuracy": 0.3608,
+    "f1": 0.3159,
+    "train_time_s": 20.5
+  },
+  {
+    "model": "LightGBM",
+    "accuracy": 0.3619,
+    "f1": 0.3328,
+    "train_time_s": 36.4
+  },
+  {
+    "model": "RandomForest",
+    "accuracy": 0.3619,
+    "f1": 0.3203,
+    "train_time_s": 43.9
+  },
+  {
+    "model": "CatBoost",
+    "accuracy": 0.3606,
+    "f1": 0.3132,
+    "train_time_s": 27.0
+  }
+]

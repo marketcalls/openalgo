@@ -97,3 +97,10 @@ ml/rl_models/
 ml/news_classifier/model/
 ml/news_classifier/model.onnx
 ml/news_classifier/data/
+
+# DL model artifacts (large binary files — train via Colab)
+ml/dl_models/*.pt
+ml/dl_models/*.joblib
+ml/dl_models/*.cbm
+ml/dl_models/*.csv
+ml/dl_models/*.png
