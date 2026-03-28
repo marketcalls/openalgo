@@ -425,3 +425,67 @@ class ResearchResource(Resource):
         except Exception:
             logger.exception("Research agent error")
             return {"status": "error", "message": "An unexpected error occurred"}, 500
+
+
+@api.route("/rl-signal")
+class RLSignalResource(Resource):
+    @limiter.limit("5 per minute")
+    def post(self):
+        """Return current BUY/SELL/HOLD signal from trained RL agent for a symbol."""
+        from flask import request
+
+        data = request.get_json(force=True)
+        api_key = data.get("apikey", "")
+        symbol = data.get("symbol", "")
+        exchange = data.get("exchange", "NSE")
+        algo = data.get("algo", "ppo")
+
+        if not symbol:
+            return {"status": "error", "message": "symbol is required"}, 400
+        if not api_key:
+            return {"status": "error", "message": "apikey is required"}, 400
+        if _validate_api_key(api_key) is None:
+            return {"status": "error", "message": "Invalid openalgo apikey"}, 403
+
+        try:
+            from ai.rl_agent import get_rl_signal
+            result = get_rl_signal(symbol=symbol, exchange=exchange, api_key=api_key, algo=algo)
+            return {"status": "success", "data": result}
+        except Exception:
+            logger.exception("RL signal error")
+            return {"status": "error", "message": "An unexpected error occurred"}, 500
+
+
+@api.route("/rl-train")
+class RLTrainResource(Resource):
+    @limiter.limit("2 per hour")
+    def post(self):
+        """Trigger RL agent training for a symbol (blocking, use small timesteps)."""
+        from flask import request
+
+        data = request.get_json(force=True)
+        api_key = data.get("apikey", "")
+        symbol = data.get("symbol", "")
+        exchange = data.get("exchange", "NSE")
+        algo = data.get("algo", "ppo")
+        timesteps = int(data.get("timesteps", 20_000))
+
+        if not symbol:
+            return {"status": "error", "message": "symbol is required"}, 400
+        if not api_key:
+            return {"status": "error", "message": "apikey is required"}, 400
+        if _validate_api_key(api_key) is None:
+            return {"status": "error", "message": "Invalid openalgo apikey"}, 403
+        if timesteps > 100_000:
+            return {"status": "error", "message": "Max 100,000 timesteps per API call"}, 400
+
+        try:
+            from ai.rl_agent import _fetch_candles, train_rl_agent
+            df = _fetch_candles(symbol=symbol, exchange=exchange, api_key=api_key)
+            if df is None or len(df) < 50:
+                return {"status": "error", "message": "Insufficient historical data (need 50+ candles)"}, 422
+            result = train_rl_agent(df=df, algo=algo, timesteps=timesteps, symbol=symbol)
+            return {"status": "success", "data": result}
+        except Exception:
+            logger.exception("RL train error")
+            return {"status": "error", "message": "An unexpected error occurred"}, 500
