@@ -89,3 +89,6 @@ yarn-error.log*
 
 # Windows NUL file
 nul
+
+# RL model artifacts (large binary files)
+ml/rl_models/
