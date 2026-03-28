@@ -50,6 +50,7 @@ const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
+const AAUMAdvisor = lazy(() => import('@/pages/AAUMAdvisor'))
 
 // Tools & Option Chain
 const Tools = lazy(() => import('@/pages/Tools'))
@@ -237,6 +238,7 @@ function App() {
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
                 {/* Flow Editor (full-width for canvas) */}
                 <Route path="/flow/editor/:id" element={<FlowEditor />} />
+                <Route path="/aaum-advisor" element={<AAUMAdvisor />} />
               </Route>
 
               {/* 404 Not Found */}
