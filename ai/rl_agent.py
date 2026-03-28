@@ -14,8 +14,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-MODEL_DIR = Path("ml/rl_models")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_DIR = Path(__file__).parent.parent / "ml" / "rl_models"
 
 AlgoName = Literal["ppo", "a2c", "dqn"]
 
@@ -62,14 +61,22 @@ def train_rl_agent(
     ALGOS = {"ppo": PPO, "a2c": A2C, "dqn": DQN}
     cls = ALGOS.get(algo.lower(), PPO)
 
-    env = TradingEnv(df)
-    model = cls("MlpPolicy", env, verbose=0)
-    model.learn(total_timesteps=int(timesteps))
+    try:
+        env = TradingEnv(df)
+        try:
+            model = cls("MlpPolicy", env, verbose=0)
+            model.learn(total_timesteps=int(timesteps))
+        finally:
+            env.close()
 
-    path = _get_model_path(symbol, algo)
-    model.save(str(path))
-    logger.info("Trained %s for %s — saved to %s", algo.upper(), symbol, path)
-    return {"status": "trained", "model_path": str(path), "algo": algo, "timesteps": timesteps}
+        path = _get_model_path(symbol, algo)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        model.save(str(path))
+        logger.info("Trained %s for %s — saved to %s", algo.upper(), symbol, path)
+        return {"status": "trained", "model_path": str(path), "algo": algo, "timesteps": timesteps}
+    except Exception:
+        logger.exception("train_rl_agent error for %s", symbol)
+        return {"status": "error", "message": "Training failed", "algo": algo, "symbol": symbol}
 
 
 def get_rl_signal(
@@ -113,32 +120,33 @@ def get_rl_signal(
     try:
         model = cls.load(str(path))
         env = TradingEnv(df)
-        obs, _ = env.reset()
-        # Step through all but the final bar so obs reflects the latest state
-        n_steps = len(df) - 21
-        for _ in range(max(n_steps, 0)):
+        try:
+            obs, _ = env.reset()
+            n_steps = len(df) - 21
+            for _ in range(max(n_steps, 0)):
+                action, _ = model.predict(obs, deterministic=True)
+                obs, _, done, _, _ = env.step(int(action))
+                if done:
+                    break
+
             action, _ = model.predict(obs, deterministic=True)
-            obs, _, done, _, _ = env.step(int(action))
-            if done:
-                break
+            action_map = {0: "HOLD", 1: "BUY", 2: "SELL"}
+            signal = action_map[int(action)]
 
-        action, _ = model.predict(obs, deterministic=True)
-        action_map = {0: "HOLD", 1: "BUY", 2: "SELL"}
-        signal = action_map[int(action)]
+            votes = [int(model.predict(obs, deterministic=False)[0]) for _ in range(20)]
+            confidence = round(votes.count(int(action)) / 20, 2)
 
-        # Confidence: fraction of stochastic rollouts that agree with deterministic action
-        votes = [int(model.predict(obs, deterministic=False)[0]) for _ in range(20)]
-        confidence = round(votes.count(int(action)) / 20, 2)
-
-        return {
-            "status": "success",
-            "signal": signal,
-            "confidence": confidence,
-            "algo": algo,
-            "symbol": symbol,
-            "model_path": str(path),
-            "action_int": int(action),
-        }
+            return {
+                "status": "success",
+                "signal": signal,
+                "confidence": confidence,
+                "algo": algo,
+                "symbol": symbol,
+                "model_path": str(path),
+                "action_int": int(action),
+            }
+        finally:
+            env.close()
     except Exception:
         logger.exception("RL inference error for %s", symbol)
         return {"status": "error", "signal": "HOLD", "confidence": 0.0, "message": "Inference failed"}

@@ -144,8 +144,10 @@ def test_env_step_buy_sell_balance():
     )
 
 
-def test_train_ppo_short():
+def test_train_ppo_short(tmp_path, monkeypatch):
     """Train PPO for 512 steps — just verify it runs without error."""
+    import ai.rl_agent as module
+    monkeypatch.setattr(module, "MODEL_DIR", tmp_path)
     from ai.rl_agent import train_rl_agent
     n = 100
     df = pd.DataFrame({
