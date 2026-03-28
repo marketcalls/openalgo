@@ -76,7 +76,7 @@ class CancelAllOrder(Resource):
 
         except Exception:
             logger.error("An unexpected error occurred in CancelAllOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An error occurred")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)

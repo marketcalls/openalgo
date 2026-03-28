@@ -81,7 +81,7 @@ def get_intervals_with_auth(auth_token: str, broker: str) -> tuple[bool, dict[st
         return True, {"status": "success", "data": intervals}, 200
     except Exception as e:
         logger.error(f"Error getting supported intervals: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return False, {"status": "error", "message": str(e)}, 500
 
 

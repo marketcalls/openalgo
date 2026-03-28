@@ -264,7 +264,7 @@ def add_smtp_columns():
     except Exception as e:
         safe_print(f"❌ Migration failed: {e}")
         if hasattr(e, "__traceback__"):
-            traceback.print_exc()
+            logger.exception("An error occurred")
         return False
 
 
@@ -397,7 +397,7 @@ Examples:
     except Exception as e:
         safe_print(f"\n❌ Unexpected error: {e}", use_emoji)
         if args.verbose:
-            traceback.print_exc()
+            logger.exception("An error occurred")
         return 1
 
 

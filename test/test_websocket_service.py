@@ -547,7 +547,7 @@ def main():
         print(f"\n{Colors.RED}Error during test: {e}{Colors.ENDC}")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
     finally:
         # Clean up all subscriptions
         try:

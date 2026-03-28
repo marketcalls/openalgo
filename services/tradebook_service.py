@@ -132,7 +132,7 @@ def get_tradebook_with_auth(
         return True, {"status": "success", "data": formatted_trades}, 200
     except Exception as e:
         logger.error(f"Error processing trade data: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return False, {"status": "error", "message": str(e)}, 500
 
 

@@ -197,7 +197,7 @@ def place_order_with_auth(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
     except Exception as e:
         logger.error(f"Error in broker_module.place_order_api: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {
             "status": "error",
             "message": "Failed to place order due to internal error",

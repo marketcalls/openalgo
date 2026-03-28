@@ -315,7 +315,7 @@ def main():
         print(f"❌ Error occurred: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
 
     finally:
         print("\n🧹 Cleaning up...")

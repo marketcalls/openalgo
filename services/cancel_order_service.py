@@ -136,7 +136,7 @@ def cancel_order_with_auth(
         response_message, status_code = broker_module.cancel_order(orderid, auth_token)
     except Exception as e:
         logger.error(f"Error in broker_module.cancel_order: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {
             "status": "error",
             "message": "Failed to cancel order due to internal error",

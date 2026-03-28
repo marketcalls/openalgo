@@ -140,7 +140,7 @@ def modify_order_with_auth(
         response_message, status_code = broker_module.modify_order(order_data, auth_token)
     except Exception as e:
         logger.error(f"Error in broker_module.modify_order: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {
             "status": "error",
             "message": "Failed to modify order due to internal error",

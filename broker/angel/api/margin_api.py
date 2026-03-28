@@ -13,11 +13,11 @@ def calculate_margin_api(positions, auth):
     Calculate margin requirement for a basket of positions using Angel Broking API.
 
     Args:
-        positions: List of positions in OpenAlgo format
-        auth: Authentication token for Angel Broking
+        positions (list): List of positions in OpenAlgo format.
+        auth (str): Authentication token for Angel Broking.
 
     Returns:
-        Tuple of (response, response_data)
+        tuple: (Response object, Response data dictionary).
     """
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")

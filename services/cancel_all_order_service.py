@@ -134,7 +134,7 @@ def cancel_all_orders_with_auth(
         )
     except Exception as e:
         logger.error(f"Error in broker_module.cancel_all_orders_api: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {
             "status": "error",
             "message": "Failed to cancel all orders due to internal error",
