@@ -122,11 +122,11 @@ export function useResearch(symbol: string, exchange: string, question: string, 
   })
 }
 
-export function useRLSignal(symbol: string, exchange: string, enabled = true) {
+export function useRLSignal(symbol: string, exchange: string, algo = 'ppo', enabled = true) {
   const apikey = useApiKey()
   return useQuery({
-    queryKey: ['rl-signal', symbol, exchange],
-    queryFn: () => strategyApi.rlSignal(apikey!, symbol, exchange),
+    queryKey: ['rl-signal', symbol, exchange, algo],
+    queryFn: () => strategyApi.rlSignal(apikey!, symbol, exchange, algo),
     enabled: enabled && !!apikey && !!symbol,
     staleTime: 60_000,
     retry: false,

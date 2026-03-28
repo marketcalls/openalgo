@@ -103,7 +103,8 @@ def classify_headline(text: str) -> dict:
                 "attention_mask": enc["attention_mask"].astype(np.int64),
             },
         )[0][0]
-        probs = np.exp(logits) / np.exp(logits).sum()
+        e = np.exp(logits - logits.max())
+        probs = e / e.sum()
         idx = int(np.argmax(probs))
         return {
             "label": LABELS[idx],

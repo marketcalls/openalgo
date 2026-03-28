@@ -35,7 +35,7 @@ export function RLAgentTab({ symbol, exchange }: Props) {
   const [training, setTraining] = useState(false)
   const [trainError, setTrainError] = useState<string | null>(null)
   const [algo, setAlgo] = useState<'ppo' | 'a2c' | 'dqn'>('ppo')
-  const { data, isLoading, refetch } = useRLSignal(symbol, exchange)
+  const { data, isLoading, refetch } = useRLSignal(symbol, exchange, algo)
 
   const handleTrain = async () => {
     if (!apikey) return

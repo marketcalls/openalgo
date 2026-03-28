@@ -122,7 +122,8 @@ def get_rl_signal(
         env = TradingEnv(df)
         try:
             obs, _ = env.reset()
-            n_steps = len(df) - 21
+            from ai.rl_env import LOOKBACK
+            n_steps = len(df) - LOOKBACK - 1
             for _ in range(max(n_steps, 0)):
                 action, _ = model.predict(obs, deterministic=True)
                 obs, _, done, _, _ = env.step(int(action))

@@ -468,7 +468,10 @@ class RLTrainResource(Resource):
         symbol = data.get("symbol", "")
         exchange = data.get("exchange", "NSE")
         algo = data.get("algo", "ppo")
-        timesteps = int(data.get("timesteps", 20_000))
+        try:
+            timesteps = int(data.get("timesteps", 20_000))
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "timesteps must be an integer"}, 400
 
         if not symbol:
             return {"status": "error", "message": "symbol is required"}, 400
@@ -516,15 +519,24 @@ class PortfolioCVaRResource(Resource):
             return {"status": "error", "message": "Invalid openalgo apikey"}, 403
 
         try:
+            import pandas as pd
             from ai.rl_agent import _fetch_candles
-            returns_dict = {}
+            # Fetch close prices and align by trimming all to the shortest series
+            close_series = {}
             for sym in symbols:
                 df = _fetch_candles(symbol=sym, exchange=exchange, api_key=api_key, interval=interval)
                 if df is not None and len(df) >= 30:
-                    returns_dict[sym] = df["close"].pct_change().dropna()
+                    close_series[sym] = df["close"].values
 
-            if len(returns_dict) < 2:
+            if len(close_series) < 2:
                 return {"status": "error", "message": "Could not fetch data for enough symbols"}, 422
+
+            # Align from the tail (most recent data) to the shortest series length
+            min_len = min(len(v) for v in close_series.values())
+            returns_dict = {}
+            for sym, closes in close_series.items():
+                trimmed = pd.Series(closes[-min_len:])
+                returns_dict[sym] = trimmed.pct_change().dropna()
 
             from ai.portfolio_cvar import run_portfolio_analysis
             valid_symbols = list(returns_dict.keys())

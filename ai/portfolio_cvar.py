@@ -79,7 +79,8 @@ def optimise_min_cvar(returns: np.ndarray, confidence: float = 0.95) -> dict:
         _objective, w0, method="SLSQP", bounds=bounds, constraints=constraints,
         options={"maxiter": 500, "ftol": 1e-9},
     )
-    weights = (res.x / res.x.sum()).tolist()
+    w_sum = res.x.sum()
+    weights = (res.x / w_sum).tolist() if w_sum > 1e-10 else (np.ones(n) / n).tolist()
     metrics = compute_cvar(returns, np.array(weights), confidence)
     return {"weights": weights, **metrics, "converged": bool(res.success)}
 
@@ -102,7 +103,8 @@ def optimise_max_sharpe(returns: np.ndarray, risk_free: float = 0.065 / 252) -> 
         _neg_sharpe, w0, method="SLSQP", bounds=bounds, constraints=constraints,
         options={"maxiter": 500},
     )
-    weights = (res.x / res.x.sum()).tolist()
+    w_sum = res.x.sum()
+    weights = (res.x / w_sum).tolist() if w_sum > 1e-10 else (np.ones(n) / n).tolist()
     sharpe = -_neg_sharpe(np.array(weights))
     ann_return = float(np.array(weights) @ mean_r) * 252
     ann_vol = float(np.sqrt(np.array(weights) @ cov @ np.array(weights))) * np.sqrt(252)
