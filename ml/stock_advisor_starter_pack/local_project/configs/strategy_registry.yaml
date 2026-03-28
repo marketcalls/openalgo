@@ -1,0 +1,11 @@
+strategy_root: "D:\\test1"
+source_code_roots:
+  - "D:\\test1"
+  - "D:\\test1\\opensource_indicators"
+unsupported:
+  flowscope_hapharmonic: "Placeholder only until lower-timeframe source arrays are available."
+starter_priority:
+  - twin_range_filter
+  - trend_signals_tp_sl_ualgo
+  - vwap_bb_super_confluence_2
+  - bahai_reversal_points

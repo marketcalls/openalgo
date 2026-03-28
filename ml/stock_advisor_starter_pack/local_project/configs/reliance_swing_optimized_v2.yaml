@@ -1,0 +1,29 @@
+symbol: "RELIANCE"
+market_data_root: "D:\\TV_proj\\output\\reliance_timeframes"
+strategy_root: "D:\\test1"
+output_root: "D:\\ml\\stock_advisor_starter_pack\\artifacts_template"
+primary_tf: "15m"
+confirm_tfs:
+  - "1hr"
+  - "1day"
+
+# Best combo from extended confluence optimizer v2 (353 combos, 13 strategies)
+# Win rate: 92.0%  |  Signals: 25  |  Long WR: 88.9%  |  Short WR: 100.0%
+selected_strategies:
+  - "trend_signals_tp_sl_ualgo"
+  - "sfp_candelacharts"
+
+# Optimized parameters — trend_signals tuned; sfp using defaults (not yet optimized)
+strategy_params:
+  trend_signals_tp_sl_ualgo:
+    DEFAULT_MULTIPLIER: 2.6
+    DEFAULT_ATR_PERIOD: 10
+    DEFAULT_CLOUD_VAL: 7
+    DEFAULT_STOP_LOSS_PCT: 1.4
+
+notes:
+  - "Best balance combo: trend_signals_tp_sl_ualgo + sfp_candelacharts"
+  - "92.0% win rate on RELIANCE 15m, 5029 bars, 8-bar lookahead (~2 hr forward)"
+  - "Supersedes reliance_swing_optimized.yaml (was trend_signals + reversal_radar at 75%)"
+  - "sfp params not yet optimized — optimization may push win rate further"
+  - "See: artifacts_template/reports/extended_confluence_v2/ for full combo table"

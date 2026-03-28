@@ -412,11 +412,16 @@ def compute_volume_signals(df: pd.DataFrame, vol_mult: float = 2.0) -> pd.DataFr
 
 def compute_all_advanced(df: pd.DataFrame) -> pd.DataFrame:
     """Run all advanced indicators on an OHLCV DataFrame."""
-    df = _safe(lambda: compute_smc_indicators(df), df) or df
-    df = _safe(lambda: compute_candlestick_patterns(df), df) or df
-    df = _safe(lambda: compute_cpr_levels(df), df) or df
-    df = _safe(lambda: compute_fibonacci_levels(df), df) or df
-    df = _safe(lambda: compute_harmonic_patterns(df), df) or df
-    df = _safe(lambda: compute_rsi_divergence(df), df) or df
-    df = _safe(lambda: compute_volume_signals(df), df) or df
+    for fn in [
+        compute_smc_indicators,
+        compute_candlestick_patterns,
+        compute_cpr_levels,
+        compute_fibonacci_levels,
+        compute_harmonic_patterns,
+        compute_rsi_divergence,
+        compute_volume_signals,
+    ]:
+        result = _safe(lambda f=fn: f(df))
+        if result is not None:
+            df = result
     return df

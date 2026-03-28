@@ -17,6 +17,7 @@ export const apiClient = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true,
+  timeout: 35_000,
 })
 
 // Request interceptor

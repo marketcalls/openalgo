@@ -1,0 +1,24 @@
+{
+  "recommendation_id": "60a5f450-429e-473e-af9e-f5c0785f2520",
+  "symbol": "RELIANCE",
+  "horizon": "swing",
+  "regime": "bear",
+  "strategy_combo": [
+    "trend_signals_tp_sl_ualgo"
+  ],
+  "parameters": {
+    "trend_signals_tp_sl_ualgo": {}
+  },
+  "primary_tf": "15m",
+  "confirm_tfs": [],
+  "entry": 1414.0,
+  "stop_loss": 1407.06,
+  "target_1": 1418.63,
+  "target_2": 1423.26,
+  "confidence": 0.3596,
+  "reason_codes": [
+    "regime:bear",
+    "strategy:trend_signals_tp_sl_ualgo"
+  ],
+  "model_version": "reliance_swing_15m_20260322T073157Z"
+}

@@ -1,18 +1,27 @@
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Loader2, Search, TrendingUp, BarChart3, History, Scan } from 'lucide-react'
 import {
-  SignalBadge, ConfidenceGauge, SubScoresChart, IndicatorTable,
-  AdvancedSignalsPanel, LivePriceHeader, MLConfidenceBar, LevelsPanel,
-  TradeActionPanel, DecisionHistory, LLMCommentary,
-  ChartWithIndicators, DecisionCard, RiskCalculator, EnhancedScanner,
+  Loader2, Search, TrendingUp, History, Scan,
+  LineChart, Target, Brain, BookOpen, ShieldAlert, Layers, Newspaper,
+  FileText, Microscope,
+} from 'lucide-react'
+import {
+  LivePriceHeader, DecisionHistory, EnhancedScanner, DecisionCard,
 } from '@/components/ai-analysis'
+import { TechnicalTab } from '@/components/ai-analysis/tabs/TechnicalTab'
+import { StrategiesTab } from '@/components/ai-analysis/tabs/StrategiesTab'
+import { DecisionTab } from '@/components/ai-analysis/tabs/DecisionTab'
+import { FundamentalTab } from '@/components/ai-analysis/tabs/FundamentalTab'
+import { WhyNotTab } from '@/components/ai-analysis/tabs/WhyNotTab'
+import { MultiTFTab } from '@/components/ai-analysis/tabs/MultiTFTab'
+import { NewsTab } from '@/components/ai-analysis/tabs/NewsTab'
+import { DailyReportTab } from '@/components/ai-analysis/tabs/DailyReportTab'
+import { ResearchTab } from '@/components/ai-analysis/tabs/ResearchTab'
 import { useAIAnalysis, useAIScan, useAIStatus } from '@/hooks/useAIAnalysis'
-import { REGIME_CONFIG } from '@/types/ai-analysis'
 import { showToast } from '@/utils/toast'
 
 const NIFTY50 = [
@@ -44,7 +53,6 @@ export default function AIAnalyzer() {
   const handleScanSelect = (sym: string) => {
     setSymbol(sym)
     setRunScan(false)
-    // Switch to analysis tab - user will need to click Analyze
   }
 
   return (
@@ -91,137 +99,137 @@ export default function AIAnalyzer() {
       {/* Live Price */}
       {symbol && <LivePriceHeader symbol={symbol} exchange={exchange} />}
 
-      <Tabs defaultValue="analysis" className="w-full">
-        <TabsList>
-          <TabsTrigger value="analysis"><BarChart3 className="h-4 w-4 mr-1" /> Analysis</TabsTrigger>
-          <TabsTrigger value="scanner"><Scan className="h-4 w-4 mr-1" /> Scanner</TabsTrigger>
-          <TabsTrigger value="history"><History className="h-4 w-4 mr-1" /> History</TabsTrigger>
+      {/* Decision Card — always visible when analysis exists */}
+      {analysis?.decision && Object.keys(analysis.decision).length > 0 && (
+        <DecisionCard decision={analysis.decision} symbol={symbol} exchange={exchange} />
+      )}
+
+      {/* ═══ 8-Tab Layout: 6 Analysis + Scanner + History ═══ */}
+      <Tabs defaultValue="technical" className="w-full">
+        <TabsList className="flex flex-wrap h-auto gap-1">
+          {/* Primary Analysis Tabs */}
+          <TabsTrigger value="technical" className="text-xs">
+            <LineChart className="h-3.5 w-3.5 mr-1" /> Technical
+          </TabsTrigger>
+          <TabsTrigger value="strategies" className="text-xs">
+            <Target className="h-3.5 w-3.5 mr-1" /> Strategies
+          </TabsTrigger>
+          <TabsTrigger value="decision" className="text-xs">
+            <Brain className="h-3.5 w-3.5 mr-1" /> Decision
+          </TabsTrigger>
+          <TabsTrigger value="fundamental" className="text-xs">
+            <BookOpen className="h-3.5 w-3.5 mr-1" /> Fundamental
+            <span className="ml-1 text-[10px] bg-muted px-1 rounded">P4</span>
+          </TabsTrigger>
+          <TabsTrigger value="whynot" className="text-xs">
+            <ShieldAlert className="h-3.5 w-3.5 mr-1" /> Why Not
+          </TabsTrigger>
+          <TabsTrigger value="multitf" className="text-xs">
+            <Layers className="h-3.5 w-3.5 mr-1" /> Multi-TF
+          </TabsTrigger>
+          <TabsTrigger value="news" className="text-xs">
+            <Newspaper className="h-3.5 w-3.5 mr-1" /> News
+          </TabsTrigger>
+          <TabsTrigger value="research" className="text-xs">
+            <Microscope className="h-3.5 w-3.5 mr-1" /> Research
+          </TabsTrigger>
+          <TabsTrigger value="report" className="text-xs">
+            <FileText className="h-3.5 w-3.5 mr-1" /> Report
+          </TabsTrigger>
+          {/* Utility Tabs */}
+          <TabsTrigger value="scanner" className="text-xs">
+            <Scan className="h-3.5 w-3.5 mr-1" /> Scanner
+          </TabsTrigger>
+          <TabsTrigger value="history" className="text-xs">
+            <History className="h-3.5 w-3.5 mr-1" /> History
+          </TabsTrigger>
         </TabsList>
 
-        {/* === ANALYSIS TAB === */}
-        <TabsContent value="analysis" className="space-y-4">
-          {analysis && (
-            <>
-              {/* Row 1: Decision Card (WHAT TO DO) — full width */}
-              {analysis.decision && Object.keys(analysis.decision).length > 0 && (
-                <DecisionCard
-                  decision={analysis.decision}
-                  symbol={symbol}
-                  exchange={exchange}
-                />
-              )}
-
-              {/* Row 2: Chart (2/3) + Signals & Risk (1/3) */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                {/* Chart */}
-                <Card className="lg:col-span-2">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Chart — {symbol} {exchange}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ChartWithIndicators
-                      candles={analysis.candles ?? []}
-                      overlays={analysis.chart_overlays}
-                      height={400}
-                    />
-                  </CardContent>
-                </Card>
-
-                {/* Signals & Risk sidebar */}
-                <div className="space-y-4">
-                  {/* Signal + Confidence */}
-                  <Card>
-                    <CardHeader className="pb-2"><CardTitle className="text-sm">Signal</CardTitle></CardHeader>
-                    <CardContent className="flex flex-col items-center gap-2">
-                      <SignalBadge signal={analysis.signal} size="lg" />
-                      <ConfidenceGauge confidence={analysis.confidence} />
-                      <p className="text-xs text-muted-foreground">
-                        {REGIME_CONFIG[analysis.regime]?.label ?? analysis.regime} | {analysis.data_points} bars
-                      </p>
-                    </CardContent>
-                  </Card>
-
-                  {/* Sub-Scores */}
-                  <Card>
-                    <CardHeader className="pb-2"><CardTitle className="text-sm">Signal Breakdown</CardTitle></CardHeader>
-                    <CardContent>
-                      <SubScoresChart scores={analysis.sub_scores} />
-                    </CardContent>
-                  </Card>
-
-                  {/* ML Confidence */}
-                  <Card>
-                    <CardHeader className="pb-2"><CardTitle className="text-sm">ML Confidence</CardTitle></CardHeader>
-                    <CardContent>
-                      <MLConfidenceBar
-                        buyConfidence={analysis.advanced?.ml_confidence?.buy ?? 0}
-                        sellConfidence={analysis.advanced?.ml_confidence?.sell ?? 0}
-                      />
-                    </CardContent>
-                  </Card>
-
-                  {/* Risk Calculator */}
-                  <Card>
-                    <CardHeader className="pb-2"><CardTitle className="text-sm">Risk Calculator</CardTitle></CardHeader>
-                    <CardContent>
-                      <RiskCalculator
-                        entry={analysis.trade_setup?.entry ?? 0}
-                        stopLoss={analysis.trade_setup?.stop_loss ?? 0}
-                      />
-                    </CardContent>
-                  </Card>
-                </div>
-              </div>
-
-              {/* Row 3: Indicators + Patterns + LLM Commentary */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Pivot Levels */}
-                <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm">Pivot Levels</CardTitle></CardHeader>
-                  <CardContent>
-                    <LevelsPanel cpr={analysis.advanced?.cpr ?? {}} />
-                  </CardContent>
-                </Card>
-
-                {/* Pattern Alerts */}
-                <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm">Pattern Alerts</CardTitle></CardHeader>
-                  <CardContent>
-                    {analysis.advanced ? (
-                      <AdvancedSignalsPanel signals={analysis.advanced} />
-                    ) : (
-                      <p className="text-xs text-muted-foreground">No advanced data</p>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* AI Commentary */}
-                <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm">AI Commentary</CardTitle></CardHeader>
-                  <CardContent>
-                    <LLMCommentary analysis={analysis} />
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Row 4: Full Indicators Table */}
-              <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">All Indicators</CardTitle></CardHeader>
-                <CardContent className="max-h-64 overflow-auto">
-                  <IndicatorTable indicators={analysis.indicators} />
-                </CardContent>
-              </Card>
-            </>
-          )}
-
-          {!analysis && !isLoading && (
+        {/* ═══ TECHNICAL TAB ═══ */}
+        <TabsContent value="technical" className="space-y-4">
+          {analysis ? (
+            <TechnicalTab
+              analysis={analysis}
+              symbol={symbol}
+              exchange={exchange}
+              interval={interval}
+            />
+          ) : !isLoading ? (
             <div className="text-center py-12 text-muted-foreground">
               Enter a symbol and click Analyze to get AI trading intelligence
             </div>
-          )}
+          ) : null}
         </TabsContent>
 
-        {/* === SCANNER TAB === */}
+        {/* ═══ STRATEGIES TAB ═══ */}
+        <TabsContent value="strategies" className="space-y-4">
+          {analysis ? (
+            <StrategiesTab
+              analysis={analysis}
+              symbol={symbol}
+              exchange={exchange}
+              interval={interval}
+            />
+          ) : !isLoading ? (
+            <div className="text-center py-12 text-muted-foreground">
+              Run analysis first to access strategy panels
+            </div>
+          ) : null}
+        </TabsContent>
+
+        {/* ═══ DECISION TAB ═══ */}
+        <TabsContent value="decision" className="space-y-4">
+          {analysis ? (
+            <DecisionTab
+              analysis={analysis}
+              symbol={symbol}
+              exchange={exchange}
+              interval={interval}
+            />
+          ) : !isLoading ? (
+            <div className="text-center py-12 text-muted-foreground">
+              Run analysis first to see strategy decision
+            </div>
+          ) : null}
+        </TabsContent>
+
+        {/* ═══ FUNDAMENTAL TAB ═══ */}
+        <TabsContent value="fundamental">
+          <FundamentalTab />
+        </TabsContent>
+
+        {/* ═══ WHY NOT TAB ═══ */}
+        <TabsContent value="whynot" className="space-y-4">
+          {analysis ? (
+            <WhyNotTab analysis={analysis} />
+          ) : !isLoading ? (
+            <div className="text-center py-12 text-muted-foreground">
+              Run analysis first to see risk factors
+            </div>
+          ) : null}
+        </TabsContent>
+
+        {/* ═══ MULTI-TF TAB ═══ */}
+        <TabsContent value="multitf" className="space-y-4">
+          <MultiTFTab symbol={symbol} exchange={exchange} />
+        </TabsContent>
+
+        {/* ═══ NEWS TAB ═══ */}
+        <TabsContent value="news" className="space-y-4">
+          <NewsTab symbol={symbol} exchange={exchange} />
+        </TabsContent>
+
+        {/* ═══ RESEARCH TAB ═══ */}
+        <TabsContent value="research" className="space-y-4">
+          <ResearchTab symbol={symbol} exchange={exchange} />
+        </TabsContent>
+
+        {/* ═══ DAILY REPORT TAB ═══ */}
+        <TabsContent value="report" className="space-y-4">
+          <DailyReportTab exchange={exchange} />
+        </TabsContent>
+
+        {/* ═══ SCANNER TAB ═══ */}
         <TabsContent value="scanner" className="space-y-4">
           <Card>
             <CardContent className="pt-4 space-y-4">
@@ -242,7 +250,7 @@ export default function AIAnalyzer() {
           </Card>
         </TabsContent>
 
-        {/* === HISTORY TAB === */}
+        {/* ═══ HISTORY TAB ═══ */}
         <TabsContent value="history">
           <Card>
             <CardContent className="pt-4">

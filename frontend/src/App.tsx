@@ -50,6 +50,11 @@ const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
+const MLAdvisor = lazy(() => import('@/pages/MLAdvisor'))
+const MLAdvisorDemo = lazy(() => import('@/pages/MLAdvisorDemo'))
+const AAUMAdvisor = lazy(() => import('@/pages/AAUMAdvisor'))
+const AIAnalyzer = lazy(() => import('@/pages/AIAnalyzer'))
+const InstitutionalDashboard = lazy(() => import('@/pages/InstitutionalDashboard'))
 
 // Tools & Option Chain
 const Tools = lazy(() => import('@/pages/Tools'))
@@ -125,10 +130,13 @@ function App() {
   return (
     <Providers>
       <BrowserRouter>
-        <AuthSync>
-          <Suspense fallback={<PageLoader />}>
-            <Routes>
-              {/* Public routes */}
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            {/* 🚀 SUPER PUBLIC ROUTES (No AuthSync wrapper) */}
+            <Route path="/ml-demo" element={<MLAdvisorDemo />} />
+            
+            <Route element={<AuthSync />}>
+              {/* Public pages */}
               <Route path="/" element={<Home />} />
               <Route path="/faq" element={<Faq />} />
               <Route path="/setup" element={<Setup />} />
@@ -141,27 +149,22 @@ function App() {
               {/* Broker auth routes */}
               <Route path="/broker" element={<BrokerSelect />} />
               <Route path="/broker/:broker/totp" element={<BrokerTOTP />} />
-              {/* Dynamic broker TOTP routes for all supported brokers */}
               <Route path="/:broker/auth" element={<BrokerTOTP />} />
 
-              {/* Protected routes - requires broker auth */}
+              {/* Protected routes */}
               <Route element={<Layout />}>
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/positions" element={<Positions />} />
                 <Route path="/orderbook" element={<OrderBook />} />
                 <Route path="/tradebook" element={<TradeBook />} />
                 <Route path="/holdings" element={<Holdings />} />
-                {/* Search routes - match Flask /search/* routes */}
                 <Route path="/search/token" element={<Token />} />
                 <Route path="/search" element={<Search />} />
-                {/* API Key management */}
                 <Route path="/apikey" element={<ApiKey />} />
-                {/* Phase 4: Charts & Webhook Configuration */}
                 <Route path="/platforms" element={<Platforms />} />
                 <Route path="/tradingview" element={<TradingView />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
-                {/* Phase 4: Sandbox & Analyzer */}
                 <Route path="/sandbox" element={<Sandbox />} />
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
                 <Route path="/analyzer" element={<Analyzer />} />
@@ -180,42 +183,31 @@ function App() {
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
-                {/* Phase 6: Webhook Strategies */}
                 <Route path="/strategy" element={<StrategyIndex />} />
                 <Route path="/strategy/new" element={<NewStrategy />} />
                 <Route path="/strategy/:strategyId" element={<ViewStrategy />} />
                 <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
-                {/* Phase 6: Python Strategies */}
                 <Route path="/python" element={<PythonStrategyIndex />} />
                 <Route path="/python/new" element={<NewPythonStrategy />} />
                 <Route path="/python/:strategyId/edit" element={<EditPythonStrategy />} />
                 <Route path="/python/:strategyId/logs" element={<PythonStrategyLogs />} />
                 <Route path="/python/:strategyId/schedule" element={<SchedulePythonStrategy />} />
                 <Route path="/python/guide" element={<PythonStrategyGuide />} />
-                {/* Phase 6: Chartink Strategies */}
                 <Route path="/chartink" element={<ChartinkIndex />} />
                 <Route path="/chartink/new" element={<NewChartinkStrategy />} />
                 <Route path="/chartink/:strategyId" element={<ViewChartinkStrategy />} />
-                <Route
-                  path="/chartink/:strategyId/configure"
-                  element={<ConfigureChartinkSymbols />}
-                />
-                {/* Flow Editor */}
+                <Route path="/chartink/:strategyId/configure" element={<ConfigureChartinkSymbols />} />
                 <Route path="/flow" element={<FlowIndex />} />
                 <Route path="/flow/shortcuts" element={<FlowKeyboardShortcuts />} />
-                {/* Leverage Configuration (crypto brokers only) */}
                 <Route path="/leverage" element={<LeverageRoute />} />
-                {/* Phase 7: Admin */}
                 <Route path="/admin" element={<AdminIndex />} />
                 <Route path="/admin/freeze" element={<FreezeQty />} />
                 <Route path="/admin/holidays" element={<Holidays />} />
                 <Route path="/admin/timings" element={<MarketTimings />} />
-                {/* Phase 7: Telegram */}
                 <Route path="/telegram" element={<TelegramIndex />} />
                 <Route path="/telegram/config" element={<TelegramConfig />} />
                 <Route path="/telegram/users" element={<TelegramUsers />} />
                 <Route path="/telegram/analytics" element={<TelegramAnalytics />} />
-                {/* Phase 7: Logs & Monitoring */}
                 <Route path="/logs" element={<LogsIndex />} />
                 <Route path="/logs/live" element={<LiveLogs />} />
                 <Route path="/logs/sandbox" element={<Analyzer />} />
@@ -223,27 +215,28 @@ function App() {
                 <Route path="/logs/traffic" element={<TrafficDashboard />} />
                 <Route path="/logs/latency" element={<LatencyDashboard />} />
                 <Route path="/health" element={<HealthMonitor />} />
-                {/* Phase 7: Settings & Action Center */}
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/master-contract" element={<MasterContract />} />
                 <Route path="/action-center" element={<ActionCenter />} />
               </Route>
 
-              {/* Full-width protected routes */}
               <Route element={<FullWidthLayout />}>
                 <Route path="/playground" element={<Playground />} />
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
-                {/* Flow Editor (full-width for canvas) */}
+                <Route path="/ml-advisor" element={<MLAdvisor />} />
+                <Route path="/aaum-advisor" element={<AAUMAdvisor />} />
+                <Route path="/ai-analyzer" element={<AIAnalyzer />} />
+                <Route path="/institutional-dashboard" element={<InstitutionalDashboard />} />
                 <Route path="/flow/editor/:id" element={<FlowEditor />} />
               </Route>
+            </Route>
 
-              {/* 404 Not Found */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </AuthSync>
+            {/* 404 Not Found */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </BrowserRouter>
     </Providers>
   )

@@ -8,6 +8,7 @@ import {
   type IChartApi,
 } from 'lightweight-charts'
 import { Button } from '@/components/ui/button'
+import { toCandlestickData, toLineData } from '@/lib/lightweightCharts'
 import type { CandleData, ChartOverlays } from '@/types/ai-analysis'
 
 interface ChartWithIndicatorsProps {
@@ -74,7 +75,7 @@ export function ChartWithIndicators({
       wickUpColor: '#16a34a',
       wickDownColor: '#dc2626',
     })
-    candleSeries.setData(sorted)
+    candleSeries.setData(toCandlestickData(sorted))
 
     if (overlays) {
       // Lines: EMA, SMA, Supertrend
@@ -93,7 +94,7 @@ export function ChartWithIndicators({
           priceLineVisible: false,
           lastValueVisible: false,
         })
-        lineSeries.setData(line.data.map(d => ({ time: d.time, value: d.value })))
+        lineSeries.setData(toLineData(line.data))
       }
 
       // Bands: Bollinger
@@ -106,7 +107,7 @@ export function ChartWithIndicators({
             priceLineVisible: false,
             lastValueVisible: false,
           })
-          upperSeries.setData(band.data.map(d => ({ time: d.time, value: d.upper })))
+          upperSeries.setData(toLineData(band.data.map((d) => ({ time: d.time, value: d.upper }))))
 
           const lowerSeries = chart.addSeries(LineSeries, {
             color: band.color,
@@ -115,7 +116,7 @@ export function ChartWithIndicators({
             priceLineVisible: false,
             lastValueVisible: false,
           })
-          lowerSeries.setData(band.data.map(d => ({ time: d.time, value: d.lower })))
+          lowerSeries.setData(toLineData(band.data.map((d) => ({ time: d.time, value: d.lower }))))
         }
       }
 

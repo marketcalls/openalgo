@@ -1715,6 +1715,7 @@ dependencies = [
     { name = "sse-starlette" },
     { name = "stack-data" },
     { name = "starlette" },
+    { name = "ta" },
     { name = "tornado" },
     { name = "traitlets" },
     { name = "typing-extensions" },
@@ -1876,6 +1877,7 @@ requires-dist = [
     { name = "sse-starlette", specifier = "==2.4.1" },
     { name = "stack-data", specifier = "==0.6.3" },
     { name = "starlette", specifier = "==0.52.1" },
+    { name = "ta", specifier = ">=0.11.0" },
     { name = "tornado", specifier = "==6.5.5" },
     { name = "traitlets", specifier = "==5.14.3" },
     { name = "typing-extensions", specifier = ">=4.12.2" },
@@ -3153,6 +3155,16 @@ sdist = { url = "https://files.pythonhosted.org/packages/96/5b/496f8abebd10c3301
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/40/8561ce06dc46fd17242c7724ab25b257a2ac1b35f4ebf551b40ce6105cfa/stevedore-5.6.0-py3-none-any.whl", hash = "sha256:4a36dccefd7aeea0c70135526cecb7766c4c84c473b1af68db23d541b6dc1820", size = 54428, upload-time = "2025-11-20T10:06:05.946Z" },
 ]
+
+[[package]]
+name = "ta"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e0/9a/37d92a6b470dc9088612c2399a68f1a9ac22872d4e1eff416818e22ab11b/ta-0.11.0.tar.gz", hash = "sha256:de86af43418420bd6b088a2ea9b95483071bf453c522a8441bc2f12bcf8493fd", size = 25308, upload-time = "2023-11-02T13:53:35.434Z" }
 
 [[package]]
 name = "tomli"

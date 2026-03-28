@@ -1,0 +1,25 @@
+{
+  "model_version": "sample-regime-v1",
+  "horizon": "swing",
+  "created_at_utc": "2026-03-21T16:57:38.500444+00:00",
+  "feature_columns": [
+    "timestamp",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "return_1",
+    "return_5",
+    "volatility_10",
+    "volume_zscore_10",
+    "close_ma_5",
+    "close_ma_20",
+    "ma_spread"
+  ],
+  "training_symbols": [
+    "RELIANCE"
+  ],
+  "notes": "Starter centroid regime model trained on sample data.",
+  "artifact_root": "D:\\ml\\stock_advisor_starter_pack\\artifacts_template\\models\\candidate\\sample_regime_bundle"
+}

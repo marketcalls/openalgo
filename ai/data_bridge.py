@@ -25,6 +25,7 @@ class OHLCVResult:
 def _call_history_service(
     symbol: str, exchange: str, interval: str, api_key: str,
     start_date: str | None = None, end_date: str | None = None,
+    timeout: int = 30,
 ) -> dict:
     """Call OpenAlgo's history service to fetch OHLCV data.
 
@@ -32,24 +33,53 @@ def _call_history_service(
     get_history(symbol, exchange, interval, start_date, end_date, api_key, source)
     Returns: (success: bool, response_data: dict, status_code: int)
     """
+    import concurrent.futures
+
     from services.history_service import get_history
 
     if end_date is None:
         end_date = datetime.now().strftime("%Y-%m-%d")
     if start_date is None:
-        days = 365 if interval in ("1d", "1wk", "1mo") else 60
+        days = 365 if interval in ("D", "W", "M") else 60
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    success, response_data, status_code = get_history(
-        symbol=symbol,
-        exchange=exchange,
-        interval=interval,
-        start_date=start_date,
-        end_date=end_date,
-        api_key=api_key,
-        source="api",
-    )
-    return response_data
+    # Try broker API first with timeout, fallback to local DuckDB (historify)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            get_history,
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            api_key=api_key,
+            source="api",
+        )
+        try:
+            success, response_data, status_code = future.result(timeout=timeout)
+            if success:
+                return response_data
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"Broker API timed out for {symbol}, trying local DB...")
+
+    # Fallback: try local DuckDB/historify data
+    try:
+        success, response_data, status_code = get_history(
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            api_key=api_key,
+            source="db",
+        )
+        if success:
+            logger.info(f"Using local DB data for {symbol}")
+            return response_data
+    except Exception as e:
+        logger.debug(f"Local DB fallback failed for {symbol}: {e}")
+
+    return {"status": "error", "message": f"No data available for {symbol} (broker timed out, no local data)"}
 
 
 def fetch_ohlcv(
@@ -81,7 +111,9 @@ def fetch_ohlcv(
 
         data = response.get("data", response) if isinstance(response, dict) else response
 
-        if isinstance(data, dict):
+        if isinstance(data, list):
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
             df = pd.DataFrame(data)
         elif isinstance(data, pd.DataFrame):
             df = data

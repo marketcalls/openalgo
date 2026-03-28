@@ -146,6 +146,22 @@ export interface TradingDecision {
   score: number
 }
 
+export interface AIDecisionRecord {
+  id: number
+  timestamp: string
+  symbol: string
+  exchange: string
+  interval: string
+  signal: SignalType
+  confidence: number
+  score: number
+  regime: string
+  sub_scores: SubScores
+  action_taken: string | null
+  order_id: string | null
+  reason: string | null
+}
+
 /** Scan result for one symbol from /api/v1/agent/scan */
 export interface ScanResult {
   symbol: string
@@ -187,6 +203,12 @@ export interface AIScanResponse {
 export interface AIStatusResponse {
   status: 'success' | 'error'
   data?: AIAgentStatus
+}
+
+export interface AIDecisionHistoryResponse {
+  status: 'success' | 'error'
+  message?: string
+  data?: AIDecisionRecord[]
 }
 
 /** Signal display config */

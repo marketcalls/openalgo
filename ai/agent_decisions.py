@@ -23,6 +23,7 @@ def log_analysis(
     score: float,
     regime: str,
     scores: dict | None = None,
+    predicted_price: float | None = None,
     api_key: str = "",
 ) -> dict:
     """Log an AI analysis result to the database and publish an event.
@@ -37,6 +38,7 @@ def log_analysis(
         score: Composite signal score.
         regime: Market regime (e.g., "TRENDING_UP", "RANGING").
         scores: Optional sub-score breakdown dict.
+        predicted_price: Price at the time of prediction.
         api_key: API key for event context.
 
     Returns:
@@ -52,6 +54,7 @@ def log_analysis(
         "score": score,
         "regime": regime,
         "scores": scores or {},
+        "predicted_price": predicted_price,
     }
 
     record = save_decision(decision_data)

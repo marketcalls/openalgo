@@ -1,0 +1,28 @@
+from __future__ import annotations
+
+ROLE_TAGS: dict[str, tuple[str, ...]] = {
+    "central_pivot_range": ("levels", "filter"),
+    "vwap_bb_confluence": ("mean_reversion", "filter"),
+    "vwap_bb_super_confluence_2": ("mean_reversion", "filter"),
+    "twin_range_filter": ("trend", "entry"),
+    "bollinger_band_breakout": ("breakout", "entry"),
+    "candlestick_patterns_identified": ("pattern", "filter"),
+    "cm_hourly_pivots": ("levels", "filter"),
+    "dark_cloud_piercing_line_tradingfinder": ("pattern", "entry"),
+    "double_top_bottom_ultimate": ("pattern", "entry"),
+    "flowscope_hapharmonic": ("unsupported",),
+    "hybrid_ml_vwap_bb": ("hybrid", "entry"),
+    "impulse_trend_boswaves": ("trend", "entry"),
+    "n_bar_reversal_luxalgo": ("pattern", "entry"),
+    "n_bar_reversal_luxalgo_strategy": ("pattern", "entry"),
+    "outside_reversal": ("pattern", "entry"),
+    "previous_candle_inside_outside_mk": ("pattern", "filter"),
+    "reversal_radar_v2": ("reversal", "entry"),
+    "rsi_divergence": ("oscillator", "filter"),
+    "sbs_swing_areas_trades": ("structure", "entry"),
+    "sfp_candelacharts": ("pattern", "entry"),
+    "three_inside_tradingfinder": ("pattern", "entry"),
+    "trend_signals_tp_sl_ualgo": ("trend", "entry"),
+    "bahai_reversal_points": ("reversal", "entry"),
+    "vedhaviyash4_daily_cpr": ("levels", "filter"),
+}

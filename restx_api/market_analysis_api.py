@@ -32,7 +32,7 @@ class MarketReportResource(Resource):
         result = analyze_market(symbol, exchange, interval, api_key, option_chain)
 
         if not result.success:
-            return {"status": "error", "message": result.error}
+            return {"status": "error", "message": result.error}, 422
 
         return {
             "status": "success",

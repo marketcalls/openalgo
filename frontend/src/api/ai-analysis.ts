@@ -2,6 +2,7 @@
 import { apiClient } from './client'
 import type {
   AIAnalysisResponse,
+  AIDecisionHistoryResponse,
   AIScanResponse,
   AIStatusResponse,
 } from '@/types/ai-analysis'
@@ -35,6 +36,20 @@ export const aiAnalysisApi = {
       symbols,
       exchange,
       interval,
+    })
+    return response.data
+  },
+
+  /** Fetch recent AI decision history */
+  getDecisionHistory: async (
+    apiKey: string,
+    symbol?: string,
+    limit: number = 10,
+  ): Promise<AIDecisionHistoryResponse> => {
+    const response = await apiClient.post<AIDecisionHistoryResponse>('/agent/history', {
+      apikey: apiKey,
+      symbol,
+      limit,
     })
     return response.data
   },

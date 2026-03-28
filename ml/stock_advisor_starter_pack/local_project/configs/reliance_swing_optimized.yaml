@@ -1,0 +1,29 @@
+symbol: "RELIANCE"
+market_data_root: "D:\\TV_proj\\output\\reliance_timeframes"
+strategy_root: "D:\\test1"
+output_root: "D:\\ml\\stock_advisor_starter_pack\\artifacts_template"
+primary_tf: "15m"
+confirm_tfs:
+  - "1hr"
+  - "1day"
+
+# Best combo from confluence optimizer: 75% win rate, 8 signals
+selected_strategies:
+  - "trend_signals_tp_sl_ualgo"
+  - "reversal_radar_v2"
+
+# Optimized parameters from param_optimizer.py sweep
+strategy_params:
+  trend_signals_tp_sl_ualgo:
+    DEFAULT_MULTIPLIER: 2.6
+    DEFAULT_ATR_PERIOD: 10
+    DEFAULT_CLOUD_VAL: 7
+    DEFAULT_STOP_LOSS_PCT: 1.4
+  reversal_radar_v2:
+    DEFAULT_BLOCK_START: 16
+    DEFAULT_BLOCK_END: 7
+
+notes:
+  - "Optimized bundle: best combo (trend_signals + reversal_radar_v2) with tuned params."
+  - "Source: artifacts_template/reports/confluence_optimizer/best_combo_config.json"
+  - "Expected win rate: ~75% on historical data (8 signals / 5029 bars)."

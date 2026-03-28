@@ -1,0 +1,12 @@
+intraday:
+  primary_tfs: ["1m", "3m", "5m", "15m"]
+  confirm_tfs: ["30m", "1hr", "2hr"]
+  force_flat_eod: true
+swing:
+  primary_tfs: ["15m", "30m", "1hr", "4hr"]
+  confirm_tfs: ["1day"]
+  max_hold_days: 10
+long_term:
+  primary_tfs: ["1day"]
+  confirm_tfs: ["1month"]
+  max_hold_days: 60

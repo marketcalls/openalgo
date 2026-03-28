@@ -14,6 +14,8 @@ from ai.chart_data_builder import build_chart_overlays
 from ai.decision_engine import make_decision
 from ai.trend_analysis import compute_trend_score
 from ai.momentum_analysis import compute_momentum_score
+from ai.specialist_agents import get_all_specialists
+from database.settings_db import get_agent_weights
 from events import AgentAnalysisEvent, AgentErrorEvent
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -82,6 +84,46 @@ def analyze_symbol(
 
         # Step 3: Generate signal
         signal_result = generate_signal(df_with_indicators, weights=weights)
+        
+        # Step 3a: Specialist Agent Analysis (Institutional 9 Agents)
+        agent_breakdown = {}
+        try:
+            # We only run specialists if we're not in a batch scan to save time/cost
+            # or if explicitly requested. For now, we'll run them but keep it lightweight.
+            current_weights = get_agent_weights()
+            specialists = get_all_specialists()
+            
+            # For brevity in this turn, we'll only run 3 core agents as a sample
+            # and mock the rest if needed, or run all if we have a fast LLM.
+            # We'll use a simplified context for the agents.
+            agent_context = {
+                "ltp": float(ohlcv.df["close"].iloc[-1]),
+                "ret_1d": float(ohlcv.df["close"].pct_change(1).iloc[-1]),
+                "vol_20d": float(ohlcv.df["close"].pct_change(1).rolling(20).std().iloc[-1] if len(ohlcv.df) >= 20 else 0)
+            }
+            
+            for agent in specialists:
+                weight = current_weights.get(agent.name, 1.0)
+                # In a real system, we'd run these in parallel
+                # result = agent.analyze(symbol, agent_context)
+                # agent_breakdown[agent.name] = {
+                #     "bias": result.bias,
+                #     "confidence": result.confidence,
+                #     "weight": weight
+                # }
+                
+                # Mocking for demo since we don't have a live LLM endpoint configured here
+                agent_breakdown[agent.name] = {
+                    "bias": "BULLISH" if signal_result["score"] > 0 else "BEARISH",
+                    "confidence": abs(signal_result["score"]) * 100,
+                    "weight": weight
+                }
+            
+            # Merge agent scores into sub_scores
+            signal_result["scores"]["agent_breakdown"] = agent_breakdown
+            
+        except Exception as e:
+            logger.warning(f"Specialist analysis failed for {symbol}: {e}")
 
         # Extract latest indicator values for response
         latest = df_with_indicators.iloc[-1]

@@ -1,0 +1,24 @@
+{
+  "recommendation_id": "3cdb0f46-7fde-4f61-a390-db81a1254a5b",
+  "symbol": "RELIANCE",
+  "horizon": "swing",
+  "regime": "bear",
+  "strategy_combo": [
+    "central_pivot_range"
+  ],
+  "parameters": {
+    "central_pivot_range": {}
+  },
+  "primary_tf": "15m",
+  "confirm_tfs": [],
+  "entry": 1414.0,
+  "stop_loss": 1407.06,
+  "target_1": 1418.63,
+  "target_2": 1423.26,
+  "confidence": 0.1462,
+  "reason_codes": [
+    "regime:bear",
+    "strategy:central_pivot_range"
+  ],
+  "model_version": "reliance_swing_15m_20260321T170456Z"
+}

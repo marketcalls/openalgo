@@ -1,0 +1,13 @@
+{
+  "best_combo": [
+    "trend_signals_tp_sl_ualgo",
+    "outside_reversal"
+  ],
+  "win_rate": 1.0,
+  "loss_rate": 0.0,
+  "n_signals": 7,
+  "n_long": 2,
+  "n_short": 5,
+  "long_win_rate": 1.0,
+  "short_win_rate": 1.0
+}

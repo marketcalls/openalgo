@@ -28,7 +28,7 @@ function pctChange(entry: number, price: number): string {
   return `(${Number(pct) >= 0 ? '+' : ''}${pct}%)`
 }
 
-export function DecisionCard({ decision, symbol, exchange, onPlaceOrder }: DecisionCardProps) {
+export function DecisionCard({ decision, symbol: _symbol, exchange: _exchange, onPlaceOrder }: DecisionCardProps) {
   const config = ACTION_CONFIG[decision.action] ?? ACTION_CONFIG['WAIT']
   const Icon = config.icon
 

@@ -1,0 +1,18 @@
+symbol: "RELIANCE"
+market_data_root: "D:\\TV_proj\\output\\reliance_timeframes"
+strategy_root: "D:\\test1"
+output_root: "D:\\ml\\stock_advisor_starter_pack\\artifacts_template"
+primary_tf: "15m"
+confirm_tfs:
+  - "1hr"
+  - "1day"
+selected_strategies:
+  - "twin_range_filter"
+  - "trend_signals_tp_sl_ualgo"
+  - "vwap_bb_super_confluence_2"
+  - "bahai_reversal_points"
+  - "reversal_radar_v2"
+  - "central_pivot_range"
+notes:
+  - "Starter real-data swing bundle for RELIANCE."
+  - "D:\\test1 may include open-source indicator source trees; load from source, do not pip install."

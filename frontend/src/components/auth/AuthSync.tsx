@@ -1,18 +1,16 @@
 import { useEffect, useState } from 'react'
+import { Outlet } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
-
-interface AuthSyncProps {
-  children: React.ReactNode
-}
 
 /**
  * AuthSync component that synchronizes Flask session with Zustand store.
  * This ensures the React app knows about authentication state from OAuth callbacks.
  * Also syncs app mode (live/analyzer) from the backend.
+ * Used as a React Router layout route element — renders nested routes via <Outlet />.
  */
-export function AuthSync({ children }: AuthSyncProps) {
+export function AuthSync() {
   const [isChecking, setIsChecking] = useState(true)
   const { setUser, setApiKey, logout } = useAuthStore()
   const { fetchCapabilities, clearCapabilities } = useBrokerStore()
@@ -82,5 +80,5 @@ export function AuthSync({ children }: AuthSyncProps) {
     )
   }
 
-  return <>{children}</>
+  return <Outlet />
 }

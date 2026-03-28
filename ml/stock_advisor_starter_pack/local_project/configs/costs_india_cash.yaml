@@ -1,0 +1,4 @@
+brokerage_bps: 2.0
+slippage_bps: 3.0
+taxes_bps: 1.5
+notes: "Starter approximation for Indian cash-equity paper-trade evaluation."

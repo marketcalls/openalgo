@@ -1,0 +1,21 @@
+{
+  "bundle_name": "reliance_swing_15m_20260322T072003Z",
+  "symbol": "RELIANCE",
+  "primary_tf": "15m",
+  "confirm_tfs": [
+    "1hr",
+    "1day"
+  ],
+  "selected_strategies": [
+    "trend_signals_tp_sl_ualgo",
+    "reversal_radar_v2"
+  ],
+  "candidate_rows": 345,
+  "regime_rows": 5029,
+  "strategy_notes": {
+    "trend_signals_tp_sl_ualgo": [],
+    "reversal_radar_v2": []
+  },
+  "market_data_root": "D:\\TV_proj\\output\\reliance_timeframes",
+  "strategy_root": "D:\\test1"
+}

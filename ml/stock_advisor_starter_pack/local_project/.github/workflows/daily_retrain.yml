@@ -1,0 +1,74 @@
+name: Daily Retrain
+
+on:
+  schedule:
+    - cron: "30 4 * * 1-5"   # 10:00 IST Mon–Fri (04:30 UTC)
+  workflow_dispatch: {}       # allow manual trigger
+
+env:
+  PYTHONPATH: ${{ github.workspace }}/src
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── Stage 1: Drift check ─────────────────────────────────────────────
+      - name: Feature drift check
+        run: python scripts/run_drift_check.py --fail-on-severe
+        # Exits 1 if PSI >= 0.25 for any feature — halts pipeline
+
+      # ── Stage 2: Retrain ─────────────────────────────────────────────────
+      - name: Retrain regime model + setup ranker
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'src')
+          from feedback.daily_retrain import run_daily_retrain
+          from pathlib import Path
+          result = run_daily_retrain(
+              market_data_path='data/reliance_15m.csv',
+              feedback_source_path='data/feedback_source.csv',
+              feedback_store_path='data/feedback_store.csv',
+          )
+          print('Retrain complete:', result)
+          "
+
+      # ── Stage 3: Rolling walk-forward gate ───────────────────────────────
+      - name: Week 2 gate — rolling walk-forward
+        run: python scripts/evaluate_bundle.py --mode rolling --gate
+        # Exits 1 if mean_test < 0.55, robustness < 0.70, or any fold < 0.45
+
+      # ── Stage 4: Promote if better ───────────────────────────────────────
+      - name: Multi-criteria model promotion
+        run: python scripts/promote_if_better.py
+
+      # ── Artifacts ────────────────────────────────────────────────────────
+      - name: Upload promotion log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promotion-log
+          path: artifacts_template/models/promotion_log.json
+          if-no-files-found: ignore
+
+      - name: Upload feature importance (LightGBM)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-importance
+          path: artifacts_template/models/candidate/feature_importance.csv
+          if-no-files-found: ignore

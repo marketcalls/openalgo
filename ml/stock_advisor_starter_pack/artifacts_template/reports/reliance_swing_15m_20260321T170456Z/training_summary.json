@@ -1,0 +1,33 @@
+{
+  "bundle_name": "reliance_swing_15m_20260321T170456Z",
+  "symbol": "RELIANCE",
+  "primary_tf": "15m",
+  "confirm_tfs": [
+    "1hr",
+    "1day"
+  ],
+  "selected_strategies": [
+    "twin_range_filter",
+    "trend_signals_tp_sl_ualgo",
+    "vwap_bb_super_confluence_2",
+    "bahai_reversal_points",
+    "reversal_radar_v2",
+    "central_pivot_range"
+  ],
+  "candidate_rows": 5618,
+  "regime_rows": 5029,
+  "strategy_notes": {
+    "twin_range_filter": [],
+    "trend_signals_tp_sl_ualgo": [],
+    "vwap_bb_super_confluence_2": [
+      "No directional columns found; defaulted to HOLD."
+    ],
+    "bahai_reversal_points": [],
+    "reversal_radar_v2": [],
+    "central_pivot_range": [
+      "Derived signal from pivot band position."
+    ]
+  },
+  "market_data_root": "D:\\TV_proj\\output\\reliance_timeframes",
+  "strategy_root": "D:\\test1"
+}

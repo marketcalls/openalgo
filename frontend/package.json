@@ -53,6 +53,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "framer-motion": "^12.38.0",
     "html2canvas-pro": "^1.6.6",
     "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.563.0",
@@ -65,10 +66,12 @@
     "react-resizable-panels": "^4.5.1",
     "react-router-dom": "^7.13.0",
     "react-syntax-highlighter": "^16.1.0",
+    "recharts": "^3.8.1",
     "socket.io-client": "^4.8.3",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.18",
+    "zod": "^4.3.6",
     "zustand": "^5.0.10"
   },
   "overrides": {

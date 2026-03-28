@@ -1,0 +1,6 @@
+daily:
+  market_close_retrain_time_ist: "18:00"
+  promote_after_manual_review: true
+  retain_candidate_days: 30
+weekly:
+  full_validation_day: "Saturday"

@@ -1,0 +1,29 @@
+{
+  "recommendation_id": "sample-0001",
+  "symbol": "RELIANCE",
+  "horizon": "swing",
+  "regime": "bull",
+  "strategy_combo": [
+    "twin_range_filter"
+  ],
+  "parameters": {
+    "twin_range_filter": {
+      "per1": 27,
+      "mult1": 1.6
+    }
+  },
+  "primary_tf": "15m",
+  "confirm_tfs": [
+    "1hr"
+  ],
+  "entry": 1410.1,
+  "stop_loss": 1388.95,
+  "target_1": 1424.2,
+  "target_2": 1438.3,
+  "confidence": 0.76,
+  "reason_codes": [
+    "regime:bull",
+    "strategy:twin_range_filter"
+  ],
+  "model_version": "sample-v1"
+}

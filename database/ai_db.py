@@ -51,6 +51,14 @@ class AiDecision(AiBase):
     order_id = Column(String(50), nullable=True)
     reason = Column(Text, nullable=True)
 
+    # Outcome tracking (Self-Learning / Option 2)
+    predicted_price = Column(Float, nullable=True)
+    actual_price = Column(Float, nullable=True)
+    outcome = Column(String(20), nullable=False, default="PENDING")  # PENDING, CORRECT, INCORRECT
+    accuracy_score = Column(Float, nullable=True)
+    actual_direction = Column(String(10), nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -66,6 +74,12 @@ class AiDecision(AiBase):
             "action_taken": self.action_taken,
             "order_id": self.order_id,
             "reason": self.reason,
+            "predicted_price": self.predicted_price,
+            "actual_price": self.actual_price,
+            "outcome": self.outcome,
+            "accuracy_score": self.accuracy_score,
+            "actual_direction": self.actual_direction,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
         }
 
 
@@ -99,6 +113,44 @@ def save_decision(decision_data: dict) -> AiDecision:
     except Exception:
         session.rollback()
         raise
+    finally:
+        AiSession.remove()
+
+
+def update_outcome(decision_id: int, outcome_data: dict) -> AiDecision | None:
+    """Update an AI decision with the actual outcome."""
+    session = AiSession()
+    try:
+        record = session.query(AiDecision).filter_by(id=decision_id).first()
+        if not record:
+            return None
+
+        if "actual_price" in outcome_data:
+            record.actual_price = outcome_data["actual_price"]
+        if "outcome" in outcome_data:
+            record.outcome = outcome_data["outcome"]
+        if "accuracy_score" in outcome_data:
+            record.accuracy_score = outcome_data["accuracy_score"]
+        if "actual_direction" in outcome_data:
+            record.actual_direction = outcome_data["actual_direction"]
+        if "predicted_price" in outcome_data:
+            record.predicted_price = outcome_data["predicted_price"]
+
+        record.resolved_at = datetime.now(timezone.utc)
+        session.commit()
+        return record
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        AiSession.remove()
+
+
+def get_pending_decisions(limit: int = 100) -> list[AiDecision]:
+    """Get AI decisions that are still PENDING outcome verification."""
+    session = AiSession()
+    try:
+        return session.query(AiDecision).filter_by(outcome="PENDING").limit(limit).all()
     finally:
         AiSession.remove()
 

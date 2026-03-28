@@ -1,8 +1,26 @@
-// frontend/src/hooks/useAIAnalysis.ts
 import { useQuery } from '@tanstack/react-query'
-import { useAuthStore } from '@/stores/authStore'
 import { aiAnalysisApi } from '@/api/ai-analysis'
 import type { AIAnalysisResult, ScanResult, AIAgentStatus } from '@/types/ai-analysis'
+
+/** Fetch the API key from the server session (same pattern as ApiKey.tsx) */
+export function useApiKey() {
+  const { data: apiKey } = useQuery<string | null>({
+    queryKey: ['openalgo-apikey'],
+    queryFn: async () => {
+      const response = await fetch('/apikey', {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      })
+      if (!response.ok) return null
+      const contentType = response.headers.get('content-type')
+      if (!contentType?.includes('application/json')) return null
+      const data = await response.json()
+      return data.api_key || null
+    },
+    staleTime: 600_000, // 10 minutes
+  })
+  return apiKey ?? null
+}
 
 /** Fetch AI analysis for a single symbol */
 export function useAIAnalysis(
@@ -11,7 +29,7 @@ export function useAIAnalysis(
   interval: string = '1d',
   enabled: boolean = true,
 ) {
-  const apiKey = useAuthStore((s) => s.apiKey)
+  const apiKey = useApiKey()
 
   return useQuery<AIAnalysisResult | null>({
     queryKey: ['ai-analysis', symbol, exchange, interval],
@@ -22,7 +40,7 @@ export function useAIAnalysis(
       return response.data ?? null
     },
     enabled: enabled && !!apiKey && !!symbol,
-    staleTime: 60_000, // 1 minute (matches existing pattern)
+    staleTime: 60_000,
     refetchOnWindowFocus: true,
   })
 }
@@ -34,7 +52,7 @@ export function useAIScan(
   interval: string = '1d',
   enabled: boolean = true,
 ) {
-  const apiKey = useAuthStore((s) => s.apiKey)
+  const apiKey = useApiKey()
 
   return useQuery<ScanResult[]>({
     queryKey: ['ai-scan', symbols, exchange, interval],
@@ -57,6 +75,6 @@ export function useAIStatus() {
       const response = await aiAnalysisApi.getStatus()
       return response.data ?? null
     },
-    staleTime: 300_000, // 5 minutes
+    staleTime: 300_000,
   })
 }

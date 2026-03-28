@@ -1,0 +1,175 @@
+{
+  "lookahead_bars": 8,
+  "min_signals": 5,
+  "phase1_best_per_tf": [
+    {
+      "tf": "1m",
+      "bars": 5250,
+      "best_combo": "central_pivot_range + twin_range_filter + n_bar_reversal_luxalgo + smc_bos",
+      "n_strategies": 4,
+      "n_signals": 5,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    },
+    {
+      "tf": "3m",
+      "bars": 5500,
+      "best_combo": "smc_ob",
+      "n_strategies": 1,
+      "n_signals": 27,
+      "win_rate": 0.9259,
+      "loss_rate": 0.0741,
+      "long_win_rate": 0.9,
+      "short_win_rate": 0.9412
+    },
+    {
+      "tf": "5m",
+      "bars": 5025,
+      "best_combo": "twin_range_filter + smc_ob",
+      "n_strategies": 2,
+      "n_signals": 9,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    },
+    {
+      "tf": "15m",
+      "bars": 5029,
+      "best_combo": "central_pivot_range + sfp_candelacharts + n_bar_reversal_luxalgo + smc_fvg",
+      "n_strategies": 4,
+      "n_signals": 5,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    },
+    {
+      "tf": "30m",
+      "bars": 7149,
+      "best_combo": "central_pivot_range + smc_ob",
+      "n_strategies": 2,
+      "n_signals": 11,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    },
+    {
+      "tf": "1hr",
+      "bars": 5565,
+      "best_combo": "central_pivot_range + outside_reversal + smc_fvg + smc_bos",
+      "n_strategies": 4,
+      "n_signals": 5,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    },
+    {
+      "tf": "2hr",
+      "bars": 5156,
+      "best_combo": "twin_range_filter + smc_ob",
+      "n_strategies": 2,
+      "n_signals": 10,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    },
+    {
+      "tf": "4hr",
+      "bars": 5045,
+      "best_combo": "twin_range_filter + smc_ob",
+      "n_strategies": 2,
+      "n_signals": 12,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    },
+    {
+      "tf": "1day",
+      "bars": 7772,
+      "best_combo": "vwap_bb_super_confluence_2 + outside_reversal + smc_fvg + smc_ob",
+      "n_strategies": 4,
+      "n_signals": 5,
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "long_win_rate": 1.0,
+      "short_win_rate": 1.0
+    }
+  ],
+  "phase2_primary_tf": "15m",
+  "phase2_confirm_tfs": [
+    "1hr",
+    "4hr"
+  ],
+  "phase1_overall_best": {
+    "tf": "1m",
+    "combo": "central_pivot_range + twin_range_filter + n_bar_reversal_luxalgo + smc_bos",
+    "win_rate": 1.0,
+    "n_signals": 5
+  },
+  "phase2_best_strategy_confirmed": [
+    {
+      "strategy": "trend_signals_tp_sl_ualgo",
+      "level": "15m + 1hr",
+      "n": 14,
+      "n_long": 9,
+      "n_short": 5,
+      "win_rate": 1.0,
+      "long_wr": 1.0,
+      "short_wr": 1.0
+    },
+    {
+      "strategy": "trend_signals_tp_sl_ualgo",
+      "level": "15m + 1hr+4hr",
+      "n": 5,
+      "n_long": 5,
+      "n_short": 0,
+      "win_rate": 1.0,
+      "long_wr": 1.0,
+      "short_wr": NaN
+    },
+    {
+      "strategy": "smc_ob",
+      "level": "15m + 1hr",
+      "n": 6,
+      "n_long": 3,
+      "n_short": 3,
+      "win_rate": 1.0,
+      "long_wr": 1.0,
+      "short_wr": 1.0
+    },
+    {
+      "strategy": "smc_ob",
+      "level": "15m + 4hr",
+      "n": 7,
+      "n_long": 1,
+      "n_short": 6,
+      "win_rate": 1.0,
+      "long_wr": 1.0,
+      "short_wr": 1.0
+    },
+    {
+      "strategy": "outside_reversal",
+      "level": "15m + 1hr+4hr",
+      "n": 9,
+      "n_long": 3,
+      "n_short": 6,
+      "win_rate": 1.0,
+      "long_wr": 1.0,
+      "short_wr": 1.0
+    }
+  ],
+  "phase2_best_combo_with_1hr": {
+    "combo": "trend_signals_tp_sl_ualgo + outside_reversal",
+    "n": 5,
+    "win_rate": 1.0,
+    "long_wr": 1.0,
+    "short_wr": 1.0
+  }
+}

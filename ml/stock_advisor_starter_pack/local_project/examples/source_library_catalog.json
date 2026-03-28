@@ -1,0 +1,241 @@
+[
+  {
+    "name": "finta",
+    "path": "D:\\test1\\opensource_indicators\\finta",
+    "python_file_count": 8,
+    "top_level_items": [
+      ".git",
+      ".github",
+      ".gitignore",
+      ".travis.yml",
+      "CONTRIBUTING.md",
+      "deploy_pypi.sh",
+      "examples",
+      "finta"
+    ]
+  },
+  {
+    "name": "mintalib",
+    "path": "D:\\test1\\opensource_indicators\\mintalib",
+    "python_file_count": 18,
+    "top_level_items": [
+      ".git",
+      ".gitattributes",
+      ".github",
+      ".gitignore",
+      ".python-version",
+      ".vscode",
+      "CHANGELOG.md",
+      "CLAUDE.md"
+    ]
+  },
+  {
+    "name": "pandas-ta-classic",
+    "path": "D:\\test1\\opensource_indicators\\pandas-ta-classic",
+    "python_file_count": 203,
+    "top_level_items": [
+      ".git",
+      ".github",
+      ".gitignore",
+      "__init__.py",
+      "_config.yml",
+      "CHANGELOG.md",
+      "CODE_OF_CONDUCT.md",
+      "CONTRIBUTING.md"
+    ]
+  },
+  {
+    "name": "py-market-profile",
+    "path": "D:\\test1\\opensource_indicators\\py-market-profile",
+    "python_file_count": 7,
+    "top_level_items": [
+      ".dockerignore",
+      ".git",
+      ".github",
+      ".gitignore",
+      ".travis.yml",
+      "CONTRIBUTING.rst",
+      "Dockerfile",
+      "docs"
+    ]
+  },
+  {
+    "name": "pyharmonics",
+    "path": "D:\\test1\\opensource_indicators\\pyharmonics",
+    "python_file_count": 28,
+    "top_level_items": [
+      ".git",
+      ".gitignore",
+      ".readthedocs.yaml",
+      "docs",
+      "LICENSE",
+      "pyproject.toml",
+      "README.md",
+      "rtd_requirements.txt"
+    ]
+  },
+  {
+    "name": "pyti",
+    "path": "D:\\test1\\opensource_indicators\\pyti",
+    "python_file_count": 96,
+    "top_level_items": [
+      ".git",
+      ".gitignore",
+      "LICENSE.TXT",
+      "MANIFEST.in",
+      "pyti",
+      "README.md",
+      "requirements.txt",
+      "setup.cfg"
+    ]
+  },
+  {
+    "name": "smart-money-concepts",
+    "path": "D:\\test1\\opensource_indicators\\smart-money-concepts",
+    "python_file_count": 5,
+    "top_level_items": [
+      ".git",
+      ".github",
+      ".gitignore",
+      "CODE_OF_CONDUCT.md",
+      "CONTRIBUTING.md",
+      "LICENSE",
+      "README.md",
+      "setup.py"
+    ]
+  },
+  {
+    "name": "stock-indicators-python",
+    "path": "D:\\test1\\opensource_indicators\\stock-indicators-python",
+    "python_file_count": 202,
+    "top_level_items": [
+      ".coderabbit.yaml",
+      ".devcontainer",
+      ".editorconfig",
+      ".git",
+      ".gitattributes",
+      ".github",
+      ".gitignore",
+      ".markdownlint-cli2.jsonc"
+    ]
+  },
+  {
+    "name": "stockstats",
+    "path": "D:\\test1\\opensource_indicators\\stockstats",
+    "python_file_count": 2,
+    "top_level_items": [
+      ".git",
+      ".github",
+      ".gitignore",
+      "CLAUDE.md",
+      "LICENSE.txt",
+      "MANIFEST.in",
+      "pyproject.toml",
+      "README.md"
+    ]
+  },
+  {
+    "name": "streaming_indicators",
+    "path": "D:\\test1\\opensource_indicators\\streaming_indicators",
+    "python_file_count": 3,
+    "top_level_items": [
+      ".git",
+      ".gitattributes",
+      ".github",
+      ".gitignore",
+      "LICENSE.txt",
+      "pyproject.toml",
+      "README.md",
+      "setup.cfg"
+    ]
+  },
+  {
+    "name": "ta-library",
+    "path": "D:\\test1\\opensource_indicators\\ta-library",
+    "python_file_count": 20,
+    "top_level_items": [
+      ".circleci",
+      ".coveragerc",
+      ".coveralls.yml",
+      ".git",
+      ".github",
+      ".gitignore",
+      ".prospector.yaml",
+      "docs"
+    ]
+  },
+  {
+    "name": "ta-py",
+    "path": "D:\\test1\\opensource_indicators\\ta-py",
+    "python_file_count": 4,
+    "top_level_items": [
+      ".git",
+      ".gitignore",
+      "LICENSE",
+      "README.md",
+      "setup.py",
+      "ta_py",
+      "tests"
+    ]
+  },
+  {
+    "name": "talipp",
+    "path": "D:\\test1\\opensource_indicators\\talipp",
+    "python_file_count": 140,
+    "top_level_items": [
+      ".git",
+      ".github",
+      ".gitignore",
+      "deploy_pypi.sh",
+      "docs",
+      "examples",
+      "images",
+      "LICENSE"
+    ]
+  },
+  {
+    "name": "trading-technical-indicators",
+    "path": "D:\\test1\\opensource_indicators\\trading-technical-indicators",
+    "python_file_count": 145,
+    "top_level_items": [
+      ".git",
+      ".github",
+      ".gitignore",
+      ".pre-commit-config.yaml",
+      ".readthedocs.yml",
+      "CONTRIBUTING.md",
+      "docs",
+      "examples"
+    ]
+  },
+  {
+    "name": "trendln",
+    "path": "D:\\test1\\opensource_indicators\\trendln",
+    "python_file_count": 3,
+    "top_level_items": [
+      ".git",
+      ".gitignore",
+      ".travis.yml",
+      "CHANGELOG.md",
+      "example.py",
+      "img",
+      "LICENSE",
+      "MANIFEST.in"
+    ]
+  },
+  {
+    "name": "ZigZag",
+    "path": "D:\\test1\\opensource_indicators\\ZigZag",
+    "python_file_count": 5,
+    "top_level_items": [
+      ".coveragerc",
+      ".git",
+      ".github",
+      ".gitignore",
+      "build.py",
+      "CHANGES.txt",
+      "issue_13.ipynb",
+      "LICENSE.txt"
+    ]
+  }
+]

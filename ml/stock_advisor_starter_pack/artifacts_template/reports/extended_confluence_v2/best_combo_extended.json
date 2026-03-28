@@ -1,0 +1,15 @@
+{
+  "best_combo": [
+    "central_pivot_range",
+    "sfp_candelacharts",
+    "n_bar_reversal_luxalgo",
+    "smc_fvg"
+  ],
+  "win_rate": 1.0,
+  "loss_rate": 0.0,
+  "n_signals": 5,
+  "n_long": 4,
+  "n_short": 1,
+  "long_win_rate": 1.0,
+  "short_win_rate": 1.0
+}

@@ -1,0 +1,68 @@
+[
+  {
+    "symbol": "RELIANCE",
+    "tf": "15m",
+    "analysis": "standalone",
+    "combo": "twin_range_filter + smc_ob",
+    "train_wr": 0.9,
+    "test_wr": 1.0,
+    "wr_drop": -0.1,
+    "n_train": 30,
+    "n_test": 10
+  },
+  {
+    "symbol": "RELIANCE",
+    "tf": "1hr",
+    "analysis": "standalone",
+    "combo": "smc_ob",
+    "train_wr": 0.9375,
+    "test_wr": 0.9444,
+    "wr_drop": -0.0069,
+    "n_train": 48,
+    "n_test": 18
+  },
+  {
+    "symbol": "INFY",
+    "tf": "15m",
+    "analysis": "standalone",
+    "combo": "smc_ob",
+    "train_wr": 0.9412,
+    "test_wr": 0.9091,
+    "wr_drop": 0.0321,
+    "n_train": 170,
+    "n_test": 44
+  },
+  {
+    "symbol": "INFY",
+    "tf": "1hr",
+    "analysis": "standalone",
+    "combo": "central_pivot_range + smc_ob",
+    "train_wr": 0.9535,
+    "test_wr": 1.0,
+    "wr_drop": -0.0465,
+    "n_train": 43,
+    "n_test": 7
+  },
+  {
+    "symbol": "RELIANCE",
+    "tf": "15m+1hr",
+    "analysis": "cross_tf",
+    "combo": "smc_ob",
+    "train_wr": 1.0,
+    "test_wr": 1.0,
+    "wr_drop": null,
+    "n_train": null,
+    "n_test": 9
+  },
+  {
+    "symbol": "INFY",
+    "tf": "15m+1hr",
+    "analysis": "cross_tf",
+    "combo": "trend_signals_tp_sl_ualgo",
+    "train_wr": 0.3442,
+    "test_wr": 0.8378,
+    "wr_drop": null,
+    "n_train": null,
+    "n_test": 37
+  }
+]

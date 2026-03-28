@@ -279,6 +279,12 @@ def react_analyzer():
     return serve_react_app()
 
 
+# AI Analysis Dashboard
+@react_bp.route("/ai-analyzer")
+def react_ai_analyzer():
+    return serve_react_app()
+
+
 # ============================================================
 # Phase 6 Routes - Strategy & Automation
 # ============================================================

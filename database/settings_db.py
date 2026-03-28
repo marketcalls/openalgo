@@ -56,6 +56,9 @@ class Settings(Base):
     security_api_ban_duration = Column(Integer, default=48)  # Ban duration in hours
     security_repeat_offender_limit = Column(Integer, default=3)  # Bans before permanent ban
 
+    # AI Agent Weights (Self-Learning / Option 2)
+    agent_weights_json = Column(Text, nullable=True)  # JSON dict of agent weights
+
 
 def init_db():
     """Initialize the settings database"""
@@ -258,6 +261,61 @@ def set_security_settings(
     # Invalidate cache after update
     if "security_settings" in _settings_cache:
         del _settings_cache["security_settings"]
+
+
+def get_agent_weights() -> dict[str, float]:
+    """Get AI agent weights (cached for 1 hour)"""
+    cache_key = "agent_weights"
+
+    # Check cache first
+    if cache_key in _settings_cache:
+        return _settings_cache[cache_key]
+
+    # Cache miss - query database
+    settings = Settings.query.first()
+    if not settings:
+        settings = Settings(analyze_mode=False)
+        db_session.add(settings)
+        db_session.commit()
+
+    if not settings.agent_weights_json:
+        # Default weights for 9 agents
+        defaults = {
+            "Rakesh": 1.0,  # Growth
+            "Graham": 1.0,  # Value
+            "Jesse": 1.0,   # Momentum
+            "Simons": 1.0,  # Quant
+            "Dalio": 1.0,   # Macro
+            "Buzz": 1.0,    # Sentiment
+            "Alpha": 1.0,   # Sector
+            "Greeks": 1.0,  # Options
+            "Taleb": 1.0    # Risk
+        }
+        settings.agent_weights_json = json.dumps(defaults)
+        db_session.commit()
+        _settings_cache[cache_key] = defaults
+        return defaults
+
+    import json
+    weights = json.loads(settings.agent_weights_json)
+    _settings_cache[cache_key] = weights
+    return weights
+
+
+def set_agent_weights(weights: dict[str, float]):
+    """Update AI agent weights"""
+    import json
+    settings = Settings.query.first()
+    if not settings:
+        settings = Settings(analyze_mode=False)
+        db_session.add(settings)
+    
+    settings.agent_weights_json = json.dumps(weights)
+    db_session.commit()
+
+    # Invalidate cache
+    if "agent_weights" in _settings_cache:
+        del _settings_cache["agent_weights"]
 
 
 def clear_settings_cache():

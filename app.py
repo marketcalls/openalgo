@@ -634,6 +634,15 @@ def setup_environment(app):
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
 
+            # Initialize AI Self-Learning Scheduler
+            try:
+                from services.ai_learning_service import init_ai_learning_scheduler
+
+                init_ai_learning_scheduler()
+                logger.debug("AI self-learning scheduler initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize AI self-learning scheduler: {e}")
+
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
                 from database.settings_db import get_analyze_mode
@@ -842,4 +851,4 @@ if __name__ == "__main__":
             "*.bak",
         ]
     }
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    socketio.run(app, host=host_ip, port=port, debug=debug, allow_unsafe_werkzeug=True, reloader_options=reloader_options)

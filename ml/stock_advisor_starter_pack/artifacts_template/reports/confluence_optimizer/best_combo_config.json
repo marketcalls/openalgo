@@ -1,0 +1,40 @@
+{
+  "best_combo": [
+    "trend_signals_tp_sl_ualgo",
+    "reversal_radar_v2"
+  ],
+  "win_rate": 0.75,
+  "n_signals": 8,
+  "optimized_strategy_params": {
+    "twin_range_filter": {
+      "DEFAULT_PER1": 27,
+      "DEFAULT_MULT1": 1.28,
+      "DEFAULT_PER2": 55,
+      "DEFAULT_MULT2": 1.6
+    },
+    "trend_signals_tp_sl_ualgo": {
+      "DEFAULT_MULTIPLIER": 2.6,
+      "DEFAULT_ATR_PERIOD": 10,
+      "DEFAULT_CLOUD_VAL": 7,
+      "DEFAULT_STOP_LOSS_PCT": 1.4
+    },
+    "bahai_reversal_points": {
+      "DEFAULT_LENGTH": 25,
+      "DEFAULT_LOOKBACK_LENGTH": 6,
+      "DEFAULT_THRESHOLD_LEVEL": 0.7
+    },
+    "reversal_radar_v2": {
+      "DEFAULT_BLOCK_START": 16,
+      "DEFAULT_BLOCK_END": 7
+    },
+    "central_pivot_range": {}
+  },
+  "vwap_bb_params": {
+    "atr_pct": 0.15,
+    "bb_k1a": 1.5,
+    "bb_len1": 30,
+    "require_double_touch": false,
+    "vwap_k1": 0.5,
+    "vwap_k2": 3.0
+  }
+}

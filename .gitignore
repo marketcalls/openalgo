@@ -16,6 +16,9 @@ Thumbs.db
 .idea/
 .claude/settings.json
 .claude/settings.local.json
+.claude/worktrees/
+.claude/projects/
+frontend/.claude/
 .python-version
 config.ini
 .venvv

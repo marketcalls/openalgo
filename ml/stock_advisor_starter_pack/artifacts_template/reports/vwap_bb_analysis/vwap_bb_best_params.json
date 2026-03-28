@@ -1,0 +1,8 @@
+{
+  "atr_pct": 0.15,
+  "bb_k1a": 1.5,
+  "bb_len1": 30,
+  "require_double_touch": false,
+  "vwap_k1": 0.5,
+  "vwap_k2": 3.0
+}
