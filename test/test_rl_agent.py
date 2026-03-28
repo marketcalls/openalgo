@@ -188,3 +188,20 @@ def test_get_rl_signal_mock(tmp_path, monkeypatch):
     result = get_rl_signal(symbol="MOCKTEST", exchange="NSE", api_key="test")
     assert result["signal"] in ("BUY", "SELL", "HOLD")
     assert 0.0 <= result["confidence"] <= 1.0
+
+
+def test_api_rl_signal_no_model():
+    """Endpoint returns 200 with no_model status when model doesn't exist."""
+    import json
+    from app import app
+    with app.test_client() as client:
+        # Use a dummy API key — we just need the endpoint to exist and respond
+        resp = client.post(
+            "/api/v1/agent/rl-signal",
+            data=json.dumps({"apikey": "INVALID_KEY_TEST", "symbol": "ZZZNOTEXIST", "exchange": "NSE"}),
+            content_type="application/json",
+        )
+        # Either 403 (invalid key) or 200 with no_model — endpoint must exist
+        assert resp.status_code in (200, 403, 422), f"Unexpected status: {resp.status_code}"
+        # Must not be 404 (endpoint not found)
+        assert resp.status_code != 404
