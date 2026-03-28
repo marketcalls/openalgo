@@ -23,6 +23,7 @@ import { DailyReportTab } from '@/components/ai-analysis/tabs/DailyReportTab'
 import { ResearchTab } from '@/components/ai-analysis/tabs/ResearchTab'
 import { RLAgentTab } from '@/components/ai-analysis/tabs/RLAgentTab'
 import { PortfolioCVaRTab } from '@/components/ai-analysis/tabs/PortfolioCVaRTab'
+import { NewsClassifyTab } from '@/components/ai-analysis/tabs/NewsClassifyTab'
 import { useAIAnalysis, useAIScan, useAIStatus } from '@/hooks/useAIAnalysis'
 import { showToast } from '@/utils/toast'
 
@@ -144,6 +145,9 @@ export default function AIAnalyzer() {
           <TabsTrigger value="portfolio-cvar" className="text-xs">
             <PieChart className="h-3.5 w-3.5 mr-1" /> Portfolio
           </TabsTrigger>
+          <TabsTrigger value="news-classify" className="text-xs">
+            <Newspaper className="h-3.5 w-3.5 mr-1" /> Classifier
+          </TabsTrigger>
           {/* Utility Tabs */}
           <TabsTrigger value="scanner" className="text-xs">
             <Scan className="h-3.5 w-3.5 mr-1" /> Scanner
@@ -245,6 +249,11 @@ export default function AIAnalyzer() {
         {/* ═══ PORTFOLIO CVaR TAB ═══ */}
         <TabsContent value="portfolio-cvar">
           <PortfolioCVaRTab exchange={exchange} />
+        </TabsContent>
+
+        {/* ═══ NEWS CLASSIFIER TAB ═══ */}
+        <TabsContent value="news-classify">
+          <NewsClassifyTab />
         </TabsContent>
 
         {/* ═══ SCANNER TAB ═══ */}

@@ -92,3 +92,8 @@ nul
 
 # RL model artifacts (large binary files)
 ml/rl_models/
+
+# News classifier model artifacts
+ml/news_classifier/model/
+ml/news_classifier/model.onnx
+ml/news_classifier/data/

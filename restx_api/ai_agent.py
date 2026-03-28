@@ -533,3 +533,36 @@ class PortfolioCVaRResource(Resource):
         except Exception:
             logger.exception("Portfolio CVaR error")
             return {"status": "error", "message": "An unexpected error occurred"}, 500
+
+
+@api.route("/news-classify")
+class NewsClassifyResource(Resource):
+    @limiter.limit("20 per minute")
+    def post(self):
+        """Classify financial news headlines using distilled student model (VADER fallback)."""
+        from flask import request
+
+        data = request.get_json(force=True)
+        api_key = data.get("apikey", "")
+        headlines = data.get("headlines", [])
+        text = data.get("text", "")
+
+        if not api_key:
+            return {"status": "error", "message": "apikey is required"}, 400
+        if _validate_api_key(api_key) is None:
+            return {"status": "error", "message": "Invalid openalgo apikey"}, 403
+
+        if text:
+            headlines = [text]
+        if not headlines:
+            return {"status": "error", "message": "headlines or text is required"}, 400
+        if len(headlines) > 50:
+            return {"status": "error", "message": "Max 50 headlines per request"}, 400
+
+        try:
+            from ai.news_classifier import classify_batch
+            results = classify_batch(headlines)
+            return {"status": "success", "data": {"results": results, "count": len(results)}}
+        except Exception:
+            logger.exception("News classify error")
+            return {"status": "error", "message": "An unexpected error occurred"}, 500

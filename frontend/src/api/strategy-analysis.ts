@@ -4,7 +4,7 @@ import type {
   SmartMoneyData, HedgeStrategyData, StrategyDecisionData,
   MultiTimeframeData, PatternsData, SupportResistanceData,
   NewsSentimentData, DailyReportData, ResearchReportData,
-  RLSignalData, PortfolioCVaRData,
+  RLSignalData, PortfolioCVaRData, NewsClassifyData,
 } from '@/types/strategy-analysis'
 
 const post = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
@@ -55,4 +55,7 @@ export const strategyApi = {
 
   portfolioCVaR: (apikey: string, symbols: string[], exchange = 'NSE') =>
     post<PortfolioCVaRData>('/api/v1/agent/portfolio-cvar', { apikey, symbols, exchange }),
+
+  newsClassify: (apikey: string, headlines: string[]) =>
+    post<NewsClassifyData>('/api/v1/agent/news-classify', { apikey, headlines }),
 }

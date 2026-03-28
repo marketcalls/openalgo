@@ -425,6 +425,20 @@ export interface PortfolioCVaRData {
   message?: string
 }
 
+// ─── News Classifier ───
+export interface HeadlineClassification {
+  label: 'bearish' | 'neutral' | 'bullish'
+  confidence: number
+  model: 'student' | 'vader_fallback' | 'empty'
+  compound?: number
+  probs?: { bearish: number; neutral: number; bullish: number }
+}
+
+export interface NewsClassifyData {
+  results: HeadlineClassification[]
+  count: number
+}
+
 // ─── RL Agent ───
 export interface RLSignalData {
   status: 'success' | 'no_model' | 'error'

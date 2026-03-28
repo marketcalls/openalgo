@@ -143,3 +143,14 @@ export function usePortfolioCVaR(symbols: string[], exchange: string, enabled = 
     retry: false,
   })
 }
+
+export function useNewsClassify(headlines: string[], enabled = true) {
+  const apikey = useApiKey()
+  return useQuery({
+    queryKey: ['news-classify', headlines.join('|').substring(0, 100)],
+    queryFn: () => strategyApi.newsClassify(apikey!, headlines),
+    enabled: enabled && !!apikey && headlines.length > 0,
+    staleTime: 2 * 60_000,
+    retry: false,
+  })
+}
