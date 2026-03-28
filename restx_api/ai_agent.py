@@ -489,3 +489,47 @@ class RLTrainResource(Resource):
         except Exception:
             logger.exception("RL train error")
             return {"status": "error", "message": "An unexpected error occurred"}, 500
+
+
+@api.route("/portfolio-cvar")
+class PortfolioCVaRResource(Resource):
+    @limiter.limit("5 per minute")
+    def post(self):
+        """CVaR portfolio optimisation for a basket of symbols."""
+        from flask import request
+
+        data = request.get_json(force=True)
+        api_key = data.get("apikey", "")
+        symbols = data.get("symbols", [])
+        exchange = data.get("exchange", "NSE")
+        interval = data.get("interval", "1d")
+
+        if not symbols or not isinstance(symbols, list):
+            return {"status": "error", "message": "symbols list is required"}, 400
+        if len(symbols) < 2:
+            return {"status": "error", "message": "Need at least 2 symbols"}, 400
+        if len(symbols) > 20:
+            return {"status": "error", "message": "Max 20 symbols"}, 400
+        if not api_key:
+            return {"status": "error", "message": "apikey is required"}, 400
+        if _validate_api_key(api_key) is None:
+            return {"status": "error", "message": "Invalid openalgo apikey"}, 403
+
+        try:
+            from ai.rl_agent import _fetch_candles
+            returns_dict = {}
+            for sym in symbols:
+                df = _fetch_candles(symbol=sym, exchange=exchange, api_key=api_key, interval=interval)
+                if df is not None and len(df) >= 30:
+                    returns_dict[sym] = df["close"].pct_change().dropna()
+
+            if len(returns_dict) < 2:
+                return {"status": "error", "message": "Could not fetch data for enough symbols"}, 422
+
+            from ai.portfolio_cvar import run_portfolio_analysis
+            valid_symbols = list(returns_dict.keys())
+            result = run_portfolio_analysis(symbols=valid_symbols, returns_dict=returns_dict)
+            return {"status": "success", "data": result}
+        except Exception:
+            logger.exception("Portfolio CVaR error")
+            return {"status": "error", "message": "An unexpected error occurred"}, 500

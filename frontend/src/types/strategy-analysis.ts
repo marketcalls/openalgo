@@ -397,6 +397,34 @@ export interface ResearchReportData {
   findings: Record<string, unknown>
 }
 
+// ─── Portfolio CVaR ───
+export interface EfficientFrontierPoint {
+  volatility: number
+  return: number
+}
+
+export interface PortfolioCVaRData {
+  status: 'success' | 'error'
+  symbols: string[]
+  n_days: number
+  gpu_used: boolean
+  equal_weight_metrics: {
+    var_95: number
+    cvar_95: number
+    var_99: number
+    cvar_99: number
+  }
+  min_cvar_weights: Record<string, number>
+  max_sharpe_weights: Record<string, number>
+  cvar_95: number
+  cvar_99: number
+  sharpe: number
+  annual_return: number
+  annual_volatility: number
+  efficient_frontier: EfficientFrontierPoint[]
+  message?: string
+}
+
 // ─── RL Agent ───
 export interface RLSignalData {
   status: 'success' | 'no_model' | 'error'

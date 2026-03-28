@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Loader2, Search, TrendingUp, History, Scan,
   LineChart, Target, Brain, BookOpen, ShieldAlert, Layers, Newspaper,
-  FileText, Microscope, Bot,
+  FileText, Microscope, Bot, PieChart,
 } from 'lucide-react'
 import {
   LivePriceHeader, DecisionHistory, EnhancedScanner, DecisionCard,
@@ -22,6 +22,7 @@ import { NewsTab } from '@/components/ai-analysis/tabs/NewsTab'
 import { DailyReportTab } from '@/components/ai-analysis/tabs/DailyReportTab'
 import { ResearchTab } from '@/components/ai-analysis/tabs/ResearchTab'
 import { RLAgentTab } from '@/components/ai-analysis/tabs/RLAgentTab'
+import { PortfolioCVaRTab } from '@/components/ai-analysis/tabs/PortfolioCVaRTab'
 import { useAIAnalysis, useAIScan, useAIStatus } from '@/hooks/useAIAnalysis'
 import { showToast } from '@/utils/toast'
 
@@ -140,6 +141,9 @@ export default function AIAnalyzer() {
           <TabsTrigger value="rl-agent" className="text-xs">
             <Bot className="h-3.5 w-3.5 mr-1" /> RL Agent
           </TabsTrigger>
+          <TabsTrigger value="portfolio-cvar" className="text-xs">
+            <PieChart className="h-3.5 w-3.5 mr-1" /> Portfolio
+          </TabsTrigger>
           {/* Utility Tabs */}
           <TabsTrigger value="scanner" className="text-xs">
             <Scan className="h-3.5 w-3.5 mr-1" /> Scanner
@@ -236,6 +240,11 @@ export default function AIAnalyzer() {
         {/* ═══ RL AGENT TAB ═══ */}
         <TabsContent value="rl-agent">
           <RLAgentTab symbol={symbol} exchange={exchange} />
+        </TabsContent>
+
+        {/* ═══ PORTFOLIO CVaR TAB ═══ */}
+        <TabsContent value="portfolio-cvar">
+          <PortfolioCVaRTab exchange={exchange} />
         </TabsContent>
 
         {/* ═══ SCANNER TAB ═══ */}

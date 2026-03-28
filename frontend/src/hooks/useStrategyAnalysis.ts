@@ -132,3 +132,14 @@ export function useRLSignal(symbol: string, exchange: string, enabled = true) {
     retry: false,
   })
 }
+
+export function usePortfolioCVaR(symbols: string[], exchange: string, enabled = true) {
+  const apikey = useApiKey()
+  return useQuery({
+    queryKey: ['portfolio-cvar', symbols.join(','), exchange],
+    queryFn: () => strategyApi.portfolioCVaR(apikey!, symbols, exchange),
+    enabled: enabled && !!apikey && symbols.length >= 2,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+}
