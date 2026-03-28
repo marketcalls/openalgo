@@ -142,3 +142,47 @@ def test_env_step_buy_sell_balance():
     assert env._cash >= initial_cash * 0.95, (
         f"Cash {env._cash:.2f} fell below 95% of initial {initial_cash:.2f}"
     )
+
+
+def test_train_ppo_short():
+    """Train PPO for 512 steps — just verify it runs without error."""
+    from ai.rl_agent import train_rl_agent
+    n = 100
+    df = pd.DataFrame({
+        'open':  np.random.uniform(100, 200, n),
+        'high':  np.random.uniform(105, 205, n),
+        'low':   np.random.uniform(95, 195, n),
+        'close': np.random.uniform(100, 200, n),
+        'volume': np.ones(n) * 1_000_000,
+    })
+    result = train_rl_agent(df, algo="ppo", timesteps=512, symbol="TEST")
+    assert result["status"] == "trained"
+    assert "model_path" in result
+    import os
+    assert os.path.exists(result["model_path"])
+
+
+def test_get_rl_signal_no_model():
+    from ai.rl_agent import get_rl_signal
+    result = get_rl_signal(symbol="NONEXISTENT_ZZZ", exchange="NSE", api_key="test")
+    assert result["status"] in ("no_model", "error")
+
+
+def test_get_rl_signal_mock(tmp_path, monkeypatch):
+    """Train tiny model then get signal via monkeypatched fetch."""
+    from ai.rl_agent import train_rl_agent, get_rl_signal
+    n = 100
+    df = pd.DataFrame({
+        'open':  np.linspace(100, 200, n),
+        'high':  np.linspace(105, 205, n),
+        'low':   np.linspace(95, 195, n),
+        'close': np.linspace(100, 200, n),
+        'volume': np.ones(n) * 1_000_000,
+    })
+    train_rl_agent(df, algo="ppo", timesteps=512, symbol="MOCKTEST")
+
+    import ai.rl_agent as module
+    monkeypatch.setattr(module, "_fetch_candles", lambda *a, **kw: df)
+    result = get_rl_signal(symbol="MOCKTEST", exchange="NSE", api_key="test")
+    assert result["signal"] in ("BUY", "SELL", "HOLD")
+    assert 0.0 <= result["confidence"] <= 1.0
