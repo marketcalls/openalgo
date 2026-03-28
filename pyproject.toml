@@ -155,6 +155,7 @@ dependencies = [
   "ta>=0.11.0",
   "gymnasium>=1.2.3",
   "stable-baselines3>=2.7.1",
+  "vadersentiment>=3.3.2",
 ]
 
 [build-system]
