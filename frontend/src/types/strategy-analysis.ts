@@ -396,3 +396,15 @@ export interface ResearchReportData {
   }
   findings: Record<string, unknown>
 }
+
+// ─── RL Agent ───
+export interface RLSignalData {
+  status: 'success' | 'no_model' | 'error'
+  signal: 'BUY' | 'SELL' | 'HOLD'
+  confidence: number
+  algo: string
+  symbol: string
+  model_path?: string
+  action_int?: number
+  message?: string
+}

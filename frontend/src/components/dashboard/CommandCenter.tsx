@@ -36,7 +36,7 @@ export function CommandCenter() {
   const mode = useDashboardStore((s) => s.mode)
   const symbol = useDashboardStore((s) => s.selectedSymbol)
   const alerts = useDashboardStore((s) => s.alerts)
-  const { data: d, isLoading, isError } = useCommandCenter(symbol)
+  const { data: d, isLoading } = useCommandCenter(symbol)
   const [showAllReasons, setShowAllReasons] = useState(false)
   const [showTrades, setShowTrades] = useState(false)
 

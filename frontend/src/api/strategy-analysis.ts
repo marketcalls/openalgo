@@ -3,7 +3,7 @@ import type {
   FibonacciData, HarmonicData, ElliottWaveData,
   SmartMoneyData, HedgeStrategyData, StrategyDecisionData,
   MultiTimeframeData, PatternsData, SupportResistanceData,
-  NewsSentimentData, DailyReportData, ResearchReportData,
+  NewsSentimentData, DailyReportData, ResearchReportData, RLSignalData,
 } from '@/types/strategy-analysis'
 
 const post = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
@@ -48,4 +48,7 @@ export const strategyApi = {
 
   research: (apikey: string, symbol: string, exchange: string, question?: string) =>
     post<ResearchReportData>('/api/v1/agent/research', { apikey, symbol, exchange, question }),
+
+  rlSignal: (apikey: string, symbol: string, exchange: string, algo = 'ppo') =>
+    post<RLSignalData>('/api/v1/agent/rl-signal', { apikey, symbol, exchange, algo }),
 }

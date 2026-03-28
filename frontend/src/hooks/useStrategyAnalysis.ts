@@ -121,3 +121,14 @@ export function useResearch(symbol: string, exchange: string, question: string, 
     staleTime: 120_000,
   })
 }
+
+export function useRLSignal(symbol: string, exchange: string, enabled = true) {
+  const apikey = useApiKey()
+  return useQuery({
+    queryKey: ['rl-signal', symbol, exchange],
+    queryFn: () => strategyApi.rlSignal(apikey!, symbol, exchange),
+    enabled: enabled && !!apikey && !!symbol,
+    staleTime: 60_000,
+    retry: false,
+  })
+}

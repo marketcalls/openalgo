@@ -96,7 +96,7 @@ export function RiskMeter() {
 
           {/* Positions compact */}
           <div className="space-y-0.5">
-            {positions.map((pos) => (
+            {positions.map((pos: any) => (
               <div key={pos.symbol} className="flex items-center justify-between text-[10px]">
                 <div className="flex items-center gap-1.5">
                   <span className={cn('font-bold', pos.side === 'LONG' ? 'text-emerald-400' : 'text-rose-400')}>
@@ -143,7 +143,7 @@ export function RiskMeter() {
         </div>
 
         <div className="space-y-0.5">
-          {positions.map((pos) => (
+          {positions.map((pos: any) => (
             <div key={pos.symbol} className="flex items-center justify-between rounded bg-slate-900/50 px-2 py-1 text-[10px]">
               <div className="flex items-center gap-2">
                 <span className={cn('font-bold', pos.side === 'LONG' ? 'text-emerald-400' : 'text-rose-400')}>

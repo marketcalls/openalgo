@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { BarChart3, Loader2 } from 'lucide-react'
+import { BarChart3 } from 'lucide-react'
 import { createChart, CandlestickSeries, HistogramSeries, type IChartApi, type CandlestickData, type Time } from 'lightweight-charts'
 import { Panel } from './shared/Panel'
 import { useDashboardStore } from '@/stores/dashboardStore'

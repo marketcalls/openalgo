@@ -2,7 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useDailyReport } from '@/hooks/useStrategyAnalysis'
 import {
-  Loader2, AlertCircle, TrendingUp, TrendingDown, Minus,
+  Loader2, AlertCircle, TrendingUp, TrendingDown,
   BarChart3, Newspaper, Target,
 } from 'lucide-react'
 
