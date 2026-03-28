@@ -50,17 +50,36 @@ class SymToken(Base):
 
 
 def init_db():
+    """Initialize the master contract database tables.
+
+    Creates the symtoken table and associated indices if they
+    do not already exist.
+    """
     logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 
 def delete_symtoken_table():
+    """Delete all records from the symtoken table.
+
+    Clears existing instrument data to prepare for a fresh
+    master contract download.
+    """
     logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 
-def copy_from_dataframe(df):
+def copy_from_dataframe(df: pd.DataFrame):
+    """Bulk insert instrument records from a DataFrame into the database.
+
+    Filters out records with tokens that already exist in the database
+    to avoid duplicates, then performs a bulk insert of new records.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing instrument data with columns
+            matching the SymToken model fields.
+    """
     logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
@@ -86,7 +105,18 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
-def download_csv_kotak_data(output_path):
+def download_csv_kotak_data(output_path: str) -> list:
+    """Download the CSV files from Kotak using Auth Credentials.
+
+    Saves the CSV files to the specified path and returns a list of
+    downloaded file paths.
+
+    Args:
+        output_path (str): Path where the CSV files will be saved.
+
+    Returns:
+        list: List of paths to the downloaded files.
+    """
     logger.info("Downloading Master Contract CSV Files")
 
     # URLs of the CSV files to be downloaded
@@ -134,9 +164,15 @@ def download_csv_kotak_data(output_path):
     return downloaded_files
 
 
-def process_kotak_nse_csv(path):
+def process_kotak_nse_csv(path: str) -> pd.DataFrame:
     """
-    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Kotak NSE CSV file to fit the existing database schema.
+
+    Args:
+        path (str): The folder path containing the CSV data.
+
+    Returns:
+        pd.DataFrame: The processed DataFrame.
     """
     logger.info("Processing kotak NSE CSV Data")
     file_path = f"{path}/NSE_CM.csv"
@@ -180,9 +216,15 @@ def process_kotak_nse_csv(path):
     return token_df
 
 
-def process_kotak_bse_csv(path):
+def process_kotak_bse_csv(path: str) -> pd.DataFrame:
     """
-    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Kotak BSE CSV file to fit the existing database schema.
+
+    Args:
+        path (str): The folder path containing the CSV data.
+
+    Returns:
+        pd.DataFrame: The processed DataFrame.
     """
     logger.info("Processing kotak BSE CSV Data")
     file_path = f"{path}/BSE_CM.csv"
@@ -230,7 +272,15 @@ def process_kotak_bse_csv(path):
     return token_df
 
 
-def combine_details(row):
+def combine_details(row: pd.Series) -> str:
+    """Combines details into a single symbol string.
+    
+    Args:
+        row (pd.Series): A row from the DataFrame.
+        
+    Returns:
+        str: The combined symbol formatted for OpenAlgo.
+    """
     base = f"{row['name']}{row['expiry'].replace('-', '')}"
     if row["instrumenttype"] == "FUT":
         return f"{base}FUT"
@@ -241,9 +291,15 @@ def combine_details(row):
         return base
 
 
-def process_kotak_nfo_csv(path):
+def process_kotak_nfo_csv(path: str) -> pd.DataFrame:
     """
-    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Kotak NFO CSV file to fit the existing database schema.
+
+    Args:
+        path (str): The folder path containing the CSV data.
+
+    Returns:
+        pd.DataFrame: The processed DataFrame.
     """
     logger.info("Processing kotak NFO CSV Data")
     file_path = f"{path}/NSE_FO.csv"
@@ -419,9 +475,15 @@ def get_kotak_master_filepaths():
     return {}
 
 
-def process_kotak_cds_csv(path):
+def process_kotak_cds_csv(path: str) -> pd.DataFrame:
     """
-    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Kotak CDS CSV file to fit the existing database schema.
+
+    Args:
+        path (str): The folder path containing the CSV data.
+
+    Returns:
+        pd.DataFrame: The processed DataFrame.
     """
     logger.info("Processing kotak CDS CSV Data")
     file_path = f"{path}/CDE_FO.csv"
@@ -457,9 +519,15 @@ def process_kotak_cds_csv(path):
     return tokensymbols
 
 
-def process_kotak_mcx_csv(path):
+def process_kotak_mcx_csv(path: str) -> pd.DataFrame:
     """
-    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Kotak MCX CSV file to fit the existing database schema.
+
+    Args:
+        path (str): The folder path containing the CSV data.
+
+    Returns:
+        pd.DataFrame: The processed DataFrame.
     """
     logger.info("Processing kotak MCX CSV Data")
     file_path = f"{path}/MCX_FO.csv"
@@ -496,9 +564,15 @@ def process_kotak_mcx_csv(path):
     return tokensymbols
 
 
-def process_kotak_bfo_csv(path):
+def process_kotak_bfo_csv(path: str) -> pd.DataFrame:
     """
-    Processes the kotak CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Kotak BFO CSV file to fit the existing database schema.
+
+    Args:
+        path (str): The folder path containing the CSV data.
+
+    Returns:
+        pd.DataFrame: The processed DataFrame.
     """
     logger.info("Processing kotak BFO CSV Data")
     file_path = f"{path}/BSE_FO.csv"
@@ -535,7 +609,12 @@ def process_kotak_bfo_csv(path):
     return tokensymbols
 
 
-def delete_kotak_temp_data(output_path):
+def delete_kotak_temp_data(output_path: str):
+    """Delete the temporary master contract data files.
+
+    Args:
+        output_path (str): Path to the temporary directory.
+    """
     # Check each file in the directory
     for filename in os.listdir(output_path):
         # Construct the full file path
@@ -547,6 +626,15 @@ def delete_kotak_temp_data(output_path):
 
 
 def master_contract_download():
+    """Download and process the full Kotak master contract.
+
+    Downloads the instrument CSVs, processes and normalizes the data,
+    replaces the existing symtoken table, and emits a SocketIO event
+    on completion.
+
+    Returns:
+        SocketIO emission with status 'success' or 'error'.
+    """
     logger.info("Downloading Master Contract")
 
     output_path = "tmp"
@@ -609,7 +697,16 @@ def master_contract_download():
         return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
 
 
-def search_symbols(symbol, exchange):
+def search_symbols(symbol: str, exchange: str) -> list:
+    """Search for symbols matching a pattern in the master contract database.
+
+    Args:
+        symbol (str): Symbol pattern to search for (supports SQL LIKE wildcards).
+        exchange (str): Exact exchange segment to filter by.
+
+    Returns:
+        list[SymToken]: List of matching SymToken records.
+    """
     return SymToken.query.filter(
         SymToken.symbol.like(f"%{symbol}%"), SymToken.exchange == exchange
     ).all()

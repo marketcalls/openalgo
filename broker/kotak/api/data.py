@@ -13,7 +13,22 @@ logger = get_logger(__name__)
 
 
 class BrokerData:
-    def __init__(self, auth_token):
+    """Kotak Neo broker data adapter for retrieving market data.
+    
+    Handles fetching live quotes, market depth, and historical data 
+    (not supported by Kotak currently) using the Kotak Neo API v2.
+    """
+
+    def __init__(self, auth_token: str):
+        """Initialize the Kotak BrokerData instance.
+
+        Args:
+            auth_token (str): Composite authentication token containing
+                session_token, session_sid, base_url, and access_token.
+                
+        Raises:
+            ValueError: If the extracted base_url is invalid or missing.
+        """
         # Updated for Neo API v2: session_token:::session_sid:::base_url:::access_token
         self.session_token, self.session_sid, self.base_url, self.access_token = auth_token.split(
             ":::"
@@ -34,8 +49,15 @@ class BrokerData:
         self.timeframe_map = {}
         logger.warning("Kotak Neo does not support historical data intervals")
 
-    def _get_kotak_exchange(self, exchange):
-        """Map OpenAlgo exchange to Kotak exchange segment"""
+    def _get_kotak_exchange(self, exchange: str) -> str:
+        """Map OpenAlgo exchange to Kotak exchange segment.
+
+        Args:
+            exchange (str): OpenAlgo standard exchange format.
+
+        Returns:
+            str: Kotak specific exchange segment code.
+        """
         exchange_map = {
             "NSE": "nse_cm",
             "BSE": "bse_cm",
@@ -48,8 +70,15 @@ class BrokerData:
         }
         return exchange_map.get(exchange)
 
-    def _get_index_symbol(self, symbol):
-        """Map OpenAlgo index symbols to Kotak Neo API format"""
+    def _get_index_symbol(self, symbol: str) -> str:
+        """Map OpenAlgo index symbols to Kotak Neo API format.
+
+        Args:
+            symbol (str): OpenAlgo standard index symbol.
+
+        Returns:
+            str: Kotak specific index symbol name.
+        """
         index_map = {
             "NIFTY": "Nifty 50",
             "NIFTY50": "Nifty 50",
@@ -62,8 +91,16 @@ class BrokerData:
         # Return mapped symbol or original symbol if not found
         return index_map.get(symbol.upper(), symbol)
 
-    def _make_quotes_request(self, query, filter_name="all"):
-        """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
+    def _make_quotes_request(self, query: str, filter_name: str = "all") -> dict:
+        """Make HTTP request to Neo API v2 quotes endpoint.
+
+        Args:
+            query (str): Formatted query string (e.g., 'nse_cm|Reliance').
+            filter_name (str): Type of data to fetch ('all' or 'depth').
+
+        Returns:
+            dict: JSON parsed API response or None on failure.
+        """
         client = get_httpx_client()
 
         # URL encode spaces but keep pipe/comma characters
@@ -115,8 +152,16 @@ class BrokerData:
         self.last_quote_error = last_error
         return None
 
-    def get_quotes(self, symbol, exchange):
-        """Get live quotes using Neo API v2 quotes endpoint with pSymbol-based queries"""
+    def get_quotes(self, symbol: str, exchange: str) -> dict:
+        """Get live quotes using Neo API v2 quotes endpoint.
+
+        Args:
+            symbol (str): Trading symbol.
+            exchange (str): Exchange segment.
+
+        Returns:
+            dict: Standardized quote data mapping (LTP, OHLC, volume, etc).
+        """
         try:
             logger.info(f"QUOTES API - Symbol: {symbol}, Exchange: {exchange}")
 
@@ -216,7 +261,15 @@ class BrokerData:
             return self._get_default_quote()
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
-        """Get market depth using Neo API v2 quotes endpoint with depth filter"""
+        """Get market depth using Neo API v2 quotes endpoint with depth filter.
+
+        Args:
+            symbol (str): Trading symbol.
+            exchange (str): Exchange segment.
+
+        Returns:
+            dict: Top 5 bids and asks with quantities.
+        """
         try:
             logger.info(f"DEPTH API - Symbol: {symbol}, Exchange: {exchange}")
 
@@ -367,9 +420,11 @@ class BrokerData:
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
-        Process a single batch of symbols (internal method)
+        Process a single batch of symbols.
+
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+            symbols (list): List of dicts with 'symbol' and 'exchange' keys (max 50)
+            
         Returns:
             list: List of quote data for the batch
         """
@@ -520,8 +575,12 @@ class BrokerData:
         # Include skipped symbols in results
         return skipped_symbols + results
 
-    def _get_default_quote(self):
-        """Return default quote structure"""
+    def _get_default_quote(self) -> dict:
+        """Return default quote structure.
+
+        Returns:
+            dict: A quote dictionary with all values set to 0.
+        """
         return {
             "bid": 0,
             "ask": 0,
@@ -534,8 +593,12 @@ class BrokerData:
             "oi": 0,
         }
 
-    def _get_default_depth(self):
-        """Return default depth structure"""
+    def _get_default_depth(self) -> dict:
+        """Return default depth structure.
+
+        Returns:
+            dict: Empty depth dictionary with 5 empty levels.
+        """
         return {
             "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
             "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
@@ -546,13 +609,30 @@ class BrokerData:
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
-        """Placeholder for historical data - not supported by Kotak Neo"""
+        """Retrieve historical timeframe data.
+
+        Note: Kotak Neo does not support historical data, returns empty DataFrame.
+
+        Args:
+            symbol (str): Trading symbol.
+            exchange (str): Exchange segment.
+            interval (str): Timeframe interval.
+            start_date (str): Start datetime.
+            end_date (str): End datetime.
+
+        Returns:
+            pd.DataFrame: Empty DataFrame as historical data is not supported.
+        """
         empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         logger.warning("Kotak Neo does not support historical data")
         return empty_df
 
     def get_supported_intervals(self) -> dict:
-        """Return supported intervals matching the format expected by intervals.py"""
+        """Return supported intervals matching the format expected by intervals.py.
+
+        Returns:
+            dict: Dictionary with empty lists since historical data is unsupported.
+        """
         intervals = {
             "seconds": [],
             "minutes": [],
