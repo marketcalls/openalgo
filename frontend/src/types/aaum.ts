@@ -75,7 +75,7 @@ const AgentOutputSchema = z.object({
   action: TradeActionSchema,
   confidence: z.number(),
   reasoning: z.string().default(''),
-  key_metrics: z.record(z.string(), z.union([z.number(), z.string()])).default({}),
+  key_metrics: z.record(z.string(), z.unknown()).default({}),
 })
 const AgentDebateSchema = z.object({
   bulls: z.array(AgentOutputSchema),
