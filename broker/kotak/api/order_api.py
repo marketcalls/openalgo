@@ -100,7 +100,7 @@ def place_order_api(data, auth_token):
     client = get_httpx_client()
 
     token_id = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token_id)
+    newdata = transform_data(data, token_id, auth_token)
 
     json_string = json.dumps(newdata)
     payload = f"jData={urllib.parse.quote(json_string)}"
