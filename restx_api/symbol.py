@@ -9,7 +9,7 @@ from services.symbol_service import get_symbol_info
 from utils.logging import get_logger
 
 from .data_schemas import SymbolSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("symbol", description="Symbol information API")
 

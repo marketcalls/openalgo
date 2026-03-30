@@ -10,7 +10,7 @@ from services.chart_service import get_chart_preferences, update_chart_preferenc
 from utils.logging import get_logger
 
 from .account_schema import ChartSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("chart", description="Chart Preferences and Cloud Workspace Sync")
 

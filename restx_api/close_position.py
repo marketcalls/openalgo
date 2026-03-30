@@ -11,7 +11,7 @@ from limiter import limiter
 from restx_api.schemas import ClosePositionSchema
 from services.close_position_service import close_position, emit_analyzer_error
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("close_position", description="Close Position API")
 

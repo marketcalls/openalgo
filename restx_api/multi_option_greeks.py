@@ -8,7 +8,7 @@ from database.auth_db import verify_api_key
 from limiter import limiter
 from services.option_greeks_service import get_multi_option_greeks
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 from .data_schemas import MultiOptionGreeksSchema
 

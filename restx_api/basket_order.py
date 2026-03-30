@@ -13,7 +13,7 @@ from limiter import limiter
 from restx_api.schemas import BasketOrderSchema
 from services.basket_order_service import emit_analyzer_error, place_basket_order
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("basket_order", description="Basket Order API")
 

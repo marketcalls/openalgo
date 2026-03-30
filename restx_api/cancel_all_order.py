@@ -11,7 +11,7 @@ from limiter import limiter
 from restx_api.schemas import CancelAllOrderSchema
 from services.cancel_all_order_service import cancel_all_orders, emit_analyzer_error
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("cancel_all_order", description="Cancel All Orders API")
 

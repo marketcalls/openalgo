@@ -9,7 +9,7 @@ from services.positionbook_service import get_positionbook
 from utils.logging import get_logger
 
 from .account_schema import PositionbookSchema
-from .config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("positionbook", description="Position Book API")
 

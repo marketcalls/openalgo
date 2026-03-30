@@ -69,7 +69,7 @@ from services.option_chain_service import get_option_chain
 from utils.logging import get_logger
 
 # Get rate limit from environment
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 from .data_schemas import OptionChainSchema
 
 # Initialize logger

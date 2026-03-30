@@ -38,7 +38,7 @@ from marshmallow import ValidationError
 from limiter import limiter
 from services.option_symbol_service import get_option_symbol
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 from .data_schemas import OptionSymbolSchema
 
 # Initialize logger

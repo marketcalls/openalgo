@@ -9,7 +9,7 @@ from services.instruments_service import get_instruments
 from utils.logging import get_logger
 
 from .data_schemas import InstrumentsSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 class CSVResponse(Response):
     """Custom Response class that supports both CSV and JSON properties for latency monitoring"""

@@ -10,7 +10,7 @@ from services.intervals_service import get_intervals
 from utils.logging import get_logger
 
 from .data_schemas import IntervalsSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("intervals", description="Supported Intervals API")
 

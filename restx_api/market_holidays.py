@@ -9,7 +9,7 @@ from services.market_calendar_service import get_holidays
 from utils.logging import get_logger
 
 from .data_schemas import MarketHolidaysSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("market/holidays", description="Market Holidays API")
 

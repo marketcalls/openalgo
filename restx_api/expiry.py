@@ -8,7 +8,7 @@ from limiter import limiter
 from services.expiry_service import get_expiry_dates
 from utils.logging import get_logger
 
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 from .data_schemas import ExpirySchema
 
 api = Namespace("expiry", description="Expiry dates API for F&O instruments")

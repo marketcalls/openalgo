@@ -15,7 +15,7 @@ from utils.logging import get_logger
 from .data_schemas import TickerSchema
 
 from types import ModuleType
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 
 

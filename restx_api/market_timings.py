@@ -9,7 +9,7 @@ from services.market_calendar_service import get_timings
 from utils.logging import get_logger
 
 from .data_schemas import MarketTimingsSchema
-from .config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("market/timings", description="Market Timings API")
 

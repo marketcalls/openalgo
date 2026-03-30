@@ -10,7 +10,7 @@ from services.holdings_service import get_holdings
 from utils.logging import get_logger
 
 from .account_schema import HoldingsSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("holdings", description="Holdings API")
 

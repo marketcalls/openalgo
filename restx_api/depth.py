@@ -10,7 +10,7 @@ from services.depth_service import get_depth
 from utils.logging import get_logger
 
 from .data_schemas import DepthSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 
 api = Namespace("depth", description="Market Depth API")

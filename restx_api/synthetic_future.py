@@ -42,7 +42,7 @@ from restx_api.schemas import SyntheticFutureSchema
 from services.synthetic_future_service import calculate_synthetic_future
 from utils.logging import get_logger
 # Get rate limit from environment
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 # Initialize logger
 logger = get_logger(__name__)

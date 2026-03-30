@@ -8,7 +8,7 @@ from marshmallow import ValidationError
 from limiter import limiter
 from services.sandbox_service import is_sandbox_mode, sandbox_get_pnl_symbols
 from utils.logging import get_logger
-from .config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 from .account_schema import PnlSymbolsSchema
 
 

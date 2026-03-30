@@ -9,7 +9,7 @@ from services.quotes_service import get_quotes
 from utils.logging import get_logger
 
 from .data_schemas import QuotesSchema
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("quotes", description="Real-time Quotes API")
 

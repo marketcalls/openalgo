@@ -11,7 +11,7 @@ from limiter import limiter
 from restx_api.schemas import SplitOrderSchema
 from services.split_order_service import emit_analyzer_error, split_order
 from utils.logging import get_logger
-from config import API_RATE_LIMIT
+from restx_api.config import API_RATE_LIMIT
 
 api = Namespace("split_order", description="Split Order API")
 
