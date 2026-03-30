@@ -10,8 +10,8 @@ from limiter import limiter
 from restx_api.schemas import MarginCalculatorSchema
 from services.margin_service import calculate_margin
 from utils.logging import get_logger
-from restx_api.config import API_RATE_LIMIT
 
+API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "50 per second")
 api = Namespace("margin", description="Margin Calculator API")
 
 # Initialize logger
