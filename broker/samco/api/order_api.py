@@ -130,7 +130,7 @@ def place_order_api(data, auth):
     Place an order with Samco.
     """
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token)
+    newdata = transform_data(data, token, auth)
 
     client = get_httpx_client()
 
@@ -159,6 +159,10 @@ def place_order_api(data, auth):
     # Add trigger price for stop loss orders
     if "triggerPrice" in newdata:
         payload["triggerPrice"] = newdata["triggerPrice"]
+
+    # Add market protection percentage if present
+    if "marketProtection" in newdata:
+        payload["marketProtection"] = newdata["marketProtection"]
 
     logger.info(f"Samco place order payload: {payload}")
 
