@@ -101,6 +101,59 @@ def transform_data(data, token, auth_token=None):
                 f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with regular market order."
             )
 
+    # Apply Market Price Protection for SL-M orders (convert SL-M to SL with protected price)
+    elif data["pricetype"] == "SL-M":
+        try:
+            trigger_price = float(data.get("trigger_price", 0))
+        except (TypeError, ValueError):
+            trigger_price = 0.0
+            logger.warning(
+                f"MPP Warning: Invalid trigger_price for SL-M Symbol={data['symbol']}. "
+                f"Proceeding with SL-M order."
+            )
+        logger.info(
+            f"MPP: SL-M order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, "
+            f"Action={action}, TriggerPrice={trigger_price}"
+        )
+        if trigger_price > 0:
+            try:
+                # Get instrument type and tick_size from master contract
+                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                tick_size = None
+                symbol_info = get_symbol_info(data["symbol"], data["exchange"])
+                if symbol_info and symbol_info.tick_size:
+                    tick_size = symbol_info.tick_size
+                logger.info(
+                    f"MPP Symbol Info: InstrumentType={instrument_type}, TickSize={tick_size}"
+                )
+
+                # Calculate protected price based on trigger price
+                protected_price = calculate_protected_price(
+                    price=trigger_price,
+                    action=action,
+                    symbol=data["symbol"],
+                    instrument_type=instrument_type,
+                    tick_size=tick_size,
+                )
+                price = str(protected_price)
+
+                # Convert SL-M to SL (stop loss limit)
+                order_type = "SL"
+                logger.info(
+                    f"MPP Conversion Complete: Symbol={data['symbol']}, OrderType=SL-M->SL, "
+                    f"TriggerPrice={trigger_price}, LimitPrice={protected_price}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"MPP Error: Failed to apply MPP for SL-M Symbol={data['symbol']}, "
+                    f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with SL-M order."
+                )
+        else:
+            logger.warning(
+                f"MPP Warning: Trigger price is 0 for SL-M Symbol={data['symbol']}. "
+                f"Proceeding with SL-M order."
+            )
+
     # Basic mapping - ALL values must be strings for Kotak API
     transformed = {
         "am": "NO",
