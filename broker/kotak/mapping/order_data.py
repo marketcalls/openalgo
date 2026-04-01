@@ -79,6 +79,10 @@ def calculate_order_statistics(order_data):
                 order["trnsTp"] = "SELL"
                 total_sell_orders += 1
 
+            # Normalize "trigger pending" to "open" for UI compatibility
+            if order["ordSt"] == "trigger pending":
+                order["ordSt"] = "open"
+
             # Count orders based on their status
             if order["ordSt"] == "complete":
                 total_completed_orders += 1
