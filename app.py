@@ -183,6 +183,7 @@ from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
+from database.samco_auth_db import init_db as ensure_samco_auth_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
@@ -375,6 +376,13 @@ def create_app():
 
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions["brlogin.broker_callback"])
+
+        # Exempt Samco 2FA setup endpoints from CSRF (JSON API calls from React frontend)
+        csrf.exempt(app.view_functions["brlogin.samco_generate_otp"])
+        csrf.exempt(app.view_functions["brlogin.samco_generate_secret"])
+        csrf.exempt(app.view_functions["brlogin.samco_save_secret"])
+        csrf.exempt(app.view_functions["brlogin.samco_ip_status"])
+        csrf.exempt(app.view_functions["brlogin.samco_update_ip"])
 
         # Exempt logout endpoint from CSRF protection (safe - only destroys session)
         csrf.exempt(app.view_functions["auth.logout"])
@@ -601,6 +609,7 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
+                ("Samco Auth DB", ensure_samco_auth_tables_exists),
             ]
 
             db_init_start = time.time()
