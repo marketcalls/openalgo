@@ -103,7 +103,14 @@ def transform_data(data, token, auth_token=None):
 
     # Apply Market Price Protection for SL-M orders (convert SL-M to SL with protected price)
     elif data["pricetype"] == "SL-M":
-        trigger_price = float(data.get("trigger_price", 0))
+        try:
+            trigger_price = float(data.get("trigger_price", 0))
+        except (TypeError, ValueError):
+            trigger_price = 0.0
+            logger.warning(
+                f"MPP Warning: Invalid trigger_price for SL-M Symbol={data['symbol']}. "
+                f"Proceeding with SL-M order."
+            )
         logger.info(
             f"MPP: SL-M order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, "
             f"Action={action}, TriggerPrice={trigger_price}"
