@@ -6,6 +6,25 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def map_order_status(status):
+    """
+    Maps Samco order status to OpenAlgo standardized status.
+    OpenAlgo expects: 'open', 'complete', 'cancelled', 'rejected'
+    """
+    status_lower = status.lower() if status else ""
+    status_mapping = {
+        "open": "open",
+        "pending": "open",
+        "trigger pending": "open",
+        "complete": "complete",
+        "executed": "complete",
+        "cancelled": "cancelled",
+        "canceled": "cancelled",
+        "rejected": "rejected",
+    }
+    return status_mapping.get(status_lower, status_lower)
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -142,7 +161,7 @@ def transform_order_data(orders):
             "pricetype": ordertype,
             "product": order.get("productCode", ""),
             "orderid": order.get("orderNumber", ""),
-            "order_status": order.get("orderStatus", ""),
+            "order_status": map_order_status(order.get("orderStatus", "")),
             "timestamp": order.get("orderTime", ""),
         }
 
