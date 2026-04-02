@@ -40,6 +40,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
           tags: icamtu/openalgo-arm64:latest,icamtu/openalgo-arm64:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
