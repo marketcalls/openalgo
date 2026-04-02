@@ -543,7 +543,7 @@ export default function SamcoAuth() {
             {currentStep === 'ip' && (
               <div className="space-y-4">
                 {ipStatus && !ipStatus.editable && (
-                  <Alert variant="warning" className="mb-2">
+                  <Alert variant="warning">
                     <Lock className="h-4 w-4" />
                     <AlertDescription>
                       IP was updated this week. Next edit available:{' '}
@@ -576,7 +576,7 @@ export default function SamcoAuth() {
                       placeholder="e.g. 203.0.113.11"
                       value={secondaryIp}
                       onChange={(e) => setSecondaryIp(e.target.value)}
-                      disabled={isLoading || (ipStatus !== null && !ipStatus.editable && ipStatus.primary_ip !== null)}
+                      disabled={isLoading || (ipStatus !== null && !ipStatus.editable && ipStatus.secondary_ip !== null)}
                       pattern="[0-9.]+"
                     />
                   </div>
@@ -588,7 +588,7 @@ export default function SamcoAuth() {
                 </div>
 
                 <div className="flex gap-2">
-                  {(ipStatus?.editable || !ipStatus?.primary_ip) && (
+                  {(ipStatus?.editable || !ipStatus?.primary_ip || !ipStatus?.secondary_ip) && (
                     <Button
                       onClick={() => {
                         if (!primaryIp.trim()) {

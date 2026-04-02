@@ -1,6 +1,6 @@
 import os
 
-from database.samco_auth_db import get_secret_key
+from database.auth_db import samco_get_secret_key as get_secret_key
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 

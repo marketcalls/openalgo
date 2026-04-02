@@ -2,9 +2,9 @@
 """
 Samco 2FA Auth Migration Script for OpenAlgo
 
-This migration creates the samco_auth table for storing:
-- Secret API key (permanent, generated via OTP flow)
-- IP registration details with weekly update tracking
+This migration adds auxiliary columns (aux_param1-4) to the existing auth table.
+These columns are used by Samco for 2FA data (secret key, IP registration)
+and are available for other brokers to store broker-specific data.
 
 Usage:
     cd upgrade
@@ -29,7 +29,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Migration metadata
-MIGRATION_NAME = "samco_auth"
+MIGRATION_NAME = "samco_auth_aux_columns"
 MIGRATION_VERSION = "001"
 
 # Load environment
@@ -51,38 +51,49 @@ def get_engine():
     return create_engine(database_url)
 
 
+AUX_COLUMNS = [
+    # Samco 2FA fields
+    ("secret_api_key", "TEXT"),
+    ("primary_ip", "VARCHAR(45)"),
+    ("secondary_ip", "VARCHAR(45)"),
+    ("ip_updated_at", "DATETIME"),
+    # Generic auxiliary fields
+    ("aux_param1", "TEXT"),
+    ("aux_param2", "TEXT"),
+    ("aux_param3", "TEXT"),
+    ("aux_param4", "TEXT"),
+]
+
+
 def upgrade():
-    """Apply the migration - create samco_auth table"""
+    """Apply the migration - add aux_param columns to auth table"""
     try:
         logger.info(f"Starting migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})")
 
         engine = get_engine()
 
         with engine.connect() as conn:
-            # Create samco_auth table
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS samco_auth (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id VARCHAR(50) UNIQUE NOT NULL,
-                    secret_api_key TEXT,
-                    primary_ip VARCHAR(45),
-                    secondary_ip VARCHAR(45),
-                    ip_updated_at DATETIME
-                )
-            """)
-            )
+            # Check existing columns
+            result = conn.execute(text("PRAGMA table_info(auth)"))
+            existing_columns = {row[1] for row in result}
 
-            # Create indexes
-            conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS idx_samco_auth_user_id ON samco_auth(user_id)"
-                )
-            )
+            added = 0
+            for col_name, col_type in AUX_COLUMNS:
+                if col_name not in existing_columns:
+                    conn.execute(
+                        text(f"ALTER TABLE auth ADD COLUMN {col_name} {col_type}")
+                    )
+                    logger.info(f"Added column: {col_name}")
+                    added += 1
+                else:
+                    logger.info(f"Column already exists: {col_name}")
 
             conn.commit()
 
-        logger.info(f"Migration {MIGRATION_NAME} completed successfully")
+        if added > 0:
+            logger.info(f"Migration {MIGRATION_NAME} completed: added {added} column(s)")
+        else:
+            logger.info(f"Migration {MIGRATION_NAME}: all columns already exist")
         return True
 
     except Exception as e:
@@ -101,20 +112,16 @@ def status():
         engine = get_engine()
 
         with engine.connect() as conn:
-            result = conn.execute(
-                text("""
-                SELECT name FROM sqlite_master
-                WHERE type='table' AND name='samco_auth'
-            """)
-            )
-            if not result.fetchone():
-                logger.info("samco_auth table does not exist - migration needed")
+            result = conn.execute(text("PRAGMA table_info(auth)"))
+            existing_columns = {row[1] for row in result}
+
+            missing = [c for c, _ in AUX_COLUMNS if c not in existing_columns]
+
+            if missing:
+                logger.info(f"Missing columns: {', '.join(missing)} - migration needed")
                 return False
 
-            # Show record count
-            result = conn.execute(text("SELECT COUNT(*) FROM samco_auth"))
-            count = result.fetchone()[0]
-            logger.info(f"samco_auth table exists with {count} record(s)")
+            logger.info("All aux_param columns exist in auth table")
             return True
 
     except Exception as e:
