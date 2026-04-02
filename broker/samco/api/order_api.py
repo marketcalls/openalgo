@@ -133,7 +133,8 @@ def place_order_api(data, auth):
     try:
         newdata = transform_data(data, token, auth)
     except ValueError as e:
-        return None, {"status": "error", "orderid": None, "message": str(e)}, None
+        error_res = type("Response", (), {"status": 400, "status_code": 400})()
+        return error_res, {"status": "error", "orderid": None, "message": str(e)}, None
 
     client = get_httpx_client()
 
