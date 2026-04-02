@@ -130,7 +130,10 @@ def place_order_api(data, auth):
     Place an order with Samco.
     """
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token, auth)
+    try:
+        newdata = transform_data(data, token, auth)
+    except ValueError as e:
+        return {"status": "error", "orderid": None, "message": str(e)}
 
     client = get_httpx_client()
 

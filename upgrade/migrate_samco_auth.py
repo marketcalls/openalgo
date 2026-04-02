@@ -22,7 +22,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from utils.logging import get_logger
 
@@ -71,12 +71,10 @@ def upgrade():
         logger.info(f"Starting migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})")
 
         engine = get_engine()
+        inspector = inspect(engine)
+        existing_columns = {col["name"] for col in inspector.get_columns("auth")}
 
         with engine.connect() as conn:
-            # Check existing columns
-            result = conn.execute(text("PRAGMA table_info(auth)"))
-            existing_columns = {row[1] for row in result}
-
             added = 0
             for col_name, col_type in AUX_COLUMNS:
                 if col_name not in existing_columns:
@@ -110,19 +108,17 @@ def status():
         logger.info(f"Checking status of migration: {MIGRATION_NAME}")
 
         engine = get_engine()
+        inspector = inspect(engine)
+        existing_columns = {col["name"] for col in inspector.get_columns("auth")}
 
-        with engine.connect() as conn:
-            result = conn.execute(text("PRAGMA table_info(auth)"))
-            existing_columns = {row[1] for row in result}
+        missing = [c for c, _ in AUX_COLUMNS if c not in existing_columns]
 
-            missing = [c for c, _ in AUX_COLUMNS if c not in existing_columns]
+        if missing:
+            logger.info(f"Missing columns: {', '.join(missing)} - migration needed")
+            return False
 
-            if missing:
-                logger.info(f"Missing columns: {', '.join(missing)} - migration needed")
-                return False
-
-            logger.info("All aux_param columns exist in auth table")
-            return True
+        logger.info("All aux_param columns exist in auth table")
+        return True
 
     except Exception as e:
         logger.error(f"Status check failed: {e}")

@@ -996,7 +996,7 @@ def samco_update_ip():
 
     # Parse ip_updated_at from response if available
     ip_updated_at = None
-    if data and data.get("data", {}).get("ip_updated_at"):
+    if data and data.get("data") and data["data"].get("ip_updated_at"):
         from datetime import datetime
 
         try:

@@ -75,29 +75,20 @@ def transform_data(data, token, auth_token=None):
                             f"LTP={ltp}, ProtectedPrice={protected_price}, MPP={mpp_percentage}%"
                         )
                     else:
-                        logger.warning(
-                            f"MPP Warning: LTP is 0 for Symbol={data['symbol']}. "
-                            f"Falling back to L order type without price protection"
+                        raise ValueError(
+                            f"LTP is 0 for Symbol={data['symbol']}. Cannot determine market price."
                         )
-                        order_type = "L"
                 else:
-                    logger.warning(
-                        f"MPP Warning: No quote data for Symbol={data['symbol']}. "
-                        f"Falling back to L order type"
+                    raise ValueError(
+                        f"No quote data for Symbol={data['symbol']}. Cannot determine market price."
                     )
-                    order_type = "L"
             else:
-                logger.warning(
-                    f"MPP Warning: No auth token for Symbol={data['symbol']}. "
-                    f"Cannot fetch quotes for MPP"
+                raise ValueError(
+                    f"No auth token for Symbol={data['symbol']}. Cannot fetch quotes for MPP."
                 )
-                order_type = "L"
         except Exception as e:
-            logger.error(
-                f"MPP Error: Failed for Symbol={data['symbol']}, Error={str(e)}. "
-                f"Falling back to L order type"
-            )
-            order_type = "L"
+            logger.error(f"MPP Error: {str(e)}")
+            raise ValueError(f"MARKET order failed: {str(e)}")
 
     # Apply Market Price Protection for SL-M orders (convert to SL with protected price)
     elif data["pricetype"] == "SL-M":
