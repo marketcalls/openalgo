@@ -1,0 +1,45 @@
+name: Build OpenAlgo ARM64
+on:
+  schedule:
+    - cron: '0 0 * * *' # Checks daily at midnight
+  workflow_dispatch:      # Allows manual trigger
+
+jobs:
+  sync_and_build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed for pushing synced code back
+    steps:
+      - name: Checkout My Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for merging
+
+      - name: Sync with Upstream
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git remote add upstream https://github.com/marketcalls/openalgo.git
+          git fetch upstream
+          git merge upstream/main --no-edit || echo "Merge conflict or already up to date"
+          git push origin main || echo "Nothing to push"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: icamtu/openalgo-arm64:latest,icamtu/openalgo-arm64:${{ github.sha }}
