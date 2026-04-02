@@ -26,6 +26,7 @@ class ShoonyaWebSocket:
     HEARTBEAT_TIMEOUT = 120
     PING_INTERVAL = 30
     PING_TIMEOUT = 10
+    HEARTBEAT_JOIN_TIMEOUT = 3
 
     # Message types
     MSG_TYPE_CONNECT = "c"
