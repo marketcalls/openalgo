@@ -272,7 +272,7 @@ export default function SamcoAuth() {
 
       const data = await response.json()
 
-      if (data.status === 'success' || response.ok) {
+      if (data.status === 'success') {
         login('', 'samco')
         showToast.success('Authentication successful')
         navigate('/dashboard')
@@ -676,19 +676,21 @@ export default function SamcoAuth() {
                 <AlertTriangle className="h-5 w-5 inline mr-2 text-amber-500" />
                 Confirm IP {ipStatus?.primary_ip ? 'Update' : 'Registration'}
               </AlertDialogTitle>
-              <AlertDialogDescription className="space-y-2">
-                <p>You can only change your IP once per calendar week.</p>
-                <div className="bg-muted rounded-md p-3 text-sm mt-2">
-                  <p>
-                    <strong>Primary IP:</strong> {primaryIp}
-                  </p>
-                  {secondaryIp && (
-                    <p>
-                      <strong>Secondary IP:</strong> {secondaryIp}
-                    </p>
-                  )}
+              <AlertDialogDescription asChild>
+                <div className="space-y-2">
+                  <span className="block">You can only change your IP once per calendar week.</span>
+                  <span className="block bg-muted rounded-md p-3 text-sm mt-2">
+                    <span className="block">
+                      <strong>Primary IP:</strong> {primaryIp}
+                    </span>
+                    {secondaryIp && (
+                      <span className="block">
+                        <strong>Secondary IP:</strong> {secondaryIp}
+                      </span>
+                    )}
+                  </span>
+                  <span className="block">Are you sure you want to proceed?</span>
                 </div>
-                <p>Are you sure you want to proceed?</p>
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
