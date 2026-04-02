@@ -152,6 +152,18 @@ class Auth(Base):
     user_id = Column(String(255), nullable=True)  # Add user_id column
     is_revoked = Column(Boolean, default=False)
 
+    # Samco 2FA fields
+    secret_api_key = Column(Text, nullable=True)
+    primary_ip = Column(String(45), nullable=True)
+    secondary_ip = Column(String(45), nullable=True)
+    ip_updated_at = Column(DateTime, nullable=True)
+
+    # Generic auxiliary fields for any broker needing extra storage
+    aux_param1 = Column(Text, nullable=True)
+    aux_param2 = Column(Text, nullable=True)
+    aux_param3 = Column(Text, nullable=True)
+    aux_param4 = Column(Text, nullable=True)
+
     # Performance indexes for frequently queried columns
     __table_args__ = (
         Index("idx_auth_broker", "broker"),  # Speeds up get_broker_name() queries
@@ -718,3 +730,117 @@ def update_order_mode(user_id, mode):
         logger.exception(f"Error updating order mode: {e}")
         db_session.rollback()
         return False
+
+
+# ============================================================
+# Samco 2FA Helper Functions
+# Uses dedicated columns on the Auth table:
+#   secret_api_key, primary_ip, secondary_ip, ip_updated_at
+# ============================================================
+
+
+def _get_samco_auth(user_id):
+    """Get the Auth record for a Samco user by name."""
+    try:
+        return Auth.query.filter_by(broker="samco", name=user_id).first()
+    except Exception as e:
+        logger.error(f"Error getting samco auth for {user_id}: {e}")
+        return None
+
+
+def samco_save_secret_key(user_id, secret_api_key):
+    """Save or update the secret API key for a Samco user.
+    Creates a placeholder auth record if one doesn't exist yet (pre-login setup).
+    """
+    try:
+        record = _get_samco_auth(user_id)
+        if not record:
+            record = Auth(
+                name=user_id,
+                auth="pending",
+                broker="samco",
+                is_revoked=True,
+            )
+            db_session.add(record)
+            logger.info(f"Created placeholder auth record for samco user {user_id}")
+        record.secret_api_key = secret_api_key
+        db_session.commit()
+        return True
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error saving secret key for {user_id}: {e}")
+        return False
+
+
+def samco_get_ip_status(user_id):
+    """Get IP registration status and whether editing is allowed."""
+    from datetime import datetime, timedelta
+
+    record = _get_samco_auth(user_id)
+    if not record:
+        return {
+            "primary_ip": None,
+            "secondary_ip": None,
+            "editable": True,
+            "ip_updated_at": None,
+            "next_editable_date": None,
+        }
+
+    editable = True
+    next_editable_date = None
+
+    if record.ip_updated_at:
+        now = datetime.utcnow()
+        unlock_date = record.ip_updated_at + timedelta(days=7)
+        if now < unlock_date:
+            editable = False
+            next_editable_date = unlock_date.strftime("%Y-%m-%d")
+
+    return {
+        "primary_ip": record.primary_ip,
+        "secondary_ip": record.secondary_ip,
+        "editable": editable,
+        "ip_updated_at": record.ip_updated_at.isoformat() if record.ip_updated_at else None,
+        "next_editable_date": next_editable_date,
+    }
+
+
+def samco_save_ip_info(user_id, primary_ip, secondary_ip=None, ip_updated_at=None):
+    """Save IP registration info for a Samco user."""
+    from datetime import datetime
+
+    try:
+        record = _get_samco_auth(user_id)
+        if record:
+            record.primary_ip = primary_ip
+            record.secondary_ip = secondary_ip
+            record.ip_updated_at = ip_updated_at or datetime.utcnow()
+            db_session.commit()
+            return True
+        else:
+            logger.error(f"No auth record found for samco user {user_id}")
+            return False
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error saving IP info for {user_id}: {e}")
+        return False
+
+
+def samco_has_secret_key(user_id):
+    """Check if a Samco user has a secret API key stored."""
+    record = _get_samco_auth(user_id)
+    return record is not None and record.secret_api_key is not None
+
+
+def samco_get_secret_key(user_id):
+    """Get the stored secret API key for a Samco user."""
+    record = _get_samco_auth(user_id)
+    if record and record.secret_api_key:
+        return record.secret_api_key
+    return None
+
+
+def samco_has_registered_ip(user_id):
+    """Check if a Samco user has registered IPs."""
+    record = _get_samco_auth(user_id)
+    return record is not None and record.primary_ip is not None
