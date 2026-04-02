@@ -13,7 +13,7 @@ BASE_URL = "https://tradeapi.samco.in"
 def _log_raw(step, response):
     """Log raw HTTP response for debugging."""
     logger.debug(f"[Samco {step}] HTTP {response.status_code} | Headers: {dict(response.headers)}")
-    logger.debug(f"[Samco {step}] Raw Body: {response.text}")
+    logger.debug(f"[Samco {step}] Raw Body: (omitted, may contain sensitive data)")
 
 
 def _parse_response(step, response):
