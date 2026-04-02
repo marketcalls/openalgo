@@ -21,7 +21,11 @@ jobs:
           git config --global user.email "action@github.com"
           git remote add upstream https://github.com/marketcalls/openalgo.git
           git fetch upstream
-          git merge upstream/main --no-edit || echo "Merge conflict or already up to date"
+          git merge upstream/main --no-edit || echo "Already updated"
+          # Stop the original repo's workflows from running in this builder
+          rm -f .github/workflows/ci.yml .github/workflows/security.yml .github/workflows/frontend.yml
+          git add .github/workflows/
+          git commit -m "Cleanup: remove original workflows after sync" || echo "No cleanup needed"
           git push origin main || echo "Nothing to push"
 
       - name: Set up QEMU
