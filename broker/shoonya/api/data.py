@@ -32,21 +32,25 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     Common function to make API calls to Shoonya using httpx with connection pooling
     """
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
-    api_key = api_key[:-2]  # Shoonya specific requirement
+    # BROKER_API_KEY format: userid:::client_id
+    full_api_key = os.getenv("BROKER_API_KEY")
+    api_key = full_api_key.split(":::")[0]  # Trading user ID
 
     if payload is None:
-        data = {"uid": api_key, "actid": api_key}
+        data = {"uid": api_key}
     else:
         data = payload
         data["uid"] = api_key
 
-    payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
+    payload_str = "jData=" + json.dumps(data)
 
     # Get the shared httpx client
     client = get_httpx_client()
 
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
     url = f"https://api.shoonya.com{endpoint}"
 
     response = client.request(method, url, content=payload_str, headers=headers)
@@ -107,7 +111,7 @@ class BrokerData:
             payload = {"exch": exchange, "token": token}
 
             response = get_api_response(
-                "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
+                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
             )
 
             if response.get("stat") != "Ok":
@@ -124,6 +128,7 @@ class BrokerData:
                 "prev_close": float(response.get("c", 0)) if "c" in response else 0,
                 "volume": int(response.get("v", 0)),
                 "oi": int(response.get("oi", 0)),
+                "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
             }
 
         except Exception as e:
@@ -182,9 +187,12 @@ class BrokerData:
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
 
-            payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://api.shoonya.com/NorenWClientTP/GetQuotes"
+            payload_str = "jData=" + json.dumps(data)
+            headers = {
+                "Content-Type": "text/plain",
+                "Authorization": f"Bearer {self.auth_token}",
+            }
+            url = "https://api.shoonya.com/NorenWClientAPI/GetQuotes"
 
             # Use httpx.post for sync requests
             http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
@@ -231,9 +239,12 @@ class BrokerData:
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
 
-            payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://api.shoonya.com/NorenWClientTP/GetQuotes"
+            payload_str = "jData=" + json.dumps(data)
+            headers = {
+                "Content-Type": "text/plain",
+                "Authorization": f"Bearer {self.auth_token}",
+            }
+            url = "https://api.shoonya.com/NorenWClientAPI/GetQuotes"
 
             http_response = await client.post(url, content=payload_str, headers=headers)
             response = http_response.json()
@@ -313,9 +324,9 @@ class BrokerData:
         skipped_symbols = []
         prepared_symbols = []
 
-        # Pre-fetch API key (Shoonya specific: remove last 2 chars)
-        api_key = os.getenv("BROKER_API_KEY")
-        api_key = api_key[:-2]
+        # Pre-fetch API key (userid part)
+        full_api_key = os.getenv("BROKER_API_KEY")
+        api_key = full_api_key.split(":::")[0]  # Trading user ID
 
         # Step 1: Pre-resolve all tokens sequentially (database access)
         for item in symbols:
@@ -422,7 +433,7 @@ class BrokerData:
             payload = {"exch": exchange, "token": token}
 
             response = get_api_response(
-                "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
+                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
             )
 
             if response.get("stat") != "Ok":
@@ -533,7 +544,7 @@ class BrokerData:
                 logger.debug(f"EOD Payload: {payload}")  # Debug print
                 try:
                     response = get_api_response(
-                        "/NorenWClientTP/EODChartData", self.auth_token, payload=payload
+                        "/NorenWClientAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
                 except Exception as e:
@@ -542,7 +553,6 @@ class BrokerData:
             else:
                 # For intraday data, use TPSeries endpoint
                 payload = {
-                    "uid": os.getenv("BROKER_API_KEY")[:-2],  # Required by Shoonya
                     "exch": exchange,
                     "token": token,
                     "st": str(start_ts),
@@ -552,7 +562,7 @@ class BrokerData:
 
                 logger.debug(f"Intraday Payload: {payload}")  # Debug print
                 response = get_api_response(
-                    "/NorenWClientTP/TPSeries", self.auth_token, payload=payload
+                    "/NorenWClientAPI/TPSeries", self.auth_token, payload=payload
                 )
                 logger.debug(f"Intraday Response: {response}")  # Debug print
 
@@ -625,7 +635,7 @@ class BrokerData:
                             # Get today's data from quotes
                             payload = {"exch": exchange, "token": token}
                             quotes_response = get_api_response(
-                                "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
+                                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
                             )
                             logger.debug(f"Quotes Response: {quotes_response}")  # Debug print
 
