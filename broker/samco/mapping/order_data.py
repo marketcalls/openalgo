@@ -15,14 +15,21 @@ def map_order_status(status):
     status_mapping = {
         "open": "open",
         "pending": "open",
+        "ordered": "open",
         "trigger pending": "open",
+        "after market order req received": "open",
         "complete": "complete",
+        "completed": "complete",
         "executed": "complete",
+        "filled": "complete",
         "cancelled": "cancelled",
         "canceled": "cancelled",
         "rejected": "rejected",
     }
-    return status_mapping.get(status_lower, status_lower)
+    mapped = status_mapping.get(status_lower, status_lower)
+    if mapped == status_lower and status_lower not in status_mapping:
+        logger.warning(f"Unknown Samco order status: '{status}' — defaulting to '{status_lower}'")
+    return mapped
 
 
 def map_order_data(order_data):

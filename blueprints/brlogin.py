@@ -923,7 +923,7 @@ def samco_save_secret():
         return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     from broker.samco.api.auth_api import get_client_id
-    from database.samco_auth_db import save_secret_key
+    from database.auth_db import samco_save_secret_key as save_secret_key
 
     uid = get_client_id()
     secret_key = request.json.get("secretApiKey") if request.is_json else request.form.get("secretApiKey")
@@ -946,7 +946,7 @@ def samco_ip_status():
         return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     from broker.samco.api.auth_api import get_client_id
-    from database.samco_auth_db import get_ip_status, has_secret_key
+    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_secret_key as has_secret_key
 
     uid = get_client_id()
     ip_status = get_ip_status(uid)
@@ -965,7 +965,7 @@ def samco_update_ip():
         return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     from broker.samco.api.auth_api import get_client_id, get_password, register_ip, update_ip
-    from database.samco_auth_db import get_ip_status, has_registered_ip, save_ip_info
+    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_registered_ip as has_registered_ip, samco_save_ip_info as save_ip_info
 
     uid = get_client_id()
     password = get_password()
@@ -976,9 +976,10 @@ def samco_update_ip():
     if not primary_ip:
         return jsonify({"status": "error", "message": "Primary IP is required"}), 400
 
-    # Check weekly lock
+    # Check weekly lock — allow if secondary IP is not yet registered
     status = get_ip_status(uid)
-    if not status["editable"] and has_registered_ip(uid):
+    secondary_missing = status["primary_ip"] and not status["secondary_ip"]
+    if not status["editable"] and has_registered_ip(uid) and not secondary_missing:
         return jsonify({
             "status": "error",
             "message": f"IP can only be updated once per calendar week. Next edit: {status['next_editable_date']}",
