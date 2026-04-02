@@ -130,7 +130,11 @@ def place_order_api(data, auth):
     Place an order with Samco.
     """
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token)
+    try:
+        newdata = transform_data(data, token, auth)
+    except ValueError as e:
+        error_res = type("Response", (), {"status": 400, "status_code": 400})()
+        return error_res, {"status": "error", "orderid": None, "message": str(e)}, None
 
     client = get_httpx_client()
 
@@ -159,6 +163,10 @@ def place_order_api(data, auth):
     # Add trigger price for stop loss orders
     if "triggerPrice" in newdata:
         payload["triggerPrice"] = newdata["triggerPrice"]
+
+    # Add market protection percentage if present
+    if "marketProtection" in newdata:
+        payload["marketProtection"] = newdata["marketProtection"]
 
     logger.info(f"Samco place order payload: {payload}")
 

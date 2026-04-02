@@ -101,6 +101,7 @@ class SamcoWebSocket:
         self._heartbeat_thread = None
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
+        self._heartbeat_stop_event = threading.Event()
 
         # Reconnection settings
         self.max_retry_attempts = 5
@@ -189,8 +190,8 @@ class SamcoWebSocket:
         # Headers as dict - matching official Samco SDK format
         headers = {"x-session-token": self.session_token}
 
-        # Enable trace for debugging (matching official SDK)
-        websocket.enableTrace(True)
+        # Disable trace in production to avoid verbose logging
+        websocket.enableTrace(False)
 
         self.ws = websocket.WebSocketApp(
             self.WS_URL,
@@ -246,19 +247,22 @@ class SamcoWebSocket:
         self._stop_heartbeat()
 
     def _close_websocket(self) -> None:
-        """Close WebSocket connection"""
+        """Close WebSocket connection and release socket fd"""
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
                 self.logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self.ws = None
 
     def _wait_for_thread_completion(self) -> None:
-        """Wait for WebSocket thread to complete"""
+        """Wait for WebSocket thread to complete and release reference"""
         if self.ws_thread and self.ws_thread.is_alive():
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
+        self.ws_thread = None
 
     # WebSocket Event Handlers
     def _on_open(self, ws) -> None:
@@ -471,7 +475,7 @@ class SamcoWebSocket:
             return 0
 
     def _on_error(self, ws, error) -> None:
-        """Handle WebSocket connection errors with retry logic"""
+        """Handle WebSocket connection errors — reconnection is handled by the adapter"""
         self.logger.error(f"Samco WebSocket error: {error}")
 
         if self._on_error_callback:
@@ -479,23 +483,6 @@ class SamcoWebSocket:
                 self._on_error_callback(ws, error)
             except Exception as e:
                 self.logger.error(f"Error in on_error callback: {e}")
-
-        # Attempt reconnection if not intentionally disconnected
-        if not self.DISCONNECT_FLAG and self.current_retry_attempt < self.max_retry_attempts:
-            self.RESUBSCRIBE_FLAG = True
-            self.current_retry_attempt += 1
-            delay = self.retry_delay * (self.retry_multiplier ** (self.current_retry_attempt - 1))
-            self.logger.warning(
-                f"Attempting reconnection (Attempt {self.current_retry_attempt}) after {delay}s delay..."
-            )
-
-            time.sleep(delay)
-
-            try:
-                self._close_websocket()
-                self._initialize_connection()
-            except Exception as e:
-                self.logger.error(f"Error during reconnection: {e}")
 
     def _on_close(
         self, ws, close_status_code: int | None = None, close_msg: str | None = None
@@ -523,19 +510,22 @@ class SamcoWebSocket:
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             return
 
+        self._heartbeat_stop_event.clear()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
         self._heartbeat_thread.start()
         self.logger.debug("Heartbeat thread started")
 
     def _stop_heartbeat(self) -> None:
-        """Stop heartbeat monitoring thread"""
-        pass  # Thread will stop when self.running becomes False
+        """Stop heartbeat monitoring thread immediately"""
+        self._heartbeat_stop_event.set()
 
     def _heartbeat_worker(self) -> None:
         """Heartbeat worker thread - monitors connection health"""
         while self.running and self.connected:
             try:
-                time.sleep(self.HEARTBEAT_INTERVAL)
+                # Wait with interrupt support instead of blocking sleep
+                if self._heartbeat_stop_event.wait(timeout=self.HEARTBEAT_INTERVAL):
+                    break  # Stop event was set
 
                 if self.running and self.connected:
                     if not self._check_connection_health():
@@ -614,7 +604,10 @@ class SamcoWebSocket:
                 exchange = token_group.get("exchangeType", "NSE")
                 tokens = token_group.get("tokens", [])
                 if exchange in self.input_request_dict[mode]:
-                    self.input_request_dict[mode][exchange].extend(tokens)
+                    # Use set to prevent duplicate tokens accumulating
+                    existing = set(self.input_request_dict[mode][exchange])
+                    existing.update(tokens)
+                    self.input_request_dict[mode][exchange] = list(existing)
                 else:
                     self.input_request_dict[mode][exchange] = list(tokens)
 
