@@ -376,6 +376,13 @@ def create_app():
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions["brlogin.broker_callback"])
 
+        # Exempt Samco 2FA setup endpoints from CSRF (JSON API calls from React frontend)
+        csrf.exempt(app.view_functions["brlogin.samco_generate_otp"])
+        csrf.exempt(app.view_functions["brlogin.samco_generate_secret"])
+        csrf.exempt(app.view_functions["brlogin.samco_save_secret"])
+        csrf.exempt(app.view_functions["brlogin.samco_ip_status"])
+        csrf.exempt(app.view_functions["brlogin.samco_update_ip"])
+
         # Exempt logout endpoint from CSRF protection (safe - only destroys session)
         csrf.exempt(app.view_functions["auth.logout"])
 

@@ -1,21 +1,146 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Samco Parameters https://www.samco.in/stocknote-api-documentation
 
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_symbol_info
+from utils.logging import get_logger
+from utils.mpp_slab import (
+    calculate_protected_price,
+    get_instrument_type_from_symbol,
+    get_mpp_percentage,
+)
+
+logger = get_logger(__name__)
 
 
-def transform_data(data, token):
+def transform_data(data, token, auth_token=None):
     """
     Transforms the OpenAlgo API request structure to Samco expected structure.
+
+    For MARKET orders, fetches LTP and converts to LIMIT with MPP (Market Price Protection).
+    For SL-M orders, converts to SL with protected limit price based on trigger price.
+    Samco no longer accepts MKT or SL-M order types.
+
+    Args:
+        data: Order data dictionary
+        token: Instrument token
+        auth_token: Authentication token for fetching quotes
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
+
+    # Default values
+    price = str(data.get("price", "0"))
+    order_type = map_order_type(data["pricetype"])
+    action = data["action"].upper()
+    mpp_percentage = None
+
+    # Apply Market Price Protection for MARKET orders (Samco only accepts L/SL)
+    if data["pricetype"] == "MARKET":
+        logger.info(
+            f"MPP: MARKET order detected for Symbol={data['symbol']}, "
+            f"Exchange={data['exchange']}, Action={action}"
+        )
+        try:
+            if auth_token:
+                from broker.samco.api.data import BrokerData
+
+                broker_data = BrokerData(auth_token)
+                quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
+                logger.info(
+                    f"MPP Quote Response: Symbol={data['symbol']}, "
+                    f"LTP={quote_data.get('ltp') if quote_data else None}"
+                )
+
+                if quote_data:
+                    instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                    tick_size = None
+                    symbol_info = get_symbol_info(data["symbol"], data["exchange"])
+                    if symbol_info and symbol_info.tick_size:
+                        tick_size = symbol_info.tick_size
+
+                    ltp = float(quote_data.get("ltp", 0))
+
+                    if ltp > 0:
+                        mpp_percentage = get_mpp_percentage(ltp, instrument_type)
+                        protected_price = calculate_protected_price(
+                            price=ltp,
+                            action=action,
+                            symbol=data["symbol"],
+                            instrument_type=instrument_type,
+                            tick_size=tick_size,
+                        )
+                        price = str(protected_price)
+                        order_type = "L"
+                        logger.info(
+                            f"MPP Conversion: Symbol={data['symbol']}, MKT->L, "
+                            f"LTP={ltp}, ProtectedPrice={protected_price}, MPP={mpp_percentage}%"
+                        )
+                    else:
+                        raise ValueError(
+                            f"LTP is 0 for Symbol={data['symbol']}. Cannot determine market price."
+                        )
+                else:
+                    raise ValueError(
+                        f"No quote data for Symbol={data['symbol']}. Cannot determine market price."
+                    )
+            else:
+                raise ValueError(
+                    f"No auth token for Symbol={data['symbol']}. Cannot fetch quotes for MPP."
+                )
+        except Exception as e:
+            logger.error(f"MPP Error: {str(e)}")
+            raise ValueError(f"MARKET order failed: {str(e)}")
+
+    # Apply Market Price Protection for SL-M orders (convert to SL with protected price)
+    elif data["pricetype"] == "SL-M":
+        try:
+            trigger_price = float(data.get("trigger_price", 0))
+        except (TypeError, ValueError):
+            trigger_price = 0.0
+        logger.info(
+            f"MPP: SL-M order detected for Symbol={data['symbol']}, "
+            f"Action={action}, TriggerPrice={trigger_price}"
+        )
+        if trigger_price > 0:
+            try:
+                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                tick_size = None
+                symbol_info = get_symbol_info(data["symbol"], data["exchange"])
+                if symbol_info and symbol_info.tick_size:
+                    tick_size = symbol_info.tick_size
+
+                mpp_percentage = get_mpp_percentage(trigger_price, instrument_type)
+                protected_price = calculate_protected_price(
+                    price=trigger_price,
+                    action=action,
+                    symbol=data["symbol"],
+                    instrument_type=instrument_type,
+                    tick_size=tick_size,
+                )
+                price = str(protected_price)
+                order_type = "SL"
+                logger.info(
+                    f"MPP Conversion: Symbol={data['symbol']}, SL-M->SL, "
+                    f"TriggerPrice={trigger_price}, LimitPrice={protected_price}, MPP={mpp_percentage}%"
+                )
+            except Exception as e:
+                logger.error(
+                    f"MPP Error: Failed for SL-M Symbol={data['symbol']}, Error={str(e)}. "
+                    f"Falling back to SL order type"
+                )
+                order_type = "SL"
+        else:
+            logger.warning(
+                f"MPP Warning: Trigger price is 0 for SL-M Symbol={data['symbol']}. "
+                f"Falling back to SL order type"
+            )
+            order_type = "SL"
 
     # Basic mapping for Samco placeOrder API
     transformed = {
         "symbolName": symbol,
         "exchange": data["exchange"],
-        "transactionType": data["action"].upper(),
-        "orderType": map_order_type(data["pricetype"]),
+        "transactionType": action,
+        "orderType": order_type,
         "quantity": str(data["quantity"]),
         "disclosedQuantity": str(data.get("disclosed_quantity", "0")),
         "orderValidity": "DAY",
@@ -23,13 +148,19 @@ def transform_data(data, token):
         "afterMarketOrderFlag": "NO",
     }
 
-    # Add price for LIMIT and SL orders
-    if data["pricetype"] in ["LIMIT", "SL"]:
-        transformed["price"] = str(data.get("price", "0"))
+    # Add price for LIMIT and SL orders (and MPP-converted orders)
+    if order_type in ["L", "SL"]:
+        if price == "0" and data["pricetype"] in ["LIMIT", "SL"]:
+            price = str(data.get("price", "0"))
+        transformed["price"] = price
 
-    # Add trigger price for SL and SL-M orders
-    if data["pricetype"] in ["SL", "SL-M"]:
+    # Add trigger price for SL orders
+    if order_type == "SL" or data["pricetype"] in ["SL", "SL-M"]:
         transformed["triggerPrice"] = str(data.get("trigger_price", "0"))
+
+    # Add marketProtection for MPP-converted orders (dynamic slab percentage)
+    if data["pricetype"] in ["MARKET", "SL-M"] and mpp_percentage is not None:
+        transformed["marketProtection"] = str(int(mpp_percentage))
 
     return transformed
 
