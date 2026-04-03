@@ -11,6 +11,23 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _try_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip()
+    if not text:
+        return value
+
+    if text[0] not in "{[":
+        return value
+
+    try:
+        return json.loads(text)
+    except Exception:
+        return value
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value in (None, "", "-"):
@@ -41,17 +58,75 @@ def _first(value: dict, keys: tuple[str, ...], default=None):
 
 
 def _is_success(status_code: int, payload: Any) -> bool:
-    if status_code == 200:
-        return True
-
     if isinstance(payload, dict):
         status = str(payload.get("status", "")).lower()
-        return status in ("ok", "success", "true", "200")
+        if status in ("error", "failed", "failure", "false", "ko"):
+            return False
+        if status in ("ok", "success", "true", "200"):
+            return True
+
+        result = payload.get("result")
+        if isinstance(result, dict):
+            nested = str(result.get("status", "")).lower()
+            if nested in ("error", "failed", "failure", "false", "ko"):
+                return False
+            if nested in ("ok", "success", "true", "200"):
+                return True
+        elif isinstance(result, list) and result and isinstance(result[0], dict):
+            nested = str(result[0].get("status", "")).lower()
+            if nested in ("error", "failed", "failure", "false", "ko"):
+                return False
+            if nested in ("ok", "success", "true", "200"):
+                return True
+
+    if status_code == 200:
+        return True
 
     return False
 
 
+def _looks_like_market_row(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+
+    if any(
+        key in value
+        for key in (
+            "ltp",
+            "lastTradedPrice",
+            "lastPrice",
+            "open",
+            "high",
+            "low",
+            "close",
+            "tradedVolume",
+            "volume",
+            "marketDepth",
+            "depth",
+            "instrumentId",
+        )
+    ):
+        return True
+
+    touchline = value.get("touchline") or value.get("Touchline")
+    if isinstance(touchline, dict):
+        return True
+
+    return False
+
+
+def _extract_row_error(row: dict) -> str | None:
+    status = str(_first(row, ("status", "Status"), "")).lower()
+    if status in ("error", "failed", "failure", "false", "ko"):
+        return str(
+            _first(row, ("message", "error", "description", "emsg"), "Request failed")
+        )
+    return None
+
+
 def _extract_rows(payload: Any) -> list:
+    payload = _try_json(payload)
+
     if isinstance(payload, list):
         return payload
 
@@ -60,7 +135,7 @@ def _extract_rows(payload: Any) -> list:
 
     # Common response containers.
     for key in ("result", "data", "quotes", "candles", "historicalData", "marketDepth"):
-        value = payload.get(key)
+        value = _try_json(payload.get(key))
         if isinstance(value, list):
             return value
         if isinstance(value, dict):
@@ -73,14 +148,21 @@ def _extract_rows(payload: Any) -> list:
                 "marketDepth",
                 "listQuotes",
             ):
-                sub_value = value.get(sub_key)
+                sub_value = _try_json(value.get(sub_key))
                 if isinstance(sub_value, list):
                     return sub_value
+                if isinstance(sub_value, dict) and _looks_like_market_row(sub_value):
+                    return [sub_value]
                 if isinstance(sub_value, str) and "|" in sub_value:
                     return [sub_value]
+        if isinstance(value, dict) and _looks_like_market_row(value):
+            return [value]
 
-    # Some APIs may return a single quote/depth object directly.
-    return [payload]
+    if _looks_like_market_row(payload):
+        # Some APIs may return a single quote/depth object directly.
+        return [payload]
+
+    return []
 
 
 def _normalize_exchange(exchange: str) -> str:
@@ -118,7 +200,7 @@ def _parse_quote_row(row: dict) -> dict:
     ltp = _to_float(
         _first(
             row,
-            ("ltp", "lastTradedPrice", "lastPrice", "last_price"),
+            ("ltp", "LTP", "lastTradedPrice", "lastPrice", "last_price"),
             _first(touchline, ("LastTradedPrice", "lastTradedPrice"), 0),
         )
     )
@@ -127,42 +209,62 @@ def _parse_quote_row(row: dict) -> dict:
         "ask": _to_float(
             _first(
                 row,
-                ("ask", "askPrice", "bestAsk"),
+                ("ask", "askPrice", "bestAsk", "bestAskPrice"),
                 _first(ask_info, ("Price", "price"), _first(ask_level_1, ("price", "Price"), 0)),
             )
         ),
         "bid": _to_float(
             _first(
                 row,
-                ("bid", "bidPrice", "bestBid"),
+                ("bid", "bidPrice", "bestBid", "bestBidPrice"),
                 _first(bid_info, ("Price", "price"), _first(bid_level_1, ("price", "Price"), 0)),
             )
         ),
         "open": _to_float(
-            _first(row, ("open", "openPrice", "dayOpen"), _first(touchline, ("Open", "open"), 0))
+            _first(
+                row,
+                ("open", "openPrice", "dayOpen", "Open"),
+                _first(touchline, ("Open", "open"), 0),
+            )
         ),
         "high": _to_float(
-            _first(row, ("high", "highPrice", "dayHigh"), _first(touchline, ("High", "high"), 0))
+            _first(
+                row,
+                ("high", "highPrice", "dayHigh", "High"),
+                _first(touchline, ("High", "high"), 0),
+            )
         ),
         "low": _to_float(
-            _first(row, ("low", "lowPrice", "dayLow"), _first(touchline, ("Low", "low"), 0))
+            _first(
+                row,
+                ("low", "lowPrice", "dayLow", "Low"),
+                _first(touchline, ("Low", "low"), 0),
+            )
         ),
         "ltp": ltp,
         "prev_close": _to_float(
             _first(
                 row,
-                ("close", "previousClose", "prevClose", "prev_close"),
+                (
+                    "close",
+                    "closePrice",
+                    "previousClose",
+                    "previousClosePrice",
+                    "prevClose",
+                    "prev_close",
+                    "Close",
+                ),
                 _first(touchline, ("Close", "close"), 0),
             )
         ),
         "volume": _to_int(
             _first(
                 row,
-                ("volume", "tradedVolume", "totalTradedQuantity"),
+                ("volume", "tradedVolume", "totalTradedVolume", "totalTradedQuantity"),
                 _first(touchline, ("TotalTradedQuantity", "totalTradedQuantity"), 0),
             )
         ),
-        "oi": _to_int(_first(row, ("oi", "openInterest", "OpenInterest"), 0)),
+        "oi": _to_int(_first(row, ("oi", "openInterest", "OpenInterest", "OI"), 0)),
     }
 
 
@@ -267,7 +369,7 @@ class BrokerData:
             "D": "ONE_DAY",
         }
 
-    def _post(self, endpoint: str, payload: dict) -> Any:
+    def _post(self, endpoint: str, payload: Any) -> Any:
         client = get_httpx_client()
         headers = {
             "Authorization": f"Bearer {self.auth_token}",
@@ -293,6 +395,31 @@ class BrokerData:
 
         return data
 
+    def _fetch_marketquote_rows(self, instruments: list[dict]) -> list:
+        errors = []
+        payload_variants = [
+            instruments,
+            {"instruments": instruments},
+        ]
+
+        for payload in payload_variants:
+            try:
+                response = self._post("/marketdata/marketquotes", payload)
+            except Exception as exc:
+                errors.append(str(exc))
+                continue
+
+            rows = _extract_rows(response)
+            if rows:
+                return rows
+
+            errors.append("No quote rows in broker response")
+
+        if errors:
+            raise Exception(errors[-1])
+
+        raise Exception("No quote data received from broker")
+
     def _resolve_token(self, symbol: str, exchange: str) -> str:
         token = get_token(symbol, exchange)
         if token is None:
@@ -306,18 +433,22 @@ class BrokerData:
         }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
-        payload = {"instruments": [self._instrument(symbol, exchange)]}
-        response = self._post("/marketdata/marketquotes", payload)
-
-        rows = _extract_rows(response)
+        rows = self._fetch_marketquote_rows([self._instrument(symbol, exchange)])
         if not rows:
             raise Exception("No quote data received from broker")
 
-        row = rows[0]
+        row = _try_json(rows[0])
         if isinstance(row, str):
-            row = json.loads(row)
+            raise Exception("Invalid quote row format received from broker")
 
-        return _parse_quote_row(_safe_dict(row))
+        row = _safe_dict(row)
+        row_error = _extract_row_error(row)
+        if row_error:
+            raise Exception(row_error)
+        if not _looks_like_market_row(row):
+            raise Exception("No quote data received from broker")
+
+        return _parse_quote_row(row)
 
     def get_multiquotes(self, symbols: list) -> list:
         instruments = []
@@ -347,6 +478,10 @@ class BrokerData:
                     "symbol": symbol,
                     "exchange": exchange,
                 }
+                identity_map[f"{exchange.upper()}:{instrument['instrumentId']}"] = {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                }
             except Exception as exc:
                 skipped.append(
                     {
@@ -360,16 +495,16 @@ class BrokerData:
         if not instruments:
             return skipped
 
-        response = self._post("/marketdata/marketquotes", {"instruments": instruments})
-        rows = _extract_rows(response)
+        rows = self._fetch_marketquote_rows(instruments)
 
         results = []
         for idx, row in enumerate(rows):
+            row = _try_json(row)
             if isinstance(row, str):
-                row = json.loads(row)
+                continue
             row = _safe_dict(row)
 
-            row_exchange = _first(row, ("exchange", "exchangeSegment"), "")
+            row_exchange = str(_first(row, ("exchange", "exchangeSegment"), "")).upper()
             row_token = str(_first(row, ("instrumentId", "token", "exchangeInstrumentID"), ""))
             original = identity_map.get(f"{row_exchange}:{row_token}")
 
@@ -381,6 +516,18 @@ class BrokerData:
                 }
 
             if not original:
+                continue
+
+            row_error = _extract_row_error(row)
+            if row_error:
+                results.append(
+                    {
+                        "symbol": original["symbol"],
+                        "exchange": original["exchange"],
+                        "data": None,
+                        "error": row_error,
+                    }
+                )
                 continue
 
             results.append(
@@ -402,8 +549,9 @@ class BrokerData:
             raise Exception("No depth data received from broker")
 
         row = rows[0]
+        row = _try_json(row)
         if isinstance(row, str):
-            row = json.loads(row)
+            raise Exception("Invalid depth row format received from broker")
         row = _safe_dict(row)
 
         depth = _safe_dict(_first(row, ("depth", "marketDepth", "Depth"), {}))

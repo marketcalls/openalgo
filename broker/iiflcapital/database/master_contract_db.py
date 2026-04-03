@@ -1,7 +1,7 @@
 import os
 import re
-from io import StringIO
 from datetime import datetime
+from io import StringIO
 
 import numpy as np
 import pandas as pd
@@ -110,25 +110,128 @@ _OPTION_TYPE_TO_STANDARD = {
     "PUT": "PE",
 }
 
-_BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
+_NSE_INDEX_SYMBOLS = {
+    "NIFTY",
+    "NIFTYNXT50",
+    "FINNIFTY",
+    "BANKNIFTY",
+    "MIDCPNIFTY",
+    "INDIAVIX",
+    "NIFTY100",
+    "NIFTY200",
+    "NIFTY500",
+    "NIFTYIT",
+    "NIFTYAUTO",
+    "NIFTYFMCG",
+    "NIFTYENERGY",
+    "NIFTYMETAL",
+    "NIFTYPHARMA",
+    "NIFTYREALTY",
+    "NIFTYPSE",
+    "NIFTYPVTBANK",
+    "NIFTYPSUBANK",
+    "NIFTYMEDIA",
+}
+
+_BSE_INDEX_SYMBOLS = {
+    "SENSEX",
+    "BANKEX",
+    "SENSEX50",
+    "BSE100",
+    "BSE200",
+    "BSE500",
+    "BSEAUTO",
+    "BSEENERGY",
+    "BSEMETAL",
+    "BSEPOWER",
+    "BSEPSU",
+    "BSEMIDCAP",
+    "BSESMALLCAP",
+    "BSEHEALTHCARE",
+    "BSETECK",
+    "BSETELECOM",
+}
+
 _INDEX_SYMBOL_MAP = {
+    # NSE canonical (as per openalgo_symbol_format.md)
     "NIFTY": "NIFTY",
-    "NIFTY50": "NIFTY",
-    "NIFTYNEXT50": "NIFTYNXT50",
     "NIFTYNXT50": "NIFTYNXT50",
-    "NIFTYFINSERVICE": "FINNIFTY",
-    "NIFTYFINANCIALSERVICES": "FINNIFTY",
     "FINNIFTY": "FINNIFTY",
-    "NIFTYBANK": "BANKNIFTY",
     "BANKNIFTY": "BANKNIFTY",
-    "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
-    "NIFTYMIDSELECT": "MIDCPNIFTY",
     "MIDCPNIFTY": "MIDCPNIFTY",
     "INDIAVIX": "INDIAVIX",
+    "NIFTY100": "NIFTY100",
+    "NIFTY200": "NIFTY200",
+    "NIFTY500": "NIFTY500",
+    "NIFTYIT": "NIFTYIT",
+    "NIFTYAUTO": "NIFTYAUTO",
+    "NIFTYFMCG": "NIFTYFMCG",
+    "NIFTYENERGY": "NIFTYENERGY",
+    "NIFTYMETAL": "NIFTYMETAL",
+    "NIFTYPHARMA": "NIFTYPHARMA",
+    "NIFTYREALTY": "NIFTYREALTY",
+    "NIFTYPSE": "NIFTYPSE",
+    "NIFTYPVTBANK": "NIFTYPVTBANK",
+    "NIFTYPSUBANK": "NIFTYPSUBANK",
+    "NIFTYMEDIA": "NIFTYMEDIA",
+    # NSE aliases
+    "NIFTY50": "NIFTY",
+    "NIFTYNEXT50": "NIFTYNXT50",
+    "NIFTYFINSERVICE": "FINNIFTY",
+    "NIFTYFINANCIALSERVICES": "FINNIFTY",
+    "NIFTYBANK": "BANKNIFTY",
+    "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+    "NIFTYMIDSELECT": "MIDCPNIFTY",
+    "NIFTYMID50": "NIFTYMIDCAP50",
     "NIFTYINDIAVIX": "INDIAVIX",
+    # BSE canonical (as per openalgo_symbol_format.md)
     "SENSEX": "SENSEX",
     "BANKEX": "BANKEX",
     "SENSEX50": "SENSEX50",
+    "BSE100": "BSE100",
+    "BSE200": "BSE200",
+    "BSE500": "BSE500",
+    "BSEAUTO": "BSEAUTO",
+    "BSEENERGY": "BSEENERGY",
+    "BSEMETAL": "BSEMETAL",
+    "BSEPOWER": "BSEPOWER",
+    "BSEPSU": "BSEPSU",
+    "BSEMIDCAP": "BSEMIDCAP",
+    "BSESMALLCAP": "BSESMALLCAP",
+    "BSEHEALTHCARE": "BSEHEALTHCARE",
+    "BSETECK": "BSETECK",
+    "BSETELECOM": "BSETELECOM",
+    # BSE aliases
+    "SENSEX30": "SENSEX",
+    "SNSX50": "SENSEX50",
+    "100": "BSE100",
+    "200": "BSE200",
+    "500": "BSE500",
+    "AUTO": "BSEAUTO",
+    "ENERGY": "BSEENERGY",
+    "METAL": "BSEMETAL",
+    "MIDCAP": "BSEMIDCAP",
+    "POWER": "BSEPOWER",
+    "PSU": "BSEPSU",
+    "HC": "BSEHEALTHCARE",
+    "TECK": "BSETECK",
+    "TELCOM": "BSETELECOM",
+    "S&PBSESENSEX": "SENSEX",
+    "S&PBSEBANKEX": "BANKEX",
+    "S&PBSESENSEX50": "SENSEX50",
+    "S&PBSE100": "BSE100",
+    "S&PBSE200": "BSE200",
+    "S&PBSE500": "BSE500",
+    "S&PBSEAUTO": "BSEAUTO",
+    "S&PBSEENERGY": "BSEENERGY",
+    "S&PBSEMETAL": "BSEMETAL",
+    "S&PBSEPOWER": "BSEPOWER",
+    "S&PBSEPSU": "BSEPSU",
+    "S&PBSEMIDCAP": "BSEMIDCAP",
+    "S&PBSESMALLCAP": "BSESMALLCAP",
+    "S&PBSEHEALTHCARE": "BSEHEALTHCARE",
+    "S&PBSETECK": "BSETECK",
+    "S&PBSETELECOM": "BSETELECOM",
 }
 
 
@@ -359,10 +462,19 @@ def _format_strike_for_symbol(strike_value) -> str:
 
 
 def _normalize_index_symbol(value: str) -> str:
-    cleaned = _clean_text(value).upper().replace(" ", "")
-    if not cleaned:
+    raw = _clean_text(value).upper()
+    if not raw:
         return ""
-    return _INDEX_SYMBOL_MAP.get(cleaned, cleaned)
+
+    # Follow Angel/Fyers style cleanup before applying common-index aliases.
+    # Keep fallback as cleaned broker symbol for unmapped values.
+    fallback = raw.replace(" ", "").replace("-", "")
+
+    lookup = fallback
+    if lookup.startswith("S&P"):
+        lookup = lookup[3:]
+
+    return _INDEX_SYMBOL_MAP.get(lookup, fallback)
 
 
 def _infer_instrument_type_from_symbol(brsymbol: str) -> str:
@@ -546,6 +658,8 @@ def _resolve_exchange(segment, row, lower_row, brsymbol, name):
     symbol_hint = _normalize_index_symbol(brsymbol or name)
     if symbol_hint in _BSE_INDEX_SYMBOLS:
         return "BSE_INDEX"
+    if symbol_hint in _NSE_INDEX_SYMBOLS:
+        return "NSE_INDEX"
 
     return "NSE_INDEX"
 
