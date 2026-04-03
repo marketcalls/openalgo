@@ -140,8 +140,10 @@ from blueprints.historify import historify_bp  # Import the historify blueprint
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
+from blueprints.custom_straddle import custom_straddle_bp  # Import custom straddle blueprint
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
+from blueprints.leverage import leverage_bp  # Import the leverage blueprint
 from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.log import log_bp
 from blueprints.logging import logging_bp  # Import the logging blueprint
@@ -180,6 +182,7 @@ from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
+from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
@@ -198,7 +201,7 @@ from utils.logging import (  # Import centralized logging
     highlight_url,
     log_startup_banner,
 )
-from utils.plugin_loader import load_broker_auth_functions
+from utils.plugin_loader import load_broker_auth_functions, load_broker_capabilities
 from utils.security_middleware import init_security_middleware  # Import security middleware
 from utils.socketio_error_handler import (
     init_socketio_error_handling,  # Import Socket.IO error handler
@@ -219,6 +222,11 @@ def create_app():
 
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app
+
+    # Initialize EventBus subscribers
+    from subscribers import register_all as register_event_subscribers
+
+    register_event_subscribers()
 
     # Initialize CSRF protection
     csrf = CSRFProtect(app)
@@ -331,6 +339,7 @@ def create_app():
     app.register_blueprint(chartink_bp)
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
+    app.register_blueprint(leverage_bp)  # Register Leverage blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_bp)
     app.register_blueprint(master_contract_status_bp)
@@ -347,6 +356,7 @@ def create_app():
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
     app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
+    app.register_blueprint(custom_straddle_bp)  # Register custom straddle blueprint
     app.register_blueprint(vol_surface_bp)  # Register vol surface blueprint
     app.register_blueprint(gex_bp)  # Register GEX blueprint
     app.register_blueprint(ivsmile_bp)  # Register IV Smile blueprint
@@ -365,6 +375,13 @@ def create_app():
 
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions["brlogin.broker_callback"])
+
+        # Exempt Samco 2FA setup endpoints from CSRF (JSON API calls from React frontend)
+        csrf.exempt(app.view_functions["brlogin.samco_generate_otp"])
+        csrf.exempt(app.view_functions["brlogin.samco_generate_secret"])
+        csrf.exempt(app.view_functions["brlogin.samco_save_secret"])
+        csrf.exempt(app.view_functions["brlogin.samco_ip_status"])
+        csrf.exempt(app.view_functions["brlogin.samco_update_ip"])
 
         # Exempt logout endpoint from CSRF protection (safe - only destroys session)
         csrf.exempt(app.view_functions["auth.logout"])
@@ -466,17 +483,28 @@ def create_app():
 
     @app.errorhandler(404)
     def not_found_error(error):
-        from flask import request
+        from flask import request, session
 
         from database.traffic_db import Error404Tracker
         from utils.ip_helper import get_real_ip
 
-        # Track the 404 error
         client_ip = get_real_ip()
         path = request.path
 
-        # Track 404 error for security monitoring
-        Error404Tracker.track_404(client_ip, path)
+        # Skip 404 tracking for authenticated users (prevents self-ban during
+        # login flows, broker OAuth callbacks, or normal navigation to
+        # React routes that don't have explicit Flask endpoints)
+        is_authenticated = session.get("logged_in", False)
+
+        # Skip tracking for common browser/crawler requests that are not attack probes
+        safe_prefixes = (
+            "/favicon", "/robots.txt", "/sitemap", "/manifest",
+            "/sw.js", "/.well-known", "/apple-touch-icon",
+            "/service-worker", "/workbox",
+        )
+
+        if not is_authenticated and not path.startswith(safe_prefixes):
+            Error404Tracker.track_404(client_ip, path)
 
         # Serve React app (React Router handles 404)
         return serve_react_app()
@@ -536,6 +564,7 @@ def setup_environment(app):
     with app.app_context():
         # load broker plugins (lazy - no actual imports until login)
         app.broker_auth_functions = load_broker_auth_functions()
+        load_broker_capabilities()  # cache plugin.json data in memory
 
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
@@ -578,6 +607,7 @@ def setup_environment(app):
                 ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
+                ("Leverage DB", ensure_leverage_tables_exists),
             ]
 
             db_init_start = time.time()

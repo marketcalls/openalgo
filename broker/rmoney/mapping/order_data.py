@@ -1,5 +1,4 @@
 import json
-from turtle import position
 
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
@@ -293,7 +292,7 @@ def transform_positions_data(positions_data):
         if not isinstance(position, dict):  # Ensure it's a dictionary
             logger.info(f"Skipping invalid position: {position}")
             continue
-        symboltoken = position.get("ExchangeInstrumentId")
+        symboltoken = position.get("ExchangeInstrumentID", position.get("ExchangeInstrumentId"))
 
         exchange = position.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
@@ -364,10 +363,10 @@ def transform_holdings_data(holdings_data):
 def map_portfolio_data(portfolio_data):
     logger.info(f"portfolio_data: {portfolio_data}")
     """
-    Processes and modifies portfolio data from FivePaisaXTS API.
-    
+    Processes and modifies portfolio data from RMoney XTS API.
+
     Parameters:
-    - portfolio_data: A dictionary containing the portfolio/holdings information from FivePaisaXTS API.
+    - portfolio_data: A dictionary containing the portfolio/holdings information from RMoney XTS API.
     
     Returns:
     - A dictionary with 'holdings' and 'totalholding' keys structured for the OpenAlgoXTS system.

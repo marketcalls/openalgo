@@ -1,0 +1,28 @@
+meta {
+  name: optionsorder
+  type: http
+  seq: 31
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/optionsorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Options",
+      "underlying": "BTC",
+      "exchange": "CRYPTO",
+      "expiry_date": "27MAR26",
+      "offset": "ATM",
+      "option_type": "CE",
+      "action": "BUY",
+      "quantity": 1,
+      "pricetype": "MARKET",
+      "product": "NRML",
+      "splitsize": 0
+  }
+}

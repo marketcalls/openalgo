@@ -23,6 +23,7 @@ import {
   ZapOff,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -81,7 +82,7 @@ interface LogEntry {
   type: 'info' | 'success' | 'error' | 'data' | 'warn'
 }
 
-const EXCHANGES = ['NSE', 'NFO', 'BSE', 'BFO', 'CDS', 'MCX']
+// EXCHANGES is now dynamic — provided by useSupportedExchanges() hook
 
 function formatPrice(price: number): string {
   return new Intl.NumberFormat('en-IN', {
@@ -221,6 +222,7 @@ interface WebSocketTestProps {
 
 export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
   const { user } = useAuthStore()
+  const { tradingExchanges } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   // Connection state - INDEPENDENT WebSocket (not shared with MarketDataManager)
   // This page needs its own connection for testing/debugging purposes
@@ -839,9 +841,9 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border">
                   <SelectItem value="_all">All Exchanges</SelectItem>
-                  {EXCHANGES.map((ex) => (
-                    <SelectItem key={ex} value={ex}>
-                      {ex}
+                  {tradingExchanges.map((ex) => (
+                    <SelectItem key={ex.value} value={ex.value}>
+                      {ex.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

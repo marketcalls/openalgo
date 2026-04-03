@@ -200,6 +200,14 @@ class BrokerData:
             else:
                 logger.debug("Existing WebSocket not connected, creating new connection")
 
+        # Disconnect old WebSocket before creating a new one
+        if self._websocket:
+            try:
+                self._websocket.disconnect()
+            except Exception as e:
+                logger.debug(f"Error disconnecting old WebSocket: {e}")
+            self._websocket = None
+
         # Get credentials from environment
         client_id = os.getenv("BROKER_API_KEY", "")
         api_key = os.getenv("BROKER_API_SECRET", "")

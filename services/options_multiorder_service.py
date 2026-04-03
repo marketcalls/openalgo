@@ -11,16 +11,13 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order
-from database.apilog_db import executor as log_executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
+from events import AnalyzerErrorEvent, MultiOrderCompletedEvent
 from services.option_symbol_service import get_option_symbol, parse_underlying_symbol
 from services.place_order_service import place_order
 from services.quotes_service import get_quotes
-from services.telegram_alert_service import telegram_alert_service
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -77,8 +74,15 @@ def get_underlying_ltp(
                 # Assume it's an equity symbol
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
 
-        # Use base symbol for quote if expiry was embedded
-        quote_symbol = base_symbol if embedded_expiry else underlying
+        # For MCX/CDS: no spot symbol exists, so use the full futures symbol for LTP
+        # For NSE/BSE: use base symbol (spot/index symbol exists)
+        if embedded_expiry:
+            if exchange.upper() in ["MCX", "CDS"]:
+                quote_symbol = underlying.upper()
+            else:
+                quote_symbol = base_symbol
+        else:
+            quote_symbol = underlying
 
         logger.info(f"Fetching LTP once for: {quote_symbol} on {quote_exchange}")
 
@@ -106,7 +110,7 @@ def get_underlying_ltp(
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
-    """Helper function to emit analyzer error events"""
+    """Helper function to emit analyzer error events via the event bus."""
     error_response = {"mode": "analyze", "status": "error", "message": error_message}
 
     analyzer_request = request_data.copy()
@@ -114,11 +118,14 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
         del analyzer_request["apikey"]
     analyzer_request["api_type"] = "optionsmultiorder"
 
-    log_executor.submit(async_log_analyzer, analyzer_request, error_response, "optionsmultiorder")
-
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
-    )
+    bus.publish(AnalyzerErrorEvent(
+        mode="analyze",
+        api_type="optionsmultiorder",
+        request_data=analyzer_request,
+        response_data=error_response,
+        error_message=error_message,
+        api_key=request_data.get("apikey", ""),
+    ))
 
     return error_response
 
@@ -465,28 +472,8 @@ def process_multiorder_with_auth(
     successful_legs = sum(1 for r in results if r.get("status") == "success")
     failed_legs = len(results) - successful_legs
 
-    # Emit single summary toast notification
-    mode = "analyze" if get_analyze_mode() else "live"
-    socketio.start_background_task(
-        socketio.emit,
-        "order_event",
-        {
-            "symbol": common_data.get("underlying"),
-            "action": f"{common_data.get('strategy', 'Multi-Order')}",
-            "orderid": f"{successful_legs}/{len(results)} legs",
-            "exchange": common_data.get("exchange"),
-            "price_type": "MULTI",
-            "product_type": "OPTIONS",
-            "mode": mode,
-            "batch_order": True,
-            "is_last_order": True,
-            "multiorder_summary": True,
-            "successful_legs": successful_legs,
-            "failed_legs": failed_legs,
-        },
-    )
-
     # Build response
+    mode = "analyze" if get_analyze_mode() else "live"
     response_data = {
         "status": "success",
         "underlying": common_data.get("underlying"),
@@ -498,36 +485,26 @@ def process_multiorder_with_auth(
     if get_analyze_mode():
         response_data["mode"] = "analyze"
 
-        # Log to analyzer
-        analyzer_request = original_data.copy()
-        if "apikey" in analyzer_request:
-            del analyzer_request["apikey"]
-        analyzer_request["api_type"] = "optionsmultiorder"
+    # Prepare request data for logging (without apikey)
+    request_log = original_data.copy()
+    if "apikey" in request_log:
+        del request_log["apikey"]
+    request_log["api_type"] = "optionsmultiorder"
 
-        log_executor.submit(
-            async_log_analyzer, analyzer_request, response_data, "optionsmultiorder"
-        )
-
-        socketio.start_background_task(
-            socketio.emit,
-            "analyzer_update",
-            {"request": analyzer_request, "response": response_data},
-        )
-    else:
-        # Log to order log
-        request_log = original_data.copy()
-        if "apikey" in request_log:
-            del request_log["apikey"]
-        log_executor.submit(async_log_order, "optionsmultiorder", request_log, response_data)
-
-    # Send Telegram alert in background task (non-blocking)
-    socketio.start_background_task(
-        telegram_alert_service.send_order_alert,
-        "optionsmultiorder",
-        multiorder_data,
-        response_data,
-        api_key,
-    )
+    bus.publish(MultiOrderCompletedEvent(
+        mode=mode,
+        api_type="optionsmultiorder",
+        strategy=common_data.get("strategy", ""),
+        underlying=common_data.get("underlying", ""),
+        exchange=common_data.get("exchange", ""),
+        results=results,
+        successful_legs=successful_legs,
+        failed_legs=failed_legs,
+        total=len(results),
+        request_data=request_log,
+        response_data=response_data,
+        api_key=api_key or "",
+    ))
 
     return True, response_data, 200
 

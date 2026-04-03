@@ -161,11 +161,13 @@ def get_order_book(auth):
         
         # 1. Fetch open orders
         open_result = get_api_response("/v2/orders", auth, method="GET", params={"state": "open"})
+        logger.debug(f"[DeltaExchange] /v2/orders (open) count={len(open_result.get('result', []))}")
         if open_result.get("success"):
             all_orders.extend(open_result.get("result", []))
-            
+
         # 2. Fetch historical orders
         hist_result = get_api_response("/v2/orders/history", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/orders/history count={len(hist_result.get('result', []))}")
         if hist_result.get("success"):
             all_orders.extend(hist_result.get("result", []))
             
@@ -200,6 +202,7 @@ def get_trade_book(auth):
         today_date = datetime.now(ist).date()
         
         result = get_api_response("/v2/fills", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/fills count={len(result.get('result', []))}")
         if result.get("success"):
             all_trades = result.get("result", [])
             today_trades = []
@@ -228,20 +231,63 @@ def get_trade_book(auth):
 # ---------------------------------------------------------------------------
 
 def get_positions(auth):
-    """Fetch all open margined positions."""
+    """
+    Fetch all open positions — both derivatives (margined) and spot (wallet).
+
+    Derivatives come from GET /v2/positions/margined.
+    Spot holdings come from GET /v2/wallet/balances — non-INR assets with
+    a non-zero balance are synthesised into position-like dicts so they
+    appear in the OpenAlgo position book alongside derivative positions.
+    """
+    positions = []
+
+    # 1. Derivative positions (perpetual futures, options)
     try:
         result = get_api_response("/v2/positions/margined", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/positions/margined count={len(result.get('result', []))}")
         if result.get("success"):
-            return result.get("result", [])
-        logger.warning(f"[DeltaExchange] get_positions unexpected response: {result}")
-        return []
+            positions.extend(result.get("result", []))
+        else:
+            logger.warning(f"[DeltaExchange] get_positions/margined unexpected: {result}")
     except Exception as e:
-        logger.error(f"[DeltaExchange] Exception in get_positions: {e}")
-        return []
+        logger.error(f"[DeltaExchange] Exception in get_positions/margined: {e}")
+
+    # 2. Spot holdings from wallet balances
+    try:
+        wallet_result = get_api_response("/v2/wallet/balances", auth, method="GET")
+        logger.debug(f"[DeltaExchange] /v2/wallet/balances count={len(wallet_result.get('result', []))}")
+        if wallet_result.get("success"):
+            for asset in wallet_result.get("result", []):
+                if not isinstance(asset, dict):
+                    continue
+                symbol = asset.get("asset_symbol", "") or asset.get("symbol", "")
+                # Skip INR (settlement currency) and zero-balance assets
+                if symbol in ("INR", "USD", "") or not symbol:
+                    continue
+                balance = float(asset.get("balance", 0) or 0)
+                blocked = float(asset.get("blocked_margin", 0) or 0)
+                size = balance - blocked  # available spot holding
+                if size <= 0:
+                    continue
+                # Synthesise a position-like dict matching /v2/positions/margined structure
+                spot_symbol = f"{symbol}_INR"
+                positions.append({
+                    "product_id": asset.get("asset_id", ""),
+                    "product_symbol": spot_symbol,
+                    "size": size,
+                    "entry_price": "0",  # Wallet doesn't track entry price
+                    "realized_pnl": "0",
+                    "unrealized_pnl": "0",
+                    "_is_spot": True,  # Internal flag for downstream mapping
+                })
+    except Exception as e:
+        logger.error(f"[DeltaExchange] Exception fetching spot wallet positions: {e}")
+
+    return positions
 
 
 def get_holdings(auth):
-    """Delta Exchange is a derivatives-only exchange; equity holdings are not applicable."""
+    """Delta Exchange has no equity holdings concept; spot is shown in positions."""
     return []
 
 
@@ -326,7 +372,18 @@ def place_order_api(data, auth):
         return _ErrResp(), {"status": "error", "message": msg}, None
 
     # Set leverage if requested (Delta Exchange requires a separate pre-order call)
-    leverage = str(data.get("leverage", "")).strip() or os.getenv("DELTA_DEFAULT_LEVERAGE", "")
+    # Priority: order payload > leverage_config DB > env var fallback
+    leverage = str(data.get("leverage", "")).strip()
+    if not leverage:
+        try:
+            from database.leverage_db import get_leverage
+            db_leverage = get_leverage()
+            if db_leverage and int(db_leverage) > 0:
+                leverage = str(int(db_leverage))
+        except Exception as e:
+            logger.warning(f"[DeltaExchange] Could not read leverage config: {e}")
+    if not leverage:
+        leverage = os.getenv("DELTA_DEFAULT_LEVERAGE", "")
     if leverage and leverage != "0":
         _set_leverage(int(token), leverage, auth)
 
@@ -406,22 +463,22 @@ def place_smartorder_api(data, auth):
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
+    position_size = float(data.get("position_size", "0"))
 
-    current_position = int(
+    current_position = float(
         get_open_position(symbol, exchange, map_product_type(product), auth)
     )
     logger.info(
         f"[DeltaExchange] SmartOrder: target={position_size} current={current_position}"
     )
 
-    if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
+    if position_size == 0 and current_position == 0 and float(data["quantity"]) != 0:
         return place_order_api(data, auth)
 
     if position_size == current_position:
         msg = (
             "No OpenPosition Found. Not placing Exit order."
-            if int(data["quantity"]) == 0
+            if float(data["quantity"]) == 0
             else "No action needed. Position size matches current position"
         )
         return res, {"status": "success", "message": msg}, None
@@ -485,7 +542,25 @@ def cancel_order(orderid, auth):
 
 
 def cancel_all_orders_api(data, auth):
-    """Cancel all currently open orders (regardless of creation date)."""
+    """
+    Cancel all currently open orders via DELETE /v2/orders/all.
+
+    Uses the bulk cancel endpoint instead of cancelling orders one by one.
+    Falls back to individual cancellation if bulk endpoint fails.
+    """
+    # Try bulk cancel first (single API call)
+    body = {
+        "cancel_limit_orders": True,
+        "cancel_stop_orders": True,
+        "cancel_reduce_only_orders": True,
+    }
+    result = get_api_response("/v2/orders/all", auth, method="DELETE", payload=json.dumps(body))
+    if result.get("success"):
+        logger.info("[DeltaExchange] All open orders cancelled via /v2/orders/all")
+        return ["all"], []
+
+    # Fallback: cancel individually
+    logger.warning("[DeltaExchange] Bulk cancel failed, falling back to individual cancellation")
     order_book = _get_all_open_orders(auth)
     if not order_book:
         return [], []
@@ -532,7 +607,7 @@ def modify_order(data, auth):
 # ---------------------------------------------------------------------------
 
 def close_all_positions(current_api_key, auth):
-    """Square off all open positions using market orders."""
+    """Square off all open positions (derivatives + spot) using market orders."""
     positions = get_positions(auth)
     if not positions:
         return {"message": "No Open Positions Found"}, 200
@@ -540,7 +615,13 @@ def close_all_positions(current_api_key, auth):
     for pos in positions:
         if not isinstance(pos, dict):
             continue
-        size = int(pos.get("size", 0))
+        is_spot = pos.get("_is_spot", False)
+
+        # Use float() to handle fractional spot sizes (e.g. 0.0001 BTC)
+        try:
+            size = float(pos.get("size", 0))
+        except (ValueError, TypeError):
+            size = 0
         if size == 0:
             continue
 
@@ -549,8 +630,13 @@ def close_all_positions(current_api_key, auth):
         action = "SELL" if size > 0 else "BUY"
         quantity = abs(size)
 
-        # Resolve OpenAlgo symbol from DB; fall back to product_symbol
-        symbol = get_symbol(str(product_id), "CRYPTO") or product_symbol
+        # Resolve OpenAlgo symbol from DB.
+        # For spot wallet entries, product_id is asset_id (not product token),
+        # so look up by brsymbol instead.
+        if is_spot:
+            symbol = get_oa_symbol(product_symbol, "CRYPTO") or product_symbol
+        else:
+            symbol = get_symbol(str(product_id), "CRYPTO") or product_symbol
         logger.info(f"[DeltaExchange] Close: {action} {quantity} {symbol}")
 
         order_payload = {
@@ -560,7 +646,7 @@ def close_all_positions(current_api_key, auth):
             "action": action,
             "exchange": "CRYPTO",
             "pricetype": "MARKET",
-            "product": "NRML",
+            "product": "CNC" if is_spot else "NRML",
             "quantity": str(quantity),
         }
         _, api_response, _ = place_order_api(order_payload, auth)

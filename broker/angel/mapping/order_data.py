@@ -128,7 +128,7 @@ def transform_order_data(orders):
             "exchange": order.get("exchange", ""),
             "action": order.get("transactiontype", ""),
             "quantity": order.get("quantity", 0),
-            "price": order.get("averageprice", 0.0),
+            "price": order.get("averageprice", 0.0) or order.get("price", 0.0),
             "trigger_price": order.get("triggerprice", 0.0),
             "pricetype": ordertype,
             "product": order.get("producttype", ""),

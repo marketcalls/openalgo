@@ -1,3 +1,5 @@
+# api/funds.py
+
 import json
 import os
 
@@ -12,9 +14,10 @@ logger = get_logger(__name__)
 def get_margin_data(auth_token):
     """Fetch margin data from Zebu's API using the provided auth token with httpx connection pooling."""
 
-    # Fetch UserID and AccountID from environment variables
-    userid = os.getenv("BROKER_API_KEY")
-    actid = userid  # Assuming AccountID is the same as UserID
+    # BROKER_API_KEY format: userid:::client_id (e.g., Z56004:::Z56004_U)
+    full_api_key = os.getenv("BROKER_API_KEY")
+    userid = full_api_key.split(":::")[0]  # Trading user ID
+    actid = userid
 
     # Prepare the payload for the request
     data = {
@@ -22,17 +25,20 @@ def get_margin_data(auth_token):
         "actid": actid,  # Account ID
     }
 
-    # Prepare the jData payload with the authentication token (jKey)
-    payload = "jData=" + json.dumps(data) + "&jKey=" + auth_token
+    # Prepare the jData payload
+    payload = "jData=" + json.dumps(data)
 
     # Get the shared httpx client
     client = get_httpx_client()
 
-    # Set headers - should be form-urlencoded, not json
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    # Set headers with Bearer token authentication
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {auth_token}",
+    }
 
     # Zebu API endpoint URL
-    url = "https://go.mynt.in/NorenWClientTP/Limits"
+    url = "https://go.mynt.in/NorenWClientAPI/Limits"
 
     # Send the POST request to Zebu's API using httpx
     response = client.post(url, content=payload, headers=headers)
@@ -58,7 +64,7 @@ def get_margin_data(auth_token):
         total_collateral = float(margin_data.get("brkcollamt", 0))
         total_used_margin = float(margin_data.get("marginused", 0))
         total_realised = -float(margin_data.get("rpnl", 0))
-        total_unrealised = float(margin_data.get("urmtom", 0))
+        total_unrealised = float(margin_data.get("unmtom", 0))
 
         # Construct and return the processed margin data
         processed_margin_data = {

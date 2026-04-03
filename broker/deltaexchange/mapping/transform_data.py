@@ -1,10 +1,30 @@
 ﻿# Mapping OpenAlgo API Request to Delta Exchange API Parameters
 # Delta Exchange API docs: https://docs.delta.exchange
 
-from database.token_db import get_br_symbol, get_token
+from database.token_db import get_br_symbol, get_symbol_info, get_token
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _order_size(quantity, symbol, exchange):
+    """
+    Convert quantity to the correct type for the Delta Exchange size parameter.
+    - Spot instruments: fractional float (e.g. 0.05 SOL)
+    - Derivatives (futures/options/perps): integer number of contracts
+
+    Raises ValueError if a fractional quantity is passed for a non-spot instrument.
+    """
+    qty = float(quantity)
+    info = get_symbol_info(symbol, exchange)
+    if info and info.instrumenttype == "SPOT":
+        return qty
+    if qty != int(qty):
+        raise ValueError(
+            f"Fractional quantity ({qty}) not allowed for derivative contracts. "
+            f"Use whole numbers for {symbol}."
+        )
+    return int(qty)
 
 
 def transform_data(data, token):
@@ -38,10 +58,12 @@ def transform_data(data, token):
     order_type = map_order_type(data["pricetype"])
     side = data["action"].lower()  # "buy" or "sell"
 
+    size = _order_size(data["quantity"], data["symbol"], data["exchange"])
+
     transformed = {
         "product_id": int(token),
         "product_symbol": symbol,
-        "size": int(data["quantity"]),
+        "size": size,
         "side": side,
         "order_type": order_type,
         "time_in_force": "gtc",
@@ -134,10 +156,12 @@ def transform_modify_order_data(data):
     else:
         limit_price = str(data.get("price", "0"))
 
+    size = _order_size(data["quantity"], data["symbol"], data["exchange"])
+
     transformed = {
         "id": order_id,
         "product_id": product_id,
-        "size": int(data["quantity"]),
+        "size": size,
         "limit_price": limit_price,
     }
 

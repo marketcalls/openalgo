@@ -1,14 +1,32 @@
-from marshmallow import Schema, fields, validate
+from marshmallow import Schema, ValidationError, fields, post_load, validate
+
+from utils.constants import CRYPTO_EXCHANGES, VALID_EXCHANGES
+
+
+def _coerce_quantity_to_int(data):
+    """Convert quantity from float to int for non-crypto exchanges.
+
+    Raises ValidationError if a fractional quantity (e.g. 1.9) is sent
+    to a non-crypto exchange, since brokers like Zerodha only accept integers.
+    """
+    if data.get("exchange") not in CRYPTO_EXCHANGES and "quantity" in data:
+        qty = data["quantity"]
+        if qty != int(qty):
+            raise ValidationError(
+                {"quantity": [f"Fractional quantity ({qty}) is not allowed for non-crypto exchanges."]}
+            )
+        data["quantity"] = int(qty)
+    return data
 
 
 class OrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
-        required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer.")
+    quantity = fields.Float(
+        required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
     )
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
@@ -29,18 +47,22 @@ class OrderSchema(Schema):
         missing=None, allow_none=True
     )  # Optional: passed from options order for execution reference
 
+    @post_load
+    def coerce_quantity(self, data, **kwargs):
+        return _coerce_quantity_to_int(data)
+
 
 class SmartOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
+    quantity = fields.Float(
         required=True,
-        validate=validate.Range(min=0, error="Quantity must be a non-negative integer."),
+        validate=validate.Range(min=0, error="Quantity must be a non-negative number."),
     )
-    position_size = fields.Int(required=True)
+    position_size = fields.Float(required=True)
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
     )
@@ -57,11 +79,15 @@ class SmartOrderSchema(Schema):
         validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."),
     )
 
+    @post_load
+    def coerce_quantity(self, data, **kwargs):
+        return _coerce_quantity_to_int(data)
+
 
 class ModifyOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     orderid = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
@@ -72,8 +98,8 @@ class ModifyOrderSchema(Schema):
     price = fields.Float(
         required=True, validate=validate.Range(min=0, error="Price must be a non-negative number.")
     )
-    quantity = fields.Int(
-        required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer.")
+    quantity = fields.Float(
+        required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
     )
     disclosed_quantity = fields.Int(
         required=True,
@@ -84,29 +110,33 @@ class ModifyOrderSchema(Schema):
         validate=validate.Range(min=0, error="Trigger price must be a non-negative number."),
     )
 
+    @post_load
+    def coerce_quantity(self, data, **kwargs):
+        return _coerce_quantity_to_int(data)
+
 
 class CancelOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     orderid = fields.Str(required=True)
 
 
 class ClosePositionSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
 
 
 class CancelAllOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
 
 
 class BasketOrderItemSchema(Schema):
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
-        required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer.")
+    quantity = fields.Float(
+        required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
     )
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
@@ -124,9 +154,13 @@ class BasketOrderItemSchema(Schema):
         validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."),
     )
 
+    @post_load
+    def coerce_quantity(self, data, **kwargs):
+        return _coerce_quantity_to_int(data)
+
 
 class BasketOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     orders = fields.List(
         fields.Nested(BasketOrderItemSchema), required=True
@@ -134,14 +168,14 @@ class BasketOrderSchema(Schema):
 
 
 class SplitOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
     symbol = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
-    quantity = fields.Int(
+    quantity = fields.Float(
         required=True,
-        validate=validate.Range(min=1, error="Total quantity must be a positive integer."),
+        validate=validate.Range(min=0, min_inclusive=False, error="Total quantity must be a positive number."),
     )  # Total quantity to split
     splitsize = fields.Int(
         required=True,
@@ -163,14 +197,18 @@ class SplitOrderSchema(Schema):
         validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."),
     )
 
+    @post_load
+    def coerce_quantity(self, data, **kwargs):
+        return _coerce_quantity_to_int(data)
+
 
 class OptionsOrderSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     underlying = fields.Str(
         required=True
     )  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE, or NIFTY28NOV24FUT)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE, NFO, BFO)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE, NFO, BFO)
     expiry_date = fields.Str(
         required=False
     )  # Optional if underlying includes expiry (DDMMMYY format)
@@ -250,10 +288,10 @@ class OptionsMultiOrderLegSchema(Schema):
 class OptionsMultiOrderSchema(Schema):
     """Schema for options multi-order with multiple legs sharing common underlying"""
 
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(
         required=False
     )  # Optional if underlying includes expiry (DDMMMYY format)
@@ -270,9 +308,9 @@ class OptionsMultiOrderSchema(Schema):
 class SyntheticFutureSchema(Schema):
     """Schema for synthetic future calculation"""
 
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28OCT25)
 
 
@@ -286,7 +324,7 @@ class MarginPositionSchema(Schema):
         ),
     )
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NSE", "BSE", "NFO", "BFO", "CDS", "MCX"])
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
     )
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Str(required=True)  # String to match API contract, validated in service layer
@@ -302,7 +340,7 @@ class MarginCalculatorSchema(Schema):
     """Schema for margin calculator request"""
 
     apikey = fields.Str(
-        required=True, validate=validate.Length(min=1, error="API key is required.")
+        required=True, validate=validate.Length(min=1, max=256, error="API key must be between 1 and 256 characters.")
     )
     positions = fields.List(
         fields.Nested(MarginPositionSchema),

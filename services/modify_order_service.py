@@ -3,17 +3,16 @@ import importlib
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order, executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
-from services.telegram_alert_service import telegram_alert_service
-from utils.api_analyzer import analyze_request
+from events import AnalyzerErrorEvent, OrderModifiedEvent, OrderModifyFailedEvent
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+API_TYPE = "modifyorder"
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -33,15 +32,13 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     analyzer_request = request_data.copy()
     if "apikey" in analyzer_request:
         del analyzer_request["apikey"]
-    analyzer_request["api_type"] = "modifyorder"
+    analyzer_request["api_type"] = API_TYPE
 
-    # Log to analyzer database
-    executor.submit(async_log_analyzer, analyzer_request, error_response, "modifyorder")
-
-    # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
-    )
+    bus.publish(AnalyzerErrorEvent(
+        mode="analyze", api_type=API_TYPE,
+        request_data=analyzer_request, response_data=error_response,
+        error_message=error_message,
+    ))
 
     return error_response
 
@@ -102,12 +99,40 @@ def modify_order_with_auth(
             return False, error_response, 400
 
         # Route to sandbox
-        return sandbox_modify_order(order_data, api_key, original_data)
+        success, response, status_code = sandbox_modify_order(order_data, api_key, original_data)
+
+        order_request_data["api_type"] = API_TYPE
+        if success:
+            bus.publish(OrderModifiedEvent(
+                mode="analyze", api_type=API_TYPE,
+                symbol=order_data.get("symbol", ""),
+                exchange=order_data.get("exchange", ""),
+                orderid=order_data.get("orderid", ""),
+                request_data=order_request_data, response_data=response,
+                api_key=api_key,
+            ))
+        else:
+            bus.publish(OrderModifyFailedEvent(
+                mode="analyze", api_type=API_TYPE,
+                symbol=order_data.get("symbol", ""),
+                orderid=order_data.get("orderid", ""),
+                error_message=response.get("message", ""),
+                request_data=order_request_data, response_data=response,
+                api_key=api_key,
+            ))
+
+        return success, response, status_code
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
         error_response = {"status": "error", "message": "Broker-specific module not found"}
-        executor.submit(async_log_order, "modifyorder", original_data, error_response)
+        bus.publish(OrderModifyFailedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=order_data.get("symbol", ""), orderid=order_data.get("orderid", ""),
+            error_message="Broker-specific module not found",
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, 404
 
     try:
@@ -120,26 +145,24 @@ def modify_order_with_auth(
             "status": "error",
             "message": "Failed to modify order due to internal error",
         }
-        executor.submit(async_log_order, "modifyorder", original_data, error_response)
+        bus.publish(OrderModifyFailedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=order_data.get("symbol", ""), orderid=order_data.get("orderid", ""),
+            error_message="Failed to modify order due to internal error",
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, 500
 
     if status_code == 200:
         response_data = {"status": "success", "orderid": order_data["orderid"]}
-        # Emit SocketIO event asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "modify_order_event",
-            {"status": "success", "orderid": order_data["orderid"], "mode": "live"},
-        )
-        executor.submit(async_log_order, "modifyorder", order_request_data, response_data)
-        # Send Telegram alert in background task (non-blocking)
-        socketio.start_background_task(
-            telegram_alert_service.send_order_alert,
-            "modifyorder",
-            order_data,
-            response_data,
-            original_data.get("apikey"),
-        )
+        bus.publish(OrderModifiedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=order_data.get("symbol", ""), exchange=order_data.get("exchange", ""),
+            orderid=order_data["orderid"],
+            request_data=order_request_data, response_data=response_data,
+            api_key=original_data.get("apikey", ""),
+        ))
         return True, response_data, 200
     else:
         message = (
@@ -148,7 +171,13 @@ def modify_order_with_auth(
             else "Failed to modify order"
         )
         error_response = {"status": "error", "message": message}
-        executor.submit(async_log_order, "modifyorder", original_data, error_response)
+        bus.publish(OrderModifyFailedEvent(
+            mode="live", api_type=API_TYPE,
+            symbol=order_data.get("symbol", ""), orderid=order_data.get("orderid", ""),
+            error_message=message,
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, status_code
 
 
@@ -196,7 +225,16 @@ def modify_order(
                         "message": "Modify order operation is not allowed in Semi-Auto mode. Please switch to Auto mode to modify orders.",
                     }
                     logger.warning(f"Modify order blocked for user {user_id} (semi-auto mode)")
-                    executor.submit(async_log_order, "modifyorder", original_data, error_response)
+                    order_request_data = copy.deepcopy(original_data)
+                    if "apikey" in order_request_data:
+                        order_request_data.pop("apikey", None)
+                    bus.publish(OrderModifyFailedEvent(
+                        mode="live", api_type=API_TYPE,
+                        symbol=order_data.get("symbol", ""), orderid=order_data.get("orderid", ""),
+                        error_message=error_response["message"],
+                        request_data=order_request_data, response_data=error_response,
+                        api_key=api_key,
+                    ))
                     return False, error_response, 403
 
         # Add API key to order data

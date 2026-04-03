@@ -20,19 +20,24 @@ logger = get_logger(__name__)
 def get_api_response(endpoint, auth, method="GET", payload=""):
     AUTH_TOKEN = auth
 
-    api_key = os.getenv("BROKER_API_KEY")
+    # BROKER_API_KEY format: userid:::client_id (e.g., Z56004:::Z56004_U)
+    full_api_key = os.getenv("BROKER_API_KEY")
+    api_key = full_api_key.split(":::")[0]  # Trading user ID
 
     data = f'{{"uid": "{api_key}", "actid": "{api_key}"}}'
 
-    if endpoint == "/NorenWClientTP/Holdings":
+    if endpoint == "/NorenWClientAPI/Holdings":
         data = f'{{"uid": "{api_key}", "actid": "{api_key}", "prd": "C"}}'
 
-    payload = "jData=" + data + "&jKey=" + AUTH_TOKEN
+    payload = "jData=" + data
 
     # Get the shared httpx client
     client = get_httpx_client()
 
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
     url = f"https://go.mynt.in{endpoint}"
 
     response = client.request(method, url, content=payload, headers=headers)
@@ -42,19 +47,21 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
 
 def get_order_book(auth):
-    return get_api_response("/NorenWClientTP/OrderBook", auth, method="POST")
+    return get_api_response("/NorenWClientAPI/OrderBook", auth, method="POST")
 
 
 def get_trade_book(auth):
-    return get_api_response("/NorenWClientTP/TradeBook", auth, method="POST")
+    return get_api_response("/NorenWClientAPI/TradeBook", auth, method="POST")
 
 
 def get_positions(auth):
-    return get_api_response("/NorenWClientTP/PositionBook", auth, method="POST")
+    positions = get_api_response("/NorenWClientAPI/PositionBook", auth, method="POST")
+    logger.info(f"PositionBook raw response: {positions}")
+    return positions
 
 
 def get_holdings(auth):
-    return get_api_response("/NorenWClientTP/Holdings", auth, method="POST")
+    return get_api_response("/NorenWClientAPI/Holdings", auth, method="POST")
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
@@ -88,29 +95,37 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
+    # BROKER_API_KEY format: userid:::client_id
+    full_api_key = os.getenv("BROKER_API_KEY")
+    BROKER_API_KEY = full_api_key.split(":::")[0]  # Trading user ID
     data["apikey"] = BROKER_API_KEY
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token)
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    newdata = transform_data(data, token, AUTH_TOKEN)
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
 
-    payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
+    payload = "jData=" + json.dumps(newdata)
 
     logger.info(f"{payload}")
 
     # Get the shared httpx client
     client = get_httpx_client()
-    url = "https://go.mynt.in/NorenWClientTP/PlaceOrder"
+    url = "https://go.mynt.in/NorenWClientAPI/PlaceOrder"
 
     res = client.post(url, content=payload, headers=headers)
     # Add status attribute for compatibility with existing code
     res.status = res.status_code
     response_data = json.loads(res.text)
 
-    if response_data["stat"] == "Ok":
-        orderid = response_data["norenordno"]
+    logger.info(f"PlaceOrder Response: {response_data}")
+
+    if response_data.get("stat") == "Ok":
+        orderid = response_data.get("norenordno")
     else:
         orderid = None
+        logger.error(f"PlaceOrder Error: {response_data.get('emsg', 'Unknown error')}")
     return res, response_data, orderid
 
 
@@ -251,23 +266,27 @@ def close_all_positions(current_api_key, auth):
 
 
 def cancel_order(orderid, auth):
-    # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    # BROKER_API_KEY format: userid:::client_id
+    full_api_key = os.getenv("BROKER_API_KEY")
+    api_key = full_api_key.split(":::")[0]  # Trading user ID
     data = {"uid": api_key, "norenordno": orderid}
 
-    payload = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
+    payload = "jData=" + json.dumps(data)
     # Set up the request headers
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
 
     # Get the shared httpx client
     client = get_httpx_client()
-    url = "https://go.mynt.in/NorenWClientTP/CancelOrder"
+    url = "https://go.mynt.in/NorenWClientAPI/CancelOrder"
 
     # Send the request using httpx
     res = client.post(url, content=payload, headers=headers)
     data = json.loads(res.text)
-    logger.info(f"{data}")
+    logger.info(f"CancelOrder Response: {data}")
 
     # Check if the request was successful
     if data.get("stat") == "Ok":
@@ -282,9 +301,10 @@ def cancel_order(orderid, auth):
 
 
 def modify_order(data, auth):
-    # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    # BROKER_API_KEY format: userid:::client_id
+    full_api_key = os.getenv("BROKER_API_KEY")
+    api_key = full_api_key.split(":::")[0]  # Trading user ID
 
     token = get_token(data["symbol"], data["exchange"])
     data["symbol"] = get_br_symbol(data["symbol"], data["exchange"])
@@ -296,13 +316,16 @@ def modify_order(data, auth):
 
     logger.info(f"Modify Order Request Data: {transformed_data}")
 
-    # Set up the request headers - should be form-urlencoded, not json
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
+    # Set up the request headers
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
+    payload = "jData=" + json.dumps(transformed_data)
 
     # Get the shared httpx client
     client = get_httpx_client()
-    url = "https://go.mynt.in/NorenWClientTP/ModifyOrder"
+    url = "https://go.mynt.in/NorenWClientAPI/ModifyOrder"
 
     res = client.post(url, content=payload, headers=headers)
     response = json.loads(res.text)

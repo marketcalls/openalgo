@@ -4,13 +4,14 @@ import time
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order, executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
-from services.telegram_alert_service import telegram_alert_service
-from utils.api_analyzer import analyze_request, generate_order_id
+from events import (
+    AnalyzerErrorEvent,
+    OrderFailedEvent,
+    OrderPlacedEvent,
+    SmartOrderNoActionEvent,
+)
 from utils.constants import (
     REQUIRED_SMART_ORDER_FIELDS,
     VALID_ACTIONS,
@@ -18,6 +19,7 @@ from utils.constants import (
     VALID_PRICE_TYPES,
     VALID_PRODUCT_TYPES,
 )
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 # Initialize logger
@@ -28,31 +30,21 @@ SMART_ORDER_DELAY = "0.5"  # Default value, can be overridden by environment var
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
-    """
-    Helper function to emit analyzer error events
-
-    Args:
-        request_data: Original request data
-        error_message: Error message to emit
-
-    Returns:
-        Error response dictionary
-    """
+    """Publish an analyzer error event and return the error response dict."""
     error_response = {"mode": "analyze", "status": "error", "message": error_message}
 
-    # Store complete request data without apikey
     analyzer_request = request_data.copy()
     if "apikey" in analyzer_request:
         del analyzer_request["apikey"]
     analyzer_request["api_type"] = "placesmartorder"
 
-    # Log to analyzer database
-    executor.submit(async_log_analyzer, analyzer_request, error_response, "placesmartorder")
-
-    # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
-    )
+    bus.publish(AnalyzerErrorEvent(
+        mode="analyze",
+        api_type="placesmartorder",
+        request_data=analyzer_request,
+        response_data=error_response,
+        error_message=error_message,
+    ))
 
     return error_response
 
@@ -144,20 +136,25 @@ def place_smart_order_with_auth(
     if "apikey" in order_request_data:
         order_request_data.pop("apikey", None)
 
+    api_key = original_data.get("apikey", "")
+
     # Validate order data
     is_valid, error_message = validate_smart_order(order_data)
     if not is_valid:
         if get_analyze_mode():
             return False, emit_analyzer_error(original_data, error_message), 400
         error_response = {"status": "error", "message": error_message}
-        executor.submit(async_log_order, "placesmartorder", original_data, error_response)
+        bus.publish(OrderFailedEvent(
+            mode="live", api_type="placesmartorder",
+            request_data=order_request_data, response_data=error_response,
+            error_message=error_message,
+        ))
         return False, error_response, 400
 
     # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
         from services.sandbox_service import sandbox_place_smart_order
 
-        api_key = original_data.get("apikey")
         if not api_key:
             return (
                 False,
@@ -165,40 +162,55 @@ def place_smart_order_with_auth(
                 400,
             )
 
-        # Route to sandbox smart order
         success, response_data, status_code = sandbox_place_smart_order(
             order_data, api_key, original_data
         )
 
-        # Store complete request data without apikey
         analyzer_request = order_request_data.copy()
         analyzer_request["api_type"] = "placesmartorder"
 
-        # Log to analyzer database with complete request and response
-        executor.submit(async_log_analyzer, analyzer_request, response_data, "placesmartorder")
-
-        # Emit socket event for toast notification asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "analyzer_update",
-            {"request": analyzer_request, "response": response_data},
+        # Check if this is a no-action case
+        no_action = (
+            response_data.get("status") == "success"
+            and "No action" in response_data.get("message", "")
+            or "Already Matched" in response_data.get("message", "")
         )
 
-        # Send Telegram alert in background task (non-blocking)
-        socketio.start_background_task(
-            telegram_alert_service.send_order_alert,
-            "placesmartorder",
-            order_data,
-            response_data,
-            order_data.get("apikey"),
-        )
+        if no_action:
+            bus.publish(SmartOrderNoActionEvent(
+                mode="analyze", api_type="placesmartorder",
+                symbol=order_data.get("symbol", ""),
+                exchange=order_data.get("exchange", ""),
+                message=response_data.get("message", ""),
+                request_data=analyzer_request, response_data=response_data,
+                api_key=api_key,
+            ))
+        else:
+            bus.publish(OrderPlacedEvent(
+                mode="analyze", api_type="placesmartorder",
+                strategy=order_data.get("strategy", ""),
+                symbol=order_data.get("symbol", ""),
+                exchange=order_data.get("exchange", ""),
+                action=order_data.get("action", ""),
+                quantity=int(order_data.get("quantity", 0)),
+                pricetype=order_data.get("pricetype", ""),
+                product=order_data.get("product", ""),
+                orderid=response_data.get("orderid", ""),
+                request_data=analyzer_request, response_data=response_data,
+                api_key=api_key,
+            ))
+
         return success, response_data, status_code
 
     # Live Mode - Proceed with actual order placement
     broker_module = import_broker_module(broker)
     if broker_module is None:
         error_response = {"status": "error", "message": "Broker-specific module not found"}
-        executor.submit(async_log_order, "placesmartorder", original_data, error_response)
+        bus.publish(OrderFailedEvent(
+            mode="live", api_type="placesmartorder",
+            request_data=order_request_data, response_data=error_response,
+            api_key=api_key, error_message="Broker-specific module not found",
+        ))
         return False, error_response, 404
 
     try:
@@ -210,60 +222,36 @@ def place_smart_order_with_auth(
             and response_data.get("status") == "success"
             and "No action needed" in response_data.get("message", "")
         ):
-            # Log the no-action-needed case
             order_response_data = {
                 "status": "success",
                 "message": "Positions Already Matched. No Action needed.",
             }
-            executor.submit(
-                async_log_order, "placesmartorder", order_request_data, order_response_data
-            )
-
-            # Emit notification for matched positions asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                "order_notification",
-                {
-                    "symbol": order_data.get("symbol"),
-                    "status": "info",
-                    "message": " Positions Already Matched. No Action needed.",
-                },
-            )
-            # Send Telegram alert in background task (non-blocking)
-            socketio.start_background_task(
-                telegram_alert_service.send_order_alert,
-                "placesmartorder",
-                order_data,
-                order_response_data,
-                original_data.get("apikey"),
-            )
+            bus.publish(SmartOrderNoActionEvent(
+                mode="live", api_type="placesmartorder",
+                symbol=order_data.get("symbol", ""),
+                exchange=order_data.get("exchange", ""),
+                message=" Positions Already Matched. No Action needed.",
+                request_data=order_request_data, response_data=order_response_data,
+                api_key=api_key,
+            ))
             return True, order_response_data, 200
 
         # Log successful order immediately after placement
         if res and res.status == 200:
             order_response_data = {"status": "success", "orderid": order_id}
-            executor.submit(
-                async_log_order, "placesmartorder", order_request_data, order_response_data
-            )
-            # Send Telegram alert in background task (non-blocking)
-            socketio.start_background_task(
-                telegram_alert_service.send_order_alert,
-                "placesmartorder",
-                order_data,
-                order_response_data,
-                original_data.get("apikey"),
-            )
-            # Emit SocketIO event asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                "order_event",
-                {
-                    "symbol": order_data.get("symbol"),
-                    "action": order_data.get("action"),
-                    "orderid": order_id,
-                    "mode": "live",
-                },
-            )
+            bus.publish(OrderPlacedEvent(
+                mode="live", api_type="placesmartorder",
+                strategy=order_data.get("strategy", ""),
+                symbol=order_data.get("symbol", ""),
+                exchange=order_data.get("exchange", ""),
+                action=order_data.get("action", ""),
+                quantity=int(order_data.get("quantity", 0)),
+                pricetype=order_data.get("pricetype", ""),
+                product=order_data.get("product", ""),
+                orderid=str(order_id),
+                request_data=order_request_data, response_data=order_response_data,
+                api_key=api_key,
+            ))
 
     except Exception as e:
         logger.error(f"Error in broker_module.place_smartorder_api: {e}")
@@ -272,7 +260,11 @@ def place_smart_order_with_auth(
             "status": "error",
             "message": "Failed to place smart order due to internal error",
         }
-        executor.submit(async_log_order, "placesmartorder", original_data, error_response)
+        bus.publish(OrderFailedEvent(
+            mode="live", api_type="placesmartorder",
+            request_data=order_request_data, response_data=error_response,
+            api_key=api_key, error_message=str(e),
+        ))
         return False, error_response, 500
 
     # Add delay if needed
@@ -291,7 +283,11 @@ def place_smart_order_with_auth(
             else "Failed to place smart order"
         )
         error_response = {"status": "error", "message": message}
-        executor.submit(async_log_order, "placesmartorder", original_data, error_response)
+        bus.publish(OrderFailedEvent(
+            mode="live", api_type="placesmartorder",
+            request_data=order_request_data, response_data=error_response,
+            api_key=api_key, error_message=message,
+        ))
         status_code = res.status if res and hasattr(res, "status") else 500
         return False, error_response, status_code
 

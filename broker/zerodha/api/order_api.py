@@ -131,6 +131,7 @@ def place_order_api(data, auth):
         "trigger_price": newdata["trigger_price"],
         "disclosed_quantity": newdata["disclosed_quantity"],
         "validity": newdata["validity"],
+        "market_protection": newdata["market_protection"],
         "tag": newdata["tag"],
     }
 
@@ -138,6 +139,7 @@ def place_order_api(data, auth):
 
     # URL-encode the payload
     payload_encoded = urllib.parse.urlencode(payload)
+    logger.info(f"Encoded payload to Zerodha: {payload_encoded}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -152,6 +154,9 @@ def place_order_api(data, auth):
     response = client.post(
         "https://api.kite.trade/orders/regular", headers=headers, content=payload_encoded
     )
+
+    # Log raw response
+    logger.info(f"Zerodha raw response: status={response.status_code}, body={response.text}")
 
     # Parse the response
     response_data = response.json()

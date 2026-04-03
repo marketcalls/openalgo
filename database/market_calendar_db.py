@@ -21,6 +21,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 
+from utils.constants import CRYPTO_EXCHANGES, EXCHANGE_CRYPTO
 from utils.logging import get_logger
 
 # IST Timezone
@@ -47,7 +48,7 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 # Supported exchanges
-SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "BCD", "CDS"]
+SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "BCD", "CDS", "CRYPTO"]
 
 # Holiday types
 HOLIDAY_TYPES = ["TRADING_HOLIDAY", "SETTLEMENT_HOLIDAY", "SPECIAL_SESSION"]
@@ -61,6 +62,7 @@ DEFAULT_MARKET_TIMINGS = {
     "CDS": {"start_offset": 32400000, "end_offset": 61200000},  # 09:00 - 17:00
     "BCD": {"start_offset": 32400000, "end_offset": 61200000},  # 09:00 - 17:00
     "MCX": {"start_offset": 32400000, "end_offset": 86100000},  # 09:00 - 23:55
+    "CRYPTO": {"start_offset": 0, "end_offset": 86399000},  # 00:00 - 23:59:59 (24/7)
 }
 
 
@@ -292,14 +294,27 @@ def seed_holidays_2025():
 
 def seed_holidays_2026():
     """
-    Seed 2026 market holidays based on NSE/BSE/MCX official calendar
+    Seed 2026 market holidays based on official NSE and MCX calendars.
+    Source: NSE Circular & MCX Circular for Calendar Year 2026.
+
     Includes:
     - Trading holidays (market closed)
-    - Settlement holidays (trading open, settlement closed)
     - Special sessions (Muhurat trading)
+
+    MCX evening session on holidays: 17:00–23:55 IST
+    MCX fully closed on: Republic Day, Good Friday, Gandhi Jayanti, Christmas
     """
     holidays_2026 = [
         # January
+        {
+            "date": "2026-01-15",
+            "description": "Municipal Corporation Election - Maharashtra",
+            "holiday_type": "TRADING_HOLIDAY",
+            "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
+            "open": [
+                {"exchange": "MCX", "start_time": 1768476600000, "end_time": 1768501500000}
+            ],  # MCX evening 17:00-23:55
+        },
         {
             "date": "2026-01-26",
             "description": "Republic Day",
@@ -307,52 +322,35 @@ def seed_holidays_2026():
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX"],
             "open": [],
         },
-        # February - Settlement Holiday
-        {
-            "date": "2026-02-19",
-            "description": "Chhatrapati Shivaji Maharaj Jayanti",
-            "holiday_type": "SETTLEMENT_HOLIDAY",
-            "closed": [],  # Trading is open
-            "open": [],  # Normal trading hours apply (not a special session)
-        },
         # March
         {
-            "date": "2026-03-10",
+            "date": "2026-03-03",
             "description": "Holi",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1741624200000, "end_time": 1741677900000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1772537400000, "end_time": 1772562300000}
+            ],  # MCX evening 17:00-23:55
         },
         {
-            "date": "2026-03-20",
-            "description": "Id-Ul-Fitr (Ramadan)",
+            "date": "2026-03-26",
+            "description": "Shri Ram Navami",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1742488200000, "end_time": 1742541900000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1774524600000, "end_time": 1774549500000}
+            ],  # MCX evening 17:00-23:55
         },
         {
-            "date": "2026-03-25",
-            "description": "Holi (Dhuleti)",
+            "date": "2026-03-31",
+            "description": "Shri Mahavir Jayanti",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1742920200000, "end_time": 1742973900000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1774956600000, "end_time": 1774981500000}
+            ],  # MCX evening 17:00-23:55
         },
         # April
-        # April - Settlement Holiday
-        {
-            "date": "2026-04-01",
-            "description": "Annual Bank Closing",
-            "holiday_type": "SETTLEMENT_HOLIDAY",
-            "closed": [],  # Trading is open
-            "open": [],  # Normal trading hours apply
-        },
-        {
-            "date": "2026-04-02",
-            "description": "Ram Navami",
-            "holiday_type": "TRADING_HOLIDAY",
-            "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1743611400000, "end_time": 1743665100000}],
-        },
         {
             "date": "2026-04-03",
             "description": "Good Friday",
@@ -361,18 +359,13 @@ def seed_holidays_2026():
             "open": [],
         },
         {
-            "date": "2026-04-06",
-            "description": "Mahavir Jayanti",
-            "holiday_type": "TRADING_HOLIDAY",
-            "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1743957000000, "end_time": 1744010700000}],
-        },
-        {
             "date": "2026-04-14",
             "description": "Dr. Baba Saheb Ambedkar Jayanti",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1744648200000, "end_time": 1744701900000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1776166200000, "end_time": 1776191100000}
+            ],  # MCX evening 17:00-23:55
         },
         # May
         {
@@ -380,46 +373,38 @@ def seed_holidays_2026():
             "description": "Maharashtra Day",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1746117000000, "end_time": 1746170700000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1777635000000, "end_time": 1777659900000}
+            ],  # MCX evening 17:00-23:55
         },
         {
-            "date": "2026-05-27",
-            "description": "Bakri Id (Eid ul-Adha)",
+            "date": "2026-05-28",
+            "description": "Bakri Id",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1748363400000, "end_time": 1748417100000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1779967800000, "end_time": 1779992700000}
+            ],  # MCX evening 17:00-23:55
         },
         # June
         {
-            "date": "2026-06-25",
+            "date": "2026-06-26",
             "description": "Muharram",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1750868400000, "end_time": 1750922100000}],
-        },
-        # August
-        {
-            "date": "2026-08-15",
-            "description": "Independence Day",
-            "holiday_type": "TRADING_HOLIDAY",
-            "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX"],
-            "open": [],
-        },
-        # August - Settlement Holiday
-        {
-            "date": "2026-08-27",
-            "description": "Id-E-Milad",
-            "holiday_type": "SETTLEMENT_HOLIDAY",
-            "closed": [],  # Trading is open
-            "open": [],  # Normal trading hours apply
+            "open": [
+                {"exchange": "MCX", "start_time": 1782473400000, "end_time": 1782498300000}
+            ],  # MCX evening 17:00-23:55
         },
         # September
         {
-            "date": "2026-09-04",
-            "description": "Milad-un-Nabi (Birthday of Prophet Mohammad)",
+            "date": "2026-09-14",
+            "description": "Ganesh Chaturthi",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1756997400000, "end_time": 1757051100000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1789385400000, "end_time": 1789410300000}
+            ],  # MCX evening 17:00-23:55
         },
         # October
         {
@@ -431,62 +416,48 @@ def seed_holidays_2026():
         },
         {
             "date": "2026-10-20",
+            "description": "Dussehra",
+            "holiday_type": "TRADING_HOLIDAY",
+            "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
+            "open": [
+                {"exchange": "MCX", "start_time": 1792495800000, "end_time": 1792520700000}
+            ],  # MCX evening 17:00-23:55
+        },
+        # November - Diwali with Muhurat Trading
+        {
+            "date": "2026-11-08",
             "description": "Diwali Laxmi Pujan (Muhurat Trading)",
             "holiday_type": "SPECIAL_SESSION",
             "closed": [],
             "open": [
-                # Muhurat Trading session - typically 6:00 PM to 7:15 PM IST
-                {
-                    "exchange": "NSE",
-                    "start_time": 1761052200000,
-                    "end_time": 1761056700000,
-                },  # 18:00-19:15
-                {
-                    "exchange": "BSE",
-                    "start_time": 1761052200000,
-                    "end_time": 1761056700000,
-                },  # 18:00-19:15
-                {
-                    "exchange": "NFO",
-                    "start_time": 1761052200000,
-                    "end_time": 1761056700000,
-                },  # 18:00-19:15
-                {
-                    "exchange": "BFO",
-                    "start_time": 1761052200000,
-                    "end_time": 1761056700000,
-                },  # 18:00-19:15
-                {
-                    "exchange": "CDS",
-                    "start_time": 1761052200000,
-                    "end_time": 1761056700000,
-                },  # 18:00-19:15
-                {
-                    "exchange": "BCD",
-                    "start_time": 1761052200000,
-                    "end_time": 1761056700000,
-                },  # 18:00-19:15
-                {
-                    "exchange": "MCX",
-                    "start_time": 1761052200000,
-                    "end_time": 1761074700000,
-                },  # 18:00-00:15 (next day)
+                # Muhurat Trading session — default 18:00 to 19:15 IST (exact timings via circular)
+                {"exchange": "NSE", "start_time": 1794141000000, "end_time": 1794145500000},
+                {"exchange": "BSE", "start_time": 1794141000000, "end_time": 1794145500000},
+                {"exchange": "NFO", "start_time": 1794141000000, "end_time": 1794145500000},
+                {"exchange": "BFO", "start_time": 1794141000000, "end_time": 1794145500000},
+                {"exchange": "CDS", "start_time": 1794141000000, "end_time": 1794145500000},
+                {"exchange": "BCD", "start_time": 1794141000000, "end_time": 1794145500000},
+                # MCX Muhurat — 18:00 to 00:15 (next day)
+                {"exchange": "MCX", "start_time": 1794141000000, "end_time": 1794163500000},
             ],
         },
         {
-            "date": "2026-10-21",
+            "date": "2026-11-10",
             "description": "Diwali Balipratipada",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1761138600000, "end_time": 1761192300000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1794310200000, "end_time": 1794335100000}
+            ],  # MCX evening 17:00-23:55
         },
-        # November
         {
-            "date": "2026-11-08",
-            "description": "Guru Nanak Jayanti",
+            "date": "2026-11-24",
+            "description": "Prakash Gurpurb Sri Guru Nanak Dev",
             "holiday_type": "TRADING_HOLIDAY",
             "closed": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
-            "open": [{"exchange": "MCX", "start_time": 1762693800000, "end_time": 1762747500000}],
+            "open": [
+                {"exchange": "MCX", "start_time": 1795519800000, "end_time": 1795544700000}
+            ],  # MCX evening 17:00-23:55
         },
         # December
         {
@@ -640,9 +611,24 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
         return _timings_cache[cache_key]
 
     # Check if it's a weekend first (doesn't require database)
+    # Crypto exchanges operate 24/7, so always include them
     if query_date.weekday() >= 5:
-        _timings_cache[cache_key] = []
-        return []
+        midnight_ist = datetime.combine(query_date, datetime.min.time())
+        midnight_epoch = int(midnight_ist.timestamp() * 1000)
+        timing_offsets = _get_timing_offsets()
+        crypto_timings = []
+        for exch in CRYPTO_EXCHANGES:
+            timings = timing_offsets.get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
+            if timings:
+                crypto_timings.append(
+                    {
+                        "exchange": exch,
+                        "start_time": midnight_epoch + timings["start_offset"],
+                        "end_time": midnight_epoch + timings["end_offset"],
+                    }
+                )
+        _timings_cache[cache_key] = crypto_timings
+        return crypto_timings
 
     try:
         # Calculate midnight timestamp for the date in IST
@@ -744,6 +730,10 @@ def is_market_holiday(query_date: date, exchange: str = None) -> bool:
         True if it's a holiday (or weekend), False otherwise
     """
     try:
+        # Crypto exchanges operate 24/7 - no holidays or weekends
+        if exchange and exchange.upper() in CRYPTO_EXCHANGES:
+            return False
+
         # Check for special session FIRST (before weekend check)
         # This allows special sessions like Budget Day or Muhurat Trading on weekends
         holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
@@ -1026,25 +1016,34 @@ def is_market_open(exchange: str = None) -> bool:
         True if market is open, False otherwise
     """
     try:
+        # Crypto exchanges are always open (24/7)
+        if exchange and exchange.upper() in CRYPTO_EXCHANGES:
+            return True
+
         now = datetime.now(IST)
         today = now.date()
-
-        # Check if it's a holiday/weekend
-        if is_market_holiday(today, exchange):
-            return False
 
         # Get current time in milliseconds from midnight
         current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
 
         if exchange:
+            # Check if it's a holiday/weekend for this specific exchange
+            if is_market_holiday(today, exchange):
+                return False
             # Check specific exchange
             timing = get_market_timing(exchange)
             if not timing:
                 return False
             return timing["start_offset"] <= current_ms <= timing["end_offset"]
         else:
-            # Check if ANY exchange is open
+            # Check if ANY exchange is open (check each individually)
             for exch in SUPPORTED_EXCHANGES:
+                # Crypto exchanges are always open
+                if exch in CRYPTO_EXCHANGES:
+                    return True
+                # Skip non-crypto exchanges on holidays/weekends
+                if is_market_holiday(today, exch):
+                    continue
                 timing = get_market_timing(exch)
                 if timing and timing["start_offset"] <= current_ms <= timing["end_offset"]:
                     return True
@@ -1082,9 +1081,13 @@ def get_market_hours_status() -> dict[str, Any]:
         for exch in SUPPORTED_EXCHANGES:
             timing = get_market_timing(exch)
             if timing:
-                is_open = (
-                    is_trading and timing["start_offset"] <= current_ms <= timing["end_offset"]
-                )
+                # Crypto exchanges are always open (24/7)
+                if exch in CRYPTO_EXCHANGES:
+                    is_open = True
+                else:
+                    is_open = (
+                        is_trading and timing["start_offset"] <= current_ms <= timing["end_offset"]
+                    )
                 if is_open:
                     any_open = True
 

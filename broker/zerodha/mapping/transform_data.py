@@ -22,6 +22,7 @@ def transform_data(data):
         "trigger_price": data.get("trigger_price", "0"),
         "disclosed_quantity": data.get("disclosed_quantity", "0"),
         "validity": "DAY",
+        "market_protection": "-1",
         "tag": "openalgo",
     }
 
