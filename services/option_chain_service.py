@@ -49,6 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
+from database.token_db_enhanced import fno_search_symbols
 from services.option_symbol_service import (
     construct_option_symbol,
     find_atm_strike_from_actual,
@@ -56,7 +57,6 @@ from services.option_symbol_service import (
     get_option_exchange,
     parse_underlying_symbol,
 )
-from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
@@ -257,10 +257,10 @@ def get_option_chain(
             else:
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
         elif exchange.upper() in CRYPTO_EXCHANGES:
-            # CRYPTO: look up the canonical perpetual symbol from DB (e.g. BTC -> BTCUSD.P)
+            # CRYPTO: look up the canonical perpetual symbol from cache (e.g. BTC -> BTCUSDFUT)
             quote_exchange = exchange.upper()
             _perp = fno_search_symbols(
-                underlying=base_symbol, exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+                query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
             )
             if not _perp:
                 return (

@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-from broker.fivepaisaxts.streaming.fivepaisaxts_websocket import FivepaisaXTSWebSocketClient
+from broker.rmoney.streaming.rmoney_websocket import RMoneyWebSocketClient
 from database.auth_db import get_auth_token, get_feed_token
 from database.token_db import get_token
 
@@ -18,36 +18,39 @@ from database.token_db import get_symbol
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
-from .fivepaisaxts_mapping import FivepaisaXTSCapabilityRegistry, FivepaisaXTSExchangeMapper
+from .rmoney_mapping import RMoneyCapabilityRegistry, RMoneyExchangeMapper
 
 
-class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
-    """Fivepaisa XTS specific implementation of the WebSocket adapter"""
+class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
+    """RMoney XTS specific implementation of the WebSocket adapter"""
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("fivepaisa_xts_websocket")
+        self.logger = logging.getLogger("rmoney_websocket")
         self.ws_client = None
         self.user_id = None
-        self.broker_name = "fivepaisaxts"
+        self.broker_name = "rmoney"
         self.reconnect_delay = 5  # Initial delay in seconds
         self.max_reconnect_delay = 60  # Maximum delay in seconds
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        self._reconnect_worker_lock = threading.Lock()
+        self._reconnect_worker: threading.Thread | None = None
+        self._stop_event = threading.Event()  # Interruptible sleep for reconnect
 
         # Log the ZMQ port being used
-        self.logger.info(f"Fivepaisa XTS adapter initialized with ZMQ port: {self.zmq_port}")
+        self.logger.info(f"RMoney XTS adapter initialized with ZMQ port: {self.zmq_port}")
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
     ) -> None:
         """
-        Initialize connection with Fivepaisa XTS WebSocket API
+        Initialize connection with RMoney XTS WebSocket API
 
         Args:
-            broker_name: Name of the broker (always 'fivepaisaxts' in this case)
+            broker_name: Name of the broker (always 'rmoney' in this case)
             user_id: Client ID/user ID
             auth_data: If provided, use these credentials instead of fetching from DB
 
@@ -76,7 +79,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(
                     "Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET environment variables"
                 )
-                raise ValueError("Missing Fivepaisa XTS API credentials in environment variables")
+                raise ValueError("Missing RMoney XTS API credentials in environment variables")
 
         else:
             # Use provided tokens
@@ -89,10 +92,21 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        self.logger.info(f"Using API Key: {api_key[:10]}... for Fivepaisa XTS connection")
+        if not api_key or not api_secret:
+            self.logger.error("Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET credentials")
+            raise ValueError("Missing RMoney XTS API credentials")
 
-        # Create Fivepaisa XTS WebSocket client with API credentials
-        self.ws_client = FivepaisaXTSWebSocketClient(
+        self.logger.info(f"Using API Key: {api_key[:10]}... for RMoney XTS connection")
+
+        # Close previous client if initialize() is called again
+        if self.ws_client is not None:
+            try:
+                self.ws_client.close()
+            except Exception:
+                pass
+
+        # Create RMoney XTS WebSocket client with API credentials
+        self.ws_client = RMoneyWebSocketClient(
             api_key=api_key,
             api_secret=api_secret,
             user_id=user_id,  # Pass the user_id, client will get actual userID from login
@@ -186,19 +200,37 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return fallback_user_id
 
     def connect(self) -> None:
-        """Establish connection to Fivepaisa XTS WebSocket"""
+        """Establish connection to RMoney XTS WebSocket"""
         if not self.ws_client:
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        # Reset stop event for fresh connection lifecycle
+        self._stop_event.clear()
+        self._start_reconnect_worker(trigger="connect")
+
+    def _start_reconnect_worker(self, trigger: str) -> None:
+        """Start a single reconnect worker thread if one is not already running."""
+        with self._reconnect_worker_lock:
+            if self._reconnect_worker and self._reconnect_worker.is_alive():
+                self.logger.debug(
+                    f"Reconnect worker already active; skipping duplicate trigger from {trigger}"
+                )
+                return
+
+            self._reconnect_worker = threading.Thread(
+                target=self._connect_with_retry,
+                daemon=True,
+                name=f"rmoney-reconnect-{self.user_id or 'unknown'}",
+            )
+            self._reconnect_worker.start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to Fivepaisa XTS WebSocket with retry logic"""
+        """Connect to RMoney XTS WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
                 self.logger.info(
-                    f"Connecting to Fivepaisa XTS WebSocket (attempt {self.reconnect_attempts + 1})"
+                    f"Connecting to RMoney XTS WebSocket (attempt {self.reconnect_attempts + 1})"
                 )
                 self.ws_client.connect()
                 self.reconnect_attempts = 0  # Reset attempts on successful connection
@@ -210,30 +242,34 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
                 )
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                # Use event-based wait so disconnect() can interrupt immediately
+                if self._stop_event.wait(delay):
+                    break  # Stop event was set — abort reconnect
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
 
     def disconnect(self) -> None:
-        """Disconnect from Fivepaisa XTS WebSocket"""
-        self.logger.info("*** DISCONNECT CALLED - Starting Fivepaisa XTS disconnect process ***")
+        """Disconnect from RMoney XTS WebSocket"""
+        self.logger.info("*** DISCONNECT CALLED - Starting RMoney XTS disconnect process ***")
 
         # Set running to False to prevent reconnection attempts
         self.running = False
         self.reconnect_attempts = self.max_reconnect_attempts  # Prevent reconnection attempts
+        # Wake up any sleeping reconnect worker immediately
+        self._stop_event.set()
         self.logger.info(
             "Set running=False and max reconnect attempts to prevent auto-reconnection"
         )
 
-        # Disconnect Socket.IO client
+        # Full teardown of Socket.IO client + HTTP session
         if hasattr(self, "ws_client") and self.ws_client:
             try:
-                self.logger.info("Disconnecting Socket.IO client...")
-                self.ws_client.disconnect()
-                self.logger.info("Socket.IO client disconnect call completed")
+                self.logger.info("Closing Socket.IO client and HTTP session...")
+                self.ws_client.close()
+                self.logger.info("Socket.IO client close call completed")
             except Exception as e:
-                self.logger.error(f"Error during Socket.IO disconnect: {e}")
+                self.logger.error(f"Error during Socket.IO close: {e}")
         else:
             self.logger.warning("No WebSocket client to disconnect")
 
@@ -270,7 +306,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # DO NOT terminate shared context - other instances may still need it
             # Context will be cleaned up when the process exits
 
-            self.logger.info("Fivepaisa XTS WebSocket cleanup completed successfully")
+            self.logger.info("RMoney XTS WebSocket cleanup completed successfully")
         except Exception as e:
             self.logger.exception(f"Error cleaning up ZeroMQ resources: {e}")
 
@@ -278,7 +314,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
     ) -> dict[str, Any]:
         """
-        Subscribe to market data with Fivepaisa XTS specific implementation
+        Subscribe to market data with RMoney XTS specific implementation
 
         Args:
             symbol: Trading symbol (e.g., 'RELIANCE')
@@ -311,7 +347,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
 
-        self.logger.info(
+        self.logger.debug(
             f"Token mapping result: symbol={symbol}, exchange={exchange} -> token={token}, brexchange={brexchange}"
         )
 
@@ -320,9 +356,9 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         actual_depth = depth_level
 
         if mode == 3:  # Depth mode
-            if not FivepaisaXTSCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
+            if not RMoneyCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
                 # If requested depth is not supported, use the highest available
-                actual_depth = FivepaisaXTSCapabilityRegistry.get_fallback_depth_level(
+                actual_depth = RMoneyCapabilityRegistry.get_fallback_depth_level(
                     exchange, depth_level
                 )
                 is_fallback = True
@@ -333,29 +369,34 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
 
         # Log the input values for debugging
-        self.logger.info(
+        self.logger.debug(
             f"Subscription input - symbol: {symbol}, exchange: {exchange}, brexchange: {brexchange}"
         )
 
-        # Create instrument list for Fivepaisa XTS API
-        exchange_type = FivepaisaXTSExchangeMapper.get_exchange_type(brexchange)
+        # Create instrument list for RMoney XTS API
+        exchange_type = RMoneyExchangeMapper.get_exchange_type(brexchange)
 
         # Log the full mapping for debugging
-        self.logger.info("Exchange mapping details:")
-        self.logger.info(f"  - Input exchange: {exchange}")
-        self.logger.info(f"  - Brexchange from DB: {brexchange}")
-        self.logger.info(f"  - Mapped exchange type: {exchange_type}")
-        self.logger.info(f"  - Symbol: {symbol}")
+        self.logger.debug("Exchange mapping details:")
+        self.logger.debug(f"  - Input exchange: {exchange}")
+        self.logger.debug(f"  - Brexchange from DB: {brexchange}")
+        self.logger.debug(f"  - Mapped exchange type: {exchange_type}")
+        self.logger.debug(f"  - Symbol: {symbol}")
 
-        # Ensure token is a string as expected by the API
-        token_str = str(token) if token is not None else ""
+        # Symphony/XTS spec expects numeric exchangeInstrumentID.
+        # Keep string fallback for non-numeric identifiers.
+        if token is None:
+            token_value: int | str = ""
+        else:
+            token_str = str(token).strip()
+            token_value = int(token_str) if token_str.isdigit() else token_str
 
-        instruments = [{"exchangeSegment": exchange_type, "exchangeInstrumentID": token_str}]
+        instruments = [{"exchangeSegment": exchange_type, "exchangeInstrumentID": token_value}]
 
-        self.logger.info(f"Final subscription request for {symbol}.{exchange}:")
-        self.logger.info(f"  - Exchange Segment: {exchange_type} (type: {type(exchange_type)})")
-        self.logger.info(f"  - Instrument ID: {token_str}")
-        self.logger.info(f"  - Full request: {instruments}")
+        self.logger.debug(f"Final subscription request for {symbol}.{exchange}:")
+        self.logger.debug(f"  - Exchange Segment: {exchange_type} (type: {type(exchange_type)})")
+        self.logger.debug(f"  - Instrument ID: {token_value}")
+        self.logger.debug(f"  - Full request: {instruments}")
 
         # Generate unique correlation ID that includes mode to prevent overwriting
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -377,11 +418,11 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
             # Don't log the actual token value for security, but log its type and length
             token_info = (
-                f"type={type(token)}, len={len(str(token))}, value={str(token)[:4]}...{str(token)[-4:]}"
-                if token
+                f"type={type(token_value)}, len={len(str(token_value))}, value={str(token_value)[:4]}...{str(token_value)[-4:]}"
+                if token_value not in ("", None)
                 else "None"
             )
-            self.logger.info(
+            self.logger.debug(
                 f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}"
             )
 
@@ -430,7 +471,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             str: Exchange segment code for XTS API
         """
-        return FivepaisaXTSExchangeMapper.get_exchange_type(exchange)
+        return RMoneyExchangeMapper.get_exchange_type(exchange)
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """
@@ -457,11 +498,13 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
 
-        # Create instrument list for Fivepaisa XTS API
+        # Create instrument list for RMoney XTS API
+        token_str = str(token).strip() if token is not None else ""
+        token_value: int | str = int(token_str) if token_str.isdigit() else token_str
         instruments = [
             {
-                "exchangeSegment": FivepaisaXTSExchangeMapper.get_exchange_type(brexchange),
-                "exchangeInstrumentID": token,
+                "exchangeSegment": RMoneyExchangeMapper.get_exchange_type(brexchange),
+                "exchangeInstrumentID": token_value,
             }
         ]
 
@@ -480,8 +523,15 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(
                     f"Sending unsubscribe request for {symbol}.{exchange} to XTS server"
                 )
-                self.ws_client.unsubscribe(correlation_id, mode, instruments)
-                self.logger.info(f"Successfully sent unsubscribe request for {symbol}.{exchange}")
+                unsubscribe_ok = self.ws_client.unsubscribe(correlation_id, mode, instruments)
+                if unsubscribe_ok:
+                    self.logger.info(
+                        f"Successfully sent unsubscribe request for {symbol}.{exchange}"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Unsubscribe may not be fully acknowledged for {symbol}.{exchange}"
+                    )
 
                 # Always disconnect and perform cleanup after unsubscription
                 self.logger.info("Initiating disconnect and cleanup after unsubscription")
@@ -505,36 +555,58 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_open(self, wsapp) -> None:
         """Callback when connection is established"""
-        self.logger.info("Connected to Fivepaisa XTS WebSocket")
+        self.logger.info("Connected to RMoney XTS WebSocket")
         self.connected = True
 
         # Resubscribe to existing subscriptions if reconnecting
         self._resubscribe_all()
 
     def _resubscribe_all(self):
-        """Resubscribe to all stored subscriptions"""
+        """Resubscribe to all stored subscriptions, respecting 50 instrument limit"""
+        MAX_SUBSCRIPTIONS = 50
+        count = 0
         with self.lock:
             for correlation_id, sub in self.subscriptions.items():
+                if count >= MAX_SUBSCRIPTIONS:
+                    self.logger.warning(
+                        f"Reached RMoney subscription limit ({MAX_SUBSCRIPTIONS}), "
+                        f"skipping remaining {len(self.subscriptions) - count} subscriptions"
+                    )
+                    break
                 try:
                     self.ws_client.subscribe(correlation_id, sub["mode"], sub["instruments"])
                     self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+                    count += 1
                 except Exception as e:
+                    error_str = str(e)
+                    # Stop on any session-level error that won't resolve by retrying
+                    if any(term in error_str for term in [
+                        "Subscription limit exceeded",
+                        "Invalid Token",
+                        "not connected",
+                        "e-session-0004",
+                        "e-session-0007",
+                    ]):
+                        self.logger.warning(
+                            f"Stopping resubscription after {count} instruments: {error_str[:100]}"
+                        )
+                        break
                     self.logger.error(
                         f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
                     )
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
-        self.logger.error(f"Fivepaisa XTS WebSocket error: {error}")
+        self.logger.error(f"RMoney XTS WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
         """Callback when connection is closed"""
-        self.logger.info("Fivepaisa XTS WebSocket connection closed")
+        self.logger.info("RMoney XTS WebSocket connection closed")
         self.connected = False
 
         # Attempt to reconnect if we're still running
         if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
+            self._start_reconnect_worker(trigger="on_close")
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""
@@ -543,31 +615,25 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, wsapp, message) -> None:
         """Callback for market data from the WebSocket"""
         try:
-            self.logger.info(f"RAW FIVEPAISA DATA: Type: {type(message)}, Data: {message}")
-            self.logger.info(
-                f"Adapter state - Connected: {self.connected}, Subscriptions count: {len(self.subscriptions)}"
-            )
+            self.logger.debug(f"RAW RMONEY DATA: Type: {type(message)}")
 
             # Handle different message types
             if isinstance(message, bytes):
                 # Binary data - parse according to XTS protocol
-                self.logger.info("Processing as binary data")
                 self._process_binary_data(message)
                 return
             elif isinstance(message, dict):
                 # JSON data
-                self.logger.info("Processing as JSON dict data")
                 self._process_json_data(message)
                 return
             elif isinstance(message, str):
                 # String data - try to parse as JSON
-                self.logger.info("Processing as string data")
                 try:
                     data = json.loads(message)
                     self._process_json_data(data)
                     return
                 except json.JSONDecodeError:
-                    self.logger.warning(f"Received non-JSON string message: {message}")
+                    self.logger.warning(f"Received non-JSON string message: {message[:100]}")
                     return
 
             self.logger.warning(f"Received unknown message type: {type(message)}")
@@ -584,16 +650,35 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _process_json_data(self, data: dict):
         """Process JSON market data"""
         try:
-            # Extract basic information
-            exchange_segment = data.get("ExchangeSegment")
-            exchange_instrument_id = data.get("ExchangeInstrumentID")
+            # Extract basic information (support multiple key variants)
+            exchange_segment = data.get("ExchangeSegment", data.get("exchangeSegment"))
+            exchange_instrument_id = data.get(
+                "ExchangeInstrumentID",
+                data.get("exchangeInstrumentID", data.get("exchangeInstrumentId")),
+            )
+
+            segment_name_to_code = {
+                "NSECM": 1,
+                "NSEFO": 2,
+                "NSECD": 3,
+                "BSECM": 11,
+                "BSEFO": 12,
+                "MCXFO": 51,
+            }
+
+            if isinstance(exchange_segment, str):
+                exchange_segment_str = exchange_segment.strip().upper()
+                if exchange_segment_str.isdigit():
+                    exchange_segment = int(exchange_segment_str)
+                else:
+                    exchange_segment = segment_name_to_code.get(exchange_segment_str, exchange_segment)
 
             self.logger.debug(
                 f"Processing market data: ExchangeSegment={exchange_segment}, ExchangeInstrumentID={exchange_instrument_id}"
             )
 
             # Create reverse mapping from ExchangeSegment to exchange code
-            # Based on Fivepaisa XTS API documentation:
+            # Based on RMoney XTS API documentation:
             # "NSECM": 1, "NSEFO": 2, "NSECD": 3, "BSECM": 11, "BSEFO": 12, "MCXFO": 51
             segment_to_exchange = {
                 1: "NSE",  # NSECM
@@ -610,7 +695,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Unknown ExchangeSegment: {exchange_segment}")
                 return
 
-            self.logger.info(f"Mapped ExchangeSegment {exchange_segment} to exchange: {exchange}")
+            self.logger.debug(f"Mapped ExchangeSegment {exchange_segment} to exchange: {exchange}")
 
             # Check if this is an index token first
             token_str = str(exchange_instrument_id)
@@ -622,14 +707,14 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     symbol = get_symbol(token_str, "NSE_INDEX")
                     if symbol:
                         exchange = "NSE_INDEX"
-                        self.logger.info(
+                        self.logger.debug(
                             f"Found index symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}"
                         )
                 elif exchange_segment == 11:  # BSE segment
                     symbol = get_symbol(token_str, "BSE_INDEX")
                     if symbol:
                         exchange = "BSE_INDEX"
-                        self.logger.info(
+                        self.logger.debug(
                             f"Found index symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}"
                         )
 
@@ -644,7 +729,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     symbol = get_symbol(token_str, "NSE_INDEX")
                     if symbol:
                         exchange = "NSE_INDEX"
-                        self.logger.info(
+                        self.logger.debug(
                             f"Found symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}"
                         )
                 elif exchange == "BSE" and not self._is_index_token(token_str, exchange_segment):
@@ -652,7 +737,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     symbol = get_symbol(token_str, "BSE_INDEX")
                     if symbol:
                         exchange = "BSE_INDEX"
-                        self.logger.info(
+                        self.logger.debug(
                             f"Found symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}"
                         )
 
@@ -662,18 +747,47 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 return
 
-            self.logger.info(
+            self.logger.debug(
                 f"Found symbol: {symbol} for token {exchange_instrument_id} on exchange {exchange}"
             )
 
-            # Determine mode based on MessageCode
-            message_code = data.get("MessageCode")
+            # Resolve active requested modes for this symbol/exchange from adapter state.
+            with self.lock:
+                active_modes = [
+                    sub.get("mode")
+                    for sub in self.subscriptions.values()
+                    if sub.get("symbol") == symbol and sub.get("exchange") == exchange
+                ]
+
+            # Determine mode based on MessageCode (support multiple key variants)
+            message_code = data.get("MessageCode", data.get("messageCode", data.get("xtsMessageCode")))
+            if isinstance(message_code, str) and message_code.strip().isdigit():
+                message_code = int(message_code.strip())
+            if message_code is None:
+                # Fallback for touchline-like payloads without explicit code
+                message_code = 1501
+
             if message_code == 1512:  # LTP
                 mode = 1
                 mode_str = "LTP"
-            elif message_code == 1501:  # Quote
-                mode = 2
-                mode_str = "QUOTE"
+            elif message_code == 1501:  # Touchline
+                # Use requested subscription modes to avoid false mode upgrades.
+                # If any active subscription asks for Quote/Depth, treat 1501 as Quote.
+                if any(m in (2, 3) for m in active_modes):
+                    mode = 2
+                    mode_str = "QUOTE"
+                elif any(m == 1 for m in active_modes):
+                    mode = 1
+                    mode_str = "LTP"
+                else:
+                    # Fallback when no active tracking entry is found.
+                    has_quote_fields = any(
+                        key in data
+                        or (isinstance(data.get("Touchline"), dict) and key in data.get("Touchline", {}))
+                        for key in ["Open", "High", "Low", "Close", "TotalTradedQuantity"]
+                    )
+                    mode = 2 if has_quote_fields else 1
+                    mode_str = "QUOTE" if has_quote_fields else "LTP"
             elif message_code == 1502:  # Depth
                 mode = 3
                 mode_str = "DEPTH"
@@ -681,15 +795,14 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Unknown MessageCode: {message_code}")
                 return
 
-            self.logger.info(f"Determined mode {mode} ({mode_str}) from MessageCode {message_code}")
+            self.logger.debug(f"Determined mode {mode} ({mode_str}) from MessageCode {message_code}")
 
-            # Check if we have an active subscription for this symbol and mode (optional check)
-            check_correlation_id = f"{symbol}_{exchange}_{mode}"
-            if check_correlation_id not in self.subscriptions:
+            # Check if symbol has active subscription(s). Avoid exact correlation-id checks,
+            # since mode upgrades and depth-level suffixes can cause false negatives.
+            if not active_modes:
                 self.logger.warning(
-                    f"No active subscription found for {check_correlation_id}, but publishing anyway"
+                    f"No active subscription found for {symbol}.{exchange}, but publishing anyway"
                 )
-                # We'll publish the data anyway since we received it
 
             # Create topic for ZeroMQ
             # Use standard topic format without broker prefix for WebSocket proxy routing
@@ -708,20 +821,11 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 }
             )
 
-            self.logger.info(f"Publishing market data: {market_data}")
-            self.logger.info(f"Publishing to topic: {topic} on ZMQ port: {self.zmq_port}")
-
-            # Log the socket state before publishing
-            self.logger.info(
-                f"ZMQ Socket State - Port: {getattr(self, 'zmq_port', 'Unknown')}, Connected: {getattr(self, 'connected', False)}"
-            )
-            self.logger.info(f"Environment ZMQ_PORT: {os.environ.get('ZMQ_PORT', 'Not Set')}")
+            self.logger.debug(f"Publishing to topic: {topic}")
 
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
-            self.logger.info(
-                f"Published data successfully to ZMQ - Topic: {topic}, Data: {market_data}"
-            )
+            self.logger.debug(f"Published to ZMQ - Topic: {topic}")
 
         except Exception as e:
             self.logger.error(f"Error processing JSON data: {e}", exc_info=True)
@@ -737,41 +841,19 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
-        # For MessageCode 1502 (Depth mode), data is structured differently
-        message_code = message.get("MessageCode")
-
-        # For depth mode (MessageCode 1502), extract data from Touchline
-        if message_code == 1502 and "Touchline" in message:
-            touchline = message.get("Touchline", {})
-            ltp = touchline.get("LastTradedPrice", 0)
-            ltt = touchline.get("LastTradedTime", 0)
-            volume = touchline.get("TotalTradedQuantity", 0)
-            open_price = touchline.get("Open", 0)
-            high = touchline.get("High", 0)
-            low = touchline.get("Low", 0)
-            close = touchline.get("Close", 0)
-            ltq = touchline.get("LastTradedQunatity", touchline.get("LastTradedQuantity", 0))
-            avg_price = touchline.get("AverageTradedPrice", 0)
-            total_buy_qty = touchline.get("TotalBuyQuantity", 0)
-            total_sell_qty = touchline.get("TotalSellQuantity", 0)
-
-            # Log touchline data for debugging
-            self.logger.info(
-                f"Extracted from Touchline - LTP: {ltp}, Volume: {volume}, Open: {open_price}"
-            )
-        else:
-            # For other message codes (1512, 1501), data is at root level
-            ltp = message.get("LastTradedPrice", 0)
-            ltt = message.get("LastTradedTime", 0)
-            volume = message.get("TotalTradedQuantity", 0)
-            open_price = message.get("Open", 0)
-            high = message.get("High", 0)
-            low = message.get("Low", 0)
-            close = message.get("Close", 0)
-            ltq = message.get("LastTradedQunatity", message.get("LastTradedQuantity", 0))
-            avg_price = message.get("AveragePrice", message.get("AverageTradedPrice", 0))
-            total_buy_qty = message.get("TotalBuyQuantity", 0)
-            total_sell_qty = message.get("TotalSellQuantity", 0)
+        # Some payloads embed quote fields under "Touchline", others send flat keys.
+        source = message.get("Touchline", message) if isinstance(message.get("Touchline"), dict) else message
+        ltp = source.get("LastTradedPrice", 0)
+        ltt = source.get("LastTradedTime", 0)
+        volume = source.get("TotalTradedQuantity", 0)
+        open_price = source.get("Open", 0)
+        high = source.get("High", 0)
+        low = source.get("Low", 0)
+        close = source.get("Close", 0)
+        ltq = source.get("LastTradedQunatity", source.get("LastTradedQuantity", 0))
+        avg_price = source.get("AveragePrice", source.get("AverageTradedPrice", 0))
+        total_buy_qty = source.get("TotalBuyQuantity", 0)
+        total_sell_qty = source.get("TotalSellQuantity", 0)
 
         if mode == 1:  # LTP mode
             return {"ltp": ltp, "ltt": ltt, "ltq": ltq}
@@ -804,11 +886,19 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
 
             # Add depth data if available
-            if "Bids" in message and "Asks" in message:
-                bids = message.get("Bids", [])
-                asks = message.get("Asks", [])
+            # XTS sends depth data with different key patterns depending on format:
+            # JSON mode: "Bids"/"Asks" or nested under "Touchline" with "BidInfo"/"AskInfo"
+            bids = message.get("Bids", source.get("Bids", []))
+            asks = message.get("Asks", source.get("Asks", []))
 
-                self.logger.info(
+            # Fallback: XTS MarketDepth may use BidInfo/AskInfo
+            if not bids:
+                bids = message.get("BidInfo", source.get("BidInfo", []))
+            if not asks:
+                asks = message.get("AskInfo", source.get("AskInfo", []))
+
+            if bids or asks:
+                self.logger.debug(
                     f"Processing depth data - Bids count: {len(bids)}, Asks count: {len(asks)}"
                 )
 
@@ -816,18 +906,8 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "buy": self._extract_depth_data(bids, is_buy=True),
                     "sell": self._extract_depth_data(asks, is_buy=False),
                 }
-
-                # Log first bid and ask for debugging
-                if bids and len(bids) > 0:
-                    self.logger.info(
-                        f"First bid: Price={bids[0].get('Price')}, Size={bids[0].get('Size')}"
-                    )
-                if asks and len(asks) > 0:
-                    self.logger.info(
-                        f"First ask: Price={asks[0].get('Price')}, Size={asks[0].get('Size')}"
-                    )
             else:
-                self.logger.warning(
+                self.logger.debug(
                     f"No depth data found in message. Keys present: {list(message.keys())}"
                 )
 

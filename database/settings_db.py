@@ -50,11 +50,12 @@ class Settings(Base):
     smtp_helo_hostname = Column(String(255), nullable=True)  # HELO/EHLO hostname
 
     # Security Settings
-    security_404_threshold = Column(Integer, default=20)  # 404 errors per day before ban
-    security_404_ban_duration = Column(Integer, default=24)  # Ban duration in hours
-    security_api_threshold = Column(Integer, default=10)  # Invalid API attempts before ban
-    security_api_ban_duration = Column(Integer, default=48)  # Ban duration in hours
-    security_repeat_offender_limit = Column(Integer, default=3)  # Bans before permanent ban
+    security_auto_ban_enabled = Column(Boolean, default=False)  # Auto-ban disabled by default
+    security_404_threshold = Column(Integer, default=100)  # 404 errors per day before ban
+    security_404_ban_duration = Column(Integer, default=0)  # 0 = permanent ban
+    security_api_threshold = Column(Integer, default=100)  # Invalid API attempts before ban
+    security_api_ban_duration = Column(Integer, default=0)  # 0 = permanent ban
+    security_repeat_offender_limit = Column(Integer, default=2)  # Bans before permanent ban
 
 
 def init_db():
@@ -206,21 +207,23 @@ def get_security_settings():
         # Create with defaults
         settings = Settings(
             analyze_mode=False,
-            security_404_threshold=20,
-            security_404_ban_duration=24,
-            security_api_threshold=10,
-            security_api_ban_duration=48,
-            security_repeat_offender_limit=3,
+            security_auto_ban_enabled=False,
+            security_404_threshold=100,
+            security_404_ban_duration=0,
+            security_api_threshold=100,
+            security_api_ban_duration=0,
+            security_repeat_offender_limit=2,
         )
         db_session.add(settings)
         db_session.commit()
 
     result = {
-        "404_threshold": settings.security_404_threshold or 20,
-        "404_ban_duration": settings.security_404_ban_duration or 24,
-        "api_threshold": settings.security_api_threshold or 10,
-        "api_ban_duration": settings.security_api_ban_duration or 48,
-        "repeat_offender_limit": settings.security_repeat_offender_limit or 3,
+        "auto_ban_enabled": bool(settings.security_auto_ban_enabled) if settings.security_auto_ban_enabled is not None else False,
+        "404_threshold": settings.security_404_threshold or 100,
+        "404_ban_duration": settings.security_404_ban_duration if settings.security_404_ban_duration is not None else 0,
+        "api_threshold": settings.security_api_threshold or 100,
+        "api_ban_duration": settings.security_api_ban_duration if settings.security_api_ban_duration is not None else 0,
+        "repeat_offender_limit": settings.security_repeat_offender_limit or 2,
     }
 
     # Store in cache
@@ -229,6 +232,7 @@ def get_security_settings():
 
 
 def set_security_settings(
+    auto_ban_enabled=None,
     threshold_404=None,
     ban_duration_404=None,
     threshold_api=None,
@@ -241,6 +245,8 @@ def set_security_settings(
         settings = Settings(analyze_mode=False)
         db_session.add(settings)
 
+    if auto_ban_enabled is not None:
+        settings.security_auto_ban_enabled = auto_ban_enabled
     if threshold_404 is not None:
         settings.security_404_threshold = threshold_404
     if ban_duration_404 is not None:

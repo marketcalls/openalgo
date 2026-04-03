@@ -1,5 +1,5 @@
+import json
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -47,8 +47,7 @@ class ChartPreferencesResource(Resource):
             return make_response(jsonify(response_data), status_code)
 
         except Exception as e:
-            logger.error(f"Unexpected error in chart GET endpoint: {e}")
-            traceback.print_exc()
+            logger.exception(f"Unexpected error in chart GET endpoint: {e}")
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )
@@ -75,6 +74,26 @@ class ChartPreferencesResource(Resource):
             # Extract preferences (all keys except apikey)
             preferences = {k: v for k, v in data.items() if k != "apikey"}
 
+            # Limit payload: max 50 keys, each key max 50 chars, each value max 1MB
+            if len(preferences) > 50:
+                return make_response(
+                    jsonify({"status": "error", "message": "Too many preference keys (max 50)"}), 400
+                )
+            for k, v in preferences.items():
+                if len(k) > 50:
+                    return make_response(
+                        jsonify({"status": "error", "message": f"Preference key too long: {k[:20]}... (max 50 chars)"}), 400
+                    )
+                # Check serialized size for all value types (not just strings)
+                try:
+                    serialized = json.dumps(v)
+                except (TypeError, ValueError):
+                    serialized = str(v)
+                if len(serialized) > 1_048_576:
+                    return make_response(
+                        jsonify({"status": "error", "message": f"Preference value too large for key: {k} (max 1MB)"}), 400
+                    )
+
             if not preferences:
                 return make_response(
                     jsonify({"status": "error", "message": "No preferences provided to update"}),
@@ -89,8 +108,7 @@ class ChartPreferencesResource(Resource):
         except ValidationError as err:
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
-            logger.error(f"Unexpected error in chart POST endpoint: {e}")
-            traceback.print_exc()
+            logger.exception(f"Unexpected error in chart POST endpoint: {e}")
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )

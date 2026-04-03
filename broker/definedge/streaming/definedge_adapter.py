@@ -110,11 +110,11 @@ class MarketDataCache:
             data.get(f) and not self._is_zero_value(data.get(f)) for f in ["o", "h", "l", "c"]
         )
         if has_ohlc:
-            self.logger.info(
-                f"📸 OHLC snapshot cached for {token}: o={data.get('o')}, h={data.get('h')}, l={data.get('l')}, c={data.get('c')}"
+            self.logger.debug(
+                f"OHLC snapshot cached for {token}: o={data.get('o')}, h={data.get('h')}, l={data.get('l')}, c={data.get('c')}"
             )
 
-        self.logger.info(
+        self.logger.debug(
             f"Initializing cache for token {token} - "
             f"{present_fields}/{len(basic_fields)} fields present ({completeness:.1%})"
         )
@@ -617,7 +617,7 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # This is subscription acknowledgement with initial OHLC snapshot
                 token = message.get("tk")
                 exchange = message.get("e")
-                self.logger.info(f"📸 Touchline ACK for {exchange}|{token} - Initial snapshot")
+                self.logger.debug(f"Touchline ACK for {exchange}|{token} - Initial snapshot")
 
                 # Check and log OHLC values in acknowledgment
                 ohlc_values = {
@@ -631,8 +631,8 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 has_nonzero_ohlc = any(v not in [None, "", "0", 0] for v in ohlc_values.values())
 
                 if has_nonzero_ohlc:
-                    self.logger.info(
-                        f"✅ OHLC snapshot received: Open={ohlc_values['open']}, High={ohlc_values['high']}, Low={ohlc_values['low']}, Close={ohlc_values['close']}"
+                    self.logger.debug(
+                        f"OHLC snapshot received: Open={ohlc_values['open']}, High={ohlc_values['high']}, Low={ohlc_values['low']}, Close={ohlc_values['close']}"
                     )
                     # Mark this as initial snapshot for cache
                     message["_is_snapshot"] = True
@@ -736,8 +736,8 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                             # Log if we're providing OHLC from depth
                             if any(market_data.get(f) for f in ["open", "high", "low", "close"]):
-                                self.logger.info(
-                                    f"✓ Providing OHLC to Quote mode from Depth data for {symbol}"
+                                self.logger.debug(
+                                    f"Providing OHLC to Quote mode from Depth data for {symbol}"
                                 )
 
                             self.publish_market_data(topic, quote_data)
@@ -758,8 +758,8 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 # Check if acknowledgment contains initial OHLC data
                 if any(message.get(f) for f in ["o", "h", "l", "c"]):
-                    self.logger.info(
-                        f"✓ Depth ACK has OHLC: o={message.get('o')}, h={message.get('h')}, l={message.get('l')}, c={message.get('c')}"
+                    self.logger.debug(
+                        f"Depth ACK has OHLC: o={message.get('o')}, h={message.get('h')}, l={message.get('l')}, c={message.get('c')}"
                     )
                     # Process the acknowledgment as initial data
                 else:
@@ -785,8 +785,8 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self._depth_ohlc_logged = {}
                     self._depth_ohlc_logged[f"{exchange}|{token}"] = True
                     if has_ohlc:
-                        self.logger.info(
-                            f"✓ Depth feed has OHLC for {exchange}|{token}: {ohlc_check}"
+                        self.logger.debug(
+                            f"Depth feed has OHLC for {exchange}|{token}: {ohlc_check}"
                         )
                     else:
                         self.logger.warning(f"✗ Depth feed has NO OHLC for {exchange}|{token}")

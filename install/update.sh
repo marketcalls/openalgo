@@ -355,7 +355,7 @@ if [ "$SERVER_MODE" = true ]; then
     ACTIVATE_CMD="source $VENV_PATH/bin/activate"
     if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'gunicorn=='"; then
         log_message "  Installing gunicorn..." "$YELLOW"
-        sudo $UV_CMD pip install --python "$VENV_PATH/bin/python" gunicorn
+        sudo $UV_CMD pip install --python "$VENV_PATH/bin/python" "gunicorn>=25.0,<26"
     fi
     if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'eventlet=='"; then
         log_message "  Installing eventlet..." "$YELLOW"

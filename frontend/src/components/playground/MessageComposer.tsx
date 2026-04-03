@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/select'
 import { Send, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import type { MessageTemplate } from '@/types/websocket'
 
 // Extended template type with category
@@ -20,7 +21,22 @@ interface CategorizedTemplate extends MessageTemplate {
 }
 
 // Message templates organized by category
-const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
+function getMessageTemplates(isCrypto: boolean): CategorizedTemplate[] {
+  const sym = isCrypto ? 'BTCUSDFUT' : 'RELIANCE'
+  const exch = isCrypto ? 'CRYPTO' : 'NSE'
+  const multiSymbols = isCrypto
+    ? [
+        { symbol: 'BTCUSDFUT', exchange: 'CRYPTO' },
+        { symbol: 'ETHUSDFUT', exchange: 'CRYPTO' },
+        { symbol: 'SOLUSDFUT', exchange: 'CRYPTO' },
+      ]
+    : [
+        { symbol: 'RELIANCE', exchange: 'NSE' },
+        { symbol: 'TCS', exchange: 'NSE' },
+        { symbol: 'INFY', exchange: 'NSE' },
+      ]
+
+  return [
   // Authentication
   {
     key: 'authenticate',
@@ -36,8 +52,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Last Traded Price (Mode 1)',
     template: {
       action: 'subscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 1,
     },
     category: 'subscribe',
@@ -48,8 +64,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Full Quote data (Mode 2)',
     template: {
       action: 'subscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 2,
     },
     category: 'subscribe',
@@ -60,11 +76,7 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Multiple symbols at once',
     template: {
       action: 'subscribe',
-      symbols: [
-        { symbol: 'RELIANCE', exchange: 'NSE' },
-        { symbol: 'TCS', exchange: 'NSE' },
-        { symbol: 'INFY', exchange: 'NSE' },
-      ],
+      symbols: multiSymbols,
       mode: 1,
     },
     category: 'subscribe',
@@ -76,8 +88,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Market Depth - 5 bid/ask levels',
     template: {
       action: 'subscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 3,
       depth: 5,
     },
@@ -89,8 +101,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Market Depth - 20 bid/ask levels',
     template: {
       action: 'subscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 3,
       depth: 20,
     },
@@ -102,8 +114,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Market Depth - 30 levels (broker dependent)',
     template: {
       action: 'subscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 3,
       depth: 30,
     },
@@ -115,8 +127,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Full Depth - 50 levels (broker dependent)',
     template: {
       action: 'subscribe',
-      symbol: 'RELIANCE:50',
-      exchange: 'NSE',
+      symbol: `${sym}:50`,
+      exchange: exch,
       mode: 3,
       depth: 50,
     },
@@ -129,8 +141,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Unsubscribe from LTP (Mode 1)',
     template: {
       action: 'unsubscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 1,
     },
     category: 'unsubscribe',
@@ -141,8 +153,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Unsubscribe from Quote (Mode 2)',
     template: {
       action: 'unsubscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 2,
     },
     category: 'unsubscribe',
@@ -153,8 +165,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Unsubscribe from Depth (Mode 3)',
     template: {
       action: 'unsubscribe',
-      symbol: 'RELIANCE',
-      exchange: 'NSE',
+      symbol: sym,
+      exchange: exch,
       mode: 3,
     },
     category: 'unsubscribe',
@@ -165,8 +177,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Unsubscribe from 50-level Depth (broker dependent)',
     template: {
       action: 'unsubscribe',
-      symbol: 'RELIANCE:50',
-      exchange: 'NSE',
+      symbol: `${sym}:50`,
+      exchange: exch,
       mode: 3,
       depth: 50,
     },
@@ -201,7 +213,8 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     template: { action: 'ping', timestamp: '{{TIMESTAMP}}' },
     category: 'broker',
   },
-]
+  ]
+}
 
 // Category labels for display
 const CATEGORY_LABELS: Record<CategorizedTemplate['category'], string> = {
@@ -213,9 +226,9 @@ const CATEGORY_LABELS: Record<CategorizedTemplate['category'], string> = {
 }
 
 // Get templates grouped by category
-const getTemplatesByCategory = () => {
+const getTemplatesByCategory = (isCrypto: boolean) => {
   const grouped: Record<string, CategorizedTemplate[]> = {}
-  for (const template of MESSAGE_TEMPLATES) {
+  for (const template of getMessageTemplates(isCrypto)) {
     if (!grouped[template.category]) {
       grouped[template.category] = []
     }
@@ -239,13 +252,14 @@ export function MessageComposer({
   disabled = false,
   apiKey = '',
 }: MessageComposerProps) {
+  const { isCrypto } = useSupportedExchanges()
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
   const editorRef = useRef<{ focus: () => void } | null>(null)
 
   // Apply template
   const applyTemplate = useCallback(
     (templateKey: string) => {
-      const template = MESSAGE_TEMPLATES.find((t) => t.key === templateKey)
+      const template = getMessageTemplates(isCrypto).find((t: CategorizedTemplate) => t.key === templateKey)
       if (!template) return
 
       let templateStr = JSON.stringify(template.template, null, 2)
@@ -268,7 +282,7 @@ export function MessageComposer({
         editorRef.current?.focus()
       }, 100)
     },
-    [onChange, apiKey]
+    [onChange, apiKey, isCrypto]
   )
 
   const handleSend = useCallback(() => {
@@ -312,7 +326,7 @@ export function MessageComposer({
             <SelectValue placeholder="Select a template..." />
           </SelectTrigger>
           <SelectContent>
-            {Object.entries(getTemplatesByCategory()).map(([category, templates]) => (
+            {Object.entries(getTemplatesByCategory(isCrypto)).map(([category, templates]) => (
               <SelectGroup key={category}>
                 <SelectLabel className="text-xs font-semibold text-muted-foreground">
                   {CATEGORY_LABELS[category as CategorizedTemplate['category']]}

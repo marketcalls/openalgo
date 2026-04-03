@@ -17,7 +17,7 @@ class FlattradeWebSocket:
     """Flattrade WebSocket client for real-time market data"""
 
     # Connection constants
-    WS_URL = "wss://piconnect.flattrade.in/PiConnectWSTp/"
+    WS_URL = "wss://piconnect.flattrade.in/PiConnectWSAPI/"
     CONNECTION_TIMEOUT = 15
     THREAD_JOIN_TIMEOUT = 5
 
@@ -29,9 +29,9 @@ class FlattradeWebSocket:
     HEARTBEAT_JOIN_TIMEOUT = 3  # Timeout for heartbeat thread join
 
     # Message types
-    MSG_TYPE_CONNECT = "c"
+    MSG_TYPE_CONNECT = "a"
     MSG_TYPE_HEARTBEAT = "h"
-    MSG_TYPE_AUTH_ACK = "ck"
+    MSG_TYPE_AUTH_ACK = "ak"
     MSG_TYPE_TOUCHLINE_SUB = "t"
     MSG_TYPE_TOUCHLINE_UNSUB = "u"
     MSG_TYPE_DEPTH_SUB = "d"
@@ -44,7 +44,7 @@ class FlattradeWebSocket:
         self,
         user_id: str,
         actid: str,
-        susertoken: str,
+        accesstoken: str,
         on_message: Callable | None = None,
         on_error: Callable | None = None,
         on_close: Callable | None = None,
@@ -56,7 +56,7 @@ class FlattradeWebSocket:
         Args:
             user_id: User ID for authentication
             actid: Account ID for authentication
-            susertoken: Session token for authentication
+            accesstoken: Session token for authentication
             on_message: Callback for incoming messages
             on_error: Callback for connection errors
             on_close: Callback for connection close
@@ -65,7 +65,7 @@ class FlattradeWebSocket:
         # Authentication credentials
         self.user_id = user_id
         self.actid = actid
-        self.susertoken = susertoken
+        self.accesstoken = accesstoken
 
         # Connection state
         self.ws = None
@@ -210,7 +210,7 @@ class FlattradeWebSocket:
             "uid": self.user_id,
             "actid": self.actid,
             "source": "API",
-            "susertoken": self.susertoken,
+            "accesstoken": self.accesstoken,
         }
 
         try:

@@ -36,6 +36,7 @@ class IiflWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        self._reconnect_thread_active = False  # Guard against duplicate reconnect threads
 
         # Log the ZMQ port being used
         self.logger.info(f"Iifl adapter initialized with ZMQ port: {self.zmq_port}")
@@ -195,25 +196,57 @@ class IiflWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _connect_with_retry(self) -> None:
         """Connect to Iifl XTS WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                self.logger.info(
-                    f"Connecting to Iifl XTS WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
+        with self.lock:
+            if self._reconnect_thread_active:
+                self.logger.info("Reconnect thread already active, skipping")
+                return
+            self._reconnect_thread_active = True
 
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-                )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+        try:
+            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                # Snapshot ws_client ref so disconnect() nulling it mid-call is safe
+                client = self.ws_client
+                if client is None:
+                    self.logger.info("ws_client is None, aborting reconnect")
+                    break
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+                try:
+                    self.logger.info(
+                        f"Connecting to Iifl XTS WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    client.connect()
+
+                    # If disconnect() was called while connect() was in progress,
+                    # tear down the orphaned connection to prevent FD leak
+                    if not self.running:
+                        self.logger.info(
+                            "disconnect() called during connect - tearing down orphaned connection"
+                        )
+                        try:
+                            client.disconnect()
+                        except Exception:
+                            pass
+                        break
+
+                    with self.lock:
+                        self.reconnect_attempts = 0  # Reset attempts on successful connection
+                    break
+
+                except Exception as e:
+                    with self.lock:
+                        self.reconnect_attempts += 1
+                        attempts = self.reconnect_attempts
+                    delay = min(
+                        self.reconnect_delay * (2**attempts), self.max_reconnect_delay
+                    )
+                    self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Max reconnection attempts reached. Giving up.")
+        finally:
+            with self.lock:
+                self._reconnect_thread_active = False
 
     def disconnect(self) -> None:
         """Disconnect from Iifl XTS WebSocket"""
@@ -226,7 +259,7 @@ class IiflWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "Set running=False and max reconnect attempts to prevent auto-reconnection"
         )
 
-        # Disconnect Socket.IO client
+        # Disconnect and release Socket.IO client
         if hasattr(self, "ws_client") and self.ws_client:
             try:
                 self.logger.info("Disconnecting Socket.IO client...")
@@ -234,6 +267,8 @@ class IiflWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info("Socket.IO client disconnect call completed")
             except Exception as e:
                 self.logger.error(f"Error during Socket.IO disconnect: {e}")
+            finally:
+                self.ws_client = None  # Release reference so socketio transport threads can be GC'd
         else:
             self.logger.warning("No WebSocket client to disconnect")
 
@@ -247,32 +282,9 @@ class IiflWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.logger.info("*** DISCONNECT PROCESS COMPLETED ***")
 
-    def cleanup_zmq(self) -> None:
-        """Override cleanup_zmq to provide more detailed logging"""
-        # Skip cleanup if using shared ZMQ (managed by ConnectionPool)
-        if hasattr(self, "_uses_shared_zmq") and self._uses_shared_zmq:
-            self.logger.debug("Skipping ZMQ cleanup - using shared publisher")
-            return
-
-        try:
-            # Release the port from the bound ports set
-            if hasattr(self, "zmq_port"):
-                with BaseBrokerWebSocketAdapter._port_lock:
-                    if self.zmq_port in BaseBrokerWebSocketAdapter._bound_ports:
-                        BaseBrokerWebSocketAdapter._bound_ports.remove(self.zmq_port)
-                        self.logger.info(f"Released port {self.zmq_port} from bound ports registry")
-
-            # Close the socket
-            if hasattr(self, "socket") and self.socket:
-                self.socket.close(linger=0)  # Don't linger on close
-                self.logger.info("ZeroMQ socket closed")
-
-            # DO NOT terminate shared context - other instances may still need it
-            # Context will be cleaned up when the process exits
-
-            self.logger.info("Iifl WebSocket cleanup completed successfully")
-        except Exception as e:
-            self.logger.exception(f"Error cleaning up ZeroMQ resources: {e}")
+    # cleanup_zmq() is inherited from BaseBrokerWebSocketAdapter which handles:
+    # - idempotency (_zmq_cleaned_up flag), shared-ZMQ skip, _instance_count
+    #   decrement, socket nulling, and shared context lifecycle.
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5

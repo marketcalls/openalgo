@@ -1,5 +1,17 @@
-import { AlertTriangle, ArrowLeft, Ban, Eye, EyeOff, Save, Shield, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Ban,
+  Eye,
+  EyeOff,
+  Save,
+  Shield,
+  Trash2,
+} from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
@@ -37,6 +49,7 @@ import {
 } from '@/components/ui/table'
 
 interface SecuritySettings {
+  auto_ban_enabled: boolean
   '404_threshold': number
   '404_ban_duration': number
   api_threshold: number
@@ -81,11 +94,12 @@ interface APIAbuseIP {
 export default function SecurityDashboard() {
   const [isLoading, setIsLoading] = useState(true)
   const [settings, setSettings] = useState<SecuritySettings>({
-    '404_threshold': 20,
-    '404_ban_duration': 24,
-    api_threshold: 10,
-    api_ban_duration: 48,
-    repeat_offender_limit: 3,
+    auto_ban_enabled: false,
+    '404_threshold': 100,
+    '404_ban_duration': 0,
+    api_threshold: 100,
+    api_ban_duration: 0,
+    repeat_offender_limit: 2,
   })
   const [stats, setStats] = useState<SecurityStats>({
     total_bans: 0,
@@ -124,6 +138,124 @@ export default function SecurityDashboard() {
   // Expanded rows state
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+
+  // Sorting state
+  type SortDir = 'asc' | 'desc'
+  const [bannedSort, setBannedSort] = useState<{ key: string; dir: SortDir }>({
+    key: 'banned_at',
+    dir: 'desc',
+  })
+  const [suspiciousSort, setSuspiciousSort] = useState<{ key: string; dir: SortDir }>({
+    key: 'error_count',
+    dir: 'desc',
+  })
+  const [apiSort, setApiSort] = useState<{ key: string; dir: SortDir }>({
+    key: 'attempt_count',
+    dir: 'desc',
+  })
+
+  const toggleSort = (
+    current: { key: string; dir: SortDir },
+    setter: (v: { key: string; dir: SortDir }) => void,
+    key: string
+  ) => {
+    if (current.key === key) {
+      setter({ key, dir: current.dir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      setter({ key, dir: 'desc' })
+    }
+  }
+
+  const SortIcon = ({ column, sort }: { column: string; sort: { key: string; dir: SortDir } }) => {
+    if (sort.key !== column)
+      return <ArrowUpDown className="h-3 w-3 ml-1 inline opacity-40" />
+    return sort.dir === 'asc' ? (
+      <ArrowUp className="h-3 w-3 ml-1 inline" />
+    ) : (
+      <ArrowDown className="h-3 w-3 ml-1 inline" />
+    )
+  }
+
+  // Parse DD-MM-YYYY HH:MM:SS AM/PM to comparable value
+  const parseDate = (dateStr: string): number => {
+    if (!dateStr || dateStr === 'Unknown' || dateStr === 'Permanent') return 0
+    const [datePart, timePart, ampm] = dateStr.split(' ')
+    if (!datePart || !timePart) return 0
+    const [dd, mm, yyyy] = datePart.split('-')
+    const [hh, min, ss] = timePart.split(':')
+    let hour = parseInt(hh, 10)
+    if (ampm?.toUpperCase() === 'PM' && hour !== 12) hour += 12
+    if (ampm?.toUpperCase() === 'AM' && hour === 12) hour = 0
+    return new Date(
+      parseInt(yyyy, 10),
+      parseInt(mm, 10) - 1,
+      parseInt(dd, 10),
+      hour,
+      parseInt(min, 10),
+      parseInt(ss, 10)
+    ).getTime()
+  }
+
+  const sortedBannedIPs = useMemo(() => {
+    const sorted = [...bannedIPs]
+    const { key, dir } = bannedSort
+    sorted.sort((a, b) => {
+      let cmp = 0
+      if (key === 'ip_address' || key === 'ban_reason' || key === 'created_by') {
+        cmp = (a[key as keyof BannedIP] as string).localeCompare(
+          b[key as keyof BannedIP] as string
+        )
+      } else if (key === 'ban_count') {
+        cmp = a.ban_count - b.ban_count
+      } else if (key === 'banned_at') {
+        cmp = parseDate(a.banned_at) - parseDate(b.banned_at)
+      } else if (key === 'expires_at') {
+        const aVal = a.is_permanent ? Number.MAX_SAFE_INTEGER : parseDate(a.expires_at)
+        const bVal = b.is_permanent ? Number.MAX_SAFE_INTEGER : parseDate(b.expires_at)
+        cmp = aVal - bVal
+      }
+      return dir === 'asc' ? cmp : -cmp
+    })
+    return sorted
+  }, [bannedIPs, bannedSort])
+
+  const sortedSuspiciousIPs = useMemo(() => {
+    const sorted = [...suspiciousIPs]
+    const { key, dir } = suspiciousSort
+    sorted.sort((a, b) => {
+      let cmp = 0
+      if (key === 'ip_address') {
+        cmp = a.ip_address.localeCompare(b.ip_address)
+      } else if (key === 'error_count') {
+        cmp = a.error_count - b.error_count
+      } else if (key === 'first_error_at') {
+        cmp = parseDate(a.first_error_at) - parseDate(b.first_error_at)
+      } else if (key === 'last_error_at') {
+        cmp = parseDate(a.last_error_at) - parseDate(b.last_error_at)
+      }
+      return dir === 'asc' ? cmp : -cmp
+    })
+    return sorted
+  }, [suspiciousIPs, suspiciousSort])
+
+  const sortedAPIAbuseIPs = useMemo(() => {
+    const sorted = [...apiAbuseIPs]
+    const { key, dir } = apiSort
+    sorted.sort((a, b) => {
+      let cmp = 0
+      if (key === 'ip_address') {
+        cmp = a.ip_address.localeCompare(b.ip_address)
+      } else if (key === 'attempt_count') {
+        cmp = a.attempt_count - b.attempt_count
+      } else if (key === 'first_attempt_at') {
+        cmp = parseDate(a.first_attempt_at) - parseDate(b.first_attempt_at)
+      } else if (key === 'last_attempt_at') {
+        cmp = parseDate(a.last_attempt_at) - parseDate(b.last_attempt_at)
+      }
+      return dir === 'asc' ? cmp : -cmp
+    })
+    return sorted
+  }, [apiAbuseIPs, apiSort])
 
   useEffect(() => {
     fetchDashboardData()
@@ -174,6 +306,7 @@ export default function SecurityDashboard() {
       const response = await webClient.post<{ success: boolean; message: string }>(
         '/security/settings',
         {
+          auto_ban_enabled: formSettings.auto_ban_enabled,
           threshold_404: formSettings['404_threshold'],
           ban_duration_404: formSettings['404_ban_duration'],
           threshold_api: formSettings.api_threshold,
@@ -415,7 +548,51 @@ export default function SecurityDashboard() {
           <CardDescription>Configure auto-ban thresholds and durations</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="flex items-center justify-between mb-6 p-4 rounded-lg border bg-muted/30">
+            <div className="space-y-1">
+              <Label className="text-base font-semibold">Auto-Ban</Label>
+              <p className="text-sm text-muted-foreground">
+                {formSettings.auto_ban_enabled
+                  ? 'IPs exceeding thresholds will be automatically banned'
+                  : 'Automatic banning is disabled — use manual ban only'}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span
+                className={`text-sm font-medium ${!formSettings.auto_ban_enabled ? 'text-foreground' : 'text-muted-foreground'}`}
+              >
+                Off
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={formSettings.auto_ban_enabled}
+                onClick={() =>
+                  setFormSettings({
+                    ...formSettings,
+                    auto_ban_enabled: !formSettings.auto_ban_enabled,
+                  })
+                }
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                  formSettings.auto_ban_enabled ? 'bg-destructive' : 'bg-input'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    formSettings.auto_ban_enabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+              <span
+                className={`text-sm font-medium ${formSettings.auto_ban_enabled ? 'text-destructive' : 'text-muted-foreground'}`}
+              >
+                On
+              </span>
+            </div>
+          </div>
+          <div
+            className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 ${!formSettings.auto_ban_enabled ? 'opacity-50 pointer-events-none' : ''}`}
+          >
             <div className="space-y-2">
               <Label>
                 404 Error Threshold <span className="text-muted-foreground text-xs">(per day)</span>
@@ -437,18 +614,28 @@ export default function SecurityDashboard() {
               <Label>
                 404 Ban Duration <span className="text-muted-foreground text-xs">(hours)</span>
               </Label>
-              <Input
-                type="number"
-                value={formSettings['404_ban_duration']}
-                onChange={(e) =>
+              <Select
+                value={String(formSettings['404_ban_duration'])}
+                onValueChange={(val) =>
                   setFormSettings({
                     ...formSettings,
-                    '404_ban_duration': parseInt(e.target.value, 10) || 24,
+                    '404_ban_duration': parseInt(val, 10),
                   })
                 }
-                min={1}
-                max={8760}
-              />
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="24">24 Hours</SelectItem>
+                  <SelectItem value="48">48 Hours</SelectItem>
+                  <SelectItem value="72">72 Hours</SelectItem>
+                  <SelectItem value="168">1 Week</SelectItem>
+                  <SelectItem value="720">30 Days</SelectItem>
+                  <SelectItem value="8760">1 Year</SelectItem>
+                  <SelectItem value="0">Permanent</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label>
@@ -472,18 +659,28 @@ export default function SecurityDashboard() {
               <Label>
                 API Ban Duration <span className="text-muted-foreground text-xs">(hours)</span>
               </Label>
-              <Input
-                type="number"
-                value={formSettings.api_ban_duration}
-                onChange={(e) =>
+              <Select
+                value={String(formSettings.api_ban_duration)}
+                onValueChange={(val) =>
                   setFormSettings({
                     ...formSettings,
-                    api_ban_duration: parseInt(e.target.value, 10) || 48,
+                    api_ban_duration: parseInt(val, 10),
                   })
                 }
-                min={1}
-                max={8760}
-              />
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="24">24 Hours</SelectItem>
+                  <SelectItem value="48">48 Hours</SelectItem>
+                  <SelectItem value="72">72 Hours</SelectItem>
+                  <SelectItem value="168">1 Week</SelectItem>
+                  <SelectItem value="720">30 Days</SelectItem>
+                  <SelectItem value="8760">1 Year</SelectItem>
+                  <SelectItem value="0">Permanent</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label>
@@ -503,12 +700,12 @@ export default function SecurityDashboard() {
                 max={10}
               />
             </div>
-            <div className="flex items-end">
-              <Button onClick={handleSaveSettings} disabled={isSavingSettings}>
-                <Save className="h-4 w-4 mr-2" />
-                {isSavingSettings ? 'Saving...' : 'Save Settings'}
-              </Button>
-            </div>
+          </div>
+          <div className="mt-4 flex items-center justify-between">
+            <Button onClick={handleSaveSettings} disabled={isSavingSettings}>
+              <Save className="h-4 w-4 mr-2" />
+              {isSavingSettings ? 'Saving...' : 'Save Settings'}
+            </Button>
           </div>
           <div className="mt-4 text-xs text-muted-foreground space-y-1">
             <p>
@@ -637,24 +834,60 @@ export default function SecurityDashboard() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>IP Address</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Banned At</TableHead>
-                  <TableHead>Expires At</TableHead>
-                  <TableHead>Ban Count</TableHead>
-                  <TableHead>Created By</TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(bannedSort, setBannedSort, 'ip_address')}
+                  >
+                    IP Address
+                    <SortIcon column="ip_address" sort={bannedSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(bannedSort, setBannedSort, 'ban_reason')}
+                  >
+                    Reason
+                    <SortIcon column="ban_reason" sort={bannedSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(bannedSort, setBannedSort, 'banned_at')}
+                  >
+                    Banned At
+                    <SortIcon column="banned_at" sort={bannedSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(bannedSort, setBannedSort, 'expires_at')}
+                  >
+                    Expires At
+                    <SortIcon column="expires_at" sort={bannedSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(bannedSort, setBannedSort, 'ban_count')}
+                  >
+                    Ban Count
+                    <SortIcon column="ban_count" sort={bannedSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(bannedSort, setBannedSort, 'created_by')}
+                  >
+                    Created By
+                    <SortIcon column="created_by" sort={bannedSort} />
+                  </TableHead>
                   <TableHead className="w-[80px]">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {bannedIPs.length === 0 ? (
+                {sortedBannedIPs.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                       No banned IPs
                     </TableCell>
                   </TableRow>
                 ) : (
-                  bannedIPs.map((ban) => (
+                  sortedBannedIPs.map((ban) => (
                     <TableRow key={ban.ip_address}>
                       <TableCell className="font-mono">{ban.ip_address}</TableCell>
                       <TableCell>{ban.ban_reason}</TableCell>
@@ -705,23 +938,47 @@ export default function SecurityDashboard() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>IP Address</TableHead>
-                  <TableHead>Attempts</TableHead>
-                  <TableHead>First Attempt</TableHead>
-                  <TableHead>Last Attempt</TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(apiSort, setApiSort, 'ip_address')}
+                  >
+                    IP Address
+                    <SortIcon column="ip_address" sort={apiSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(apiSort, setApiSort, 'attempt_count')}
+                  >
+                    Attempts
+                    <SortIcon column="attempt_count" sort={apiSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(apiSort, setApiSort, 'first_attempt_at')}
+                  >
+                    First Attempt
+                    <SortIcon column="first_attempt_at" sort={apiSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(apiSort, setApiSort, 'last_attempt_at')}
+                  >
+                    Last Attempt
+                    <SortIcon column="last_attempt_at" sort={apiSort} />
+                  </TableHead>
                   <TableHead>API Keys Tried</TableHead>
                   <TableHead className="w-[80px]">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {apiAbuseIPs.length === 0 ? (
+                {sortedAPIAbuseIPs.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                       No invalid API key attempts detected
                     </TableCell>
                   </TableRow>
                 ) : (
-                  apiAbuseIPs.map((tracker) => (
+                  sortedAPIAbuseIPs.map((tracker) => (
                     <TableRow
                       key={tracker.ip_address}
                       className={tracker.attempt_count >= 8 ? 'bg-destructive/10' : ''}
@@ -788,23 +1045,51 @@ export default function SecurityDashboard() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>IP Address</TableHead>
-                  <TableHead>404 Count</TableHead>
-                  <TableHead>First Error</TableHead>
-                  <TableHead>Last Error</TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(suspiciousSort, setSuspiciousSort, 'ip_address')}
+                  >
+                    IP Address
+                    <SortIcon column="ip_address" sort={suspiciousSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() => toggleSort(suspiciousSort, setSuspiciousSort, 'error_count')}
+                  >
+                    404 Count
+                    <SortIcon column="error_count" sort={suspiciousSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() =>
+                      toggleSort(suspiciousSort, setSuspiciousSort, 'first_error_at')
+                    }
+                  >
+                    First Error
+                    <SortIcon column="first_error_at" sort={suspiciousSort} />
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer select-none"
+                    onClick={() =>
+                      toggleSort(suspiciousSort, setSuspiciousSort, 'last_error_at')
+                    }
+                  >
+                    Last Error
+                    <SortIcon column="last_error_at" sort={suspiciousSort} />
+                  </TableHead>
                   <TableHead>Sample Paths</TableHead>
                   <TableHead className="w-[120px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {suspiciousIPs.length === 0 ? (
+                {sortedSuspiciousIPs.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                       No suspicious IPs detected
                     </TableCell>
                   </TableRow>
                 ) : (
-                  suspiciousIPs.map((tracker) => (
+                  sortedSuspiciousIPs.map((tracker) => (
                     <TableRow
                       key={tracker.ip_address}
                       className={tracker.error_count >= 15 ? 'bg-destructive/10' : ''}

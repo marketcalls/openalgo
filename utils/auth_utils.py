@@ -14,6 +14,7 @@ from database.auth_db import upsert_auth
 from database.master_contract_status_db import (
     get_exchange_stats_from_db,
     get_last_download_time,
+    get_last_downloaded_broker,
     init_broker_status,
     mark_status_ready_without_download,
     update_download_stats,
@@ -95,6 +96,11 @@ def should_download_master_contract(broker):
 
     if last_download is None:
         return True, "No previous download found"
+
+    # Check if a different broker downloaded more recently (symtoken has stale data)
+    last_broker = get_last_downloaded_broker()
+    if last_broker and last_broker != broker:
+        return True, f"Broker changed from {last_broker} to {broker}, symtoken needs refresh"
 
     # Get cutoff time and reference timezone for this broker
     cutoff_hour, cutoff_minute, tz = get_master_contract_cutoff(broker)

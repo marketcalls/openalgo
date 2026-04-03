@@ -2,6 +2,7 @@ import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } fro
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
+import { showToast } from '@/utils/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -24,6 +25,7 @@ import {
 } from '@/components/ui/table'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { onModeChange } from '@/stores/themeStore'
 import type { Trade } from '@/types/trading'
 
@@ -34,19 +36,45 @@ interface FilterState {
 }
 
 function formatTime(timestamp: string): string {
-  try {
-    return new Date(timestamp).toLocaleTimeString('en-IN', {
+  if (!timestamp) return '-'
+
+  // Try native Date parsing first (handles ISO and standard formats)
+  let date = new Date(timestamp)
+
+  // If invalid, try "HH:MM:SS DD-MM-YYYY" (Flattrade/Shoonya/Zebu/Firstock norentm format)
+  if (Number.isNaN(date.getTime())) {
+    const norentm = timestamp.match(/^(\d{2}:\d{2}:\d{2})\s+(\d{2})-(\d{2})-(\d{4})$/)
+    if (norentm) {
+      date = new Date(`${norentm[4]}-${norentm[3]}-${norentm[2]}T${norentm[1]}`)
+    }
+  }
+
+  // If invalid, try "DD-MM-YYYY HH:MM:SS"
+  if (Number.isNaN(date.getTime())) {
+    const ddmmyyyy = timestamp.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}:\d{2}:\d{2})$/)
+    if (ddmmyyyy) {
+      date = new Date(`${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}T${ddmmyyyy[4]}`)
+    }
+  }
+
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleTimeString('en-IN', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
     })
-  } catch {
-    return timestamp
   }
+
+  // Last resort: extract HH:MM:SS if embedded in the string
+  const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
+  if (timeMatch) return timeMatch[1]
+
+  return timestamp
 }
 
 export default function TradeBook() {
   const { apiKey, user } = useAuthStore()
+  const { isCrypto } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [trades, setTrades] = useState<Trade[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -131,36 +159,48 @@ export default function TradeBook() {
   }, [fetchTrades])
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Product',
-      'Action',
-      'Qty',
-      'Price',
-      'Trade Value',
-      'Order ID',
-      'Time',
-    ]
-    const rows = trades.map((t) => [
-      sanitizeCSV(t.symbol),
-      sanitizeCSV(t.exchange),
-      sanitizeCSV(t.product),
-      sanitizeCSV(t.action),
-      sanitizeCSV(t.quantity),
-      sanitizeCSV(t.average_price),
-      sanitizeCSV(t.trade_value),
-      sanitizeCSV(t.orderid),
-      sanitizeCSV(t.timestamp),
-    ])
+    if (filteredTrades.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `tradebook_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        ...(isCrypto ? [] : ['Product']),
+        'Action',
+        'Qty',
+        'Price',
+        'Trade Value',
+        'Order ID',
+        'Time',
+      ]
+      const rows = filteredTrades.map((t) => [
+        sanitizeCSV(t.symbol),
+        sanitizeCSV(t.exchange),
+        ...(isCrypto ? [] : [sanitizeCSV(t.product)]),
+        sanitizeCSV(t.action),
+        sanitizeCSV(t.quantity),
+        sanitizeCSV(t.average_price),
+        sanitizeCSV(t.trade_value),
+        sanitizeCSV(t.orderid),
+        sanitizeCSV(t.timestamp),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `tradebook_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const stats = {
@@ -249,6 +289,7 @@ export default function TradeBook() {
                 </div>
 
                 {/* Product */}
+                {!isCrypto && (
                 <div className="space-y-3">
                   <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Product
@@ -259,6 +300,7 @@ export default function TradeBook() {
                     <FilterChip type="product" value="NRML" label="NRML" />
                   </div>
                 </div>
+                )}
               </div>
 
               <DialogFooter>
@@ -308,7 +350,7 @@ export default function TradeBook() {
               {v}
             </Badge>
           ))}
-          {filters.product.map((v) => (
+          {!isCrypto && filters.product.map((v) => (
             <Badge
               key={v}
               variant="secondary"
@@ -385,7 +427,7 @@ export default function TradeBook() {
                   <TableRow>
                     <TableHead>Symbol</TableHead>
                     <TableHead>Exchange</TableHead>
-                    <TableHead>Product</TableHead>
+                    {!isCrypto && <TableHead>Product</TableHead>}
                     <TableHead>Action</TableHead>
                     <TableHead className="text-right">Qty</TableHead>
                     <TableHead className="text-right">Price</TableHead>
@@ -401,9 +443,11 @@ export default function TradeBook() {
                       <TableCell>
                         <Badge variant="outline">{trade.exchange}</Badge>
                       </TableCell>
+                      {!isCrypto && (
                       <TableCell>
                         <Badge variant="secondary">{trade.product}</Badge>
                       </TableCell>
+                      )}
                       <TableCell>
                         <Badge
                           variant={trade.action === 'BUY' ? 'default' : 'destructive'}

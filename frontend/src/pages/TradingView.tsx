@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { JsonEditor } from '@/components/ui/json-editor'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 
 interface SearchResult {
   symbol: string
@@ -23,14 +24,7 @@ interface SearchResult {
   token: string
 }
 
-const EXCHANGES = [
-  { value: 'NSE', label: 'NSE' },
-  { value: 'NFO', label: 'NFO' },
-  { value: 'BSE', label: 'BSE' },
-  { value: 'BFO', label: 'BFO' },
-  { value: 'CDS', label: 'CDS' },
-  { value: 'MCX', label: 'MCX' },
-]
+// EXCHANGES and PRODUCTS are now dynamic — provided by useSupportedExchanges() hook
 
 const PRODUCTS = [
   { value: 'MIS', label: 'MIS - Intraday' },
@@ -39,11 +33,13 @@ const PRODUCTS = [
 ]
 
 export default function TradingView() {
+  const { tradingExchanges, defaultExchange, isCrypto } = useSupportedExchanges()
+
   // Form state
   const [alertMode, setAlertMode] = useState<'strategy' | 'line'>('strategy')
-  const [symbol, setSymbol] = useState('NHPC')
-  const [exchange, setExchange] = useState('NSE')
-  const [product, setProduct] = useState('MIS')
+  const [symbol, setSymbol] = useState(isCrypto ? 'BTCUSDFUT' : 'NHPC')
+  const [exchange, setExchange] = useState(defaultExchange)
+  const [product, setProduct] = useState(isCrypto ? 'NRML' : 'MIS')
   const [action, setAction] = useState('BUY')
   const [quantity, setQuantity] = useState('1')
 
@@ -51,6 +47,13 @@ export default function TradingView() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [showResults, setShowResults] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setExchange((prev) =>
+      prev && tradingExchanges.some((ex) => ex.value === prev) ? prev : defaultExchange
+    )
+  }, [defaultExchange, tradingExchanges])
 
   // JSON output
   const [generatedJson, setGeneratedJson] = useState<string>('')
@@ -95,7 +98,8 @@ export default function TradingView() {
   }, [])
 
   // Get webhook URL from host config or fallback to window.location.origin
-  const webhookUrl = hostConfig ? `${hostConfig.host_server}/api/v1/placesmartorder` : `${window.location.origin}/api/v1/placesmartorder`
+  const endpoint = alertMode === 'strategy' ? '/api/v1/placesmartorder' : '/api/v1/placeorder'
+  const webhookUrl = hostConfig ? `${hostConfig.host_server}${endpoint}` : `${window.location.origin}${endpoint}`
 
   // Debounced search
   const performSearch = useCallback(
@@ -324,7 +328,7 @@ export default function TradingView() {
                     <SelectValue placeholder="Select Exchange" />
                   </SelectTrigger>
                   <SelectContent>
-                    {EXCHANGES.map((ex) => (
+                    {tradingExchanges.map((ex) => (
                       <SelectItem key={ex.value} value={ex.value}>
                         {ex.label}
                       </SelectItem>
@@ -333,22 +337,24 @@ export default function TradingView() {
                 </Select>
               </div>
 
-              {/* Product Type */}
-              <div className="space-y-2">
-                <Label htmlFor="product">Product Type</Label>
-                <Select value={product} onValueChange={setProduct}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PRODUCTS.map((p) => (
-                      <SelectItem key={p.value} value={p.value}>
-                        {p.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {/* Product Type (hidden for crypto — Delta Exchange ignores it) */}
+              {!isCrypto && (
+                <div className="space-y-2">
+                  <Label htmlFor="product">Product Type</Label>
+                  <Select value={product} onValueChange={setProduct}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PRODUCTS.map((p) => (
+                        <SelectItem key={p.value} value={p.value}>
+                          {p.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {/* Line Alert Mode Fields */}
               {alertMode === 'line' && (

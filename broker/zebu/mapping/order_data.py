@@ -90,11 +90,12 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
 
             # Count orders based on their status
-            if order["status"] == "COMPLETE":
+            status = order.get("status", "").upper()
+            if status == "COMPLETE":
                 total_completed_orders += 1
-            elif order["status"] == "OPEN":
+            elif status in ("OPEN", "TRIGGER PENDING", "PENDING"):
                 total_open_orders += 1
-            elif order["status"] == "REJECTED":
+            elif status == "REJECTED":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -118,6 +119,19 @@ def transform_order_data(orders):
             )
             continue
 
+        # Map Zebu status to OpenAlgo status
+        raw_status = order.get("status", "").upper()
+        status_map = {
+            "COMPLETE": "complete",
+            "OPEN": "open",
+            "REJECTED": "rejected",
+            "CANCELED": "cancelled",
+            "CANCELLED": "cancelled",
+            "TRIGGER PENDING": "open",
+            "PENDING": "open",
+        }
+        mapped_status = status_map.get(raw_status, raw_status.lower())
+
         transformed_order = {
             "symbol": order.get("tsym", ""),
             "exchange": order.get("exch", ""),
@@ -128,7 +142,7 @@ def transform_order_data(orders):
             "pricetype": order.get("prctyp", ""),
             "product": order.get("prd", ""),
             "orderid": order.get("norenordno", ""),
-            "order_status": order.get("status", "").lower(),
+            "order_status": mapped_status,
             "timestamp": order.get("norentm", ""),
         }
 
@@ -263,19 +277,30 @@ def transform_positions_data(positions_data):
         netqty = float(position.get("netqty", 0))
         netavgprc = float(position.get("netavgprc", 0.0))
         lp = float(position.get("lp", 0.0))  # Last Price from Zebu
+        rpnl = float(position.get("rpnl", 0.0))  # Realized P&L from Zebu
+        urmtom = float(position.get("urmtom", 0.0))  # Unrealized MTM from Zebu
 
-        # Calculate PnL only if there's an open position
+        # For closed positions, Zebu zeroes out netavgprc
+        # Use daybuyavgprc or totbuyavgprc as fallback for average price
+        if netavgprc == 0 and netqty == 0:
+            # Closed position — show the buy avg price as reference
+            netavgprc = float(position.get("daybuyavgprc", 0.0)) or float(
+                position.get("totbuyavgprc", 0.0)
+            )
+
+        # Calculate PnL
         if netqty != 0 and lp > 0:
-            if netqty > 0:
-                # Long position
-                pnl = (lp - netavgprc) * netqty
+            # Open position: use unrealized MTM if available, else calculate
+            if urmtom != 0:
+                pnl = urmtom + rpnl
             else:
-                # Short position
-                pnl = (netavgprc - lp) * abs(netqty)
+                if netqty > 0:
+                    pnl = (lp - netavgprc) * netqty + rpnl
+                else:
+                    pnl = (netavgprc - lp) * abs(netqty) + rpnl
         else:
-            # No position or no LTP available
-            pnl = 0.0
-            lp = 0.0 if netqty == 0 else lp  # Set LTP to 0 if position is closed
+            # Closed position: use realized P&L
+            pnl = rpnl
 
         transformed_position = {
             "symbol": position.get("tsym", ""),

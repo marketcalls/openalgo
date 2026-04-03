@@ -3,17 +3,16 @@ import importlib
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order, executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
-from services.telegram_alert_service import telegram_alert_service
-from utils.api_analyzer import analyze_request
+from events import AnalyzerErrorEvent, AllOrdersCancelledEvent, OrderFailedEvent
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+API_TYPE = "cancelallorder"
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -33,15 +32,13 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     analyzer_request = request_data.copy()
     if "apikey" in analyzer_request:
         del analyzer_request["apikey"]
-    analyzer_request["api_type"] = "cancelallorder"
+    analyzer_request["api_type"] = API_TYPE
 
-    # Log to analyzer database
-    executor.submit(async_log_analyzer, analyzer_request, error_response, "cancelallorder")
-
-    # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
-    )
+    bus.publish(AnalyzerErrorEvent(
+        mode="analyze", api_type=API_TYPE,
+        request_data=analyzer_request, response_data=error_response,
+        error_message=error_message,
+    ))
 
     return error_response
 
@@ -106,32 +103,28 @@ def cancel_all_orders_with_auth(
 
         # Store complete request data without apikey
         analyzer_request = order_request_data.copy()
-        analyzer_request["api_type"] = "cancelallorder"
+        analyzer_request["api_type"] = API_TYPE
 
-        # Log to analyzer database with complete request and response
-        executor.submit(async_log_analyzer, analyzer_request, response_data, "cancelallorder")
-
-        # Emit socket event for toast notification asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "analyzer_update",
-            {"request": analyzer_request, "response": response_data},
-        )
-
-        # Send Telegram alert in background task (non-blocking)
-        socketio.start_background_task(
-            telegram_alert_service.send_order_alert,
-            "cancelallorder",
-            order_data,
-            response_data,
-            order_data.get("apikey"),
-        )
+        bus.publish(AllOrdersCancelledEvent(
+            mode="analyze", api_type=API_TYPE,
+            canceled_count=response_data.get("canceled_count", 0) if isinstance(response_data, dict) else 0,
+            failed_count=response_data.get("failed_count", 0) if isinstance(response_data, dict) else 0,
+            canceled_orders=response_data.get("canceled_orders", []) if isinstance(response_data, dict) else [],
+            failed_cancellations=response_data.get("failed_cancellations", []) if isinstance(response_data, dict) else [],
+            request_data=analyzer_request, response_data=response_data,
+            api_key=order_data.get("apikey", ""),
+        ))
         return success, response_data, status_code
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
         error_response = {"status": "error", "message": "Broker-specific module not found"}
-        executor.submit(async_log_order, "cancelallorder", original_data, error_response)
+        bus.publish(OrderFailedEvent(
+            mode="live", api_type=API_TYPE,
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+            error_message="Broker-specific module not found",
+        ))
         return False, error_response, 404
 
     try:
@@ -146,7 +139,12 @@ def cancel_all_orders_with_auth(
             "status": "error",
             "message": "Failed to cancel all orders due to internal error",
         }
-        executor.submit(async_log_order, "cancelallorder", original_data, error_response)
+        bus.publish(OrderFailedEvent(
+            mode="live", api_type=API_TYPE,
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+            error_message=str(e),
+        ))
         return False, error_response, 500
 
     # Prepare response data
@@ -157,32 +155,13 @@ def cancel_all_orders_with_auth(
         "message": f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders.",
     }
 
-    # Emit single summary event at the end (page refreshes only once)
-    socketio.start_background_task(
-        socketio.emit,
-        "cancel_order_event",
-        {
-            "status": "success",
-            "orderid": f"{len(canceled_orders)} orders canceled",
-            "mode": "live",
-            "batch_order": True,
-            "is_last_order": True,
-            "canceled_count": len(canceled_orders),
-            "failed_count": len(failed_cancellations),
-        },
-    )
-
-    # Log the action asynchronously
-    executor.submit(async_log_order, "cancelallorder", order_request_data, response_data)
-
-    # Send Telegram alert in background task (non-blocking)
-    socketio.start_background_task(
-        telegram_alert_service.send_order_alert,
-        "cancelallorder",
-        order_data,
-        response_data,
-        original_data.get("apikey"),
-    )
+    bus.publish(AllOrdersCancelledEvent(
+        mode="live", api_type=API_TYPE,
+        canceled_count=len(canceled_orders), failed_count=len(failed_cancellations),
+        canceled_orders=canceled_orders, failed_cancellations=failed_cancellations,
+        request_data=order_request_data, response_data=response_data,
+        api_key=original_data.get("apikey", ""),
+    ))
 
     return True, response_data, 200
 
@@ -233,9 +212,16 @@ def cancel_all_orders(
                         "message": "Cancel all orders operation is not allowed in Semi-Auto mode. Please switch to Auto mode to cancel orders.",
                     }
                     logger.warning(f"Cancel all orders blocked for user {user_id} (semi-auto mode)")
-                    executor.submit(
-                        async_log_order, "cancelallorder", original_data, error_response
-                    )
+                    order_request_data = copy.deepcopy(original_data)
+                    if "apikey" in order_request_data:
+                        order_request_data.pop("apikey", None)
+                    bus.publish(AllOrdersCancelledEvent(
+                        mode="live", api_type=API_TYPE,
+                        canceled_count=0, failed_count=0,
+                        canceled_orders=[], failed_cancellations=[],
+                        request_data=order_request_data, response_data=error_response,
+                        api_key=api_key,
+                    ))
                     return False, error_response, 403
 
         # Add API key to order data

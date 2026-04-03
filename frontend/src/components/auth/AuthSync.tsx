@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/stores/authStore'
+import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
 
 interface AuthSyncProps {
@@ -14,6 +15,7 @@ interface AuthSyncProps {
 export function AuthSync({ children }: AuthSyncProps) {
   const [isChecking, setIsChecking] = useState(true)
   const { setUser, setApiKey, logout } = useAuthStore()
+  const { fetchCapabilities, clearCapabilities } = useBrokerStore()
   const { syncAppMode } = useThemeStore()
 
   useEffect(() => {
@@ -38,6 +40,8 @@ export function AuthSync({ children }: AuthSyncProps) {
             if (data.api_key) {
               setApiKey(data.api_key)
             }
+            // Fetch broker capabilities (exchanges, type, features)
+            await fetchCapabilities()
             // Also sync app mode from backend
             await syncAppMode()
           } else if (data.status === 'success' && data.authenticated && !data.logged_in) {
@@ -48,13 +52,16 @@ export function AuthSync({ children }: AuthSyncProps) {
               isLoggedIn: false,
               loginTime: null,
             })
+            clearCapabilities()
           } else {
             // Not authenticated or status is not success - clear Zustand store
             logout()
+            clearCapabilities()
           }
         } else {
           // Any non-OK response (401, 500, etc.) - clear Zustand store
           logout()
+          clearCapabilities()
         }
       } catch (error) {
         // On error, don't change auth state - let existing state persist
@@ -64,7 +71,7 @@ export function AuthSync({ children }: AuthSyncProps) {
     }
 
     syncSession()
-  }, [setUser, setApiKey, logout, syncAppMode])
+  }, [setUser, setApiKey, logout, fetchCapabilities, clearCapabilities, syncAppMode])
 
   // Show nothing while checking - prevents flash of wrong content
   if (isChecking) {

@@ -1,0 +1,11 @@
+meta {
+  name: ticker
+  type: http
+  seq: 20
+}
+
+get {
+  url: http://127.0.0.1:5000/api/v1/ticker/CRYPTO:BTCUSDFUT?apikey=&interval=D&from=2025-01-01&to=2026-03-20&format=json
+  body: none
+  auth: none
+}

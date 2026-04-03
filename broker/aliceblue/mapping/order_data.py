@@ -1,10 +1,139 @@
 import json
 from datetime import date
 
+from broker.aliceblue.mapping.transform_data import reverse_map_product_type
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# ─── V2 API response normalization ───────────────────────────────────────────
+# These map AliceBlue V2 API response fields to the old field names that the
+# downstream transform/map functions in this file expect.
+
+
+def normalize_order(order):
+    """Normalize a V2 order-book entry to old field names."""
+    # Map transactionType BUY/SELL → B/S
+    trantype_map = {"BUY": "B", "SELL": "S"}
+    trantype = trantype_map.get(order.get("transactionType", ""), order.get("transactionType", ""))
+
+    # Map orderType MARKET/LIMIT/SL/SLM → MKT/L/SL/SL-M
+    prctype_map = {"MARKET": "MKT", "LIMIT": "L", "SL": "SL", "SLM": "SL-M"}
+    prctype = prctype_map.get(order.get("orderType", ""), order.get("orderType", ""))
+
+    # Map orderStatus to lowercase for downstream compatibility
+    status_raw = order.get("orderStatus", "")
+    status = status_raw.lower() if status_raw else ""
+
+    return {
+        # Core identifiers
+        "Nstordno": order.get("brokerOrderId", ""),
+        "Exchange": order.get("exchange", ""),
+        "Trsym": order.get("formattedInstrumentName", order.get("tradingSymbol", "")),
+        "Tsym": order.get("formattedInstrumentName", order.get("tradingSymbol", "")),
+        # Transaction
+        "Trantype": trantype,
+        "transactionType": order.get("transactionType", ""),
+        # Quantities
+        "Qty": str(order.get("quantity", 0)),
+        "Fillshares": str(order.get("filledQuantity", 0)),
+        "cancelledQuantity": str(order.get("cancelledQuantity", 0)),
+        "pendingQuantity": str(order.get("pendingQuantity", 0)),
+        # Prices
+        "Prc": str(order.get("price", 0)),
+        "Trgprc": str(order.get("slTriggerPrice", 0)),
+        "AvgPrice": str(order.get("averageTradedPrice", 0)),
+        # Order metadata
+        "Prctype": prctype,
+        "orderType": order.get("orderType", ""),
+        "Pcode": reverse_map_product_type(order.get("product", "")),
+        "Status": status,
+        "orderStatus": status_raw,
+        "orderentrytime": order.get("orderTime", ""),
+        "rejectionReason": order.get("rejectionReason", ""),
+        "orderTag": order.get("orderTag", ""),
+        # Complexity & validity
+        "orderComplexity": order.get("orderComplexity", ""),
+        "validity": order.get("validity", ""),
+        # Exchange-level
+        "exchangeOrderId": order.get("exchangeOrderId", ""),
+        "formattedInstrumentName": order.get("formattedInstrumentName", ""),
+        "instrumentId": order.get("instrumentId", ""),
+    }
+
+
+def normalize_trade(trade):
+    """Normalize a V2 trade-book entry to old field names."""
+    trantype_map = {"BUY": "B", "SELL": "S"}
+    trantype = trantype_map.get(trade.get("transactionType", ""), trade.get("transactionType", ""))
+
+    prctype_map = {"MARKET": "MKT", "LIMIT": "L", "SL": "SL", "SLM": "SL-M"}
+    prctype = prctype_map.get(trade.get("orderType", ""), trade.get("orderType", ""))
+
+    return {
+        "Nstordno": trade.get("brokerOrderId", ""),
+        "Exchange": trade.get("exchange", ""),
+        "Tsym": trade.get("formattedInstrumentName", trade.get("tradingSymbol", "")),
+        "Trsym": trade.get("formattedInstrumentName", trade.get("tradingSymbol", "")),
+        "Trantype": trantype,
+        "transactionType": trade.get("transactionType", ""),
+        "Qty": str(trade.get("filledQuantity", 0)),
+        "AvgPrice": str(trade.get("tradedPrice", 0)),
+        "Prc": str(trade.get("tradedPrice", 0)),
+        "Pcode": reverse_map_product_type(trade.get("product", "")),
+        "Prctype": prctype,
+        "Filltime": trade.get("fillTimestamp", trade.get("orderTime", "")),
+        "orderTag": trade.get("orderTag", ""),
+        "exchangeOrderId": trade.get("exchangeOrderId", ""),
+        "exchangeTradeId": trade.get("exchangeTradeId", ""),
+    }
+
+
+def normalize_position(position):
+    """Normalize a V2 position entry to old field names."""
+    return {
+        "Tsym": position.get("tradingSymbol", position.get("formattedInstrumentName", "")),
+        "Exchange": position.get("exchange", ""),
+        "Pcode": reverse_map_product_type(position.get("product", "")),
+        "Netqty": str(position.get("netQuantity", 0)),
+        "Buyavgprc": str(position.get("dayBuyPrice", position.get("netAveragePrice", 0))),
+        "Sellavgprc": str(position.get("daySellPrice", 0)),
+        "Bqty": str(position.get("buyQuantity", position.get("dayBuyQuantity", 0))),
+        "Sqty": str(position.get("sellQuantity", position.get("daySellQuantity", 0))),
+        "LTP": str(position.get("ltp", position.get("previousDayClose", 0))),
+        "MtoM": str(position.get("mtm", position.get("markToMarket", 0))),
+        "unrealisedprofitloss": str(position.get("unrealisedPnl", position.get("unrealisedProfitLoss", 0))),
+        "realisedprofitloss": str(position.get("realizedPnl", position.get("realisedPnl", 0))),
+        "instrumentId": position.get("instrumentId", ""),
+    }
+
+
+def normalize_holding(h):
+    """Normalize a V2 holdings entry to old field names."""
+    nse_symbol = h.get("nseTradingSymbol", "")
+    bse_symbol = h.get("bseTradingSymbol", "")
+    # Use NSE symbol as primary, fallback to BSE
+    primary_symbol = nse_symbol or bse_symbol
+    # Determine exchange based on which symbol is available
+    exchange = "NSE" if nse_symbol else ("BSE" if bse_symbol else "NSE")
+
+    return {
+        "Nsetsym": nse_symbol,
+        "Bsetsym": bse_symbol,
+        "ExchSeg1": exchange,
+        "Exchange": exchange,
+        "Holdqty": str(h.get("dpQuantity", h.get("totalQuantity", 0))),
+        "HUqty": str(h.get("t1Quantity", 0)),
+        "Ltp": str(h.get("ltp", 0)),
+        "Price": str(h.get("averageTradedPrice", h.get("investedPrice", 0))),
+        "Pcode": "CNC",
+        "Symbol": primary_symbol,
+        "instrumentId": h.get("nseInstrumentId", h.get("bseInstrumentId", "")),
+        "isin": h.get("isin", ""),
+        "sellableQty": str(h.get("sellableQty", 0)),
+    }
 
 
 def map_order_data(order_data):
@@ -188,7 +317,14 @@ def map_trade_data(trade_data):
 
             # Check if a symbol was found; if so, update the trading_symbol in the current trade
             if symbol:
-                trade["Tsym"] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                mapped_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                # Keep original symbol if mapping returns None (e.g., NFO symbols)
+                if mapped_symbol is not None:
+                    trade["Tsym"] = mapped_symbol
+                else:
+                    logger.warning(
+                        f"Symbol mapping returned None for {symbol} on {exchange}. Keeping original symbol."
+                    )
             else:
                 logger.info(
                     f"{symbol} and exchange {exchange} not found. Keeping original trading symbol."
@@ -220,6 +356,27 @@ def transform_tradebook_data(tradebook_data):
         else:
             action = trantype
 
+        # Parse Filltime which can be:
+        #   - Full datetime: '04-03-2026 15:21:01' (DD-MM-YYYY HH:MM:SS)
+        #   - Time only: '15:21:01' (HH:MM:SS)
+        filltime_raw = trade.get("Filltime", "")
+        timestamp = ""
+        if filltime_raw:
+            try:
+                from datetime import datetime as _dt
+                # Try full datetime format: DD-MM-YYYY HH:MM:SS
+                parsed = _dt.strptime(filltime_raw, "%d-%m-%Y %H:%M:%S")
+                timestamp = parsed.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                try:
+                    # Try time-only format: HH:MM:SS (prepend today's date)
+                    parsed = _dt.strptime(filltime_raw, "%H:%M:%S")
+                    timestamp = f"{date.today()} {filltime_raw}"
+                except ValueError:
+                    # Fallback: use as-is
+                    logger.warning(f"Could not parse Filltime: {filltime_raw}")
+                    timestamp = filltime_raw
+
         transformed_trade = {
             "symbol": trade.get("Tsym"),
             "exchange": trade.get("Exchange", ""),
@@ -229,7 +386,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": average_price,
             "trade_value": quantity * average_price,
             "orderid": trade.get("Nstordno", ""),
-            "timestamp": f"{date.today()} {trade.get('Filltime', '')}" if trade.get("Filltime") else "",
+            "timestamp": timestamp,
         }
         transformed_data.append(transformed_trade)
     return transformed_data

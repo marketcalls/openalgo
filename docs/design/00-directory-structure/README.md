@@ -37,6 +37,8 @@ openalgo/
 ├── database/                 # Database models & utilities
 ├── broker/                   # Broker integrations (29 brokers)
 ├── utils/                    # Shared utilities
+├── events/                   # Event bus event types (dataclasses)
+├── subscribers/              # Event bus subscribers (log, socketio, telegram)
 ├── websocket_proxy/          # Real-time data server
 ├── sandbox/                  # Sandbox trading engine
 ├── frontend/                 # React 19 SPA
@@ -290,6 +292,7 @@ utils/
 ├── plugin_loader.py          # Broker plugin discovery
 ├── api_analyzer.py           # API analysis tools
 ├── httpx_client.py           # HTTP client pooling
+├── event_bus.py              # In-process event bus (pub/sub)
 │
 ├── email_utils.py            # Email sending
 ├── email_debug.py            # Email debugging
@@ -304,6 +307,32 @@ utils/
 ├── env_check.py              # Environment validation
 ├── version.py                # Version information
 └── socketio_error_handler.py # SocketIO error handling
+```
+
+### `/events/` - Event Bus Event Types
+
+Typed dataclasses for the in-process event bus. All order side-effects flow through these events.
+
+```
+events/
+├── __init__.py               # Re-exports all event types
+├── base.py                   # OrderEvent base class (mode, api_type, request/response data)
+├── order_events.py           # OrderPlaced, OrderFailed, SmartOrderNoAction, Modified, Cancelled
+├── batch_events.py           # BasketCompleted, SplitCompleted, OptionsCompleted, MultiOrderCompleted
+├── position_events.py        # PositionClosed, AllOrdersCancelled
+└── analyzer_events.py        # AnalyzerError (validation/unexpected errors)
+```
+
+### `/subscribers/` - Event Bus Subscribers
+
+Each subscriber handles one concern for all order event types.
+
+```
+subscribers/
+├── __init__.py               # register_all() — wires all subscribers at app startup
+├── log_subscriber.py         # DB logging (order_logs for live, analyzer_logs for analyze)
+├── socketio_subscriber.py    # Real-time dashboard events (8 event names, mode-aware)
+└── telegram_subscriber.py    # Telegram alerts for all order types
 ```
 
 ## Broker Integration
@@ -539,7 +568,8 @@ docs/
 │   ├── 00-directory-structure/
 │   ├── 01-frontend/
 │   ├── 02-backend/
-│   └── ... (52 modules)
+│   ├── 53-event-bus/         # Event bus architecture
+│   └── ... (53 modules)
 │
 ├── api/                      # API documentation
 ├── audit/                    # Broker API audit reports
@@ -594,6 +624,9 @@ test/
 | `sandbox/execution_engine.py` | Sandbox order execution |
 | `database/auth_db.py` | Core authentication models |
 | `services/place_order_service.py` | Order placement logic |
+| `utils/event_bus.py` | Event bus (pub/sub for order side-effects) |
+| `events/__init__.py` | All event type definitions |
+| `subscribers/__init__.py` | Event subscriber registration |
 
 ## Navigation Tips
 
@@ -604,3 +637,4 @@ test/
 5. **Frontend components**: Explore `/frontend/src/components/` and `/frontend/src/pages/`
 6. **Real-time features**: See `/websocket_proxy/` for market data streaming
 7. **Sandbox mode**: Check `/sandbox/` for virtual trading logic
+8. **Order side-effects**: Check `/events/` for event types, `/subscribers/` for handlers

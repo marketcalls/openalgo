@@ -136,18 +136,27 @@ def import_broker_module(broker_name):
     return importlib.import_module(module_path)
 ```
 
-### Pattern 4: Async Operations
+### Pattern 4: Event Bus for Side-Effects
+
+All order side-effects (logging, SocketIO, Telegram) are dispatched through the Event Bus. Services publish typed events; subscribers handle them asynchronously in a shared thread pool.
 
 ```python
-# Non-blocking socket events
-socketio.start_background_task(socketio.emit, 'event', data)
+from events import OrderPlacedEvent
+from utils.event_bus import bus
 
-# Non-blocking logging
-executor.submit(async_log_order, type, data, response)
-
-# Non-blocking alerts
-socketio.start_background_task(send_telegram_alert, data)
+# One publish replaces 3 separate async calls
+bus.publish(OrderPlacedEvent(
+    mode="live",           # or "analyze" — subscribers branch on this
+    api_type="placeorder",
+    symbol=order_data["symbol"],
+    orderid=order_id,
+    request_data=cleaned_request,
+    response_data=response,
+    api_key=api_key,
+))
 ```
+
+See [53-event-bus](../53-event-bus/README.md) for full architecture details.
 
 ## Market Data Service (Singleton)
 

@@ -24,6 +24,7 @@ import {
 import { isActiveRoute, mobileSheetItems, navItems, profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
 
 export function Navbar() {
@@ -33,6 +34,14 @@ export function Navbar() {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  const { capabilities } = useBrokerStore()
+
+  // Filter menu items based on broker capabilities
+  const filteredProfileMenuItems = profileMenuItems.filter((item) => {
+    if (item.href === '/leverage') return capabilities?.leverage_config === true
+    if (item.href === '/holdings') return capabilities?.broker_type !== 'crypto'
+    return true
+  })
 
   const handleLogout = async () => {
     try {
@@ -122,7 +131,7 @@ export function Navbar() {
                 <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Quick Access
                 </div>
-                {profileMenuItems.map((item) => (
+                {filteredProfileMenuItems.map((item) => (
                   <Link
                     key={item.href}
                     to={item.href}
@@ -247,7 +256,7 @@ export function Navbar() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              {profileMenuItems.map((item) => (
+              {filteredProfileMenuItems.map((item) => (
                 <DropdownMenuItem
                   key={item.href}
                   onSelect={() => navigate(item.href)}

@@ -1,0 +1,28 @@
+meta {
+  name: PlaceSmartOrder
+  type: http
+  seq: 2
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/placesmartorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Strategy",
+      "exchange": "CRYPTO",
+      "symbol": "BTCUSDFUT",
+      "action": "BUY",
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "quantity": "1",
+      "position_size": "1",
+      "price": "0",
+      "trigger_price": "0",
+      "disclosed_quantity": "0"
+  }
+}

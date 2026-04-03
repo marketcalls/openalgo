@@ -65,7 +65,7 @@ def calculate_margin_api(positions, auth):
     try:
         # Make the request to Flattrade Span Calculator API
         response = client.post(
-            "https://piconnect.flattrade.in/PiConnectTP/SpanCalc", headers=headers, content=payload
+            "https://piconnect.flattrade.in/PiConnectAPI/SpanCalc", headers=headers, content=payload
         )
 
         # Add status attribute for compatibility with the existing codebase

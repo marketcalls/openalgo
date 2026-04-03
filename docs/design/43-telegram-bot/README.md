@@ -265,38 +265,35 @@ def handle_telegram_command(update):
         return handler(chat_id, args)
 ```
 
-### Notification Service
+### Order Alert Integration (via Event Bus)
+
+Order-related Telegram alerts are dispatched through the Event Bus. The `telegram_subscriber` receives all order events and calls `telegram_alert_service.send_order_alert()` for each one.
 
 ```python
-from concurrent.futures import ThreadPoolExecutor
-
-executor = ThreadPoolExecutor(max_workers=4)
-
-def send_notification_async(user_id, message_type, message):
-    """Send notification in background thread"""
-    executor.submit(_send_notification, user_id, message_type, message)
-
-def _send_notification(user_id, message_type, message):
-    """Send Telegram notification"""
-    # Get user's telegram config
-    config = get_bot_config(user_id)
-    telegram_user = get_telegram_user(user_id)
-
-    if not config or not telegram_user or not config.is_enabled:
-        return
-
-    # Check user preferences
-    prefs = get_user_preferences(user_id)
-    if message_type == 'order' and not prefs.order_alerts:
-        return
-
-    # Send via Telegram API
-    bot_token = decrypt_bot_token(config.bot_token)
-    send_telegram_message(bot_token, telegram_user.telegram_id, message)
-
-    # Log notification
-    log_notification(user_id, message_type, 'sent')
+# subscribers/telegram_subscriber.py
+def on_order_placed(event):
+    socketio.start_background_task(
+        telegram_alert_service.send_order_alert,
+        event.api_type, event.request_data, event.response_data, event.api_key,
+    )
 ```
+
+The alert service formats messages per order type and handles both live and analyze mode:
+
+| Order Type | Template |
+|------------|----------|
+| `placeorder` | Order Placed (symbol, action, qty, price) |
+| `placesmartorder` | Smart Order Placed (symbol, position_size) |
+| `basketorder` | Basket Order (success/fail counts, symbols) |
+| `splitorder` | Split Order (total qty, split size, success/fail) |
+| `optionsorder` | Options Order (underlying, legs, results) |
+| `optionsmultiorder` | Options Multi-Order (underlying, all legs with symbols) |
+| `modifyorder` | Order Modified (orderid, new qty/price) |
+| `cancelorder` | Order Cancelled (orderid) |
+| `cancelallorder` | All Orders Cancelled (counts) |
+| `closeposition` | Position Closed (symbol or count of positions) |
+
+See [53-event-bus](../53-event-bus/README.md) for the full event bus architecture.
 
 ## API Endpoints
 

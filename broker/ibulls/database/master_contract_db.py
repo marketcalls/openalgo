@@ -178,6 +178,55 @@ def reformat_symbol_detail(s):
     return f"{parts[0]}{parts[3]}{parts[2].upper()}{parts[1]}{parts[4]}"
 
 
+# Shared BSE index normalization map used by both BSECM SPOT ingestion
+# and indexlist ingestion paths.
+BSE_INDEX_SYMBOL_MAP = {
+    "SNSX50": "SENSEX50",
+    "SNXT50": "BSESENSEXNEXT50",
+    "MID150": "BSE150MIDCAPINDEX",
+    "LMI250": "BSE250LARGEMIDCAPINDEX",
+    "MSL400": "BSE400MIDSMALLCAPINDEX",
+    "AUTO": "BSEAUTO",
+    "BSE CG": "BSECAPITALGOODS",
+    "CARBON": "BSECARBONEX",
+    "BSE CD": "BSECONSUMERDURABLES",
+    "CPSE": "BSECPSE",
+    "DOL100": "BSEDOLLEX100",
+    "DOL200": "BSEDOLLEX200",
+    "DOL30": "BSEDOLLEX30",
+    "ENERGY": "BSEENERGY",
+    "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+    "FIN": "BSEFINANCIALSERVICES",
+    "FINSER": "BSEFINANCIALSERVICES",
+    "GREENX": "BSEGREENEX",
+    "BSE HC": "BSEHEALTHCARE",
+    "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+    "INDSTR": "BSEINDUSTRIALS",
+    "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+    "LRGCAP": "BSELARGECAP",
+    "METAL": "BSEMETAL",
+    "MIDCAP": "BSEMIDCAP",
+    "MIDSEL": "BSEMIDCAPSELECTINDEX",
+    "OILGAS": "BSEOIL&GAS",
+    "POWER": "BSEPOWER",
+    "BSEPBI": "BSEPSU",
+    "REALTY": "BSEREALTY",
+    "SMLCAP": "BSESMALLCAP",
+    "SMLSEL": "BSESMALLCAPSELECTINDEX",
+    "SMEIPO": "BSESMEIPO",
+    "TECK": "BSETECK",
+    "TELCOM": "BSETELECOM",
+}
+
+
+def normalize_bse_index_symbols(symbol_series: pd.Series) -> pd.Series:
+    """Normalize raw BSE index symbols to OpenAlgo naming and format."""
+    normalized = symbol_series.astype(str).str.upper().str.strip()
+    normalized = normalized.str.replace(r"\s+", " ", regex=True)
+    normalized = normalized.replace(BSE_INDEX_SYMBOL_MAP)
+    return normalized.str.replace(r"[\s\-]+", "", regex=True)
+
+
 def process_compositedge_nse_csv(path):
     """
     Processes the compositedge CSV file to fit the existing database schema and performs exchange name mapping.
@@ -220,7 +269,6 @@ def process_compositedge_bse_csv(path):
     token_df["symbol"] = df["Name"]
     token_df["brsymbol"] = df["DisplayName"]
     token_df["name"] = df["Name"]
-    token_df["exchange"] = df["ExchangeSegment"].map({"BSECM": "BSE"})
     token_df["exchange"] = df.apply(
         lambda row: "BSE_INDEX" if row["Series"] == "SPOT" else "BSE", axis=1
     )
@@ -231,6 +279,13 @@ def process_compositedge_bse_csv(path):
     token_df["lotsize"] = df["LotSize"]
     token_df["instrumenttype"] = df["Series"]
     token_df["tick_size"] = df["TickSize"]
+
+    # Normalize BSE index short codes from SPOT rows to OpenAlgo index symbols
+    bse_idx_mask = token_df["exchange"] == "BSE_INDEX"
+    token_df.loc[bse_idx_mask, "symbol"] = normalize_bse_index_symbols(
+        token_df.loc[bse_idx_mask, "symbol"]
+    )
+    token_df.loc[bse_idx_mask, "name"] = token_df.loc[bse_idx_mask, "symbol"]
 
     return token_df
 
@@ -363,23 +418,46 @@ def process_compositedge_mcx_csv(path):
 
 
 def process_index_data(index_data):
+    """
+    Processes index data from API to fit the OpenAlgo database schema.
+    Uses regex normalization to handle spacing variations in symbol names.
+
+    Input format from API (index_entry format: "SYMBOL_TOKEN"):
+    - brsymbol: Full format (e.g., "NIFTY 100_26004")
+    - symbol: Raw symbol before mapping (e.g., "NIFTY 100")
+    - exchange: NSE_INDEX or BSE_INDEX
+    - token: Token value
+    """
     logger.info("Processing Index Data")
     df = pd.DataFrame(index_data)
+    if df.empty:
+        return df
 
-    # Map Symbols to Standard Format
-    df["symbol"] = df["symbol"].replace(
-        {
-            "NIFTY 50": "NIFTY",
-            "NIFTY BANK": "BANKNIFTY",
-            "INDIA VIX": "INDIAVIX",
-            "NIFTY FIN SERVICE": "FINNIFTY",
-            "NIFTY MID SELECT": "MIDCPNIFTY",
-            "NIFTY NEXT 50": "NIFTYNXT50",
-            "SENSEX": "SENSEX",
-            "BANKEX": "BANKEX",
-            "SNSX50": "SENSEX50",
-        }
+    # Normalize casing and spacing first
+    df["symbol"] = df["symbol"].astype(str).str.upper().str.strip()
+    df["symbol"] = df["symbol"].str.replace(r"\s+", " ", regex=True)
+
+    # NSE index mapping (raw broker index names -> OpenAlgo symbols)
+    nse_index_map = {
+        "NIFTY 50": "NIFTY",
+        "NIFTY BANK": "BANKNIFTY",
+        "INDIA VIX": "INDIAVIX",
+        "NIFTY FIN SERVICE": "FINNIFTY",
+        "NIFTY MID SELECT": "MIDCPNIFTY",
+        "NIFTY NEXT 50": "NIFTYNXT50",
+        "HANGSENG BEES NAV": "HANGSENGBEESNAV",
+        "HANGSENG BEES-NAV": "HANGSENGBEESNAV",
+    }
+    df["symbol"] = df["symbol"].replace(nse_index_map)
+
+    # BSE short-code mapping (applied only to BSE_INDEX symbols)
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    df.loc[bse_idx_mask, "symbol"] = normalize_bse_index_symbols(
+        df.loc[bse_idx_mask, "symbol"]
     )
+
+    # Final cleanup: enforce no spaces/hyphens in symbols
+    df["symbol"] = df["symbol"].str.replace(r"[\s\-]+", "", regex=True)
 
     df["name"] = df["symbol"]
     df["brexchange"] = df["exchange"]
@@ -388,7 +466,6 @@ def process_index_data(index_data):
     df["lotsize"] = 1  # Default index lot size
     df["instrumenttype"] = "INDEX"
     df["tick_size"] = 0.05
-    # logger.info(f"{df}")
 
     return df
 

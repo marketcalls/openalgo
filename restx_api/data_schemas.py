@@ -2,6 +2,8 @@ import re
 
 from marshmallow import Schema, ValidationError, fields, validate
 
+from utils.constants import VALID_EXCHANGES
+
 
 # Custom validator for date or timestamp string
 def validate_date_or_timestamp(data):
@@ -36,27 +38,27 @@ def validate_option_offset(data):
 
 
 class QuotesSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)  # Single symbol
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
 
 
 class SymbolExchangePair(Schema):
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
 
 
 class MultiQuotesSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbols = fields.List(
         fields.Nested(SymbolExchangePair), required=True, validate=validate.Length(min=1)
     )
 
 
 class HistorySchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
     interval = fields.Str(
         required=True,
         validate=validate.OneOf(
@@ -99,23 +101,23 @@ class HistorySchema(Schema):
 
 
 class DepthSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
 
 
 class IntervalsSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
 
 
 class SymbolSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbol = fields.Str(required=True)  # Symbol code (e.g., RELIANCE)
-    exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
 
 
 class TickerSchema(Schema):
-    apikey = fields.Str(required=True)
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)  # Combined exchange:symbol format
     interval = fields.Str(
         required=True,
@@ -134,29 +136,29 @@ class TickerSchema(Schema):
 
 
 class SearchSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     query = fields.Str(required=True)  # Search query/symbol name
-    exchange = fields.Str(required=False)  # Optional exchange filter (e.g., NSE, BSE)
+    exchange = fields.Str(required=False, validate=validate.OneOf(VALID_EXCHANGES))  # Optional exchange filter (e.g., NSE, BSE)
 
 
 class ExpirySchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbol = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY)
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NFO", "BFO", "MCX", "CDS"])
-    )  # Exchange (e.g., NFO, BFO, MCX, CDS)
+        required=True, validate=validate.OneOf(["NFO", "BFO", "MCX", "CDS", "CRYPTO"])
+    )  # Exchange (e.g., NFO, BFO, MCX, CDS, CRYPTO)
     instrumenttype = fields.Str(
         required=True, validate=validate.OneOf(["futures", "options"])
     )  # futures or options
 
 
 class OptionSymbolSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     strategy = fields.Str(
         required=False, allow_none=True
     )  # DEPRECATED: Strategy name (optional, will be removed in future versions)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, RELIANCE, NIFTY28OCT25FUT)
-    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, NFO)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, NFO)
     expiry_date = fields.Str(
         required=False
     )  # Expiry date in DDMMMYY format (e.g., 28OCT25). Optional if underlying includes expiry
@@ -172,11 +174,11 @@ class OptionSymbolSchema(Schema):
 
 
 class OptionGreeksSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbol = fields.Str(required=True)  # Option symbol (e.g., NIFTY28NOV2424000CE)
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX"])
-    )  # Exchange (NFO, BFO, CDS, MCX)
+        required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX", "CRYPTO"])
+    )  # Exchange (NFO, BFO, CDS, MCX, CRYPTO)
     interest_rate = fields.Float(
         required=False, validate=validate.Range(min=0, max=100)
     )  # Risk-free interest rate (annualized %). Optional, defaults per exchange
@@ -195,12 +197,10 @@ class OptionGreeksSchema(Schema):
 
 
 class InstrumentsSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     exchange = fields.Str(
         required=False,
-        validate=validate.OneOf(
-            ["NSE", "BSE", "NFO", "BFO", "BCD", "CDS", "MCX", "NSE_INDEX", "BSE_INDEX"]
-        ),
+        validate=validate.OneOf(VALID_EXCHANGES),
     )  # Optional exchange filter
     format = fields.Str(
         required=False, validate=validate.OneOf(["json", "csv"])
@@ -208,10 +208,10 @@ class InstrumentsSchema(Schema):
 
 
 class OptionChainSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     underlying = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(
-        required=True
+        required=True, validate=validate.OneOf(VALID_EXCHANGES)
     )  # Exchange (NSE_INDEX, NSE, NFO, BSE_INDEX, BSE, BFO, MCX, CDS)
     expiry_date = fields.Str(
         required=True
@@ -222,14 +222,14 @@ class OptionChainSchema(Schema):
 
 
 class MarketHolidaysSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     year = fields.Int(
         required=False, validate=validate.Range(min=2020, max=2050)
     )  # Year to get holidays for (defaults to current year)
 
 
 class MarketTimingsSchema(Schema):
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     date = fields.Str(required=True)  # Date in YYYY-MM-DD format
 
 
@@ -237,7 +237,7 @@ class OptionSymbolRequest(Schema):
     """Schema for a single option symbol request in batch"""
 
     symbol = fields.Str(required=True)  # Option symbol (e.g., NIFTY28NOV2424000CE)
-    exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX"]))
+    exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX", "CRYPTO"]))
     underlying_symbol = fields.Str(required=False)  # Optional: Specify underlying symbol
     underlying_exchange = fields.Str(required=False)  # Optional: Specify underlying exchange
 
@@ -245,7 +245,7 @@ class OptionSymbolRequest(Schema):
 class MultiOptionGreeksSchema(Schema):
     """Schema for batch option greeks requests"""
 
-    apikey = fields.Str(required=True)  # API Key for authentication
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbols = fields.List(
         fields.Nested(OptionSymbolRequest),
         required=True,

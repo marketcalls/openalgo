@@ -8,6 +8,7 @@ import {
   type IChartApi,
   type ISeriesApi,
 } from 'lightweight-charts'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useThemeStore } from '@/stores/themeStore'
 import { oiProfileApi } from '@/api/oi-profile'
 import {
@@ -35,17 +36,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { showToast } from '@/utils/toast'
 
-const FNO_EXCHANGES = [
-  { value: 'NFO', label: 'NFO' },
-  { value: 'BFO', label: 'BFO' },
-  { value: 'CRYPTO', label: 'CRYPTO' },
-]
-
-const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
-  NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
-  BFO: ['SENSEX', 'BANKEX'],
-  CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
-}
+// FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
 const CHART_HEIGHT = 500
 
@@ -72,15 +63,16 @@ function formatIST(unixSeconds: number): { date: string; time: string } {
 
 export default function StraddleChart() {
   const { mode, appMode } = useThemeStore()
+  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
   const isDarkMode = mode === 'dark'
   const isAnalyzer = appMode === 'analyzer'
 
   // Control state
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedExchange, setSelectedExchange] = useState('NFO')
-  const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
+  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState('NIFTY')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [intervals, setIntervals] = useState<string[]>([])
@@ -103,6 +95,13 @@ export default function StraddleChart() {
   const watermarkRef = useRef<HTMLDivElement | null>(null)
   const chartDataRef = useRef<StraddleChartData | null>(null)
   const seriesDataMapRef = useRef<Map<number, StraddleDataPoint>>(new Map())
+
+  // Re-sync exchange when broker capabilities load asynchronously
+  useEffect(() => {
+    setSelectedExchange((prev) =>
+      prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
+    )
+  }, [defaultFnoExchange, fnoExchanges])
 
   // Send NFO/BFO directly — backend resolves correct exchange for index vs stock
 
@@ -496,7 +495,7 @@ export default function StraddleChart() {
 
   // Fetch underlyings when exchange changes
   useEffect(() => {
-    const defaults = DEFAULT_UNDERLYINGS[selectedExchange] || []
+    const defaults = defaultUnderlyings[selectedExchange] || []
     setUnderlyings(defaults)
     setSelectedUnderlying(defaults[0] || '')
     setExpiries([])
@@ -611,7 +610,7 @@ export default function StraddleChart() {
                 <SelectValue placeholder="Exchange" />
               </SelectTrigger>
               <SelectContent>
-                {FNO_EXCHANGES.map((ex) => (
+                {fnoExchanges.map((ex) => (
                   <SelectItem key={ex.value} value={ex.value}>
                     {ex.label}
                   </SelectItem>
