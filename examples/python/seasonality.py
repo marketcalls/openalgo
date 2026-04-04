@@ -161,18 +161,18 @@ def build_heatmap_figure(matrix):
         header=dict(
             values=header,
             fill_color=HEADER_BG,
-            font=dict(color=TEXT_COLOR, size=13, family="Trebuchet MS, sans-serif"),
+            font=dict(color=TEXT_COLOR, size=15, family="Trebuchet MS, sans-serif"),
             align="center",
             line=dict(color=LINE_COLOR, width=1),
-            height=35,
+            height=40,
         ),
         cells=dict(
             values=cell_values,
             fill_color=cell_colors,
-            font=dict(color=TEXT_COLOR, size=12, family="Trebuchet MS, sans-serif"),
+            font=dict(color=TEXT_COLOR, size=14, family="Trebuchet MS, sans-serif"),
             align="center",
             line=dict(color=LINE_COLOR, width=1),
-            height=30,
+            height=36,
         ),
     )])
 
@@ -184,7 +184,7 @@ def build_heatmap_figure(matrix):
         ),
         paper_bgcolor=BG_COLOR,
         margin=dict(l=10, r=10, t=50, b=10),
-        height=max(400, 35 + n_rows * 30 + 60),
+        height=max(400, 40 + n_rows * 36 + 60),
     )
 
     return fig
