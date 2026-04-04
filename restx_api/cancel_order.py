@@ -1,5 +1,4 @@
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -59,7 +58,7 @@ class CancelOrder(Resource):
 
         except KeyError as e:
             missing_field = str(e)
-            logger.error(f"KeyError: Missing field {missing_field}")
+            logger.exception(f"KeyError: Missing field {missing_field}")
             error_message = f"A required field is missing: {missing_field}"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
@@ -74,8 +73,7 @@ class CancelOrder(Resource):
             return make_response(jsonify(error_response), 400)
 
         except Exception:
-            logger.error("An unexpected error occurred in CancelOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in CancelOrder endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)
