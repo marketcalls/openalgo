@@ -379,10 +379,11 @@ export default function ResetPassword() {
                   <Input
                     id="totp"
                     type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={totpCode}
                     onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="000000"
-                    pattern="[0-9]{6}"
                     maxLength={6}
                     className="text-center text-2xl tracking-widest"
                     required
