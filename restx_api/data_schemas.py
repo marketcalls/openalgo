@@ -6,7 +6,7 @@ from utils.constants import VALID_EXCHANGES
 
 
 # Custom validator for date or timestamp string
-def validate_date_or_timestamp(data):
+def validate_date_or_timestamp(data: str) -> None:
     """
     Validates that the input string is either in 'YYYY-MM-DD' format or a numeric timestamp.
     """
@@ -19,7 +19,7 @@ def validate_date_or_timestamp(data):
 
 
 # Custom validator for option offset
-def validate_option_offset(data):
+def validate_option_offset(data: str) -> bool:
     """
     Validates option offset: ATM, ITM1-ITM50, OTM1-OTM50
     """
