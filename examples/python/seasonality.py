@@ -65,6 +65,12 @@ def fetch_monthly_data(client, symbol, exchange, start_year):
     # Resample to monthly — use last close of each month
     monthly = df["close"].resample("ME").last()
     monthly = monthly.dropna()
+
+    # Drop the current incomplete month — only keep fully completed months
+    today = pd.Timestamp.now(tz=monthly.index.tz)
+    last_complete_month_end = (today.replace(day=1) - pd.Timedelta(days=1)).normalize()
+    monthly = monthly[monthly.index <= last_complete_month_end]
+
     return monthly
 
 
@@ -80,7 +86,7 @@ def build_seasonality_matrix(monthly_close, start_year):
 
     for dt, ret in returns.items():
         if dt.year >= start_year:
-            matrix.loc[dt.year, dt.month] = round(ret, 2)
+            matrix.loc[dt.year, dt.month] = ret
 
     return matrix
 
@@ -92,7 +98,7 @@ def build_heatmap_figure(matrix):
 
     # Calculate metrics
     avgs = [matrix[m].mean() for m in range(1, 13)]
-    stdevs = [matrix[m].std(ddof=0) for m in range(1, 13)]
+    stdevs = [matrix[m].std(ddof=1) for m in range(1, 13)]
     pos_pcts = []
     for m in range(1, 13):
         col = matrix[m].dropna()
@@ -196,7 +202,7 @@ def main():
     print()
 
     # Print the matrix to console
-    display_df = matrix.copy()
+    display_df = matrix.round(2).copy()
     display_df.columns = MONTH_NAMES
     print(display_df.to_string())
     print()
