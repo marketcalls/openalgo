@@ -26,6 +26,11 @@ class Symbol(Resource):
     def post(self):
         """Get symbol information for a given symbol and exchange"""
         try:
+            if request.json is None:
+                return make_response(
+                    jsonify({"status": "error", "message": "Request body must be JSON"}), 400
+                )
+
             # Validate request data
             symbol_data = symbol_schema.load(request.json)
 

@@ -26,6 +26,11 @@ class MarketHolidays(Resource):
     def post(self):
         """Get market holidays for a specific year"""
         try:
+            if request.json is None:
+                return make_response(
+                    jsonify({"status": "error", "message": "Request body must be JSON"}), 400
+                )
+
             # Validate request data
             holidays_data = holidays_schema.load(request.json)
 

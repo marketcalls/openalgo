@@ -1,5 +1,4 @@
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
@@ -27,6 +26,11 @@ class Intervals(Resource):
     def post(self):
         """Get supported intervals for the broker"""
         try:
+            if request.json is None:
+                return make_response(
+                    jsonify({"status": "error", "message": "Request body must be JSON"}), 400
+                )
+
             # Validate request data
             intervals_data = intervals_schema.load(request.json)
 
