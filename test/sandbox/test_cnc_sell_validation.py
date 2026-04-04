@@ -334,7 +334,7 @@ if __name__ == "__main__":
             print(f"❌ TEST ERROR: {e}")
             import traceback
 
-            traceback.print_exc()
+            logger.exception("An error occurred")
             failed += 1
 
     print("\n" + "=" * 60)

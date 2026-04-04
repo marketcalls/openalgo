@@ -234,5 +234,5 @@ if __name__ == "__main__":
         log(f"Unexpected error: {str(e)}", "ERROR")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
         exit(1)

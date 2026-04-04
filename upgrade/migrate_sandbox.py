@@ -394,7 +394,7 @@ def upgrade():
         logger.error(f"❌ Migration failed: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return False
 
 

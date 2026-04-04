@@ -137,7 +137,7 @@ def get_holdings_with_auth(
         )
     except Exception as e:
         logger.error(f"Error processing holdings data: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return False, {"status": "error", "message": str(e)}, 500
 
 

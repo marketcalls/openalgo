@@ -114,7 +114,7 @@ def get_depth_with_auth(
         return True, {"status": "success", "data": depth}, 200
     except Exception as e:
         logger.error(f"Error in broker_module.get_depth: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return False, {"status": "error", "message": str(e)}, 500
 
 

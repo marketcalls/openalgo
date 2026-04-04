@@ -406,7 +406,7 @@ def main():
         print(f"❌ Error: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
 
     finally:
         print("\n🧹 Cleaning up...")

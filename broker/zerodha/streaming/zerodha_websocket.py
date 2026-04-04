@@ -193,7 +193,7 @@ class ZerodhaWebSocket:
                     self.logger.error(f"❌ Error in WebSocket thread: {e}")
                     import traceback
 
-                    traceback.print_exc()
+                    logger.exception("An error occurred")
                 finally:
                     # Clean up the event loop
                     try:

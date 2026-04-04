@@ -151,7 +151,7 @@ def get_quotes_with_auth(
         else:
             # Log other errors normally
             logger.error(f"Error in broker_module.get_quotes: {e}")
-            traceback.print_exc()
+            logger.exception("An error occurred")
 
         return False, {"status": "error", "message": str(e)}, 500
 
@@ -322,7 +322,7 @@ def get_multiquotes_with_auth(
         else:
             # Log other errors normally
             logger.error(f"Error in broker_module.get_multiquotes: {e}")
-            traceback.print_exc()
+            logger.exception("An error occurred")
 
         return False, {"status": "error", "message": str(e)}, 500
 

@@ -112,7 +112,7 @@ def test_order_execution():
         print(f"  {type(e).__name__}: {str(e)}")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
 
 
 if __name__ == "__main__":

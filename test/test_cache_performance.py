@@ -285,7 +285,7 @@ def test_cache_performance():
         print(f"\n[ERROR] Unexpected error: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return False
 
 

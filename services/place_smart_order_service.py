@@ -255,7 +255,7 @@ def place_smart_order_with_auth(
 
     except Exception as e:
         logger.error(f"Error in broker_module.place_smartorder_api: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {
             "status": "error",
             "message": "Failed to place smart order due to internal error",
@@ -272,7 +272,7 @@ def place_smart_order_with_auth(
         time.sleep(float(smart_order_delay))
     except Exception:
         logger.error(f"Invalid SMART_ORDER_DELAY value: {smart_order_delay}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
 
     if res and res.status == 200:
         return True, order_response_data, 200

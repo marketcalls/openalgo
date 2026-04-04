@@ -207,7 +207,7 @@ def main():
         print(f"\n[ERROR] Migration failed: {e}")
         import traceback
 
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return 1
 
 

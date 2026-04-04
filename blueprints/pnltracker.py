@@ -1103,5 +1103,5 @@ def get_pnl_data():
 
     except Exception as e:
         logger.error(f"Error calculating intraday PnL: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         return jsonify({"status": "error", "message": str(e)}), 500

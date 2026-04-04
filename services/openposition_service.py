@@ -176,7 +176,7 @@ def get_open_position_with_auth(
 
     except Exception as e:
         logger.error(f"Error processing open position: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {"status": "error", "message": str(e)}
         log_executor.submit(async_log_order, "openposition", original_data, error_response)
         return False, error_response, 500

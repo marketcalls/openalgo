@@ -79,7 +79,7 @@ def get_symbol_info_with_auth(
 
     except Exception as e:
         logger.error(f"Error retrieving symbol information: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {"status": "error", "message": str(e)}
         return False, error_response, 500
 

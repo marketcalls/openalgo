@@ -199,7 +199,7 @@ def calculate_margin_with_auth(
         return False, error_response, 501
     except Exception as e:
         logger.error(f"Error in broker_module.calculate_margin_api: {e}")
-        traceback.print_exc()
+        logger.exception("An error occurred")
         error_response = {
             "status": "error",
             "message": "Failed to calculate margin due to internal error",
