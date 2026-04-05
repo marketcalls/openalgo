@@ -44,17 +44,36 @@ class SymToken(Base):
 
 
 def init_db():
+    """Initialize the master contract database.
+    
+    Creates all tables defined in the SQLAlchemy Base metadata using
+    the configured database engine.
+    """
     logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 
 def delete_symtoken_table():
+    """Delete all records from the Symtoken table.
+    
+    Clears the existing master contracts to prepare for a fresh bulk insert.
+    """
     logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 
 def copy_from_dataframe(df):
+    """Perform a bulk insert of contract data from a pandas DataFrame.
+    
+    Filters out any token-exchange combinations that already exist in the
+    database to avoid primary key constraints or duplicates, and then inserts
+    the remaining records in bulk using SQLAlchemy.
+    
+    Args:
+        df (pd.DataFrame): DataFrame containing the formatted contract data
+            with columns matching the SymToken model parameters.
+    """
     logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
@@ -97,8 +116,18 @@ shoonya_urls = {
 
 
 def download_and_unzip_shoonya_data(output_path):
-    """
-    Downloads and unzips the shoonya text files to the tmp folder.
+    """Download and unzip the Shoonya master contract text files from their FTP.
+    
+    Iterates through the exchange URLs defined in `shoonya_urls`, downloads
+    each ZIP file in memory, and extracts its contents to the specified
+    output path.
+    
+    Args:
+        output_path (str): Directory path where the extracted text files
+            should be saved (e.g., 'tmp').
+            
+    Returns:
+        list[str]: A list of downloaded filenames (e.g., ['NSE.txt', 'NFO.txt']).
     """
     logger.info("Downloading and Unzipping shoonya Data")
 
@@ -135,9 +164,17 @@ def download_and_unzip_shoonya_data(output_path):
 
 
 def process_shoonya_nse_data(output_path):
-    """
-    Processes the shoonya NSE data (NSE_symbols.txt) to generate OpenAlgo symbols.
-    Separates EQ, BE symbols, and Index symbols.
+    """Process the Shoonya NSE data file to generate OpenAlgo symbols.
+    
+    Reads the downloaded NSE_symbols.txt, formats the equity (EQ) and
+    BE symbols, normalizes the index symbols, and structures the DataFrame
+    to match the database schema.
+    
+    Args:
+        output_path (str): The directory containing the extracted NSE data file.
+        
+    Returns:
+        pd.DataFrame: A formatted pandas DataFrame ready for bulk DB insertion.
     """
     logger.info("Processing shoonya NSE Data")
     file_path = f"{output_path}/NSE_symbols.txt"
@@ -242,9 +279,16 @@ def process_shoonya_nse_data(output_path):
 
 
 def process_shoonya_nfo_data(output_path):
-    """
-    Processes the shoonya NFO data (NFO_symbols.txt) to generate OpenAlgo symbols.
-    Handles both futures and options formatting.
+    """Process the Shoonya NFO data file to generate OpenAlgo F&O symbols.
+    
+    Handles both futures and options formatting. Parses expiry dates into
+    the 'DD-MMM-YY' format and structures the strike prices correctly.
+    
+    Args:
+        output_path (str): The directory containing the extracted NFO data file.
+        
+    Returns:
+        pd.DataFrame: A formatted pandas DataFrame ready for bulk DB insertion.
     """
     logger.info("Processing shoonya NFO Data")
     file_path = f"{output_path}/NFO_symbols.txt"
@@ -360,9 +404,16 @@ def process_shoonya_nfo_data(output_path):
 
 
 def process_shoonya_cds_data(output_path):
-    """
-    Processes the shoonya CDS data (CDS_symbols.txt) to generate OpenAlgo symbols.
-    Handles both futures and options formatting.
+    """Process the Shoonya CDS data file to generate OpenAlgo currency symbols.
+    
+    Reads CDS_symbols.txt, handles futures and options formatting for the
+    currency segment, and filters out dummy tokens or incorrect entries.
+    
+    Args:
+        output_path (str): The directory containing the extracted CDS data file.
+        
+    Returns:
+        pd.DataFrame: A formatted pandas DataFrame ready for bulk DB insertion.
     """
     logger.info("Processing shoonya CDS Data")
     file_path = f"{output_path}/CDS_symbols.txt"
@@ -493,9 +544,16 @@ def process_shoonya_cds_data(output_path):
 
 
 def process_shoonya_mcx_data(output_path):
-    """
-    Processes the shoonya MCX data (MCX_symbols.txt) to generate OpenAlgo symbols.
-    Handles both futures and options formatting.
+    """Process the Shoonya MCX data file to generate OpenAlgo commodity symbols.
+    
+    Handles formatting of futures and options for commodities. Normalizes
+    strike prices and expiry dates.
+    
+    Args:
+        output_path (str): The directory containing the extracted MCX data file.
+        
+    Returns:
+        pd.DataFrame: A formatted pandas DataFrame ready for bulk DB insertion.
     """
     logger.info("Processing shoonya MCX Data")
     file_path = f"{output_path}/MCX_symbols.txt"
@@ -620,9 +678,16 @@ def process_shoonya_mcx_data(output_path):
 
 
 def process_shoonya_bse_data(output_path):
-    """
-    Processes the shoonya BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
-    Maps all instrument types to 'EQ' and manually adds missing BSE index symbols.
+    """Process the Shoonya BSE data file to generate OpenAlgo equity symbols.
+    
+    Maps all raw BSE instrument types to 'EQ', handles numeric conversions,
+    and manually appends major BSE indices (like SENSEX, BANKEX).
+    
+    Args:
+        output_path (str): The directory containing the extracted BSE data file.
+        
+    Returns:
+        pd.DataFrame: A formatted pandas DataFrame ready for bulk DB insertion.
     """
     logger.info("Processing shoonya BSE Data")
     file_path = f"{output_path}/BSE_symbols.txt"
@@ -739,9 +804,16 @@ def process_shoonya_bse_data(output_path):
 
 
 def process_shoonya_bfo_data(output_path):
-    """
-    Processes the shoonya BFO data (BFO_symbols.txt) to generate OpenAlgo symbols and correctly extract the name column.
-    Handles both futures and options formatting, ensuring strike prices are handled as either float or integer.
+    """Process the Shoonya BFO data file to generate OpenAlgo BFO symbols.
+    
+    Parses both BSE futures and options. Correctly extracts the base name,
+    calculates the expiry formats, and handles decimal/integer strike prices.
+    
+    Args:
+        output_path (str): The directory containing the extracted BFO data file.
+        
+    Returns:
+        pd.DataFrame: A formatted pandas DataFrame ready for bulk DB insertion.
     """
     logger.info("Processing shoonya BFO Data")
     file_path = f"{output_path}/BFO_symbols.txt"
@@ -880,8 +952,10 @@ def process_shoonya_bfo_data(output_path):
 
 
 def delete_shoonya_temp_data(output_path):
-    """
-    Deletes the shoonya symbol files from the tmp folder after processing.
+    """Delete the downloaded Shoonya text files from the temporary directory.
+    
+    Args:
+        output_path (str): The directory where the extracted texts are located.
     """
     for filename in os.listdir(output_path):
         file_path = os.path.join(output_path, filename)
@@ -891,8 +965,15 @@ def delete_shoonya_temp_data(output_path):
 
 
 def master_contract_download():
-    """
-    Downloads, processes, and deletes shoonya data.
+    """Download, process, and update the database with the latest Shoonya master contracts.
+    
+    Coordinates the entire flow: downloads ZIP files, extracts them, clears
+    the existing `SymToken` table, processes NSE, BSE, NFO, CDS, MCX, and BFO
+    text files separately, and performs bulk inserts. Finally cleans up the
+    temporary files and emits a websocket status event.
+
+    Returns:
+        socketio.emit response regarding the success or failure of the download.
     """
     logger.info("Downloading shoonya Master Contract")
 

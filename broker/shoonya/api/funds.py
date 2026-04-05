@@ -12,7 +12,21 @@ logger = get_logger(__name__)
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Shoonya's API using the provided auth token."""
+    """Fetch margin data from Shoonya's API using the provided auth token.
+
+    Calls the NorenWClientTP/Limits endpoint and aggregates various
+    margin fields (cash, payin, collateral, realized/unrealized PnL)
+    into a standardized OpenAlgo format. Assuming the 'jKey' auth token
+    is valid.
+
+    Args:
+        auth_token (str): Shoonya session authentication token (jKey).
+
+    Returns:
+        dict: Standardized margin data including 'availablecash',
+            'collateral', 'm2munrealized', 'm2mrealized', and
+            'utiliseddebits'. Returns an empty dict on error.
+    """
 
     # Fetch UserID and AccountID from environment variables
     userid = os.getenv("BROKER_API_KEY")

@@ -5,8 +5,15 @@ from database.token_db import get_br_symbol
 
 
 def transform_data(data, token):
-    """
-    Transforms the new API request structure to the current expected structure.
+    """Transform the OpenAlgo API request to Shoonya's expected order structure.
+
+    Args:
+        data (dict): OpenAlgo order data including 'apikey', 'symbol',
+            'exchange', 'quantity', 'price', 'product', 'action', etc.
+        token (str): Security token for the symbol (unused in Shoonya's API).
+
+    Returns:
+        dict: Transformed payload for placing an order in Shoonya API.
     """
     userid = data["apikey"]
     userid = userid[:-2]
@@ -33,6 +40,16 @@ def transform_data(data, token):
 
 
 def transform_modify_order_data(data, token):
+    """Transform the OpenAlgo modify order request to Shoonya's expected structure.
+
+    Args:
+        data (dict): OpenAlgo modify order data including 'apikey',
+            'orderid', 'symbol', 'exchange', 'quantity', 'price', etc.
+        token (str): Security token for the symbol.
+
+    Returns:
+        dict: Transformed payload for modifying an order in Shoonya API.
+    """
     return {
         "exch": data["exchange"],
         "norenordno": data["orderid"],
@@ -49,16 +66,26 @@ def transform_modify_order_data(data, token):
 
 
 def map_order_type(pricetype):
-    """
-    Maps the new pricetype to the existing order type.
+    """Map an OpenAlgo price type to Shoonya's order type code.
+
+    Args:
+        pricetype (str): OpenAlgo price type ('MARKET', 'LIMIT', 'SL', 'SL-M').
+
+    Returns:
+        str: Shoonya order type ('MKT', 'LMT', 'SL-LMT', 'SL-MKT'). Defaults to 'MKT'.
     """
     order_type_mapping = {"MARKET": "MKT", "LIMIT": "LMT", "SL": "SL-LMT", "SL-M": "SL-MKT"}
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
 
 
 def map_product_type(product):
-    """
-    Maps the new product type to the existing product type.
+    """Map an OpenAlgo product type to Shoonya's product type.
+
+    Args:
+        product (str): OpenAlgo product type ('CNC', 'NRML', 'MIS').
+
+    Returns:
+        str: Shoonya product type ('C', 'M', 'I'). Defaults to 'I' (Intraday).
     """
     product_type_mapping = {
         "CNC": "C",
@@ -69,8 +96,13 @@ def map_product_type(product):
 
 
 def reverse_map_product_type(product):
-    """
-    Maps the new product type to the existing product type.
+    """Map a Shoonya product type back to OpenAlgo's product type.
+
+    Args:
+        product (str): Shoonya product type ('C', 'M', 'I').
+
+    Returns:
+        str or None: OpenAlgo product type ('CNC', 'NRML', 'MIS').
     """
     reverse_product_type_mapping = {
         "C": "CNC",

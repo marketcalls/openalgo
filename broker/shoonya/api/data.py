@@ -28,8 +28,16 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
-    """
-    Common function to make API calls to Shoonya using httpx with connection pooling
+    """Make common API calls to Shoonya using httpx with connection pooling.
+    
+    Args:
+        endpoint (str): API endpoint path.
+        auth (str): Authentication token.
+        method (str): HTTP method. Defaults to "POST".
+        payload (dict, optional): API payload.
+        
+    Returns:
+        dict: Parsed JSON response from the API.
     """
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
@@ -176,8 +184,17 @@ class BrokerData:
     def _fetch_single_quote_sync(
         self, symbol: str, exchange: str, api_exchange: str, token: str, api_key: str
     ) -> dict:
-        """
-        Fetch quote for a single symbol synchronously (for ThreadPoolExecutor)
+        """Fetch quote for a single symbol synchronously (for ThreadPoolExecutor).
+        
+        Args:
+            symbol (str): Trading symbol.
+            exchange (str): OpenAlgo exchange name.
+            api_exchange (str): Shoonya exchange segment.
+            token (str): Instrument token.
+            api_key (str): Shoonya API key.
+            
+        Returns:
+            dict: Standardized quote data dict or an error message.
         """
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
@@ -225,8 +242,18 @@ class BrokerData:
         token: str,
         api_key: str,
     ) -> dict:
-        """
-        Fetch quote for a single symbol asynchronously
+        """Fetch quote for a single symbol asynchronously.
+        
+        Args:
+            client (httpx.AsyncClient): The Async client for HTTP connections.
+            symbol (str): Trading symbol.
+            exchange (str): OpenAlgo exchange name.
+            api_exchange (str): Shoonya exchange segment.
+            token (str): Instrument token.
+            api_key (str): Shoonya API key.
+            
+        Returns:
+            dict: Standardized quote data dict or an error message.
         """
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
@@ -265,8 +292,14 @@ class BrokerData:
             return {"symbol": symbol, "exchange": exchange, "error": str(e)}
 
     async def _process_quotes_batch_async(self, symbols: list, api_key: str) -> list:
-        """
-        Process a batch of symbols using async httpx
+        """Process a batch of symbols using async httpx.
+        
+        Args:
+            symbols (list[dict]): List of dictionaries with symbol details.
+            api_key (str): Shoonya API key.
+            
+        Returns:
+            list[dict]: List of processed quote responses or error dicts.
         """
         results = []
 
@@ -303,12 +336,13 @@ class BrokerData:
         return final_results
 
     def _process_quotes_batch(self, symbols: list) -> list:
-        """
-        Process a single batch of symbols using concurrent API calls
+        """Process a single batch of symbols using concurrent API calls.
+        
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 40)
+            symbols (list): List of dicts with 'symbol' and 'exchange' keys (max 40).
+            
         Returns:
-            list: List of quote data for the batch
+            list: List of quote data for the batch.
         """
         skipped_symbols = []
         prepared_symbols = []

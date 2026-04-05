@@ -18,6 +18,20 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
+    """Make an authenticated API request to the Shoonya API.
+
+    Handles setting the `UID` and `ACTID` using the configured API key,
+    and formats the payload as `jData={data}&jKey={token}`.
+
+    Args:
+        endpoint: API endpoint path (e.g., '/NorenWClientTP/OrderBook').
+        auth: Shoonya authentication token (jKey).
+        method: HTTP method to use. Defaults to 'GET'.
+        payload: Optional payload string. Defaults to ''.
+
+    Returns:
+        dict: Parsed JSON response from the Shoonya API.
+    """
     AUTH_TOKEN = auth
 
     api_key = os.getenv("BROKER_API_KEY")
@@ -48,22 +62,66 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
 
 def get_order_book(auth):
+    """Retrieve the order book for the authenticated user.
+
+    Args:
+        auth: Shoonya authentication token.
+
+    Returns:
+        dict: Order book data containing all orders for the session.
+    """
     return get_api_response("/NorenWClientTP/OrderBook", auth, method="POST")
 
 
 def get_trade_book(auth):
+    """Retrieve the trade book for the authenticated user.
+
+    Args:
+        auth: Shoonya authentication token.
+
+    Returns:
+        dict: Trade book data containing all executed trades.
+    """
     return get_api_response("/NorenWClientTP/TradeBook", auth, method="POST")
 
 
 def get_positions(auth):
+    """Retrieve current positions for the authenticated user.
+
+    Args:
+        auth: Shoonya authentication token.
+
+    Returns:
+        dict: Position data including net quantities and prices.
+    """
     return get_api_response("/NorenWClientTP/PositionBook", auth, method="POST")
 
 
 def get_holdings(auth):
+    """Retrieve portfolio holdings for the authenticated user.
+
+    Args:
+        auth: Shoonya authentication token.
+
+    Returns:
+        dict: Holdings data with instrument valuations and quantities.
+    """
     return get_api_response("/NorenWClientTP/Holdings", auth, method="POST")
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
+    """Get the net open position quantity for a specific symbol.
+
+    Args:
+        tradingsymbol: Trading symbol in OpenAlgo format.
+        exchange: Exchange in OpenAlgo format (e.g., 'NSE', 'NFO').
+        producttype: Product type in Shoonya format (e.g., 'C', 'I').
+        auth: Shoonya authentication token.
+
+    Returns:
+        str: Net quantity of the open position as a string. Positive for long,
+            negative for short, '0' if no position found.
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
@@ -93,6 +151,19 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 
 def place_order_api(data, auth):
+    """Place a new order through the Shoonya API.
+
+    Args:
+        data: Order parameters including 'symbol', 'exchange', 'action',
+            'quantity', 'pricetype', 'product', and optional 'price'
+            and 'trigger_price'.
+        auth: Shoonya authentication token.
+
+    Returns:
+        tuple: (response, response_data, orderid) where response is the
+            httpx Response object, response_data is the parsed JSON dict,
+            and orderid is the order number string or None on failure.
+    """
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     data["apikey"] = BROKER_API_KEY
@@ -123,6 +194,17 @@ def place_order_api(data, auth):
 
 
 def place_smartorder_api(data, auth):
+    """Place a smart order that automatically manages position sizing.
+
+    Args:
+        data: Order parameters including 'symbol', 'exchange', 'product',
+            'action', 'quantity', and 'position_size'.
+        auth: Shoonya authentication token.
+
+    Returns:
+        tuple: (response, response_data, orderid). Returns None for
+            response if no API call was needed.
+    """
     AUTH_TOKEN = auth
 
     # If no API call is made in this function then res will return None
@@ -259,6 +341,16 @@ def close_all_positions(current_api_key, auth):
 
 
 def cancel_order(orderid, auth):
+    """Cancel an existing order by its order number.
+
+    Args:
+        orderid: The Shoonya order number (norenordno) to cancel.
+        auth: Shoonya authentication token.
+
+    Returns:
+        tuple: (response_dict, status_code). On success, returns the
+            cancelled order ID with status 200.
+    """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
@@ -293,6 +385,18 @@ def cancel_order(orderid, auth):
 
 
 def modify_order(data, auth):
+    """Modify an existing order's parameters in Shoonya.
+
+    Args:
+        data: Modification parameters including 'orderid', 'symbol',
+            'exchange', 'quantity', 'price', 'pricetype', 'product',
+            and 'action'.
+        auth: Shoonya authentication token.
+
+    Returns:
+        tuple: (response_dict, status_code). On success, returns the
+            modified order ID with status 200.
+    """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")

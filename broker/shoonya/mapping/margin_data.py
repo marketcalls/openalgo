@@ -8,15 +8,19 @@ logger = get_logger(__name__)
 
 
 def transform_margin_positions(positions, account_id):
-    """
-    Transform OpenAlgo margin positions to Shoonya margin format.
+    """Transform OpenAlgo margin positions to Shoonya margin API format.
+
+    Parses OpenAlgo symbols to determine the exact instrument name,
+    base symbol name, and derivative details (strike, expiry, option type).
+    All numeric fields in the returned dict are converted to strings as required
+    by the Shoonya API.
 
     Args:
-        positions: List of positions in OpenAlgo format
-        account_id: Shoonya account ID (API key without last 2 chars)
+        positions (list[dict]): List of positions in OpenAlgo format.
+        account_id (str): Shoonya account ID (usually API key without last 2 chars).
 
     Returns:
-        Dict in Shoonya margin format with actid and pos array
+        dict: A dict containing 'actid' and 'pos' array in Shoonya format.
     """
     transformed_positions = []
 
@@ -101,10 +105,18 @@ def transform_margin_positions(positions, account_id):
 
 
 def determine_instrument_name(symbol, exchange):
-    """
-    Determine instrument name based on symbol and exchange.
+    """Determine the Shoonya instrument name based on symbol and exchange.
 
-    Returns: FUTSTK, FUTIDX, OPTSTK, OPTIDX, FUTCUR, etc.
+    Analyzes the structure of the OpenAlgo symbol and its exchange to
+    map it to Shoonya's internal instrument naming convention (e.g.,
+    FUTSTK, FUTIDX, OPTSTK, OPTIDX, FUTCUR).
+
+    Args:
+        symbol (str): OpenAlgo trading symbol.
+        exchange (str): OpenAlgo exchange (e.g., 'NSE', 'NFO', 'CDS').
+
+    Returns:
+        str: Shoonya instrument name (e.g., 'EQ', 'FUTIDX', 'OPTSTK').
     """
     # For equity exchanges
     if exchange in ["NSE", "BSE"]:
@@ -143,10 +155,20 @@ def determine_instrument_name(symbol, exchange):
 
 
 def extract_symbol_name(symbol):
-    """
-    Extract base symbol name from trading symbol.
-    E.g., NIFTY25NOV25FUT -> NIFTY
-    E.g., NIFTY30DEC2524500CE -> NIFTY
+    """Extract the base symbol name from a full trading symbol.
+
+    Removes option type suffixes (CE, PE, C, P), FUT suffixes, -EQ suffixes,
+    date patterns, and strike prices to isolate the base instrument name.
+    
+    Examples:
+        - "NIFTY25NOV25FUT" -> "NIFTY"
+        - "NIFTY30DEC2524500CE" -> "NIFTY"
+
+    Args:
+        symbol (str): Full OpenAlgo trading symbol.
+
+    Returns:
+        str: The extracted base symbol name.
     """
     import re
 
@@ -184,10 +206,18 @@ def extract_symbol_name(symbol):
 
 
 def extract_derivative_details(symbol, exchange):
-    """
-    Extract expiry date, option type, and strike price from symbol.
+    """Extract expiry date, option type, and strike price from a derivative symbol.
 
-    Returns: (exd, optt, strprc)
+    Parses the OpenAlgo symbol to find patterns matching dates and option
+    strike metadata, and converts the date format to 'DD-MMM-YYYY' for Shoonya.
+    
+    Args:
+        symbol (str): OpenAlgo derivative trading symbol.
+        exchange (str): OpenAlgo exchange name.
+        
+    Returns:
+        tuple: (exd, optt, strprc). For futures, optt is 'XX' and strprc is '-1'.
+            For equity, all three are empty strings.
     """
     exd = ""
     optt = ""
@@ -246,14 +276,17 @@ def extract_derivative_details(symbol, exchange):
 
 
 def parse_margin_response(response_data):
-    """
-    Parse Shoonya margin response to OpenAlgo standard format.
+    """Parse Shoonya margin calculation response to OpenAlgo standard format.
+
+    Extracts 'span', 'expo', and total margin requirements from the raw
+    Shoonya SpanCalc API response.
 
     Args:
-        response_data: Raw response from Shoonya API
+        response_data (dict): Raw response from Shoonya API.
 
     Returns:
-        Standardized margin response matching OpenAlgo format
+        dict: Standardized margin response matching OpenAlgo API format,
+            or an error dict if parsing fails.
     """
     try:
         if not response_data or not isinstance(response_data, dict):

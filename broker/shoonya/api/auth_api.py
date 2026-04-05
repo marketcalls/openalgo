@@ -8,13 +8,33 @@ from utils.httpx_client import get_httpx_client
 
 
 def sha256_hash(text):
-    """Generate SHA256 hash."""
+    """Generate SHA256 hash of the input text.
+    
+    Args:
+        text (str): Input string to be hashed.
+        
+    Returns:
+        str: Hexadecimal string of the SHA256 hash.
+    """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def authenticate_broker(userid, password, totp_code):
-    """
-    Authenticate with Shoonya and return the auth token.
+    """Authenticate with Shoonya and return the auth token.
+    
+    Communicates with Shoonya's QuickAuth endpoint. Requires
+    BROKER_API_SECRET and BROKER_API_KEY environment variables
+    to be set.
+
+    Args:
+        userid (str): The Shoonya user ID.
+        password (str): The plaintext password.
+        totp_code (str): Time-based one-time password or PAN/DOB factor.
+
+    Returns:
+        tuple: (auth_token, error_message). On success, returns the
+            authentication token and None. On failure, returns None
+            and an error message.
     """
     # Get the Shoonya API key and other credentials from environment variables
     api_secretkey = os.getenv("BROKER_API_SECRET")
