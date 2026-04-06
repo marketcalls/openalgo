@@ -68,7 +68,7 @@ API_RATE_LIMIT=50 per second
 ORDER_RATE_LIMIT=10 per second
 
 # Smart order endpoints (AI/automated trading)
-SMART_ORDER_RATE_LIMIT=2 per second
+SMART_ORDER_RATE_LIMIT=10 per second
 
 # Webhook endpoints (external integrations)
 WEBHOOK_RATE_LIMIT=100 per minute
@@ -249,7 +249,7 @@ def place_order_with_retry(order_data, max_retries=3):
 | `/api/v1/modifyorder` | ORDER_RATE_LIMIT | 10/sec |
 | `/api/v1/cancelorder` | ORDER_RATE_LIMIT | 10/sec |
 | `/api/v1/cancelallorder` | API_RATE_LIMIT | 50/sec |
-| `/api/v1/placesmartorder` | SMART_ORDER_RATE_LIMIT | 2/sec |
+| `/api/v1/placesmartorder` | SMART_ORDER_RATE_LIMIT | 10/sec |
 | `/api/v1/quotes` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/multiquotes` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/positions` | API_RATE_LIMIT | 50/sec |

@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 from typing import Any, Dict, Optional
 
 import httpx
@@ -180,6 +182,47 @@ def get_holdings(auth: str) -> dict[str, Any]:
         raise
 
 
+# --- Per-Symbol Smart Order Lock ---
+_symbol_locks = {}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+_position_cache = {}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
 def get_open_position(
     tradingsymbol: str, exchange: str, Exch: str, ExchType: str, producttype: str, auth: str
 ) -> str:
@@ -200,7 +243,7 @@ def get_open_position(
         # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
         token = int(get_token(tradingsymbol, exchange))  # Convert token to integer
         tradingsymbol = get_br_symbol(tradingsymbol, exchange)
-        positions_data = get_positions(auth)
+        positions_data = _get_cached_positions(auth)
 
         logger.debug("Token : ", token)
         logger.debug("Product Type : ", producttype)
@@ -300,6 +343,17 @@ def place_smartorder_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
+
+    # Per-symbol lock: serialize smart orders per symbol
+    symbol_lock = _get_symbol_lock(symbol, exchange, product)
+
+    with symbol_lock:
+        return _place_smartorder_locked(data, AUTH_TOKEN, symbol, exchange, product)
+
+
+def _place_smartorder_locked(data, AUTH_TOKEN, symbol, exchange, product):
+    """Inner smart order logic, called under per-symbol lock."""
+    res = None
     position_size = int(data.get("position_size", "0"))
 
     exch = map_exchange(exchange)
@@ -324,8 +378,7 @@ def place_smartorder_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
         # logger.info(f"action : {action}")
         # logger.info(f"Quantity : {quantity}")
         res, response, orderid = place_order_api(data, AUTH_TOKEN)
-        # logger.info(f"{res}")
-        # logger.info(f"{response}")
+        _invalidate_position_cache(AUTH_TOKEN)
 
         return res, response, orderid
 
@@ -371,7 +424,7 @@ def place_smartorder_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
         # logger.info(f"{order_data}")
         # Place the order
         res, response, orderid = place_order_api(order_data, auth)
-        # logger.info(f"{res}")
+        _invalidate_position_cache(AUTH_TOKEN)
         logger.info(f"{response}")
         logger.info(f"{orderid}")
 
