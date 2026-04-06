@@ -1733,10 +1733,7 @@ def direct_place_order_api(data, auth):
             return res, response_data, None
 
     except Exception as e:
-        logger.error(f"Error placing order: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error placing order: {e}")
 
         class ResponseObject:
             def __init__(self, status_code):
@@ -1833,10 +1830,7 @@ def direct_place_order(
         return response
 
     except Exception as e:
-        logger.error(f"Direct order error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Direct order error: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -2035,10 +2029,7 @@ def place_smartorder_api(data, auth):
         return None, response, None
 
     except Exception as e:
-        logger.error(f"Error in smart order placement: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error in smart order placement: {e}")
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}
         return None, response, None
 
@@ -2833,10 +2824,7 @@ def direct_modify_order(data, auth):
             return ResponseObject(200), response
 
     except Exception as e:
-        logger.error(f"Error in direct_modify_order: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error in direct_modify_order: {e}")
 
         # Create a response object to maintain compatibility with existing code
         class ResponseObject:
