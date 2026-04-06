@@ -92,7 +92,7 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
 
             # Count orders based on their status
-            status = order.get("status", "").upper()
+            status = str(order.get("status") or "").upper()
             if status == "COMPLETE":
                 total_completed_orders += 1
             elif status in ("OPEN", "TRIGGER PENDING", "PENDING"):
@@ -122,7 +122,7 @@ def transform_order_data(orders):
             continue
 
         # Map Shoonya status to OpenAlgo status
-        raw_status = order.get("status", "").upper()
+        raw_status = str(order.get("status") or "").upper()
         status_map = {
             "COMPLETE": "complete",
             "OPEN": "open",

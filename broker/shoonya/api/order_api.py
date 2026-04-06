@@ -363,7 +363,8 @@ def modify_order(data, auth):
 
     transformed_data = transform_modify_order_data(data, token)
 
-    logger.info(f"Modify Order Request Data: {transformed_data}")
+    safe_log_data = {k: v for k, v in transformed_data.items() if k != "uid"}
+    logger.info(f"Modify Order Request Data: {safe_log_data}")
 
     headers = {
         "Content-Type": "text/plain",
