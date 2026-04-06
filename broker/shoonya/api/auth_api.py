@@ -20,6 +20,8 @@ def authenticate_broker(code):
             return None, "BROKER_API_KEY must be in format userid:::client_id"
         client_id = full_api_key.split(":::")[1]  # appKey / client_id
         secret_key = os.getenv("BROKER_API_SECRET")
+        if not secret_key:
+            return None, "BROKER_API_SECRET is required"
 
         # Get the shared httpx client
         client = get_httpx_client()

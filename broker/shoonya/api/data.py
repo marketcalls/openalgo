@@ -34,6 +34,8 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     AUTH_TOKEN = auth
     # BROKER_API_KEY format: userid:::client_id
     full_api_key = os.getenv("BROKER_API_KEY")
+    if not full_api_key:
+        raise RuntimeError("BROKER_API_KEY is not configured")
     api_key = full_api_key.split(":::")[0]  # Trading user ID
 
     if payload is None:
@@ -56,14 +58,52 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     response = client.request(method, url, content=payload_str, headers=headers)
     data = response.text
 
-    # Print raw response for debugging
-    logger.debug(f"Raw Response: {data}")
+    # Log response status and raw data for debugging
+    logger.info(f"API Response [{endpoint}] status={response.status_code} body={data[:500]}")
 
     try:
         return json.loads(data)
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding JSON: {e}")
         logger.debug(f"Response data: {data}")
+        raise
+
+
+def get_chart_api_response(endpoint, auth, method="POST", payload=None):
+    """
+    Chart data endpoints (EODChartData, TPSeries) use the legacy NorenWClientTP path
+    with jKey authentication as they haven't migrated to NorenWClientAPI yet.
+    """
+    AUTH_TOKEN = auth
+    full_api_key = os.getenv("BROKER_API_KEY")
+    api_key = full_api_key.split(":::")[0]
+
+    if payload is None:
+        data = {"uid": api_key}
+    else:
+        data = payload
+        data["uid"] = api_key
+
+    payload_str = "jData=" + json.dumps(data)
+
+    client = get_httpx_client()
+
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
+    url = f"https://api.shoonya.com{endpoint}"
+
+    response = client.request(method, url, content=payload_str, headers=headers)
+    data = response.text
+
+    logger.info(f"Chart API Response [{endpoint}] status={response.status_code} body={data[:500]}")
+
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding chart JSON: {e}")
+        logger.debug(f"Chart response data: {data}")
         raise
 
 

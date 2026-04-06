@@ -16,6 +16,9 @@ def get_margin_data(auth_token):
 
     # BROKER_API_KEY format: userid:::client_id
     full_api_key = os.getenv("BROKER_API_KEY")
+    if not full_api_key or ":::" not in full_api_key:
+        logger.error("BROKER_API_KEY not configured or invalid format")
+        return {}
     userid = full_api_key.split(":::")[0]  # Trading user ID
     actid = userid
 
