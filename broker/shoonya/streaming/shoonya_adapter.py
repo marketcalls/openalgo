@@ -38,7 +38,7 @@ class Config:
     MODE_DEPTH = 3
 
     # Message types
-    MSG_AUTH = "ck"
+    MSG_AUTH = "ak"
     MSG_TOUCHLINE_FULL = "tf"
     MSG_TOUCHLINE_PARTIAL = "tk"
     MSG_DEPTH_FULL = "df"
