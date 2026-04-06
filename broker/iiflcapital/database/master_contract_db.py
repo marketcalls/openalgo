@@ -117,20 +117,57 @@ _NSE_INDEX_SYMBOLS = {
     "BANKNIFTY",
     "MIDCPNIFTY",
     "INDIAVIX",
+    "HANGSENGBEESNAV",
     "NIFTY100",
     "NIFTY200",
     "NIFTY500",
-    "NIFTYIT",
+    "NIFTYALPHA50",
     "NIFTYAUTO",
-    "NIFTYFMCG",
+    "NIFTYCOMMODITIES",
+    "NIFTYCONSUMPTION",
+    "NIFTYCPSE",
+    "NIFTYDIVOPPS50",
     "NIFTYENERGY",
-    "NIFTYMETAL",
-    "NIFTYPHARMA",
-    "NIFTYREALTY",
-    "NIFTYPSE",
-    "NIFTYPVTBANK",
-    "NIFTYPSUBANK",
+    "NIFTYFMCG",
+    "NIFTYGROWSECT15",
+    "NIFTYGS10YR",
+    "NIFTYGS10YRCLN",
+    "NIFTYGS1115YR",
+    "NIFTYGS15YRPLUS",
+    "NIFTYGS48YR",
+    "NIFTYGS813YR",
+    "NIFTYGSCOMPSITE",
+    "NIFTYINFRA",
+    "NIFTYIT",
     "NIFTYMEDIA",
+    "NIFTYMETAL",
+    "NIFTYMIDLIQ15",
+    "NIFTYMIDCAP100",
+    "NIFTYMIDCAP150",
+    "NIFTYMIDCAP50",
+    "NIFTYMIDSML400",
+    "NIFTYMNC",
+    "NIFTYPHARMA",
+    "NIFTYPSE",
+    "NIFTYPSUBANK",
+    "NIFTYPVTBANK",
+    "NIFTYREALTY",
+    "NIFTYSERVSECTOR",
+    "NIFTYSMLCAP100",
+    "NIFTYSMLCAP250",
+    "NIFTYSMLCAP50",
+    "NIFTY100EQLWGT",
+    "NIFTY100LIQ15",
+    "NIFTY100LOWVOL30",
+    "NIFTY100QUALTY30",
+    "NIFTY200QUALTY30",
+    "NIFTY50DIVPOINT",
+    "NIFTY50EQLWGT",
+    "NIFTY50PR1XINV",
+    "NIFTY50PR2XLEV",
+    "NIFTY50TR1XINV",
+    "NIFTY50TR2XLEV",
+    "NIFTY50VALUE20",
 }
 
 _BSE_INDEX_SYMBOLS = {
@@ -138,100 +175,111 @@ _BSE_INDEX_SYMBOLS = {
     "BANKEX",
     "SENSEX50",
     "BSE100",
+    "BSE150MIDCAPINDEX",
     "BSE200",
+    "BSE250LARGEMIDCAPINDEX",
+    "BSE400MIDSMALLCAPINDEX",
     "BSE500",
     "BSEAUTO",
+    "BSECAPITALGOODS",
+    "BSECARBONEX",
+    "BSECONSUMERDURABLES",
+    "BSECPSE",
+    "BSEDOLLEX100",
+    "BSEDOLLEX200",
+    "BSEDOLLEX30",
     "BSEENERGY",
+    "BSEFASTMOVINGCONSUMERGOODS",
+    "BSEFINANCIALSERVICES",
+    "BSEGREENEX",
+    "BSEHEALTHCARE",
+    "BSEINDIAINFRASTRUCTUREINDEX",
+    "BSEINDUSTRIALS",
+    "BSEINFORMATIONTECHNOLOGY",
+    "BSEIPO",
+    "BSELARGECAP",
     "BSEMETAL",
+    "BSEMIDCAP",
+    "BSEMIDCAPSELECTINDEX",
+    "BSEOIL&GAS",
     "BSEPOWER",
     "BSEPSU",
-    "BSEMIDCAP",
+    "BSEREALTY",
+    "BSESENSEXNEXT50",
     "BSESMALLCAP",
-    "BSEHEALTHCARE",
+    "BSESMALLCAPSELECTINDEX",
+    "BSESMEIPO",
     "BSETECK",
     "BSETELECOM",
 }
 
-_INDEX_SYMBOL_MAP = {
-    # NSE canonical (as per openalgo_symbol_format.md)
-    "NIFTY": "NIFTY",
-    "NIFTYNXT50": "NIFTYNXT50",
-    "FINNIFTY": "FINNIFTY",
-    "BANKNIFTY": "BANKNIFTY",
-    "MIDCPNIFTY": "MIDCPNIFTY",
-    "INDIAVIX": "INDIAVIX",
-    "NIFTY100": "NIFTY100",
-    "NIFTY200": "NIFTY200",
-    "NIFTY500": "NIFTY500",
-    "NIFTYIT": "NIFTYIT",
-    "NIFTYAUTO": "NIFTYAUTO",
-    "NIFTYFMCG": "NIFTYFMCG",
-    "NIFTYENERGY": "NIFTYENERGY",
-    "NIFTYMETAL": "NIFTYMETAL",
-    "NIFTYPHARMA": "NIFTYPHARMA",
-    "NIFTYREALTY": "NIFTYREALTY",
-    "NIFTYPSE": "NIFTYPSE",
-    "NIFTYPVTBANK": "NIFTYPVTBANK",
-    "NIFTYPSUBANK": "NIFTYPSUBANK",
-    "NIFTYMEDIA": "NIFTYMEDIA",
-    # NSE aliases
+_NSE_INDEX_ALIASES = {
     "NIFTY50": "NIFTY",
     "NIFTYNEXT50": "NIFTYNXT50",
     "NIFTYFINSERVICE": "FINNIFTY",
-    "NIFTYFINANCIALSERVICES": "FINNIFTY",
-    "NIFTYBANK": "BANKNIFTY",
     "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
-    "NIFTYMIDSELECT": "MIDCPNIFTY",
-    "NIFTYMID50": "NIFTYMIDCAP50",
-    "NIFTYINDIAVIX": "INDIAVIX",
-    # BSE canonical (as per openalgo_symbol_format.md)
+    "VOLATILITY": "INDIAVIX",
+}
+
+_BSE_INDEX_ALIASES = {
+    "BSEINDEXBANKEX": "BANKEX",
+    "BSEINDEXBSE100": "BSE100",
+    "BSEINDEXBSE150MIDCAPINDEX": "BSE150MIDCAPINDEX",
+    "BSEINDEXBSE200": "BSE200",
+    "BSEINDEXBSE250LARGEMIDCAPINDEX": "BSE250LARGEMIDCAPINDEX",
+    "BSEINDEXBSE400MIDSMALLCAPINDEX": "BSE400MIDSMALLCAPINDEX",
+    "BSEINDEXBSE500": "BSE500",
+    "BSEINDEXAUTO": "BSEAUTO",
+    "BSEINDEXBSEAUTO": "BSEAUTO",
+    "BSEINDEXBSECAPITALGOODS": "BSECAPITALGOODS",
+    "BSEINDEXCARBON": "BSECARBONEX",
+    "BSEINDEXBSECARBONEX": "BSECARBONEX",
+    "BSEINDEXBSECONSUMERDURABLES": "BSECONSUMERDURABLES",
+    "BSEINDEXCPSE": "BSECPSE",
+    "BSEINDEXBSECPSE": "BSECPSE",
+    "BSEINDEXBSEDOLLEX100": "BSEDOLLEX100",
+    "BSEINDEXBSEDOLLEX200": "BSEDOLLEX200",
+    "BSEINDEXBSEDOLLEX30": "BSEDOLLEX30",
+    "BSEINDEXENERGY": "BSEENERGY",
+    "BSEINDEXBSEENERGY": "BSEENERGY",
+    "BSEINDEXBSEFASTMOVINGCONSUMERGOODS": "BSEFASTMOVINGCONSUMERGOODS",
+    "BSEINDEXFIN": "BSEFINANCIALSERVICES",
+    "BSEINDEXBSEFINANCIALSERVICES": "BSEFINANCIALSERVICES",
+    "BSEINDEXGREENX": "BSEGREENEX",
+    "BSEINDEXBSEGREENEX": "BSEGREENEX",
+    "BSEINDEXBSEHC": "BSEHEALTHCARE",
+    "BSEINDEXBSEHEALTHCARE": "BSEHEALTHCARE",
+    "BSEINDEXINFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+    "BSEINDEXBSEINDIAINFRASTRUCTUREINDEX": "BSEINDIAINFRASTRUCTUREINDEX",
+    "BSEINDEXINDSTR": "BSEINDUSTRIALS",
+    "BSEINDEXBSEINDUSTRIALS": "BSEINDUSTRIALS",
+    "BSEINDEXBSEIT": "BSEINFORMATIONTECHNOLOGY",
+    "BSEINDEXBSEINFORMATIONTECHNOLOGY": "BSEINFORMATIONTECHNOLOGY",
+    "BSEINDEXBSEIPO": "BSEIPO",
+    "BSEINDEXBSELARGECAP": "BSELARGECAP",
+    "BSEINDEXMETAL": "BSEMETAL",
+    "BSEINDEXBSEMETAL": "BSEMETAL",
+    "BSEINDEXMIDCAP": "BSEMIDCAP",
+    "BSEINDEXBSEMIDCAP": "BSEMIDCAP",
+    "BSEINDEXBSEMIDCAPSELECTINDEX": "BSEMIDCAPSELECTINDEX",
+    "BSEINDEXOILGAS": "BSEOIL&GAS",
+    "BSEINDEXBSEOIL&GAS": "BSEOIL&GAS",
+    "BSEINDEXPOWER": "BSEPOWER",
+    "BSEINDEXBSEPOWER": "BSEPOWER",
+    "BSEINDEXBSEPSU": "BSEPSU",
+    "BSEINDEXREALTY": "BSEREALTY",
+    "BSEINDEXBSEREALTY": "BSEREALTY",
+    "BSEINDEXBSESENSEXNEXT50": "BSESENSEXNEXT50",
+    "BSEINDEXSMLCAP": "BSESMALLCAP",
+    "BSEINDEXBSESMALLCAP": "BSESMALLCAP",
+    "BSEINDEXBSESMALLCAPSELECTINDEX": "BSESMALLCAPSELECTINDEX",
+    "BSEINDEXSMEIPO": "BSESMEIPO",
+    "BSEINDEXBSESMEIPO": "BSESMEIPO",
+    "BSEINDEXTECK": "BSETECK",
+    "BSEINDEXBSETECK": "BSETECK",
+    "BSEINDEXBSETELECOM": "BSETELECOM",
     "SENSEX": "SENSEX",
-    "BANKEX": "BANKEX",
     "SENSEX50": "SENSEX50",
-    "BSE100": "BSE100",
-    "BSE200": "BSE200",
-    "BSE500": "BSE500",
-    "BSEAUTO": "BSEAUTO",
-    "BSEENERGY": "BSEENERGY",
-    "BSEMETAL": "BSEMETAL",
-    "BSEPOWER": "BSEPOWER",
-    "BSEPSU": "BSEPSU",
-    "BSEMIDCAP": "BSEMIDCAP",
-    "BSESMALLCAP": "BSESMALLCAP",
-    "BSEHEALTHCARE": "BSEHEALTHCARE",
-    "BSETECK": "BSETECK",
-    "BSETELECOM": "BSETELECOM",
-    # BSE aliases
-    "SENSEX30": "SENSEX",
-    "SNSX50": "SENSEX50",
-    "100": "BSE100",
-    "200": "BSE200",
-    "500": "BSE500",
-    "AUTO": "BSEAUTO",
-    "ENERGY": "BSEENERGY",
-    "METAL": "BSEMETAL",
-    "MIDCAP": "BSEMIDCAP",
-    "POWER": "BSEPOWER",
-    "PSU": "BSEPSU",
-    "HC": "BSEHEALTHCARE",
-    "TECK": "BSETECK",
-    "TELCOM": "BSETELECOM",
-    "S&PBSESENSEX": "SENSEX",
-    "S&PBSEBANKEX": "BANKEX",
-    "S&PBSESENSEX50": "SENSEX50",
-    "S&PBSE100": "BSE100",
-    "S&PBSE200": "BSE200",
-    "S&PBSE500": "BSE500",
-    "S&PBSEAUTO": "BSEAUTO",
-    "S&PBSEENERGY": "BSEENERGY",
-    "S&PBSEMETAL": "BSEMETAL",
-    "S&PBSEPOWER": "BSEPOWER",
-    "S&PBSEPSU": "BSEPSU",
-    "S&PBSEMIDCAP": "BSEMIDCAP",
-    "S&PBSESMALLCAP": "BSESMALLCAP",
-    "S&PBSEHEALTHCARE": "BSEHEALTHCARE",
-    "S&PBSETECK": "BSETECK",
-    "S&PBSETELECOM": "BSETELECOM",
 }
 
 
@@ -461,20 +509,56 @@ def _format_strike_for_symbol(strike_value) -> str:
     return f"{strike:.6f}".rstrip("0").rstrip(".")
 
 
-def _normalize_index_symbol(value: str) -> str:
+def _clean_index_symbol(value: str) -> str:
     raw = _clean_text(value).upper()
     if not raw:
         return ""
 
-    # Follow Angel/Fyers style cleanup before applying common-index aliases.
-    # Keep fallback as cleaned broker symbol for unmapped values.
-    fallback = raw.replace(" ", "").replace("-", "")
+    return raw.replace(" ", "").replace("-", "")
 
-    lookup = fallback
-    if lookup.startswith("S&P"):
-        lookup = lookup[3:]
 
-    return _INDEX_SYMBOL_MAP.get(lookup, fallback)
+def _match_documented_index_symbol(
+    value: str, symbols: set[str], aliases: dict[str, str] | None = None
+) -> str:
+    cleaned = _clean_index_symbol(value)
+    if not cleaned:
+        return ""
+
+    if cleaned in symbols:
+        return cleaned
+
+    normalized = cleaned
+    if normalized.startswith("S&P"):
+        normalized = normalized[3:]
+
+    if normalized in symbols:
+        return normalized
+
+    if aliases and normalized in aliases:
+        return aliases[normalized]
+
+    return ""
+
+
+def _normalize_index_symbol(value: str, exchange: str | None = None) -> str:
+    fallback = _clean_index_symbol(value)
+    if not fallback:
+        return ""
+
+    if exchange == "NSE_INDEX":
+        return (
+            _match_documented_index_symbol(value, _NSE_INDEX_SYMBOLS, _NSE_INDEX_ALIASES) or fallback
+        )
+    if exchange == "BSE_INDEX":
+        return (
+            _match_documented_index_symbol(value, _BSE_INDEX_SYMBOLS, _BSE_INDEX_ALIASES) or fallback
+        )
+
+    return (
+        _match_documented_index_symbol(value, _BSE_INDEX_SYMBOLS, _BSE_INDEX_ALIASES)
+        or _match_documented_index_symbol(value, _NSE_INDEX_SYMBOLS, _NSE_INDEX_ALIASES)
+        or fallback
+    )
 
 
 def _infer_instrument_type_from_symbol(brsymbol: str) -> str:
@@ -620,6 +704,7 @@ def _build_openalgo_symbol(
     instrument_type: str,
     base_symbol: str,
     brsymbol: str,
+    name: str,
     expiry: str,
     strike: float,
 ):
@@ -627,7 +712,7 @@ def _build_openalgo_symbol(
     compact_expiry = _clean_text(expiry).replace("-", "")
 
     if exchange in ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX"):
-        return _normalize_index_symbol(normalized_base or brsymbol)
+        return _normalize_index_symbol(name or normalized_base or brsymbol, exchange)
 
     if instrument_type == "FUT" and compact_expiry:
         return f"{normalized_base}{compact_expiry}FUT"
@@ -655,10 +740,9 @@ def _resolve_exchange(segment, row, lower_row, brsymbol, name):
     if "MCX" in exchange_hint:
         return "MCX_INDEX"
 
-    symbol_hint = _normalize_index_symbol(brsymbol or name)
-    if symbol_hint in _BSE_INDEX_SYMBOLS:
+    if _match_documented_index_symbol(brsymbol or name, _BSE_INDEX_SYMBOLS, _BSE_INDEX_ALIASES):
         return "BSE_INDEX"
-    if symbol_hint in _NSE_INDEX_SYMBOLS:
+    if _match_documented_index_symbol(brsymbol or name, _NSE_INDEX_SYMBOLS, _NSE_INDEX_ALIASES):
         return "NSE_INDEX"
 
     return "NSE_INDEX"
@@ -745,6 +829,7 @@ def _parse_segment_data(segment, rows):
             instrument_type=instrument_type,
             base_symbol=base_symbol,
             brsymbol=brsymbol,
+            name=name,
             expiry=expiry,
             strike=strike,
         )
@@ -753,7 +838,7 @@ def _parse_segment_data(segment, rows):
         if instrument_type not in ("FUT", "CE", "PE"):
             normalized_name = _normalize_cash_equity_symbol(name or brsymbol, exchange)
         if instrument_type == "INDEX":
-            normalized_name = _normalize_index_symbol(name or brsymbol)
+            normalized_name = _normalize_index_symbol(name or brsymbol, exchange)
 
         record = {
             "symbol": normalized_symbol,
