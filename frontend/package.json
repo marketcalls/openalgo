@@ -72,7 +72,7 @@
     "zustand": "^5.0.10"
   },
   "overrides": {
-    "lodash-es": "4.17.23",
+    "lodash-es": "4.18.1",
     "rollup": ">=4.59.0"
   },
   "devDependencies": {
