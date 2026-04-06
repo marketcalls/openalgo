@@ -29,6 +29,26 @@ def safe_float(value, default=0.0):
         return default
 
 
+def safe_int(value, default=0):
+    """
+    Convert value to int, handling None, empty strings, and invalid values.
+
+    Args:
+        value: Value to convert to int
+        default: Default value to return if conversion fails
+
+    Returns:
+        int: Converted value or default
+    """
+    if value is None or value == '':
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        logger.debug(f"Could not convert value to int: {value}, using default: {default}")
+        return default
+
+
 def get_margin_data(auth_token):
     """
     Fetch margin data from the broker's API using the provided auth token.
@@ -125,10 +145,10 @@ def get_margin_data(auth_token):
 
                 for position in positions:
                     # Calculate net quantity
-                    fl_buy_qty = int(position.get("flBuyQty", 0))
-                    fl_sell_qty = int(position.get("flSellQty", 0))
-                    cf_buy_qty = int(position.get("cfBuyQty", 0))
-                    cf_sell_qty = int(position.get("cfSellQty", 0))
+                    fl_buy_qty = safe_int(position.get("flBuyQty"))
+                    fl_sell_qty = safe_int(position.get("flSellQty"))
+                    cf_buy_qty = safe_int(position.get("cfBuyQty"))
+                    cf_sell_qty = safe_int(position.get("cfSellQty"))
 
                     net_qty = (fl_buy_qty - fl_sell_qty) + (cf_buy_qty - cf_sell_qty)
 
