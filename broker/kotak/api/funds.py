@@ -9,6 +9,26 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def safe_float(value, default=0.0):
+    """
+    Convert value to float, handling None, empty strings, and invalid values.
+
+    Args:
+        value: Value to convert to float
+        default: Default value to return if conversion fails
+
+    Returns:
+        float: Converted value or default
+    """
+    if value is None or value == '':
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        logger.debug(f"Could not convert value to float: {value}, using default: {default}")
+        return default
+
+
 def get_margin_data(auth_token):
     """
     Fetch margin data from the broker's API using the provided auth token.
@@ -69,20 +89,118 @@ def get_margin_data(auth_token):
             logger.error(f"Kotak Limits API error: {error_msg}")
             return {}
 
-        # Process and return the margin data
-        # Note: Based on the API docs, the response fields are at root level
-        # Available Balance = CollateralValue + RmsPayInAmt - RmsPayOutAmt + Collateral
-        collateral_value = float(margin_data.get("CollateralValue", 0))
-        pay_in = float(margin_data.get("RmsPayInAmt", 0))
-        pay_out = float(margin_data.get("RmsPayOutAmt", 0))
-        collateral = float(margin_data.get("Collateral", 0))
+        # Log API response structure for debugging
+        logger.debug(f"Kotak API response keys: {list(margin_data.keys())}")
 
+        # Validate critical fields exist
+        required_fields = ['CollateralValue', 'RmsPayInAmt', 'RmsPayOutAmt', 'Collateral', 'MarginUsed']
+        missing_fields = [field for field in required_fields if field not in margin_data]
+        if missing_fields:
+            logger.warning(f"Kotak API response missing fields: {missing_fields}")
+
+        # Process margin data with null-safe parsing
+        # Available Balance = CollateralValue + RmsPayInAmt - RmsPayOutAmt + Collateral
+        collateral_value = safe_float(margin_data.get("CollateralValue"))
+        pay_in = safe_float(margin_data.get("RmsPayInAmt"))
+        pay_out = safe_float(margin_data.get("RmsPayOutAmt"))
+        collateral = safe_float(margin_data.get("Collateral"))
+
+        # Calculate PnL from positions for accuracy
+        total_realised = 0.0
+        total_unrealised = 0.0
+
+        try:
+            # Import here to avoid circular dependency
+            from broker.kotak.api.order_api import get_positions
+
+            logger.info("Fetching positions for PnL calculation")
+            positions_response = get_positions(auth_token)
+            logger.info(f"Positions API Response: {positions_response}")
+
+            if positions_response.get("stat", "").lower() == "ok" and positions_response.get("data"):
+                positions = positions_response["data"]
+                logger.info(f"Processing {len(positions)} positions for PnL")
+                logger.info(f"Sample position data: {positions[0] if positions else 'No positions'}")
+
+                for position in positions:
+                    # Calculate net quantity
+                    fl_buy_qty = int(position.get("flBuyQty", 0))
+                    fl_sell_qty = int(position.get("flSellQty", 0))
+                    cf_buy_qty = int(position.get("cfBuyQty", 0))
+                    cf_sell_qty = int(position.get("cfSellQty", 0))
+
+                    net_qty = (fl_buy_qty - fl_sell_qty) + (cf_buy_qty - cf_sell_qty)
+
+                    # Handle realized P&L differently for closed vs open positions
+                    if net_qty == 0:
+                        # Closed position - use buyAmt/sellAmt for accurate realized P&L
+                        # The rpnl field is often inaccurate for closed positions
+                        buy_amt = safe_float(position.get("buyAmt"))
+                        sell_amt = safe_float(position.get("sellAmt"))
+
+                        if buy_amt > 0 or sell_amt > 0:
+                            realized_pnl = sell_amt - buy_amt
+                            total_realised += realized_pnl
+                            logger.info(
+                                f"Closed Position {position.get('trdSym')}: "
+                                f"buyAmt={buy_amt}, sellAmt={sell_amt}, realized={realized_pnl:.2f}"
+                            )
+                    else:
+                        # Open position - use rpnl for partial realized P&L
+                        rpnl = safe_float(position.get("rpnl"))
+                        total_realised += rpnl
+
+                        # Calculate unrealized PnL for open positions
+                        # Determine average price based on position direction
+                        if net_qty > 0:
+                            # Long position - use buy average
+                            avg_price = safe_float(position.get("flBuyAvg"))
+                        else:
+                            # Short position - use sell average
+                            avg_price = safe_float(position.get("flSellAvg"))
+
+                        # Get current LTP
+                        ltp = safe_float(position.get("ltp"))
+
+                        # Calculate unrealized PnL
+                        if ltp > 0 and avg_price > 0:
+                            unrealized = (ltp - avg_price) * net_qty
+                            total_unrealised += unrealized
+                            logger.info(
+                                f"Open Position {position.get('trdSym')}: qty={net_qty}, "
+                                f"avg={avg_price}, ltp={ltp}, unrealized={unrealized:.2f}, rpnl={rpnl:.2f}"
+                            )
+
+                logger.info(
+                    f"Calculated PnL from positions - Realized: {total_realised:.2f}, "
+                    f"Unrealized: {total_unrealised:.2f}"
+                )
+
+            else:
+                logger.warning("Could not fetch positions, using API-provided PnL values")
+                # Fallback to API-provided values if positions fetch fails
+                total_realised = safe_float(margin_data.get('RealizedMtomPrsnt'))
+                total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Error calculating PnL from positions: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Fallback to API-provided values
+            total_realised = safe_float(margin_data.get('RealizedMtomPrsnt'))
+            total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
+            logger.info(
+                f"Using API-provided PnL - Realized: {total_realised:.2f}, "
+                f"Unrealized: {total_unrealised:.2f}"
+            )
+
+        # Construct and return the processed margin data
         processed_margin_data = {
             "availablecash": f"{collateral_value + pay_in - pay_out + collateral:.2f}",
             "collateral": f"{collateral:.2f}",
-            "m2munrealized": f"{float(margin_data.get('UnrealizedMtomPrsnt', 0)):.2f}",
-            "m2mrealized": f"{float(margin_data.get('RealizedMtomPrsnt', 0)):.2f}",
-            "utiliseddebits": f"{float(margin_data.get('MarginUsed', 0)):.2f}",
+            "m2munrealized": f"{total_unrealised:.2f}",
+            "m2mrealized": f"{total_realised:.2f}",
+            "utiliseddebits": f"{safe_float(margin_data.get('MarginUsed')):.2f}",
         }
 
         logger.info(f"Successfully fetched margin data: {processed_margin_data}")
