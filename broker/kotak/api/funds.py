@@ -117,8 +117,9 @@ def get_margin_data(auth_token):
             positions_response = get_positions(auth_token)
             logger.info(f"Positions API Response: {positions_response}")
 
-            if positions_response.get("stat", "").lower() == "ok" and positions_response.get("data"):
-                positions = positions_response["data"]
+            data = positions_response.get("data")
+            if positions_response.get("stat", "").lower() == "ok" and data is not None:
+                positions = data
                 logger.info(f"Processing {len(positions)} positions for PnL")
                 logger.info(f"Sample position data: {positions[0] if positions else 'No positions'}")
 
