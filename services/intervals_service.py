@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -24,7 +23,7 @@ def import_broker_module(broker_name: str) -> Any | None:
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 
@@ -81,7 +80,6 @@ def get_intervals_with_auth(auth_token: str, broker: str) -> tuple[bool, dict[st
         return True, {"status": "success", "data": intervals}, 200
     except Exception as e:
         logger.error(f"Error getting supported intervals: {e}")
-        traceback.print_exc()
         return False, {"status": "error", "message": str(e)}, 500
 
 

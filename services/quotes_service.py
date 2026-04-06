@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -91,7 +90,7 @@ def import_broker_module(broker_name: str) -> Any | None:
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
-        logger.error(f"Error importing broker module '{module_path}': {error}")
+        logger.exception(f"Error importing broker module '{module_path}': {error}")
         return None
 
 
@@ -151,7 +150,6 @@ def get_quotes_with_auth(
         else:
             # Log other errors normally
             logger.error(f"Error in broker_module.get_quotes: {e}")
-            traceback.print_exc()
 
         return False, {"status": "error", "message": str(e)}, 500
 
@@ -321,8 +319,7 @@ def get_multiquotes_with_auth(
             logger.debug(f"Multiquote fetch permission denied: {error_msg}")
         else:
             # Log other errors normally
-            logger.error(f"Error in broker_module.get_multiquotes: {e}")
-            traceback.print_exc()
+            logger.exception(f"Error in broker_module.get_multiquotes: {e}")
 
         return False, {"status": "error", "message": str(e)}, 500
 
