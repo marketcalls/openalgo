@@ -32,8 +32,8 @@ def calculate_margin_api(positions, auth):
 
         return MockResponse(), error_response
 
-    # Extract account ID (remove last 2 characters)
-    account_id = api_key[:-2]
+    # BROKER_API_KEY format: userid:::client_id
+    account_id = api_key.split(":::")[0]  # Trading user ID
 
     # Transform positions to Shoonya format
     margin_data = transform_margin_positions(positions, account_id)
@@ -50,12 +50,15 @@ def calculate_margin_api(positions, auth):
 
         return MockResponse(), error_response
 
-    # Prepare headers
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    # Prepare headers with Bearer token authentication
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
 
-    # Prepare payload in Shoonya format: jData={...}&jKey={token}
+    # Prepare payload in Shoonya format
     jdata = json.dumps(margin_data)
-    payload = f"jData={jdata}&jKey={AUTH_TOKEN}"
+    payload = f"jData={jdata}"
 
     logger.info(f"Shoonya margin calculation payload: {payload}")
 
@@ -65,7 +68,7 @@ def calculate_margin_api(positions, auth):
     try:
         # Make the request to Shoonya Span Calculator API
         response = client.post(
-            "https://api.shoonya.com/NorenWClientTP/SpanCalc", headers=headers, content=payload
+            "https://api.shoonya.com/NorenWClientAPI/SpanCalc", headers=headers, content=payload
         )
 
         # Add status attribute for compatibility with the existing codebase
