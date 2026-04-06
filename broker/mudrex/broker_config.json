@@ -1,0 +1,4 @@
+{
+  "requests_per_second": 2,
+  "close_position_delay_ms": 500
+}

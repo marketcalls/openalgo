@@ -1,0 +1,11 @@
+{
+    "Plugin Name": "mudrex",
+    "Plugin URI": "https://openalgo.in",
+    "Description": "Mudrex Crypto Futures OpenAlgo Plugin",
+    "Version": "1.0",
+    "Author": "OpenAlgo Community",
+    "Author URI": "https://openalgo.in",
+    "supported_exchanges": ["CRYPTO_FUT"],
+    "broker_type": "crypto",
+    "leverage_config": true
+}

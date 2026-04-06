@@ -261,6 +261,18 @@ const brokerFields: Record<string, BrokerConfig> = {
     ],
     callbackUrl: '/zebu/callback',
   },
+  mudrex: {
+    fields: [
+      {
+        name: 'api_secret',
+        label: 'API Secret',
+        type: 'password',
+        placeholder: 'Enter your Mudrex API secret',
+        hint: 'Generate an API secret from your Mudrex account settings',
+      },
+    ],
+    callbackUrl: '/mudrex/callback',
+  },
   default: {
     fields: [
       { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID' },
@@ -293,6 +305,7 @@ const brokerNames: Record<string, string> = {
   shoonya: 'Shoonya',
   tradejini: 'Tradejini',
   zebu: 'Zebu',
+  mudrex: 'Mudrex',
   jmfinancial: 'JM Financial',
 }
 

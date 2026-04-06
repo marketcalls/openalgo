@@ -15,16 +15,17 @@ EXCHANGE_NCDEX = "NCDEX"  # NCDEX Commodity
 EXCHANGE_NSE_INDEX = "NSE_INDEX"  # NSE Index
 EXCHANGE_BSE_INDEX = "BSE_INDEX"  # BSE Index
 EXCHANGE_CRYPTO = "CRYPTO"  # Crypto Exchanges (broker-agnostic; brexchange carries broker name)
+EXCHANGE_CRYPTO_FUT = "CRYPTO_FUT"  # Crypto Futures-only exchanges (e.g. Mudrex)
 
 # Set of all crypto-family exchanges.
 # Use `exchange in CRYPTO_EXCHANGES` instead of `exchange == "CRYPTO"` so that
 # onboarding a second crypto exchange (e.g. BINANCE, BYBIT) is a one-line change here.
-CRYPTO_EXCHANGES: set[str] = {EXCHANGE_CRYPTO}
+CRYPTO_EXCHANGES: set[str] = {EXCHANGE_CRYPTO, EXCHANGE_CRYPTO_FUT}
 
 # Set of broker names that map to crypto exchanges.
 # Used to select the correct download cutoff timezone (UTC vs IST).
 # Add new crypto brokers here — the smart download logic picks this up automatically.
-CRYPTO_BROKERS: set[str] = {"deltaexchange"}
+CRYPTO_BROKERS: set[str] = {"deltaexchange", "mudrex"}
 
 # Instrument type for crypto perpetual futures (used in symbol DB queries).
 INSTRUMENT_PERPFUT: str = "PERPFUT"
@@ -57,6 +58,7 @@ VALID_EXCHANGES = [
     EXCHANGE_NSE_INDEX,
     EXCHANGE_BSE_INDEX,
     EXCHANGE_CRYPTO,
+    EXCHANGE_CRYPTO_FUT,
 ]
 
 # Product Types
@@ -93,6 +95,7 @@ EXCHANGE_BADGE_COLORS = {
     EXCHANGE_NSE_INDEX: "badge-accent",
     EXCHANGE_BSE_INDEX: "badge-neutral",
     EXCHANGE_CRYPTO: "badge-primary",
+    EXCHANGE_CRYPTO_FUT: "badge-primary",
 }
 
 # Required Fields for Order Placement

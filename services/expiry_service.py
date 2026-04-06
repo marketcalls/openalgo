@@ -4,6 +4,7 @@ from sqlalchemy import distinct, func
 
 from database.auth_db import verify_api_key
 from database.symbol import SymToken, db_session
+from utils.constants import EXCHANGE_CRYPTO, EXCHANGE_CRYPTO_FUT
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -75,8 +76,8 @@ def get_expiry_dates(
                 400,
             )
 
-        # Validate exchange
-        supported_exchanges = ["NFO", "BFO", "MCX", "CDS", "CRYPTO"]
+        # Validate exchange (include crypto futures — e.g. Mudrex CRYPTO_FUT)
+        supported_exchanges = ["NFO", "BFO", "MCX", "CDS", EXCHANGE_CRYPTO, EXCHANGE_CRYPTO_FUT]
         if exchange.upper() not in supported_exchanges:
             logger.warning(f"Unsupported exchange provided: {exchange}")
             return (
@@ -116,7 +117,7 @@ def get_expiry_dates(
                 query = query.filter(SymToken.instrumenttype.in_(["FUTCOM", "FUTENR", "FUT"]))
             elif exchange == "CDS":
                 query = query.filter(SymToken.instrumenttype.in_(["FUTCUR", "FUTIRC", "FUT"]))
-            elif exchange == "CRYPTO":
+            elif exchange in (EXCHANGE_CRYPTO, EXCHANGE_CRYPTO_FUT):
                 query = query.filter(SymToken.instrumenttype.in_(["FUT", "PERPFUT"]))
         else:  # options
             # All exchanges support CE/PE along with their specific types
@@ -126,7 +127,7 @@ def get_expiry_dates(
                 query = query.filter(SymToken.instrumenttype.in_(["OPTFUT", "CE", "PE"]))
             elif exchange == "CDS":
                 query = query.filter(SymToken.instrumenttype.in_(["OPTCUR", "OPTIRC", "CE", "PE"]))
-            elif exchange == "CRYPTO":
+            elif exchange in (EXCHANGE_CRYPTO, EXCHANGE_CRYPTO_FUT):
                 query = query.filter(SymToken.instrumenttype.in_(["CE", "PE"]))
 
         # Execute query and get results
