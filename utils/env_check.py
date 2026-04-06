@@ -255,7 +255,6 @@ def load_and_check_env_variables() -> None:
         "SMART_ORDER_RATE_LIMIT",  # Rate limit for smart order placement
         "WEBHOOK_RATE_LIMIT",  # Rate limit for webhook endpoints
         "STRATEGY_RATE_LIMIT",  # Rate limit for strategy operations
-        "SMART_ORDER_DELAY",
         "SESSION_EXPIRY_TIME",  # Added SESSION_EXPIRY_TIME as it's required for session management
         "WEBSOCKET_HOST",  # Host for the WebSocket server
         "WEBSOCKET_PORT",  # Port for the WebSocket server
@@ -449,16 +448,6 @@ def load_and_check_env_variables() -> None:
         print("\nError: Invalid SESSION_EXPIRY_TIME format.")
         print("Format should be 24-hour time (HH:MM)")
         print("Example: '03:00', '15:30'")
-        sys.exit(1)
-
-    # Validate SMART_ORDER_DELAY is a valid float
-    try:
-        delay = float(os.getenv("SMART_ORDER_DELAY", "0"))
-        if delay < 0:
-            raise ValueError
-    except ValueError:
-        print("\nError: SMART_ORDER_DELAY must be a valid positive number")
-        print("Example: SMART_ORDER_DELAY='0.5'")
         sys.exit(1)
 
     # Validate WEBSOCKET_URL format

@@ -2,6 +2,8 @@ import json
 import os
 
 import httpx
+import threading
+import time
 
 from broker.definedge.mapping.transform_data import (
     map_product_type,
@@ -81,6 +83,52 @@ def get_holdings(auth):
     return get_api_response("/holdings", auth)
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
+
 def get_open_position(tradingsymbol, exchange, product, auth):
     """Get open position for a specific symbol."""
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -89,7 +137,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     logger.info("=== GET OPEN POSITION ===")
     logger.info(f"Looking for: Symbol={tradingsymbol}, Exchange={exchange}, Product={product}")
 
-    positions_data = get_positions(auth)
+    positions_data = _get_cached_positions(auth)
     logger.info(f"Raw positions response: {positions_data}")
 
     net_qty = "0"
@@ -258,78 +306,83 @@ def place_smartorder_api(data, auth):
             logger.info("Missing required parameters in place_smartorder_api")
             return res, response_data, orderid
 
-        position_size = int(data.get("position_size", "0"))
+        # Per-symbol lock: serialize smart orders per symbol
+        symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        # Get current open position for the symbol
-        current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
+        with symbol_lock:
+            position_size = int(data.get("position_size", "0"))
 
-        logger.info("=== SMART ORDER EXECUTION ===")
-        logger.info(f"Symbol: {symbol}, Exchange: {exchange}, Product: {product}")
-        logger.info(f"Target position_size: {position_size}")
-        logger.info(f"Current Open Position: {current_position}")
+            # Get current open position for the symbol
+            current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
 
-        # Determine action based on position_size and current_position
-        action = None
-        quantity = 0
+            logger.info("=== SMART ORDER EXECUTION ===")
+            logger.info(f"Symbol: {symbol}, Exchange: {exchange}, Product: {product}")
+            logger.info(f"Target position_size: {position_size}")
+            logger.info(f"Current Open Position: {current_position}")
 
-        if position_size == 0 and current_position > 0:
-            # Square off long position
-            action = "SELL"
-            quantity = abs(current_position)
-            logger.info(f"Squaring off long position: SELL {quantity}")
-        elif position_size == 0 and current_position < 0:
-            # Square off short position
-            action = "BUY"
-            quantity = abs(current_position)
-            logger.info(f"Squaring off short position: BUY {quantity}")
-        elif position_size == 0 and current_position == 0:
-            # No position to square off
-            logger.info("No position to square off (position_size=0, current_position=0)")
-            response_data = {"status": "success", "message": "No position to square off"}
-            return res, response_data, orderid
-        elif position_size == current_position:
-            # Position already matches target
-            logger.info(f"Position already matches target (both are {position_size})")
-            response_data = {"status": "success", "message": "Position already at target size"}
-            return res, response_data, orderid
-        elif current_position == 0:
-            # Open new position
-            action = "BUY" if position_size > 0 else "SELL"
-            quantity = abs(position_size)
-            logger.info(f"Opening new position: {action} {quantity}")
-        else:
-            # Adjust existing position
-            if position_size > current_position:
-                action = "BUY"
-                quantity = position_size - current_position
-                logger.info(
-                    f"Increasing position: BUY {quantity} (from {current_position} to {position_size})"
-                )
-            elif position_size < current_position:
+            # Determine action based on position_size and current_position
+            action = None
+            quantity = 0
+
+            if position_size == 0 and current_position > 0:
+                # Square off long position
                 action = "SELL"
-                quantity = current_position - position_size
-                logger.info(
-                    f"Reducing position: SELL {quantity} (from {current_position} to {position_size})"
-                )
+                quantity = abs(current_position)
+                logger.info(f"Squaring off long position: SELL {quantity}")
+            elif position_size == 0 and current_position < 0:
+                # Square off short position
+                action = "BUY"
+                quantity = abs(current_position)
+                logger.info(f"Squaring off short position: BUY {quantity}")
+            elif position_size == 0 and current_position == 0:
+                # No position to square off
+                logger.info("No position to square off (position_size=0, current_position=0)")
+                response_data = {"status": "success", "message": "No position to square off"}
+                return res, response_data, orderid
+            elif position_size == current_position:
+                # Position already matches target
+                logger.info(f"Position already matches target (both are {position_size})")
+                response_data = {"status": "success", "message": "Position already at target size"}
+                return res, response_data, orderid
+            elif current_position == 0:
+                # Open new position
+                action = "BUY" if position_size > 0 else "SELL"
+                quantity = abs(position_size)
+                logger.info(f"Opening new position: {action} {quantity}")
+            else:
+                # Adjust existing position
+                if position_size > current_position:
+                    action = "BUY"
+                    quantity = position_size - current_position
+                    logger.info(
+                        f"Increasing position: BUY {quantity} (from {current_position} to {position_size})"
+                    )
+                elif position_size < current_position:
+                    action = "SELL"
+                    quantity = current_position - position_size
+                    logger.info(
+                        f"Reducing position: SELL {quantity} (from {current_position} to {position_size})"
+                    )
 
-        if action and quantity > 0:
-            # Prepare data for placing the order
-            order_data = data.copy()
-            order_data["action"] = action
-            order_data["quantity"] = str(quantity)
+            if action and quantity > 0:
+                # Prepare data for placing the order
+                order_data = data.copy()
+                order_data["action"] = action
+                order_data["quantity"] = str(quantity)
 
-            logger.info(f"Placing order: {action} {quantity} {symbol}")
+                logger.info(f"Placing order: {action} {quantity} {symbol}")
 
-            # Place the order
-            res, response, orderid = place_order_api(order_data, auth)
-            logger.info(f"Order response: {response}")
-            logger.info(f"Order ID: {orderid}")
+                # Place the order
+                res, response, orderid = place_order_api(order_data, auth)
+                _invalidate_position_cache(auth)
+                logger.info(f"Order response: {response}")
+                logger.info(f"Order ID: {orderid}")
 
-            return res, response, orderid
-        else:
-            logger.info("No action required or invalid quantity")
-            response_data = {"status": "success", "message": "No action required"}
-            return res, response_data, orderid
+                return res, response, orderid
+            else:
+                logger.info("No action required or invalid quantity")
+                response_data = {"status": "success", "message": "No action required"}
+                return res, response_data, orderid
 
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {e}"

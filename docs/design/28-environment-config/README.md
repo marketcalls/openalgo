@@ -151,7 +151,7 @@ RESET_RATE_LIMIT = '15 per hour'
 # API rate limits
 API_RATE_LIMIT = '50 per second'
 ORDER_RATE_LIMIT = '10 per second'
-SMART_ORDER_RATE_LIMIT = '2 per second'
+SMART_ORDER_RATE_LIMIT = '10 per second'
 
 # Webhook rate limits
 WEBHOOK_RATE_LIMIT = '100 per minute'
