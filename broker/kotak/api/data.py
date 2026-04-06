@@ -35,7 +35,15 @@ class BrokerData:
         logger.warning("Kotak Neo does not support historical data intervals")
 
     def _get_kotak_exchange(self, exchange):
-        """Map OpenAlgo exchange to Kotak exchange segment"""
+        """
+        Map OpenAlgo exchange to Kotak exchange segment.
+
+        Args:
+            exchange (str): Exchange name in OpenAlgo format (e.g., 'NSE').
+
+        Returns:
+            str: Mapped Kotak exchange segment string.
+        """
         exchange_map = {
             "NSE": "nse_cm",
             "BSE": "bse_cm",
@@ -49,7 +57,15 @@ class BrokerData:
         return exchange_map.get(exchange)
 
     def _get_index_symbol(self, symbol):
-        """Map OpenAlgo index symbols to Kotak Neo API format"""
+        """
+        Map OpenAlgo index symbols to Kotak Neo API format.
+
+        Args:
+            symbol (str): Index symbol in OpenAlgo format.
+
+        Returns:
+            str: Mapped index symbol in Kotak Neo format.
+        """
         index_map = {
             "NIFTY": "Nifty 50",
             "NIFTY50": "Nifty 50",
@@ -63,7 +79,16 @@ class BrokerData:
         return index_map.get(symbol.upper(), symbol)
 
     def _make_quotes_request(self, query, filter_name="all"):
-        """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
+        """
+        Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling.
+
+        Args:
+            query (str): The query string formatted for the Neo API.
+            filter_name (str, optional): The filter name to apply. Defaults to "all".
+
+        Returns:
+            list or None: Raw response list containing quote data, or None if the request fails.
+        """
         client = get_httpx_client()
 
         # URL encode spaces but keep pipe/comma characters
@@ -116,7 +141,16 @@ class BrokerData:
         return None
 
     def get_quotes(self, symbol, exchange):
-        """Get live quotes using Neo API v2 quotes endpoint with pSymbol-based queries"""
+        """
+        Get live quotes using Neo API v2 quotes endpoint with pSymbol-based queries.
+
+        Args:
+            symbol (str): The trading symbol.
+            exchange (str): The exchange on which the symbol trades.
+
+        Returns:
+            dict: Standardized quote data according to OpenAlgo schema, or empty data structure on failure.
+        """
         try:
             logger.info(f"QUOTES API - Symbol: {symbol}, Exchange: {exchange}")
 
@@ -216,7 +250,16 @@ class BrokerData:
             return self._get_default_quote()
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
-        """Get market depth using Neo API v2 quotes endpoint with depth filter"""
+        """
+        Get market depth using Neo API v2 quotes endpoint with depth filter.
+
+        Args:
+            symbol (str): The trading symbol.
+            exchange (str): The exchange on which the symbol trades.
+
+        Returns:
+            dict: The market depth information in standard OpenAlgo format.
+        """
         try:
             logger.info(f"DEPTH API - Symbol: {symbol}, Exchange: {exchange}")
 
@@ -321,13 +364,15 @@ class BrokerData:
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols with automatic batching
+        Get real-time quotes for multiple symbols with automatic batching.
+
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys
-                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+            symbols (list): List of dicts with 'symbol' and 'exchange' keys.
+                Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+
         Returns:
             list: List of quote data for each symbol with format:
-                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+                [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
             BATCH_SIZE = 50  # Conservative limit for URL length (GET request)
@@ -367,11 +412,13 @@ class BrokerData:
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
-        Process a single batch of symbols (internal method)
+        Process a single batch of symbols (internal method).
+
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+            symbols (list): List of dicts with 'symbol' and 'exchange' keys (max 50).
+
         Returns:
-            list: List of quote data for the batch
+            list: List of quote data for the batch.
         """
         # Build comma-separated queries and mapping
         queries = []
@@ -546,7 +593,19 @@ class BrokerData:
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
-        """Placeholder for historical data - not supported by Kotak Neo"""
+        """
+        Placeholder for historical data - not supported by Kotak Neo.
+
+        Args:
+            symbol (str): The trading symbol.
+            exchange (str): The exchange on which the symbol trades.
+            interval (str): Timeframe interval.
+            start_date (str): The starting date block.
+            end_date (str): The ending date block.
+
+        Returns:
+            pd.DataFrame: Empty pandas DataFrame as Kotak Neo lacks historical coverage.
+        """
         empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         logger.warning("Kotak Neo does not support historical data")
         return empty_df

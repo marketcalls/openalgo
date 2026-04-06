@@ -136,9 +136,14 @@ def transform_modify_order_data(data):
     return transformed
 
 
-def map_order_type(pricetype):
-    """
-    Maps the OpenAlgo pricetype to Groww order_type values.
+def map_order_type(pricetype: str) -> str:
+    """Map OpenAlgo price type to Groww order type code.
+
+    Args:
+        pricetype (str): OpenAlgo price type.
+
+    Returns:
+        str: Groww order type code.
     """
     order_type_mapping = {
         "MARKET": ORDER_TYPE_MARKET,
@@ -151,9 +156,14 @@ def map_order_type(pricetype):
     )  # Default to MARKET if not found
 
 
-def map_exchange_type(exchange):
-    """
-    Maps the OpenAlgo Exchange to Groww Exchange values.
+def map_exchange_type(exchange: str) -> str:
+    """Map OpenAlgo Exchange to Groww Exchange values.
+
+    Args:
+        exchange (str): OpenAlgo exchange string.
+
+    Returns:
+        str: Groww exchange string.
     """
     exchange_mapping = {
         "NSE": EXCHANGE_NSE,
@@ -164,9 +174,14 @@ def map_exchange_type(exchange):
     return exchange_mapping.get(exchange.upper(), EXCHANGE_NSE)  # Default to NSE if not found
 
 
-def map_exchange(brexchange):
-    """
-    Maps the Groww Exchange to OpenAlgo Exchange format.
+def map_exchange(brexchange: str) -> str:
+    """Map Groww Exchange to OpenAlgo Exchange format.
+
+    Args:
+        brexchange (str): Groww exchange string.
+
+    Returns:
+        str: OpenAlgo exchange string.
     """
     exchange_mapping = {
         EXCHANGE_NSE: "NSE",
@@ -177,9 +192,14 @@ def map_exchange(brexchange):
     return exchange_mapping.get(brexchange, "NSE")  # Default to NSE if not found
 
 
-def map_product_type(product):
-    """
-    Maps the OpenAlgo product type to Groww product type.
+def map_product_type(product: str) -> str:
+    """Map OpenAlgo product type to Groww product type.
+
+    Args:
+        product (str): OpenAlgo product type.
+
+    Returns:
+        str: Groww product type.
     """
     product_type_mapping = {
         "CNC": PRODUCT_CNC,  # Cash and Carry
@@ -189,17 +209,27 @@ def map_product_type(product):
     return product_type_mapping.get(product.upper(), PRODUCT_CNC)  # Default to CNC if not found
 
 
-def reverse_map_product_type(product):
-    """
-    Maps the Groww product type to the OpenAlgo product type.
+def reverse_map_product_type(product: str) -> str:
+    """Map Groww product type to OpenAlgo product type.
+
+    Args:
+        product (str): Groww product type.
+
+    Returns:
+        str: OpenAlgo product type.
     """
     product_mapping = {PRODUCT_CNC: "CNC", PRODUCT_NRML: "NRML", PRODUCT_MIS: "MIS"}
     return product_mapping.get(product)  # Return None if not found
 
 
-def get_segment(exchange):
-    """
-    Map exchange to segment type for Groww
+def get_segment(exchange: str) -> str:
+    """Map exchange to segment type for Groww.
+
+    Args:
+        exchange (str): Exchange string.
+
+    Returns:
+        str: Groww segment string.
     """
     segment_mapping = {
         "NSE": SEGMENT_CASH,
@@ -210,9 +240,14 @@ def get_segment(exchange):
     return segment_mapping.get(exchange.upper(), SEGMENT_CASH)  # Default to CASH if not found
 
 
-def map_segment_type(exchange):
-    """
-    Maps the OpenAlgo exchange to Groww segment type.
+def map_segment_type(exchange: str) -> str:
+    """Map OpenAlgo exchange to Groww segment type.
+
+    Args:
+        exchange (str): Exchange string.
+
+    Returns:
+        str: Groww segment string.
     """
     segment_mapping = {
         "NSE": SEGMENT_CASH,
@@ -223,9 +258,14 @@ def map_segment_type(exchange):
     return segment_mapping.get(exchange.upper(), SEGMENT_CASH)  # Default to CASH if not found
 
 
-def map_validity(validity):
-    """
-    Maps OpenAlgo validity to Groww validity type.
+def map_validity(validity: str) -> str:
+    """Map OpenAlgo validity to Groww validity type.
+
+    Args:
+        validity (str): OpenAlgo validity string.
+
+    Returns:
+        str: Groww validity string.
     """
     validity_mapping = {
         "DAY": VALIDITY_DAY,
@@ -235,9 +275,14 @@ def map_validity(validity):
     return validity_mapping.get(validity.upper(), VALIDITY_DAY)  # Default to DAY if not found
 
 
-def map_transaction_type(action):
-    """
-    Maps OpenAlgo action to Groww transaction_type.
+def map_transaction_type(action: str) -> str:
+    """Map OpenAlgo action to Groww transaction type.
+
+    Args:
+        action (str): OpenAlgo action string.
+
+    Returns:
+        str: Groww transaction type.
     """
     transaction_type_mapping = {"BUY": TRANSACTION_TYPE_BUY, "SELL": TRANSACTION_TYPE_SELL}
     return transaction_type_mapping.get(

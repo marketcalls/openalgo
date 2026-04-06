@@ -11,11 +11,11 @@ def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
 
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    Args:
+        order_data (dict): A dictionary containing 'data' which is a list of order dictionaries.
 
     Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+        dict: The modified order_data dictionary with updated fields.
     """
     # Check if 'data' is None
     # if order_data has key 'data' and its value is None
@@ -59,11 +59,11 @@ def calculate_order_statistics(order_data):
     Calculates statistics from order data, including totals for buy orders, sell orders,
     completed orders, open orders, and rejected orders.
 
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    Args:
+        order_data (list): A list of dictionaries, where each dictionary represents an order.
 
     Returns:
-    - A dictionary containing counts of different types of orders.
+        dict: A dictionary containing counts of different types of orders.
     """
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
@@ -102,6 +102,15 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
+    """
+    Transforms broker-specific order data into the OpenAlgo standard format.
+
+    Args:
+        orders (list or dict): A list of order dictionaries or a single order dictionary.
+
+    Returns:
+        list: A list of dictionaries with standardized order fields.
+    """
     # Directly handling a dictionary assuming it's the structure we expect
     if isinstance(orders, dict):
         # Convert the single dictionary into a list of one dictionary
@@ -154,13 +163,13 @@ def transform_order_data(orders):
 
 def map_trade_data(trade_data):
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
+    Processes and modifies a list of trade dictionaries based on specific conditions.
 
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    Args:
+        trade_data (dict): A dictionary containing 'data' which is a list of trade dictionaries.
 
     Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+        dict: The modified trade_data dictionary with updated 'tradingsymbol' and 'product' fields.
     """
     if trade_data["stat"] == "Not_Ok":
         logger.info("No data available.")
@@ -205,6 +214,15 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """
+    Transforms broker-specific tradebook data into the OpenAlgo standard format.
+
+    Args:
+        tradebook_data (list): A list of trade dictionaries to process.
+
+    Returns:
+        list: A list of standardized trade dictionaries.
+    """
     transformed_data = []
 
     for trade in tradebook_data:
@@ -224,10 +242,28 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
+    """
+    Maps position data to standard format by reusing the order mapping logic.
+
+    Args:
+        position_data (dict): The position data to map.
+
+    Returns:
+        dict: Mapped position data.
+    """
     return map_order_data(position_data)
 
 
 def transform_positions_data(positions_data):
+    """
+    Transforms broker-specific position data into the OpenAlgo standard format.
+
+    Args:
+        positions_data (list): A list of position dictionaries.
+
+    Returns:
+        list: A list of standardized position dictionaries.
+    """
     transformed_data = []
     for position in positions_data:
         transformed_position = {
@@ -258,6 +294,15 @@ def transform_positions_data(positions_data):
 
 
 def transform_holdings_data(holdings_data):
+    """
+    Transforms broker-specific holdings data into the OpenAlgo standard format.
+
+    Args:
+        holdings_data (list): A list of holdings dictionaries.
+
+    Returns:
+        list: A list of standardized holdings dictionaries.
+    """
     transformed_data = []
     logger.info("Holdings Data")
     logger.info(f"{holdings_data}")
@@ -290,15 +335,13 @@ def transform_holdings_data(holdings_data):
 
 def map_portfolio_data(portfolio_data):
     """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions and
-    ensures both holdings and totalholding parts are transmitted in a single response.
+    Processes and modifies a list of Portfolio dictionaries based on specific conditions.
 
-    Parameters:
-    - portfolio_data: A dictionary, where keys are 'holdings' and 'totalholding',
-                      and values are lists/dictionaries representing the portfolio information.
+    Args:
+        portfolio_data (dict): A dictionary containing 'data' representing portfolio information.
 
     Returns:
-    - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
+        list or dict: The modified portfolio_data 'data' branch.
     """
     # Check if 'data' is None or doesn't contain 'holdings'
     if portfolio_data.get("data") is None:
@@ -333,6 +376,15 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
+    """
+    Calculates statistics representing the overall portfolio performance.
+
+    Args:
+        holdings_data (list): A list of holding dictionaries.
+
+    Returns:
+        dict: A dictionary of compiled portfolio statistics including totals and percentage.
+    """
     totalholdingvalue = sum(item["mktValue"] for item in holdings_data)
     totalinvvalue = sum(item["holdingCost"] for item in holdings_data)
     totalprofitandloss = sum(item["mktValue"] - item["holdingCost"] for item in holdings_data)
