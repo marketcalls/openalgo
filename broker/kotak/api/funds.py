@@ -133,15 +133,18 @@ def get_margin_data(auth_token):
             # Import here to avoid circular dependency
             from broker.kotak.api.order_api import get_positions
 
-            logger.info("Fetching positions for PnL calculation")
+            logger.debug("Fetching positions for PnL calculation")
             positions_response = get_positions(auth_token)
-            logger.info(f"Positions API Response: {positions_response}")
+            logger.debug(f"Positions API Response: {positions_response}")
 
             data = positions_response.get("data")
             if positions_response.get("stat", "").lower() == "ok" and data is not None:
                 positions = data
                 logger.info(f"Processing {len(positions)} positions for PnL")
-                logger.info(f"Sample position data: {positions[0] if positions else 'No positions'}")
+
+                # Collect all symbols for batch LTP fetch
+                symbols_to_fetch = []
+                position_map = {}  # Map symbol to position data
 
                 for position in positions:
                     # Calculate net quantity
@@ -152,86 +155,125 @@ def get_margin_data(auth_token):
 
                     net_qty = (fl_buy_qty - fl_sell_qty) + (cf_buy_qty - cf_sell_qty)
 
-                    # Handle realized P&L differently for closed vs open positions
-                    if net_qty == 0:
-                        # Closed position - use buyAmt/sellAmt for accurate realized P&L
-                        # The rpnl field is often inaccurate for closed positions
-                        buy_amt = safe_float(position.get("buyAmt"))
-                        sell_amt = safe_float(position.get("sellAmt"))
-
-                        if buy_amt > 0 or sell_amt > 0:
-                            realized_pnl = sell_amt - buy_amt
-                            total_realised += realized_pnl
-                            logger.info(
-                                f"Closed Position {position.get('trdSym')}: "
-                                f"buyAmt={buy_amt}, sellAmt={sell_amt}, realized={realized_pnl:.2f}"
-                            )
-                    else:
-                        # Open position - calculate both realized and unrealized P&L
-                        # For partially closed positions, we need to calculate realized P&L
-                        # from the closed portion
-                        buy_amt = safe_float(position.get("buyAmt"))
-                        sell_amt = safe_float(position.get("sellAmt"))
-
-                        # Calculate realized P&L for the closed portion
-                        if fl_sell_qty > 0 and fl_buy_qty > 0:
-                            # Average buy price
-                            avg_buy_price = buy_amt / fl_buy_qty if fl_buy_qty > 0 else 0
-                            # Realized P&L = sellAmt - (avg_buy_price × sell_qty)
-                            realized_pnl = sell_amt - (avg_buy_price * fl_sell_qty)
-                            total_realised += realized_pnl
-                            logger.info(
-                                f"Partial Realized P&L for {position.get('trdSym')}: "
-                                f"sold {fl_sell_qty} @ avg {avg_buy_price:.2f}, "
-                                f"realized={realized_pnl:.2f}"
-                            )
-
-                        # Calculate unrealized PnL for open positions
-                        # Kotak API doesn't provide flBuyAvg/flSellAvg, so calculate from amounts
-                        avg_price = 0.0
-                        if net_qty > 0:
-                            # Long position - calculate buy average from buyAmt / flBuyQty
-                            if fl_buy_qty > 0:
-                                avg_price = buy_amt / fl_buy_qty
-                        else:
-                            # Short position - calculate sell average from sellAmt / flSellQty
-                            if fl_sell_qty > 0:
-                                avg_price = sell_amt / fl_sell_qty
-
-                        # Get current LTP - Kotak positions API doesn't provide ltp
-                        # We need to fetch it from quotes API
-                        ltp = 0.0
+                    # Only fetch LTP for open positions
+                    if net_qty != 0:
                         try:
-                            from broker.kotak.api.data import BrokerData
                             from broker.kotak.mapping.transform_data import map_exchange
-
-                            # Get OpenAlgo exchange format
-                            oa_exchange = map_exchange(position.get("exSeg"))
-
-                            # Get OpenAlgo symbol from database
                             from database.token_db import get_symbol
+
+                            oa_exchange = map_exchange(position.get("exSeg"))
                             token = position.get("tok")
                             oa_symbol = get_symbol(token, oa_exchange)
 
                             if oa_symbol and oa_exchange:
-                                broker_data = BrokerData(auth_token)
-                                quotes_response = broker_data.get_quotes(oa_symbol, oa_exchange)
-                                if quotes_response:
-                                    ltp = safe_float(quotes_response.get("ltp"))
-                                    logger.debug(f"Fetched LTP for {position.get('trdSym')}: {ltp}")
+                                symbols_to_fetch.append({
+                                    "symbol": oa_symbol,
+                                    "exchange": oa_exchange
+                                })
+                                position_map[f"{oa_symbol}_{oa_exchange}"] = position
                         except Exception as e:
-                            logger.debug(f"Could not fetch LTP for {position.get('trdSym')}: {e}")
+                            logger.debug(f"Could not prepare symbol for LTP fetch: {e}")
+
+                # Batch fetch LTP for all open positions
+                ltp_map = {}
+                if symbols_to_fetch:
+                    try:
+                        from broker.kotak.api.data import BrokerData
+                        broker_data = BrokerData(auth_token)
+                        multiquotes_response = broker_data.get_multiquotes(symbols_to_fetch)
+
+                        for quote_item in multiquotes_response:
+                            if "data" in quote_item and quote_item["data"]:
+                                symbol = quote_item["symbol"]
+                                exchange = quote_item["exchange"]
+                                ltp = safe_float(quote_item["data"].get("ltp"))
+                                ltp_map[f"{symbol}_{exchange}"] = ltp
+                                logger.debug(f"Fetched LTP for {symbol}: {ltp}")
+                    except Exception as e:
+                        logger.warning(f"Could not batch fetch LTP: {e}")
+
+                # Now calculate P&L for each position
+                for position in positions:
+                    # Calculate net quantity
+                    fl_buy_qty = safe_int(position.get("flBuyQty"))
+                    fl_sell_qty = safe_int(position.get("flSellQty"))
+                    cf_buy_qty = safe_int(position.get("cfBuyQty"))
+                    cf_sell_qty = safe_int(position.get("cfSellQty"))
+
+                    net_qty = (fl_buy_qty - fl_sell_qty) + (cf_buy_qty - cf_sell_qty)
+
+                    # Get amounts including carry-forward
+                    fl_buy_amt = safe_float(position.get("buyAmt"))
+                    fl_sell_amt = safe_float(position.get("sellAmt"))
+                    cf_buy_amt = safe_float(position.get("cfBuyAmt"))
+                    cf_sell_amt = safe_float(position.get("cfSellAmt"))
+
+                    total_buy_amt = fl_buy_amt + cf_buy_amt
+                    total_sell_amt = fl_sell_amt + cf_sell_amt
+                    total_buy_qty = fl_buy_qty + cf_buy_qty
+                    total_sell_qty = fl_sell_qty + cf_sell_qty
+
+                    # Handle realized P&L differently for closed vs open positions
+                    if net_qty == 0:
+                        # Closed position - use total buyAmt/sellAmt for accurate realized P&L
+                        if total_buy_amt > 0 or total_sell_amt > 0:
+                            realized_pnl = total_sell_amt - total_buy_amt
+                            total_realised += realized_pnl
+                            logger.debug(
+                                f"Closed Position {position.get('trdSym')}: "
+                                f"buyAmt={total_buy_amt}, sellAmt={total_sell_amt}, realized={realized_pnl:.2f}"
+                            )
+                    else:
+                        # Open position - calculate both realized and unrealized P&L
+                        # Calculate realized P&L for the closed portion
+                        if total_sell_qty > 0 and total_buy_qty > 0:
+                            # Average buy price including carry-forward
+                            avg_buy_price = total_buy_amt / total_buy_qty if total_buy_qty > 0 else 0
+                            # Realized P&L = sellAmt - (avg_buy_price × sell_qty)
+                            realized_pnl = total_sell_amt - (avg_buy_price * total_sell_qty)
+                            total_realised += realized_pnl
+                            logger.debug(
+                                f"Partial Realized P&L for {position.get('trdSym')}: "
+                                f"sold {total_sell_qty} @ avg {avg_buy_price:.2f}, "
+                                f"realized={realized_pnl:.2f}"
+                            )
+
+                        # Calculate unrealized PnL for open positions
+                        # Include carry-forward in average price calculation
+                        avg_price = 0.0
+                        if net_qty > 0:
+                            # Long position - calculate buy average including carry-forward
+                            if total_buy_qty > 0:
+                                avg_price = total_buy_amt / total_buy_qty
+                        else:
+                            # Short position - calculate sell average including carry-forward
+                            if total_sell_qty > 0:
+                                avg_price = total_sell_amt / total_sell_qty
+
+                        # Get LTP from batch fetch
+                        try:
+                            from broker.kotak.mapping.transform_data import map_exchange
+                            from database.token_db import get_symbol
+
+                            oa_exchange = map_exchange(position.get("exSeg"))
+                            token = position.get("tok")
+                            oa_symbol = get_symbol(token, oa_exchange)
+
+                            ltp = ltp_map.get(f"{oa_symbol}_{oa_exchange}", 0.0)
+                        except Exception as e:
+                            logger.debug(f"Could not get LTP for {position.get('trdSym')}: {e}")
+                            ltp = 0.0
 
                         # Calculate unrealized PnL
                         if ltp > 0 and avg_price > 0:
                             unrealized = (ltp - avg_price) * net_qty
                             total_unrealised += unrealized
-                            logger.info(
+                            logger.debug(
                                 f"Open Position {position.get('trdSym')}: qty={net_qty}, "
                                 f"avg={avg_price:.2f}, ltp={ltp:.2f}, unrealized={unrealized:.2f}"
                             )
                         else:
-                            logger.warning(
+                            logger.debug(
                                 f"Could not calculate unrealized PnL for {position.get('trdSym')}: "
                                 f"avg_price={avg_price:.2f}, ltp={ltp:.2f}"
                             )
