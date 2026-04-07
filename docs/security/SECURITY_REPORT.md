@@ -10,9 +10,9 @@ Auditor: Claude Code
 
 | Severity | Count |
 |----------|-------|
-| Critical | 2 |
-| High | 12 |
-| Medium | 23 |
+| Critical | 3 |
+| High | 16 |
+| Medium | 27 |
 | Low | 4 |
 
 ## Critical Findings
@@ -42,6 +42,20 @@ What: The `get_encryption_key()` function uses `os.getenv("API_KEY_PEPPER", "def
 Risk: This is a compound failure: both the pepper and salt have hardcoded defaults. Since the repository is open source, any attacker who obtains the database can decrypt every Telegram user's API key using these known values. Each API key grants full trading access to that user's broker account.
 
 Fix: Remove the default values for both `API_KEY_PEPPER` and `TELEGRAM_KEY_SALT` and fail fast if they are not set, matching the pattern established in `auth_db.py`.
+
+---
+
+### VULN-045: Install Script Deploys Production Trading Platform Over Plain HTTP Without TLS
+
+Severity: Critical
+File: install/ubuntu-ip.sh (lines 369, 375, 404, 477)
+CWE: CWE-319
+
+What: The `ubuntu-ip.sh` install script deploys OpenAlgo bound directly to `0.0.0.0:80` over plain HTTP with no TLS, no reverse proxy, and no SSL certificate setup. The `HOST_SERVER` is set to `http://$SERVER_IP`, and the WebSocket URL is set to `ws://$SERVER_IP:8765`. All communication -- including broker API credentials during login, API key authentication, session cookies, trading orders, and market data -- is transmitted in plaintext. The firewall is configured to expose both port 80 and port 8765 to the internet.
+
+Risk: All traffic between the user's browser and the server is transmitted unencrypted. An attacker on the same network or any network hop can intercept broker credentials, API keys, session tokens, and trading commands. This enables complete account takeover and unauthorized trading with real money.
+
+Fix: Either remove this script or add a prominent warning that it is only for local/development use behind a firewall. For any internet-facing deployment, require TLS. At minimum, add a check that refuses to bind to `0.0.0.0` without TLS and guide users to the `install.sh` script which includes Certbot/SSL setup.
 
 ---
 
@@ -226,6 +240,62 @@ What: The Fyers OAuth authorization URL uses a hardcoded, static `state` paramet
 Risk: An attacker can craft a malicious link that initiates the Fyers OAuth flow with the attacker's authorization code, causing the victim's OpenAlgo instance to authenticate with the attacker's brokerage account. This is a classic OAuth CSRF attack. Since this application handles real financial transactions, an attacker could trick a user into trading on a manipulated account, or intercept the legitimate user's authorization code via a race condition.
 
 Fix: Generate a cryptographically random state per OAuth request using `crypto.randomUUID()`, store it in `sessionStorage`, and validate it on callback.
+
+---
+
+### VULN-046: MCP Server Accepts API Key via Command-Line Argument Visible in Process List
+
+Severity: High
+File: mcp/mcpserver.py (lines 9-16)
+CWE: CWE-214
+
+What: The MCP server reads the OpenAlgo API key directly from `sys.argv[1]`. When the MCP server is launched, the API key appears as a plaintext argument in the process list (visible via `ps aux`, `/proc/*/cmdline`, or task manager). Any user or process with access to the system's process list can read this key. This API key provides full trading capabilities -- the MCP server exposes tools for placing orders, modifying orders, canceling orders, closing all positions, and accessing account funds.
+
+Risk: On multi-user or shared systems, any local user can harvest the API key from the process table and gain full trading control over the victim's brokerage account, including placing, modifying, and canceling orders with real money.
+
+Fix: Read the API key from an environment variable (`OPENALGO_API_KEY`) or a configuration file with restrictive permissions (0600) instead of command-line arguments. Remove the `sys.argv` approach entirely.
+
+---
+
+### VULN-047: MCP Server Exposes Unrestricted Live Trading Operations Without Confirmation
+
+Severity: High
+File: mcp/mcpserver.py (lines 24-461)
+CWE: CWE-862
+
+What: The MCP server exposes 30+ tools via the Model Context Protocol, including `place_order`, `place_smart_order`, `place_basket_order`, `place_split_order`, `place_options_order`, `place_options_multi_order`, `modify_order`, `cancel_order`, `cancel_all_orders`, `close_all_positions`, and `analyzer_toggle`. These tools can execute real trades with real money. There is no secondary confirmation mechanism, no rate limiting, no order size validation, and no guard preventing the MCP client (an AI agent) from toggling from analyzer mode to live mode and then placing orders.
+
+Risk: An AI agent interacting through MCP could inadvertently (through prompt injection or hallucination) place large orders, cancel all positions, or switch from paper trading to live trading, resulting in significant financial losses. The lack of any confirmation step or guardrail means a single misinterpreted instruction could trigger irreversible financial transactions.
+
+Fix: Implement a confirmation mechanism for destructive operations (place orders, close positions, toggle analyzer mode). Add configurable order size limits, a configurable allowlist of permitted operations, and require explicit opt-in to live trading mode. Consider making the MCP server read-only by default.
+
+---
+
+### VULN-050: Install Script Exposes WebSocket Port 8765 Directly to the Internet
+
+Severity: High
+File: install/ubuntu-ip.sh (line 287)
+CWE: CWE-668
+
+What: The `ubuntu-ip.sh` script explicitly opens port 8765 in the firewall with `sudo ufw allow 8765/tcp`. Combined with the lack of TLS (VULN-045), the WebSocket proxy server is directly exposed to the internet without any transport-layer security. While the WebSocket proxy does require API key authentication at the application level, this authentication occurs over plaintext.
+
+Risk: The WebSocket port is reachable from the internet without TLS encryption. API keys transmitted during authentication can be intercepted by network observers. The exposed port also increases the attack surface for connection-flooding DoS attacks against the WebSocket server.
+
+Fix: Remove the `ufw allow 8765/tcp` rule. The WebSocket should only be accessible through a reverse proxy that provides TLS termination.
+
+---
+
+### VULN-051: ZeroMQ Publisher Binds to All Interfaces Exposing Internal Message Bus
+
+Severity: High
+File: websocket_proxy/base_adapter.py (lines 203, 219)
+CWE: CWE-668
+
+What: The `BaseBrokerWebSocketAdapter._bind_to_available_port()` method binds the ZeroMQ PUB socket to `tcp://*:{port}`, which listens on all network interfaces. The install scripts explicitly set `ZMQ_HOST='0.0.0.0'`. The ZeroMQ message bus carries raw market data from broker adapters. The bare-metal installation scripts do not configure firewall rules to block the ZMQ port (typically 5555-5556), leaving it accessible from the network.
+
+Risk: Any host on the network can connect a ZMQ SUB socket to the publisher and receive all raw market data being streamed from the broker. In bare-metal deployments without proper firewall rules, this leaks potentially sensitive real-time trading data. An attacker could also monitor subscriptions and infer trading strategies.
+
+Fix: Change the bind address from `tcp://*:{port}` to `tcp://127.0.0.1:{port}` in `base_adapter.py`. The ZMQ publisher only needs to be reachable from the local WebSocket proxy server. The install scripts should also set `ZMQ_HOST='127.0.0.1'` instead of `0.0.0.0`.
 
 ---
 
@@ -550,6 +620,62 @@ What: The recommended and default CSP configuration includes `'unsafe-inline'` i
 Risk: The entire purpose of `script-src` in CSP is to prevent inline script execution -- the most common XSS attack vector. With `'unsafe-inline'` present, CSP provides no protection against reflected or stored XSS attacks. Combined with the API key in localStorage (VULN-037) and unrestricted `connect-src` (VULN-042), a single XSS injection could steal trading credentials and exfiltrate them.
 
 Fix: Remove `'unsafe-inline'` from `script-src` and use nonces or hashes instead. Generate a per-request nonce and pass it to both the CSP header and any required inline scripts.
+
+---
+
+### VULN-048: WebSocket Proxy Has No Per-Client Subscription Limit
+
+Severity: Medium
+File: websocket_proxy/server.py (lines 937-1047)
+CWE: CWE-770
+
+What: The `subscribe_client` method processes subscription requests without enforcing any limit on the number of symbols a single client can subscribe to. The server iterates over the `symbols` array in the request data and subscribes to each one with no cap on the array size. While the broker adapter has per-connection symbol limits (`MAX_SYMBOLS_PER_WEBSOCKET`), there is no server-side validation preventing a client from sending an arbitrarily large subscription request.
+
+Risk: An authenticated client can subscribe to thousands of symbols in a single request, causing excessive memory consumption, exhausting the broker connection pool, and potentially triggering a denial of service that disrupts real-time market data for active trading strategies.
+
+Fix: Add a per-request and per-client subscription limit check in `subscribe_client` before processing symbols. Reject requests where `len(symbols)` exceeds a configurable maximum.
+
+---
+
+### VULN-049: Dockerfile Sets World-Readable .env File Permissions
+
+Severity: Medium
+File: Dockerfile (line 51)
+CWE: CWE-732
+
+What: The Dockerfile creates the `.env` file with `chmod 666` permissions, making it readable and writable by any user inside the container. The `.env` file contains highly sensitive secrets including `APP_KEY`, `API_KEY_PEPPER`, `BROKER_API_KEY`, `BROKER_API_SECRET`, and database URLs.
+
+Risk: Any process running inside the container (e.g., a compromised Python strategy script uploaded via the strategies feature) can read the `.env` file containing broker credentials and cryptographic secrets, potentially gaining full access to the user's brokerage account.
+
+Fix: Change the Dockerfile from `chmod 666 /app/.env` to `chmod 600 /app/.env`, ensuring only the `appuser` owner can read and write the file.
+
+---
+
+### VULN-052: start.sh Writes Plaintext Secrets to .env File With Fallback to /tmp
+
+Severity: Medium
+File: start.sh (lines 34-140)
+CWE: CWE-312
+
+What: When `start.sh` runs in a cloud environment and detects `HOST_SERVER` is set, it writes all sensitive environment variables -- including `BROKER_API_KEY`, `BROKER_API_SECRET`, `APP_KEY`, `API_KEY_PEPPER` -- to a plaintext `.env` file on disk. If the primary write to `/app/.env` fails, it falls back to `/tmp/.env`, which is even more widely accessible.
+
+Risk: Secrets that were previously only in memory (as environment variables) are persisted to disk in plaintext with overly permissive file permissions. The `/tmp/.env` fallback path is particularly dangerous as `/tmp` is typically world-readable.
+
+Fix: Write the `.env` file with `chmod 600` permissions. Remove the `/tmp/.env` fallback -- if the app cannot write to `/app/.env`, it should fail rather than write secrets to a world-readable temp location.
+
+---
+
+### VULN-053: Install Scripts Write Secrets Into .env With Overly Broad File Permissions
+
+Severity: Medium
+File: install/install.sh (lines 694-709), install/ubuntu-ip.sh (lines 359-372)
+CWE: CWE-538
+
+What: The install scripts write broker API keys and secrets directly into the `.env` file using `sed -i` substitution. The resulting `.env` file permissions are set to 755 applied recursively across the entire installation directory, making the `.env` file containing `BROKER_API_KEY`, `BROKER_API_SECRET`, `APP_KEY`, and `API_KEY_PEPPER` readable by any user on the system.
+
+Risk: On shared hosting environments or systems with multiple users, any local user can read the `.env` file and obtain broker API credentials, enabling unauthorized access to the trading account.
+
+Fix: After writing the `.env` file, set its permissions to `chmod 600` and ensure ownership is restricted to the service user only.
 
 ---
 
