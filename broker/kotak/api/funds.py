@@ -176,6 +176,7 @@ def get_margin_data(auth_token):
 
                 # Batch fetch LTP for all open positions
                 ltp_map = {}
+                use_api_fallback = False
                 if symbols_to_fetch:
                     try:
                         from broker.kotak.api.data import BrokerData
@@ -189,14 +190,21 @@ def get_margin_data(auth_token):
                                 ltp = safe_float(quote_item["data"].get("ltp"))
                                 ltp_map[f"{symbol}_{exchange}"] = ltp
                                 logger.debug(f"Fetched LTP for {symbol}: {ltp}")
+
+                        # Check if we got any usable LTP data
+                        if not ltp_map and symbols_to_fetch:
+                            logger.warning("Batch LTP fetch returned no usable data")
+                            use_api_fallback = True
                     except Exception as e:
                         logger.warning(f"Could not batch fetch LTP: {e}")
-                        # Fallback: try to use API-provided unrealized P&L if batch fetch fails
-                        if not ltp_map:
-                            logger.info("Using API-provided unrealized P&L as fallback")
-                            total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
-                            # Still calculate realized P&L from positions
-                            # (continue with position loop but skip unrealized calculation)
+                        use_api_fallback = True
+
+                    # Fallback: use API-provided unrealized P&L if batch fetch failed or returned no data
+                    if use_api_fallback:
+                        logger.info("Using API-provided unrealized P&L as fallback")
+                        total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
+                        # Still calculate realized P&L from positions
+                        # (continue with position loop but skip unrealized calculation)
 
                 # Now calculate P&L for each position
                 for position in positions:
@@ -280,8 +288,8 @@ def get_margin_data(auth_token):
                             ltp = 0.0
 
                         # Calculate unrealized PnL only if we have LTP data
-                        # If batch fetch failed, unrealized P&L was already set from API fallback
-                        if ltp_map:  # Only calculate if we have LTP data
+                        # If batch fetch failed or returned no data, unrealized P&L was set from API fallback
+                        if not use_api_fallback:  # Only calculate if we have LTP data
                             if ltp > 0 and avg_price > 0:
                                 unrealized = (ltp - avg_price) * net_qty
                                 total_unrealised += unrealized
