@@ -40,15 +40,15 @@ Fix: Add a startup validation in `utils/env_check.py` that reads the hardcoded s
 
 ### VULN-003: Install Script Deploys Production Trading Platform Over Plain HTTP Without TLS
 
-Severity: Critical
-File: install/ubuntu-ip.sh (lines 369, 375, 404, 477)
+Severity: Critical -- **RESOLVED** (ubuntu-ip.sh deleted)
+File: install/ubuntu-ip.sh (removed)
 CWE: CWE-319
 
-What: The `ubuntu-ip.sh` install script deploys OpenAlgo bound directly to `0.0.0.0:80` over plain HTTP with no TLS, no reverse proxy, and no SSL certificate setup. The `HOST_SERVER` is set to `http://$SERVER_IP`, and the WebSocket URL is set to `ws://$SERVER_IP:8765`. All communication -- including broker API credentials during login, API key authentication, session cookies, trading orders, and market data -- is transmitted in plaintext. The firewall is configured to expose both port 80 and port 8765 to the internet.
+What: The `ubuntu-ip.sh` install script deployed OpenAlgo bound directly to `0.0.0.0:80` over plain HTTP with no TLS, no reverse proxy, and no SSL certificate setup. The `HOST_SERVER` was set to `http://$SERVER_IP`, and the WebSocket URL was set to `ws://$SERVER_IP:8765`. All communication -- including broker API credentials during login, API key authentication, session cookies, trading orders, and market data -- was transmitted in plaintext. The firewall was configured to expose both port 80 and port 8765 to the internet.
 
-Risk: All traffic between the user's browser and the server is transmitted unencrypted. An attacker on the same network or any network hop can intercept broker credentials, API keys, session tokens, and trading commands. This enables complete account takeover and unauthorized trading with real money.
+Risk: All traffic between the user's browser and the server was transmitted unencrypted. An attacker on the same network or any network hop could intercept broker credentials, API keys, session tokens, and trading commands.
 
-Fix: Either remove this script or add a prominent warning that it is only for local/development use behind a firewall. For any internet-facing deployment, require TLS. At minimum, add a check that refuses to bind to `0.0.0.0` without TLS and guide users to the `install.sh` script which includes Certbot/SSL setup.
+Fix: Script deleted. Users should use `install/install.sh` which includes Nginx reverse proxy and Certbot/SSL setup.
 
 ---
 
@@ -266,15 +266,15 @@ Fix: Implement a confirmation mechanism for destructive operations (place orders
 
 ### VULN-019: Install Script Exposes WebSocket Port 8765 Directly to the Internet
 
-Severity: High
-File: install/ubuntu-ip.sh (line 287)
+Severity: High -- **RESOLVED** (ubuntu-ip.sh deleted)
+File: install/ubuntu-ip.sh (removed)
 CWE: CWE-668
 
-What: The `ubuntu-ip.sh` script explicitly opens port 8765 in the firewall with `sudo ufw allow 8765/tcp`. Combined with the lack of TLS (VULN-003), the WebSocket proxy server is directly exposed to the internet without any transport-layer security. While the WebSocket proxy does require API key authentication at the application level, this authentication occurs over plaintext.
+What: The `ubuntu-ip.sh` script explicitly opened port 8765 in the firewall with `sudo ufw allow 8765/tcp`. Combined with the lack of TLS (VULN-003), the WebSocket proxy server was directly exposed to the internet without any transport-layer security.
 
-Risk: The WebSocket port is reachable from the internet without TLS encryption. API keys transmitted during authentication can be intercepted by network observers. The exposed port also increases the attack surface for connection-flooding DoS attacks against the WebSocket server.
+Risk: The WebSocket port was reachable from the internet without TLS encryption. API keys transmitted during authentication could be intercepted by network observers.
 
-Fix: Remove the `ufw allow 8765/tcp` rule. The WebSocket should only be accessible through a reverse proxy that provides TLS termination.
+Fix: Script deleted. The `install/install.sh` script proxies WebSocket through Nginx with TLS.
 
 ---
 
@@ -677,7 +677,7 @@ Fix: Write the `.env` file with `chmod 600` permissions. Remove the `/tmp/.env` 
 ### VULN-047: Install Scripts Write Secrets Into .env With Overly Broad File Permissions
 
 Severity: Medium
-File: install/install.sh (lines 694-709), install/ubuntu-ip.sh (lines 359-372)
+File: install/install.sh (lines 694-709)
 CWE: CWE-538
 
 What: The install scripts write broker API keys and secrets directly into the `.env` file using `sed -i` substitution. The resulting `.env` file permissions are set to 755 applied recursively across the entire installation directory, making the `.env` file containing `BROKER_API_KEY`, `BROKER_API_SECRET`, `APP_KEY`, and `API_KEY_PEPPER` readable by any user on the system.
@@ -791,7 +791,7 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 ### Immediate (fix before next release)
 
 - VULN-001: Add startup check that refuses to start if APP_KEY or API_KEY_PEPPER matches the sample defaults (mitigated by install.sh but still needed for manual deployments)
-- VULN-003: Add TLS requirement or prominent warning to ubuntu-ip.sh install script
+- ~~VULN-003: Add TLS requirement or prominent warning to ubuntu-ip.sh install script~~ -- **RESOLVED** (script deleted)
 - VULN-009: Remove hardcoded "default-pepper-key" fallback in settings_db.py; fail fast if missing
 - VULN-010: Implement OAuth state parameter validation across all broker callback handlers
 - VULN-011: Remove automatic admin user fallback in Compositedge/RMoney OAuth callbacks
@@ -800,7 +800,7 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 - VULN-016: Replace hardcoded Fyers OAuth state with crypto.randomUUID()
 - VULN-017: Read MCP API key from environment variable instead of sys.argv
 - VULN-018: Add confirmation mechanism and operation allowlist to MCP server
-- VULN-019: Remove ufw allow 8765/tcp from ubuntu-ip.sh; proxy WebSocket through Nginx
+- ~~VULN-019: Remove ufw allow 8765/tcp from ubuntu-ip.sh; proxy WebSocket through Nginx~~ -- **RESOLVED** (script deleted)
 - VULN-020: Bind ZeroMQ to 127.0.0.1 instead of 0.0.0.0
 
 ### Short-term (fix within 2-4 weeks)
