@@ -11,8 +11,8 @@ Auditor: Claude Code
 | Severity | Count |
 |----------|-------|
 | Critical | 1 |
-| High | 3 |
-| Medium | 3 |
+| High | 4 |
+| Medium | 10 |
 | Low | 2 |
 
 ## Critical Findings
@@ -75,6 +75,20 @@ Fix: Do not return `totp_secret` in the API response. The QR code already contai
 
 ---
 
+### VULN-010: API Key Exposed in URL Query Parameters Across Multiple Endpoints
+
+Severity: High
+File: restx_api/chart_api.py (line 37), restx_api/instruments.py (line 55), restx_api/ticker.py (line 156), restx_api/telegram_bot.py (lines 113, 356, 542, 573)
+CWE: CWE-598
+
+What: Multiple endpoints accept the API key via URL query parameter (`request.args.get("apikey")`). The chart GET endpoint, instruments GET endpoint, ticker GET endpoint, and several Telegram bot endpoints all read `apikey` from the query string. URL query parameters are logged in web server access logs, browser history, proxy logs, CDN logs, and HTTP Referer headers. Since the API key grants full trading authority (place orders, cancel orders, close positions), this exposure in logs creates a persistent credential leakage risk.
+
+Risk: An attacker who gains access to any system that logs HTTP requests (web server logs, reverse proxy logs, load balancer logs, browser history, or network monitoring tools) can extract valid API keys and execute unauthorized trades on real brokerage accounts. This is especially severe because OpenAlgo is typically deployed behind reverse proxies like nginx which log full request URLs by default.
+
+Fix: Move API key authentication to the `X-API-KEY` request header for all GET endpoints. For endpoints that must remain GET (like TradingView chart integration), use a short-lived session token instead of the raw API key. At minimum, add documentation warning users about the URL-logged credential risk and configure server-side log redaction.
+
+---
+
 ## Medium Findings
 
 ### VULN-005: Plaintext API Key Used as Cache Key in `broker_cache`
@@ -116,6 +130,118 @@ What: CSRF protection is controlled by the `CSRF_ENABLED` environment variable: 
 Risk: If an administrator sets `CSRF_ENABLED=FALSE` (perhaps during troubleshooting), the entire application becomes vulnerable to CSRF attacks. An attacker could craft malicious pages that submit orders, change passwords, modify settings, or revoke API keys using the victim's authenticated session.
 
 Fix: Log a prominent warning at startup when CSRF is disabled. Consider removing the ability to fully disable CSRF, or at minimum require `FLASK_ENV=development` for CSRF to be disableable. Add a startup log message: "CRITICAL WARNING: CSRF protection is DISABLED. This should never be done in production."
+
+---
+
+### VULN-011: Unbounded Basket Order List Enables Resource Exhaustion
+
+Severity: Medium
+File: restx_api/schemas.py (lines 165-167)
+CWE: CWE-770
+
+What: The `BasketOrderSchema` defines `orders` as `fields.List(fields.Nested(BasketOrderItemSchema), required=True)` without any `validate=validate.Length(max=...)` constraint. An attacker can submit a basket order request containing thousands or millions of individual orders in a single request. Each order in the list undergoes schema validation, broker module loading, and potentially triggers a real order placement to the broker API. The `OptionsMultiOrderSchema` correctly limits legs to 20, and `MarginCalculatorSchema` limits positions to 50, but `BasketOrderSchema` has no such limit.
+
+Risk: A malicious authenticated user can submit an extremely large basket order (e.g., 100,000 orders) in a single API call. This could exhaust server memory during deserialization, overwhelm the broker API with order submissions, create a denial-of-service condition for the application, and potentially result in massive unintended trading exposure. The rate limiter protects against repeated requests but not against a single oversized request.
+
+Fix: Add `validate=validate.Length(min=1, max=50)` (or a suitable maximum) to the `orders` field in `BasketOrderSchema`, similar to how `OptionsMultiOrderSchema` limits legs and `MarginCalculatorSchema` limits positions.
+
+---
+
+### VULN-012: Symbol and Strategy Fields Lack Length and Character Validation
+
+Severity: Medium
+File: restx_api/schemas.py (lines 24-26, 57-59, 89-92, 136, 174)
+CWE: CWE-20
+
+What: Across all order schemas (`OrderSchema`, `SmartOrderSchema`, `ModifyOrderSchema`, `BasketOrderItemSchema`, `SplitOrderSchema`), the `symbol` field is defined as `fields.Str(required=True)` with no length constraint or character pattern validation. Similarly, the `strategy` field is `fields.Str(required=True)` without any constraints. An attacker can submit arbitrarily long strings (megabytes) in these fields, or include special characters, newlines, or control characters. These values are passed to broker API modules and logged throughout the system.
+
+Risk: Oversized strings in `symbol` or `strategy` fields can cause log injection (inserting fake log entries via newline characters), excessive memory consumption in downstream processing, unexpected behavior in broker API calls that concatenate these values into URLs or request bodies, and potential database storage issues. While the `MarginPositionSchema` correctly validates `symbol` with `validate.Length(min=1, max=50)`, all order-critical schemas omit this validation.
+
+Fix: Add `validate=validate.Length(min=1, max=50)` and a regex pattern validator (e.g., `validate.Regexp(r'^[A-Za-z0-9_\-:]+$')`) to all `symbol` fields. Add `validate=validate.Length(min=1, max=100)` to all `strategy` fields to prevent oversized payloads.
+
+---
+
+### VULN-013: SmartOrder position_size Has No Range Validation
+
+Severity: Medium
+File: restx_api/schemas.py (line 65)
+CWE: CWE-20
+
+What: The `SmartOrderSchema` defines `position_size = fields.Float(required=True)` with no range validation whatsoever. This field directly controls the target position size for smart order logic, which determines how many contracts/shares to buy or sell to reach a target position. An attacker can submit extreme values like `position_size=999999999` or `position_size=-999999999`, which the smart order service uses to calculate the order quantity by comparing against the current position. In contrast, all `quantity`, `price`, and `trigger_price` fields in the same schema have explicit `Range` validators.
+
+Risk: An authenticated attacker can submit a smart order with an astronomically large `position_size`, causing the system to calculate and place orders for an extreme quantity of shares or contracts. This could result in massive unintended market exposure, margin violations, or financial loss. The broker may reject such orders, but not all brokers have safety limits, and the order would still be submitted.
+
+Fix: Add `validate=validate.Range(min=-1000000, max=1000000)` (or appropriate bounds based on exchange position limits) to the `position_size` field in `SmartOrderSchema`.
+
+---
+
+### VULN-014: Webhook Endpoints Lack Per-Request Authentication
+
+Severity: Medium
+File: blueprints/strategy.py (lines 868-870), blueprints/chartink.py (lines 785-787)
+CWE: CWE-306
+
+What: The strategy webhook (`/strategy/webhook/<webhook_id>`) and Chartink webhook (`/chartink/webhook/<webhook_id>`) endpoints rely solely on the UUID `webhook_id` as authentication. There is no HMAC signature verification, no shared secret header check, and no IP whitelist. The webhook_id is a UUID4 which provides 122 bits of entropy, making brute-force impractical, but the UUID is transmitted in the URL and may be exposed through browser history, server logs, Referer headers, or the TradingView/Chartink platform configurations. Once known, anyone can trigger orders.
+
+Risk: If a webhook_id is leaked (through log exposure, misconfigured TradingView alert sharing, screenshots, or SSRF), an attacker can send arbitrary order requests to the webhook endpoint. The webhook directly queues orders with the user's stored API key (retrieved via `get_api_key_for_tradingview`), meaning the attacker does not need to know the API key -- they only need the UUID. The rate limit of 100/minute provides some mitigation but still allows significant unauthorized trading activity.
+
+Fix: Add an optional HMAC signature verification header (e.g., `X-Webhook-Secret`) that users can configure per strategy. Verify the signature against the request body using a shared secret. Additionally, consider adding IP whitelisting support for webhook sources (TradingView publishes their webhook IP ranges).
+
+---
+
+### VULN-015: Error Responses Leak Internal Exception Details
+
+Severity: Medium
+File: blueprints/chartink.py (line 944), restx_api/ticker.py (lines 263, 267), restx_api/telegram_bot.py (lines 243, 273)
+CWE: CWE-209
+
+What: Multiple endpoints return `str(e)` (the raw Python exception message) directly in HTTP error responses to the client. In `chartink.py` line 944, the webhook error handler returns `jsonify({"status": "error", "error": str(e)})`. In `ticker.py` line 267, broker module errors are returned as `jsonify({"status": "error", "message": str(e)})`. In `telegram_bot.py` lines 243 and 273, bot start/stop errors include `f"Failed to start bot: {str(e)}"`. These exceptions can contain internal file paths, database connection strings, broker API error details, or stack trace fragments.
+
+Risk: An attacker can trigger errors (by sending malformed data or invalid parameters) and collect internal implementation details from the error messages. This information aids in reconnaissance for further attacks -- revealing database types, broker API endpoints, internal module paths, and library versions. This is especially concerning on the publicly-exposed API endpoints that accept external webhook requests.
+
+Fix: Replace all instances of `str(e)` in client-facing error responses with generic messages like `"An unexpected error occurred"`. Log the full exception details server-side using `logger.exception()` (which is already done in most cases) but never expose them to the client.
+
+---
+
+### VULN-016: No Global Request Body Size Limit
+
+Severity: Medium
+File: app.py (entire file - absent configuration)
+CWE: CWE-400
+
+What: The Flask application does not set `MAX_CONTENT_LENGTH`, which means there is no global limit on the size of incoming request bodies. Flask defaults to accepting unlimited request body sizes. A search of the entire codebase confirms `MAX_CONTENT_LENGTH` is never configured. While individual schemas validate field lengths (e.g., `apikey` max 256 chars), there is no protection against a malicious client sending a multi-gigabyte JSON payload. Flask will attempt to parse the entire body into memory before any schema validation occurs.
+
+Risk: An attacker (authenticated or not, since the body is parsed before API key verification) can send extremely large HTTP request bodies to any API endpoint, consuming server memory and potentially causing an out-of-memory crash. This is a denial-of-service vector. Combined with the unbounded basket order list (VULN-011), a single request could consume gigabytes of memory.
+
+Fix: Set `app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024` (10 MB or appropriate limit) in `app.py` to enforce a global request body size limit. Flask will automatically return a 413 (Request Entity Too Large) response for oversized payloads before attempting to parse them.
+
+---
+
+### VULN-017: CORS Default Allows All Origins When Not Explicitly Configured
+
+Severity: Medium
+File: cors.py (lines 16-20, 56)
+CWE: CWE-942
+
+What: When `CORS_ENABLED` is not set to `TRUE` (which is the default), the `get_cors_config()` function returns an empty dictionary. This empty config is passed to `CORS(resources={r"/api/*": {}})`. With Flask-CORS, an empty config dictionary means the library uses its defaults, which allows all origins (`*`). Since `CORS_ENABLED` defaults to `FALSE`, a default deployment will have completely open CORS on all `/api/*` endpoints. The SocketIO extension also uses `cors_allowed_origins="*"` (extensions.py line 7).
+
+Risk: Any website can make cross-origin API requests to the OpenAlgo API endpoints. If a user visits a malicious website while logged in or while their API key is accessible, the malicious site can use JavaScript to call trading endpoints (place orders, cancel orders, retrieve account data). While the API key is required in the request body, if the key is stored in the browser (localStorage, cookies), or if the user's browser auto-fills forms, this creates a cross-site request forgery-like attack vector.
+
+Fix: Change the default behavior when `CORS_ENABLED` is `FALSE` to explicitly deny cross-origin requests by returning `{"origins": []}` or a restrictive default. At minimum, add a prominent warning in the setup documentation that CORS must be explicitly configured for production deployments. For SocketIO, replace `cors_allowed_origins="*"` with a configurable value.
+
+---
+
+### VULN-018: Webhook Queues Orders Using Unvalidated Scan Name as Action
+
+Severity: Medium
+File: blueprints/chartink.py (lines 808-829)
+CWE: CWE-20
+
+What: The Chartink webhook handler determines the trading action (BUY/SELL) by performing substring matching on the `scan_name` field from the incoming webhook payload: `if "BUY" in scan_name` / `elif "SELL" in scan_name`. The `scan_name` is provided by the external Chartink service in the webhook body and is not validated against a predefined set of expected values. If the scan_name contains both "BUY" and "SELL" (e.g., "BUY_THEN_SELL_STRATEGY"), only the first match wins due to if/elif ordering. More critically, anyone who knows the webhook_id can craft a request with any `scan_name` to trigger arbitrary BUY or SELL orders.
+
+Risk: An attacker who obtains the webhook UUID can craft requests with manipulated `scan_name` values to trigger unintended buy or sell orders. The substring matching approach means ambiguous names like "BUYBACK_SELL" would match "BUY" instead of "SELL", potentially causing incorrect trade direction. Combined with the webhook-id-only authentication (VULN-014), this allows full control over trade direction.
+
+Fix: Validate the `scan_name` against a strict allowlist or use exact-match patterns instead of substring matching. Consider requiring the action to be explicitly specified in the webhook payload with validation, rather than inferring it from a free-text scan name.
 
 ---
 
