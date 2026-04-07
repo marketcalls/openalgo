@@ -1,0 +1,4118 @@
+Run started:2026-04-07 20:48:44.469520+00:00
+
+Test results:
+>> Issue: [B104:hardcoded_bind_all_interfaces] Possible binding to all interfaces.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-605 (https://cwe.mitre.org/data/definitions/605.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b104_hardcoded_bind_all_interfaces.html
+   Location: .\app.py:22:23
+21	        _display_ip = _host_ip
+22	        if _host_ip == "0.0.0.0":
+23	            import socket as _sock
+
+--------------------------------------------------
+>> Issue: [B104:hardcoded_bind_all_interfaces] Possible binding to all interfaces.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-605 (https://cwe.mitre.org/data/definitions/605.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b104_hardcoded_bind_all_interfaces.html
+   Location: .\app.py:555:81
+554	        is_localhost = any(
+555	            local in host_server.lower() for local in ["localhost", "127.0.0.1", "0.0.0.0"]
+556	        )
+
+--------------------------------------------------
+>> Issue: [B108:hardcoded_tmp_directory] Probable insecure usage of temp file/directory.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-377 (https://cwe.mitre.org/data/definitions/377.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b108_hardcoded_tmp_directory.html
+   Location: .\blueprints\admin.py:277:20
+276	        # Save temporarily and load
+277	        temp_path = "/tmp/qtyfreeze_upload.csv"
+278	        file.save(temp_path)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\broker_credentials.py:94:4
+93	            return match.group(1).lower()
+94	    except:
+95	        pass
+96	    return ""
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\blueprints\chartink.py:92:31
+91	                try:
+92	                    response = requests.post(
+93	                        f"{BASE_URL}/api/v1/placesmartorder", json=smart_order["payload"]
+94	                    )
+95	                    if response.ok:
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\blueprints\chartink.py:128:35
+127	                    try:
+128	                        response = requests.post(
+129	                            f"{BASE_URL}/api/v1/placeorder", json=regular_order["payload"]
+130	                        )
+131	                        if response.ok:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\health.py:199:8
+198	            ]
+199	        except Exception:
+200	            pass
+201	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\historify.py:349:16
+348	                        os.remove(file_path)
+349	                except Exception:
+350	                    pass
+351	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\historify.py:364:12
+363	                os.remove(file_path)
+364	            except Exception:
+365	                pass
+366	        return jsonify({"status": "error", "message": str(e)}), 500
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\historify.py:599:16
+598	                        os.remove(file_path)
+599	                except Exception:
+600	                    pass
+601	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\historify.py:614:12
+613	                os.remove(file_path)
+614	            except Exception:
+615	                pass
+616	        return jsonify({"status": "error", "message": str(e)}), 500
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: .\blueprints\python_strategy.py:15:0
+14	import signal
+15	import subprocess
+16	import sys
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\python_strategy.py:79:12
+78	                active_subscribers.append(q)
+79	            except:
+80	                pass  # Queue full or dead, skip
+81	        SSE_SUBSCRIBERS.clear()
+
+--------------------------------------------------
+>> Issue: [B103:set_bad_file_permissions] Chmod setting a permissive mask 0o755 on file (file_path).
+   Severity: Medium   Confidence: High
+   CWE: CWE-732 (https://cwe.mitre.org/data/definitions/732.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b103_set_bad_file_permissions.html
+   Location: .\blueprints\python_strategy.py:404:20
+403	                try:
+404	                    os.chmod(file_path, 0o755)
+405	                except Exception as e:
+
+--------------------------------------------------
+>> Issue: [B103:set_bad_file_permissions] Chmod setting a permissive mask 0o755 on file (parent).
+   Severity: Medium   Confidence: High
+   CWE: CWE-732 (https://cwe.mitre.org/data/definitions/732.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b103_set_bad_file_permissions.html
+   Location: .\blueprints\python_strategy.py:425:20
+424	                    # Ensure log directory is writable
+425	                    os.chmod(log_file.parent, 0o755)
+426	                except:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\python_strategy.py:426:16
+425	                    os.chmod(log_file.parent, 0o755)
+426	                except:
+427	                    pass
+428	
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: .\blueprints\python_strategy.py:469:26
+468	            try:
+469	                process = subprocess.Popen(cmd, **subprocess_args)
+470	            except PermissionError as e:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\python_strategy.py:545:20
+544	                        return True, "Strategy stopped"
+545	                    except:
+546	                        pass
+547	            return False, "Strategy not running"
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b607_start_process_with_partial_path.html
+   Location: .\blueprints\python_strategy.py:565:24
+564	                        # Force kill using taskkill
+565	                        subprocess.run(
+566	                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+567	                            capture_output=True,
+568	                            check=False,
+569	                        )
+570	                        process.wait(timeout=2)
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: .\blueprints\python_strategy.py:565:24
+564	                        # Force kill using taskkill
+565	                        subprocess.run(
+566	                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+567	                            capture_output=True,
+568	                            check=False,
+569	                        )
+570	                        process.wait(timeout=2)
+
+--------------------------------------------------
+>> Issue: [B103:set_bad_file_permissions] Chmod setting a permissive mask 0o755 on file (file_path).
+   Severity: Medium   Confidence: High
+   CWE: CWE-732 (https://cwe.mitre.org/data/definitions/732.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b103_set_bad_file_permissions.html
+   Location: .\blueprints\python_strategy.py:1461:20
+1460	                try:
+1461	                    os.chmod(file_path, 0o755)
+1462	                except:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\python_strategy.py:1462:16
+1461	                    os.chmod(file_path, 0o755)
+1462	                except:
+1463	                    pass
+1464	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\python_strategy.py:1862:12
+1861	                total_size += log_file.stat().st_size
+1862	            except:
+1863	                pass
+1864	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\python_strategy.py:2477:12
+2476	                stop_strategy_process(strategy_id)
+2477	            except:
+2478	                pass
+2479	    logger.info("Cleanup complete")
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\blueprints\strategy.py:114:31
+113	                try:
+114	                    response = requests.post(
+115	                        f"{BASE_URL}/api/v1/placesmartorder", json=smart_order["payload"]
+116	                    )
+117	                    if response.ok:
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\blueprints\strategy.py:150:35
+149	                    try:
+150	                        response = requests.post(
+151	                            f"{BASE_URL}/api/v1/placeorder", json=regular_order["payload"]
+152	                        )
+153	                        if response.ok:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\strategy.py:480:16
+479	                    scheduler.remove_job(f"squareoff_{strategy_id}")
+480	                except Exception:
+481	                    pass
+482	                flash("Strategy deactivated successfully", "success")
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\blueprints\strategy.py:514:8
+513	            scheduler.remove_job(f"squareoff_{strategy_id}")
+514	        except Exception:
+515	            pass
+516	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\aliceblue\api\alicebluewebsocket.py:189:24
+188	                            self.ws.close()
+189	                        except Exception:
+190	                            pass
+191	
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\broker\aliceblue\streaming\aliceblue_client.py:137:19
+136	
+137	        response = requests.get(url, headers=headers, params=data, verify=not self.disable_ssl)
+138	
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\broker\aliceblue\streaming\aliceblue_client.py:151:19
+150	        headers = self._user_agent()
+151	        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+152	
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\broker\aliceblue\streaming\aliceblue_client.py:164:19
+163	        headers = self._user_agent()
+164	        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+165	
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\broker\aliceblue\streaming\aliceblue_client.py:198:19
+197	
+198	        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+199	
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\broker\aliceblue\streaming\aliceblue_client.py:302:19
+301	        url = self.base_url_c % exchange
+302	        response = requests.get(url)
+303	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\angel\database\master_contract_db.py:148:12
+147	            "symbol": "symbol",
+148	            "token": "token",
+149	            "name": "name",
+150	            "tick_size": "tick_size",
+151	        }
+152	    )
+153	
+154	    # Reformat 'symbol' column if needed (based on the given reformat_symbol function)
+155	    # df['symbol'] = df.apply(lambda row: reformat_symbol(row), axis=1)
+156	
+157	    # Assuming 'brsymbol' and 'brexchange' are not present in the JSON and are the same as 'symbol' and 'exchange'
+158	    df["brsymbol"] = df["symbol"]
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\angel\streaming\angel_adapter.py:827:12
+826	                self.cleanup()
+827	            except Exception:
+828	                pass
+829	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\angel\streaming\angel_adapter.py:833:12
+832	                self.cleanup_zmq()
+833	            except Exception:
+834	                pass
+835	        except Exception:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\angel\streaming\angel_adapter.py:835:8
+834	                pass
+835	        except Exception:
+836	            # Can't use logger in __del__ reliably
+837	            pass
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: ''
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\angel\streaming\smartWebSocketV2.py:660:16
+659	    def _parse_token_value(binary_packet):
+660	        token = ""
+661	        for i in range(len(binary_packet)):
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\angel\streaming\smartWebSocketV2.py:761:8
+760	            self.close_connection()
+761	        except Exception:
+762	            # Can't reliably log in __del__, just ensure we don't raise
+763	            pass
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\compositedge\streaming\compositedge_adapter.py:229:24
+228	                            client.disconnect()
+229	                        except Exception:
+230	                            pass
+231	                        break
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\deltaexchange\api\order_api.py:92:55
+91	                float(retry_after) if retry_after
+92	                else (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
+93	            )
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\deltaexchange\streaming\delta_websocket.py:299:12
+298	                self.wsapp.close()
+299	            except Exception:
+300	                pass
+301	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_adapter.py:922:12
+921	                self._stop_fallback_monitor_internal()
+922	            except Exception:
+923	                pass
+924	            try:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_adapter.py:926:12
+925	                self.cleanup_zmq()
+926	            except Exception:
+927	                pass
+928	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_adapter.py:947:16
+946	                    self.ws_client_5depth.disconnect()
+947	                except Exception:
+948	                    pass
+949	                self.ws_client_5depth = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_adapter.py:954:16
+953	                    self.ws_client_20depth.disconnect()
+954	                except Exception:
+955	                    pass
+956	                self.ws_client_20depth = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_adapter.py:961:12
+960	                self.cleanup_zmq()
+961	            except Exception:
+962	                pass
+963	        except Exception:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_adapter.py:963:8
+962	                pass
+963	        except Exception:
+964	            pass  # Ignore all errors during destruction
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_websocket.py:712:20
+711	                        self.ws.close()
+712	                    except Exception:
+713	                        pass
+714	                    self.ws = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan\streaming\dhan_websocket.py:715:8
+714	                    self.ws = None
+715	        except Exception:
+716	            pass  # Ignore errors during destruction
+
+--------------------------------------------------
+>> Issue: [B324:hashlib] Use of weak MD5 hash for security. Consider usedforsecurity=False
+   Severity: High   Confidence: High
+   CWE: CWE-327 (https://cwe.mitre.org/data/definitions/327.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b324_hashlib.html
+   Location: .\broker\dhan_sandbox\api\data.py:771:23
+770	        # Deterministic dummy OI based on security_id for sandbox
+771	        dummy_oi = int(hashlib.md5(str(security_id).encode()).hexdigest()[:8], 16) % 100000 + 1000
+772	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\dhan_sandbox\streaming\dhan_adapter.py:1174:8
+1173	            self.disconnect()
+1174	        except:
+1175	            pass
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:249:39
+248	                        drift = (fair_price - current_price) * 0.18
+249	                        step = drift + random.uniform(
+250	                            -max(fair_price * 0.02, 0.2),
+251	                            max(fair_price * 0.02, 0.2),
+252	                        )
+253	                        new_price = max(0.05, current_price + step)
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:255:31
+254	                    else:
+255	                        step = random.uniform(
+256	                            -max(current_price * 0.0025, 0.05),
+257	                            max(current_price * 0.0025, 0.05),
+258	                        )
+259	                        new_price = max(0.05, current_price + step)
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:276:38
+275	                        market_data.update({
+276	                            "volume": random.randint(1000, 50000),
+277	                            "oi": random.randint(10000, 500000),
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:277:34
+276	                            "volume": random.randint(1000, 50000),
+277	                            "oi": random.randint(10000, 500000),
+278	                            "open": round(new_price * 0.95, 2),
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:282:51
+281	                            "close": round(new_price * 0.98, 2),
+282	                            "last_trade_quantity": random.randint(1, 100),
+283	                            "average_price": round(new_price, 2),
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:284:50
+283	                            "average_price": round(new_price, 2),
+284	                            "total_buy_quantity": random.randint(5000, 100000),
+285	                            "total_sell_quantity": random.randint(5000, 100000)
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:285:51
+284	                            "total_buy_quantity": random.randint(5000, 100000),
+285	                            "total_sell_quantity": random.randint(5000, 100000)
+286	                        })
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:292:88
+291	                            "buy": [
+292	                                {"price": round(new_price - (0.05 * i), 2), "quantity": random.randint(10, 500), "orders": random.randint(1, 10)} for i in range(1, 6)
+293	                            ],
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:292:123
+291	                            "buy": [
+292	                                {"price": round(new_price - (0.05 * i), 2), "quantity": random.randint(10, 500), "orders": random.randint(1, 10)} for i in range(1, 6)
+293	                            ],
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:295:88
+294	                            "sell": [
+295	                                {"price": round(new_price + (0.05 * i), 2), "quantity": random.randint(10, 500), "orders": random.randint(1, 10)} for i in range(1, 6)
+296	                            ]
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_sandbox_adapter.py:295:123
+294	                            "sell": [
+295	                                {"price": round(new_price + (0.05 * i), 2), "quantity": random.randint(10, 500), "orders": random.randint(1, 10)} for i in range(1, 6)
+296	                            ]
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\dhan_sandbox\streaming\dhan_websocket.py:446:25
+445	                delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+446	                jitter = random.uniform(0.8, 1.2)  # Add some jitter
+447	                sleep_time = min(delay * jitter, max_delay)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\firstock\database\master_contract_db.py:161:8
+160	        "Exchange": "exchange",
+161	        "Token": "token",
+162	        "LotSize": "lotsize",
+163	        "TradingSymbol": "brsymbol",
+164	        "CompanyName": "name",
+165	        "TickSize": "tick_size",
+166	    }
+167	    df = df.rename(columns=column_mapping)
+168	
+169	    # Initialize symbol with brsymbol
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\firstock\database\master_contract_db.py:257:8
+256	        "Exchange": "exchange",
+257	        "Token": "token",
+258	        "LotSize": "lotsize",
+259	        "Symbol": "name",
+260	        "TradingSymbol": "brsymbol",
+261	        "Expiry": "expiry",
+262	        "Instrument": "instrumenttype",
+263	        "OptionType": "optiontype",
+264	        "StrikePrice": "strike",
+265	        "TickSize": "tick_size",
+266	    }
+267	    df = df.rename(columns=column_mapping)
+268	
+269	    # Fill missing values
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\firstock\database\master_contract_db.py:357:8
+356	        "Exchange": "exchange",
+357	        "Token": "token",
+358	        "LotSize": "lotsize",
+359	        "TradingSymbol": "brsymbol",
+360	        "CompanyName": "name",
+361	        "TickSize": "tick_size",
+362	    }
+363	    df = df.rename(columns=column_mapping)
+364	
+365	    # Initialize symbol with brsymbol
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\firstock\database\master_contract_db.py:424:8
+423	        "Exchange": "exchange",
+424	        "Token": "token",
+425	        "LotSize": "lotsize",
+426	        "Symbol": "name",
+427	        "TradingSymbol": "brsymbol",
+428	        "Expiry": "expiry",
+429	        "Instrument": "instrumenttype",
+430	        "OptionType": "optiontype",
+431	        "StrikePrice": "strike",
+432	        "TickSize": "tick_size",
+433	    }
+434	    df = df.rename(columns=column_mapping)
+435	
+436	    # Fill missing values
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fivepaisa\api\data.py:152:55
+151	                    "ScripCode": token,
+152	                    "ScripData": br_symbol if token == "0" else "",
+153	                },
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fivepaisa\api\data.py:234:63
+233	                            "ScripCode": token,
+234	                            "ScripData": br_symbol if token == "0" else "",
+235	                        }
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fivepaisa\api\data.py:278:55
+277	                    "ScripCode": token,
+278	                    "ScripData": br_symbol if token == "0" else "",
+279	                },
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fivepaisa\api\data.py:384:63
+383	                            "ScripCode": token,
+384	                            "ScripData": br_symbol if token == "0" else "",
+385	                        }
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fivepaisa\api\data.py:391:178
+390	            logger.debug(
+391	                f"API Request - Exchange: {map_exchange(exchange)}, ExchangeType: {map_exchange_type(normalized_exchange)}, ScripCode: {token}, ScripData: {br_symbol if token == '0' else ''}"
+392	            )
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fivepaisa\api\data.py:534:55
+533	                    "ScripCode": token,
+534	                    "ScripData": br_symbol if token == "0" else "",
+535	                }
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fivepaisa\api\data.py:541:24
+540	            # where multiple symbols might have the same fallback token
+541	            if token == "0":
+542	                # For fallback cases, use ScripData (br_symbol) as key
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fivepaisaxts\streaming\fivepaisaxts_adapter.py:227:24
+226	                            client.disconnect()
+227	                        except Exception:
+228	                            pass
+229	                        break
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\flattrade\database\master_contract_db.py:168:12
+167	        column_mapping = {
+168	            "Token": "token",
+169	            "Lotsize": "lotsize",
+170	            "Symbol": "name",
+171	            "Tradingsymbol": "brsymbol",
+172	            "Instrument": "instrumenttype",
+173	            "Expiry": "expiry",
+174	            "Strike": "strike",
+175	            "Optiontype": "optiontype",
+176	        }
+177	
+178	        df = df.rename(columns=column_mapping)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\flattrade\database\master_contract_db.py:303:8
+302	    column_mapping = {
+303	        "Token": "token",
+304	        "Lotsize": "lotsize",
+305	        "Symbol": "name",
+306	        "Tradingsymbol": "brsymbol",
+307	        "Instrument": "instrumenttype",
+308	        "Expiry": "expiry",
+309	        "Strike": "strike",
+310	        "Optiontype": "optiontype",
+311	    }
+312	
+313	    df = df.rename(columns=column_mapping)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\flattrade\database\master_contract_db.py:417:8
+416	    column_mapping = {
+417	        "Token": "token",
+418	        "Lotsize": "lotsize",
+419	        "Symbol": "name",
+420	        "Tradingsymbol": "brsymbol",
+421	        "Instrument": "instrumenttype",
+422	        "Expiry": "expiry",
+423	        "Strike": "strike",
+424	        "Optiontype": "optiontype",
+425	    }
+426	
+427	    df = df.rename(columns=column_mapping)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\flattrade\database\master_contract_db.py:531:8
+530	    column_mapping = {
+531	        "Token": "token",
+532	        "Lotsize": "lotsize",
+533	        "Symbol": "name",
+534	        "Tradingsymbol": "brsymbol",
+535	        "Instrument": "instrumenttype",
+536	        "Expiry": "expiry",
+537	        "Strike": "strike",
+538	        "Optiontype": "optiontype",
+539	    }
+540	
+541	    df = df.rename(columns=column_mapping)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\flattrade\database\master_contract_db.py:645:8
+644	    column_mapping = {
+645	        "Token": "token",
+646	        "Lotsize": "lotsize",
+647	        "Symbol": "name",
+648	        "Tradingsymbol": "brsymbol",
+649	        "Instrument": "instrumenttype",
+650	        "Expiry": "expiry",
+651	        "Strike": "strike",
+652	        "Optiontype": "optiontype",
+653	    }
+654	
+655	    df = df.rename(columns=column_mapping)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\flattrade\database\master_contract_db.py:751:8
+750	    column_mapping = {
+751	        "Token": "token",
+752	        "Lotsize": "lotsize",
+753	        "Symbol": "name",
+754	        "Tradingsymbol": "brsymbol",
+755	        "Instrument": "instrumenttype",
+756	        "Expiry": "expiry",
+757	        "Strike": "strike",
+758	        "Optiontype": "optiontype",
+759	    }
+760	
+761	    df = df.rename(columns=column_mapping)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_adapter.py:619:16
+618	                        self.ws_client.disconnect()
+619	                except Exception:
+620	                    pass
+621	                self.ws_client = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_adapter.py:623:8
+622	
+623	        except Exception:
+624	            pass  # Suppress all errors in force cleanup
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'https://api-t1.fyers.in/data/symbol-token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fyers\streaming\fyers_hsm_websocket.py:28:24
+27	    HSM_URL = "wss://socket.fyers.in/hsm/v1-5/prod"
+28	    SYMBOLS_TOKEN_API = "https://api-t1.fyers.in/data/symbol-token"
+29	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_hsm_websocket.py:1150:16
+1149	                    self.ws.close()
+1150	                except:
+1151	                    pass
+1152	                self.ws = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_hsm_websocket.py:1170:8
+1169	
+1170	        except:
+1171	            pass  # Suppress all errors in force cleanup
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\broker\fyers\streaming\fyers_tbt_websocket.py:379:42
+378	                else:
+379	                    self.logger.warning(f"No on_depth_update callback set for {ticker}")
+380	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_tbt_websocket.py:665:16
+664	                    self.ws.close()
+665	                except Exception:
+666	                    pass
+667	                self.ws = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_tbt_websocket.py:675:8
+674	
+675	        except Exception:
+676	            pass  # Suppress all errors in force cleanup
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'https://api-t1.fyers.in/data/symbol-token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\fyers\streaming\fyers_token_converter.py:70:33
+69	
+70	        self.symbols_token_api = "https://api-t1.fyers.in/data/symbol-token"
+71	        self.database_available = DATABASE_AVAILABLE
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_websocket_adapter.py:977:16
+976	                    self.tbt_client.disconnect()
+977	                except:
+978	                    pass
+979	                self.tbt_client = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_websocket_adapter.py:991:16
+990	                    self.fyers_adapter.disconnect(clear_mappings=True)
+991	                except:
+992	                    pass
+993	                self.fyers_adapter = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_websocket_adapter.py:1003:12
+1002	                        self._bound_ports.discard(self.zmq_port)
+1003	            except:
+1004	                pass
+1005	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\fyers\streaming\fyers_websocket_adapter.py:1008:8
+1007	
+1008	        except:
+1009	            pass  # Suppress all errors in force cleanup
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\groww\database\master_contract_db.py:543:12
+542	            "exchange": "brexchange",  # Broker exchange (NSE, BSE, etc.)
+543	            "exchange_token": "token",  # Token ID
+544	            "trading_symbol": "brsymbol",  # Broker-specific symbol
+545	            "groww_symbol": "groww_symbol",  # Groww-specific symbol (keep for reference)
+546	            "name": "groww_symbol",  # Instrument name
+547	            "instrument_type": "instrument_type",  # Instrument type from Groww
+548	            "segment": "segment",  # Segment (CASH, FNO)
+549	            "series": "series",  # Series (EQ, etc.)
+550	            "isin": "isin",  # ISIN code
+551	            "underlying_symbol": "underlying",  # Underlying symbol for derivatives
+552	            "lot_size": "lotsize",  # Lot size
+553	            "expiry_date": "expiry",  # Expiry date
+554	            "strike_price": "strike",  # Strike price
+555	            "tick_size": "tick_size",  # Tick size
+556	        }
+557	
+558	        # Rename columns based on the mapping
+559	        df_mapped = pd.DataFrame()
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\groww\streaming\groww_adapter.py:172:20
+171	                        self.ws_client.disconnect()
+172	                    except:
+173	                        pass
+174	                    self.ws_client = None
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'https://api.groww.in/v1/api/apex/v1/socket/token/create/'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\groww\streaming\nats_websocket.py:68:25
+67	        self.ws_url = "wss://socket-api.groww.in"
+68	        self.token_url = "https://api.groww.in/v1/api/apex/v1/socket/token/create/"
+69	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\groww\streaming\nats_websocket.py:860:20
+859	                        self.ws.send(unsub_cmd)
+860	                    except:
+861	                        pass
+862	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\ibulls\streaming\ibulls_adapter.py:227:24
+226	                            client.disconnect()
+227	                        except Exception:
+228	                            pass
+229	                        break
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\iifl\streaming\iifl_adapter.py:227:24
+226	                            client.disconnect()
+227	                        except Exception:
+228	                            pass
+229	                        break
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_adapter.py:227:24
+226	                            client.disconnect()
+227	                        except Exception:
+228	                            pass
+229	                        break
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:759:20
+758	                            market_data[field] = round(val, 2)
+759	                    except Exception:
+760	                        pass
+761	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:780:12
+779	                    found_prices[off] = round(val, 2)
+780	            except Exception:
+781	                pass
+782	        self.logger.debug(
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:816:20
+815	                            break
+816	                    except Exception:
+817	                        pass
+818	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:830:20
+829	                            break
+830	                    except Exception:
+831	                        pass
+832	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:858:20
+857	                            ohlc_values.append(val)
+858	                    except Exception:
+859	                        pass
+860	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:891:20
+890	                            break
+891	                    except Exception:
+892	                        pass
+893	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:906:20
+905	                            break
+906	                    except Exception:
+907	                        pass
+908	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:1005:16
+1004	                        )
+1005	                except Exception:
+1006	                    pass
+1007	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\jainamxts\streaming\jainamxts_websocket.py:1053:12
+1052	                        asks.append(level)
+1053	            except Exception:
+1054	                pass
+1055	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'x-access-token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\kotak\streaming\HSWebSocketLib.py:89:4
+88	    "SID": "Sid",
+89	    "X_ACCESS_TOKEN": "x-access-token",
+90	    "SOURCE": "source",
+91	}
+92	ReqTypeValues = {
+93	    "CONNECTION": "cn",
+94	    "SCRIP_SUBS": "mws",
+95	    "SCRIP_UNSUBS": "mwu",
+96	    "INDEX_SUBS": "ifs",
+97	    "INDEX_UNSUBS": "ifu",
+98	    "DEPTH_SUBS": "dps",
+99	    "DEPTH_UNSUBS": "dpu",
+100	    "CHANNEL_RESUME": "cr",
+101	    "CHANNEL_PAUSE": "cp",
+102	    "SNAP_MW": "mwsp",
+103	    "SNAP_DP": "dpsp",
+104	    "SNAP_IF": "ifsp",
+105	    "OPC_SUBS": "opc",
+106	    "THROTTLING_INTERVAL": "ti",
+107	    "STR": "str",
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\kotak\streaming\HSWebSocketLib.py:1322:8
+1321	            self.close()
+1322	        except Exception:
+1323	            pass
+1324	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\kotak\streaming\HSWebSocketLib.py:1541:8
+1540	            self.close()
+1541	        except Exception:
+1542	            pass
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\kotak\streaming\kotak_adapter.py:744:12
+743	                self.cleanup()
+744	            except Exception:
+745	                pass
+746	            try:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\kotak\streaming\kotak_adapter.py:748:12
+747	                self.cleanup_zmq()
+748	            except Exception:
+749	                pass
+750	        except Exception:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\kotak\streaming\kotak_adapter.py:750:8
+749	                pass
+750	        except Exception:
+751	            pass
+752	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'None'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\mstock\api\data.py:467:37
+466	            # Validate token
+467	            if not token or token == "None" or str(token).strip() == "":
+468	                raise Exception(
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'None'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\mstock\api\data.py:736:37
+735	            # Validate token
+736	            if not token or token == "None" or str(token).strip() == "":
+737	                raise Exception(
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\mstock\api\funds.py:81:8
+80	            logger.error(f"Error details: {error_detail}")
+81	        except:
+82	            pass
+83	        return {}
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\mstock\database\master_contract_db.py:300:12
+299	        columns={
+300	            "token": "token",
+301	            "symbol": "name",  # API symbol → name (base symbol)
+302	            "name": "brsymbol",  # API name → brsymbol (broker's full symbol)
+303	            "lotsize": "lotsize",
+304	            "instrumenttype": "instrumenttype",
+305	            "exch_seg": "exchange",
+306	            "expiry": "expiry",
+307	            "strike": "strike",
+308	            "tick_size": "tick_size",
+309	        }
+310	    )
+311	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\data.py:116:16
+115	                    self._websocket.close()
+116	                except Exception:
+117	                    pass
+118	                self._websocket = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\data.py:124:8
+123	            self.close()
+124	        except Exception:
+125	            pass
+126	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\data.py:151:20
+150	                        self._websocket.close()
+151	                    except Exception:
+152	                        pass
+153	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\data.py:165:20
+164	                        ws.close()
+165	                    except Exception:
+166	                        pass
+167	                    return None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\data.py:346:16
+345	                        websocket.unsubscribe_greeks([token_int])
+346	                except Exception:
+347	                    pass
+348	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\data.py:580:16
+579	                        websocket.unsubscribe_ohlcv(br_syms, "1m", ws_exchange)
+580	                except Exception:
+581	                    pass
+582	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\data.py:1013:16
+1012	                    websocket.unsubscribe_greeks([token_int])
+1013	                except Exception:
+1014	                    pass
+1015	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\nubrawebsocket.py:117:20
+116	                        self.ws.close()
+117	                    except Exception:
+118	                        pass
+119	                    self.ws = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\nubrawebsocket.py:538:12
+537	                self.ws.close()
+538	            except Exception:
+539	                pass
+540	            self.ws = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\api\nubrawebsocket.py:553:8
+552	            self.close()
+553	        except Exception:
+554	            pass
+555	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\streaming\nubra_adapter.py:213:12
+212	                self.cleanup_zmq()
+213	            except Exception:
+214	                pass
+215	            return self._create_error_response("DISCONNECT_ERROR", str(e))
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\streaming\nubra_adapter.py:738:12
+737	                self.cleanup_zmq()
+738	            except Exception:
+739	                pass
+740	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\nubra\streaming\nubra_adapter.py:745:8
+744	            self.cleanup()
+745	        except Exception:
+746	            pass
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\broker\pocketful\api\auth_api.py:156:24
+155	
+156	        state = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+157	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\pocketful\api\data.py:422:8
+421	                )
+422	        except Exception:
+423	            pass  # Ignore errors, just use default
+424	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\pocketful\api\data.py:451:12
+450	            "volume": 5000,
+451	            "instrument_token": 0,  # Placeholder
+452	        }
+453	
+454	        return mock_data
+455	
+456	    def _get_market_depth_websocket(self, symbol: str, exchange: str) -> dict:
+457	        """
+458	        Get market depth using WebSocket implementation
+459	        Internal method called by get_market_depth
+460	        """
+461	        try:
+462	            # Ensure WebSocket connection is established
+463	            if not self._ensure_websocket_connection():
+464	                raise PocketfulAPIError("WebSocket connection not established")
+465	
+466	            # Convert symbol to broker format and get instrument token
+467	            br_symbol = get_br_symbol(symbol, exchange)
+468	            logger.info(f"Fetching market depth for {exchange}:{br_symbol}")
+469	
+470	            # Get token from database
+471	            with db_session() as session:
+472	                symbol_info = (
+473	                    session.query(SymToken)
+474	                    .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
+475	                    .first()
+476	                )
+477	
+478	                if not symbol_info:
+
+--------------------------------------------------
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b112_try_except_continue.html
+   Location: .\broker\rmoney\api\data.py:550:24
+549	                            oi_map[oi_key] = oi_value
+550	                        except Exception:
+551	                            continue
+552	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\rmoney\streaming\rmoney_adapter.py:105:12
+104	                self.ws_client.close()
+105	            except Exception:
+106	                pass
+107	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:322:16
+321	                        self.sio.disconnect()
+322	                except Exception:
+323	                    pass
+324	                # Force-kill Engine.IO transport to release its FD and threads
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:329:16
+328	                        eio.disconnect(abort=True)
+329	                except Exception:
+330	                    pass
+331	                self.sio = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:393:12
+392	                    eio.disconnect(abort=True)
+393	            except Exception:
+394	                pass
+395	            self.sio = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:669:8
+668	                    self._process_market_data(payload, message_code)
+669	        except Exception:
+670	            # Keep message handler non-fatal; explicit event handlers continue to work.
+671	            pass
+672	
+
+--------------------------------------------------
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b112_try_except_continue.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:830:12
+829	                    return round(value, 2)
+830	            except Exception:
+831	                continue
+832	
+
+--------------------------------------------------
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b112_try_except_continue.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:840:12
+839	                    return round(value, 2)
+840	            except Exception:
+841	                continue
+842	        return None
+
+--------------------------------------------------
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b112_try_except_continue.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:860:16
+859	                        result[field] = round(value, 2)
+860	                except Exception:
+861	                    continue
+862	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:871:16
+870	                        break
+871	                except Exception:
+872	                    pass
+873	            if "TotalTradedQuantity" in result:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\rmoney\streaming\rmoney_websocket.py:881:16
+880	                        break
+881	                except Exception:
+882	                    pass
+883	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_50'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:91:12
+90	            "brexchange": "NSE",
+91	            "token": "NIFTY_50",
+92	            "instrumenttype": "INDEX",
+93	        },
+94	        {
+95	            "symbol": "BANKNIFTY",
+96	            "brsymbol": "NIFTY BANK",
+97	            "name": "Nifty Bank",
+98	            "exchange": "NSE_INDEX",
+99	            "brexchange": "NSE",
+100	            "token": "NIFTY_BANK",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_BANK'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:100:12
+99	            "brexchange": "NSE",
+100	            "token": "NIFTY_BANK",
+101	            "instrumenttype": "INDEX",
+102	        },
+103	        {
+104	            "symbol": "FINNIFTY",
+105	            "brsymbol": "NIFTY FIN SERVICE",
+106	            "name": "Nifty Fin Service",
+107	            "exchange": "NSE_INDEX",
+108	            "brexchange": "NSE",
+109	            "token": "NIFTY_FIN_SERVICE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_FIN_SERVICE'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:109:12
+108	            "brexchange": "NSE",
+109	            "token": "NIFTY_FIN_SERVICE",
+110	            "instrumenttype": "INDEX",
+111	        },
+112	        {
+113	            "symbol": "MIDCPNIFTY",
+114	            "brsymbol": "NIFTY MID SELECT",
+115	            "name": "Nifty Mid Select",
+116	            "exchange": "NSE_INDEX",
+117	            "brexchange": "NSE",
+118	            "token": "NIFTY_MID_SELECT",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_MID_SELECT'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:118:12
+117	            "brexchange": "NSE",
+118	            "token": "NIFTY_MID_SELECT",
+119	            "instrumenttype": "INDEX",
+120	        },
+121	        {
+122	            "symbol": "NIFTYNXT50",
+123	            "brsymbol": "NIFTY NEXT 50",
+124	            "name": "Nifty Next 50",
+125	            "exchange": "NSE_INDEX",
+126	            "brexchange": "NSE",
+127	            "token": "NIFTY_NEXT_50",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_NEXT_50'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:127:12
+126	            "brexchange": "NSE",
+127	            "token": "NIFTY_NEXT_50",
+128	            "instrumenttype": "INDEX",
+129	        },
+130	        # Broad Market Indices
+131	        {
+132	            "symbol": "NIFTY100",
+133	            "brsymbol": "NIFTY 100",
+134	            "name": "Nifty 100",
+135	            "exchange": "NSE_INDEX",
+136	            "brexchange": "NSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_100'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:137:12
+136	            "brexchange": "NSE",
+137	            "token": "NIFTY_100",
+138	            "instrumenttype": "INDEX",
+139	        },
+140	        {
+141	            "symbol": "NIFTY200",
+142	            "brsymbol": "NIFTY 200",
+143	            "name": "Nifty 200",
+144	            "exchange": "NSE_INDEX",
+145	            "brexchange": "NSE",
+146	            "token": "NIFTY_200",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_200'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:146:12
+145	            "brexchange": "NSE",
+146	            "token": "NIFTY_200",
+147	            "instrumenttype": "INDEX",
+148	        },
+149	        {
+150	            "symbol": "NIFTY500",
+151	            "brsymbol": "NIFTY 500",
+152	            "name": "Nifty 500",
+153	            "exchange": "NSE_INDEX",
+154	            "brexchange": "NSE",
+155	            "token": "NIFTY_500",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_500'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:155:12
+154	            "brexchange": "NSE",
+155	            "token": "NIFTY_500",
+156	            "instrumenttype": "INDEX",
+157	        },
+158	        {
+159	            "symbol": "NIFTYMIDCAP50",
+160	            "brsymbol": "NIFTY MIDCAP 50",
+161	            "name": "Nifty Midcap 50",
+162	            "exchange": "NSE_INDEX",
+163	            "brexchange": "NSE",
+164	            "token": "NIFTY_MIDCAP_50",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_MIDCAP_50'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:164:12
+163	            "brexchange": "NSE",
+164	            "token": "NIFTY_MIDCAP_50",
+165	            "instrumenttype": "INDEX",
+166	        },
+167	        # Sectoral Indices
+168	        {
+169	            "symbol": "NIFTYIT",
+170	            "brsymbol": "NIFTY IT",
+171	            "name": "Nifty IT",
+172	            "exchange": "NSE_INDEX",
+173	            "brexchange": "NSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_IT'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:174:12
+173	            "brexchange": "NSE",
+174	            "token": "NIFTY_IT",
+175	            "instrumenttype": "INDEX",
+176	        },
+177	        {
+178	            "symbol": "NIFTYAUTO",
+179	            "brsymbol": "NIFTY AUTO",
+180	            "name": "Nifty Auto",
+181	            "exchange": "NSE_INDEX",
+182	            "brexchange": "NSE",
+183	            "token": "NIFTY_AUTO",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_AUTO'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:183:12
+182	            "brexchange": "NSE",
+183	            "token": "NIFTY_AUTO",
+184	            "instrumenttype": "INDEX",
+185	        },
+186	        {
+187	            "symbol": "NIFTYPHARMA",
+188	            "brsymbol": "NIFTY PHARMA",
+189	            "name": "Nifty Pharma",
+190	            "exchange": "NSE_INDEX",
+191	            "brexchange": "NSE",
+192	            "token": "NIFTY_PHARMA",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_PHARMA'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:192:12
+191	            "brexchange": "NSE",
+192	            "token": "NIFTY_PHARMA",
+193	            "instrumenttype": "INDEX",
+194	        },
+195	        {
+196	            "symbol": "NIFTYMETAL",
+197	            "brsymbol": "NIFTY METAL",
+198	            "name": "Nifty Metal",
+199	            "exchange": "NSE_INDEX",
+200	            "brexchange": "NSE",
+201	            "token": "NIFTY_METAL",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_METAL'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:201:12
+200	            "brexchange": "NSE",
+201	            "token": "NIFTY_METAL",
+202	            "instrumenttype": "INDEX",
+203	        },
+204	        {
+205	            "symbol": "NIFTYFMCG",
+206	            "brsymbol": "NIFTY FMCG",
+207	            "name": "Nifty FMCG",
+208	            "exchange": "NSE_INDEX",
+209	            "brexchange": "NSE",
+210	            "token": "NIFTY_FMCG",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_FMCG'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:210:12
+209	            "brexchange": "NSE",
+210	            "token": "NIFTY_FMCG",
+211	            "instrumenttype": "INDEX",
+212	        },
+213	        {
+214	            "symbol": "NIFTYREALTY",
+215	            "brsymbol": "NIFTY REALTY",
+216	            "name": "Nifty Realty",
+217	            "exchange": "NSE_INDEX",
+218	            "brexchange": "NSE",
+219	            "token": "NIFTY_REALTY",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_REALTY'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:219:12
+218	            "brexchange": "NSE",
+219	            "token": "NIFTY_REALTY",
+220	            "instrumenttype": "INDEX",
+221	        },
+222	        {
+223	            "symbol": "NIFTYENERGY",
+224	            "brsymbol": "NIFTY ENERGY",
+225	            "name": "Nifty Energy",
+226	            "exchange": "NSE_INDEX",
+227	            "brexchange": "NSE",
+228	            "token": "NIFTY_ENERGY",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_ENERGY'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:228:12
+227	            "brexchange": "NSE",
+228	            "token": "NIFTY_ENERGY",
+229	            "instrumenttype": "INDEX",
+230	        },
+231	        {
+232	            "symbol": "NIFTYMEDIA",
+233	            "brsymbol": "NIFTY MEDIA",
+234	            "name": "Nifty Media",
+235	            "exchange": "NSE_INDEX",
+236	            "brexchange": "NSE",
+237	            "token": "NIFTY_MEDIA",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_MEDIA'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:237:12
+236	            "brexchange": "NSE",
+237	            "token": "NIFTY_MEDIA",
+238	            "instrumenttype": "INDEX",
+239	        },
+240	        {
+241	            "symbol": "NIFTYPSUBANK",
+242	            "brsymbol": "NIFTY PSU BANK",
+243	            "name": "Nifty PSU Bank",
+244	            "exchange": "NSE_INDEX",
+245	            "brexchange": "NSE",
+246	            "token": "NIFTY_PSU_BANK",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_PSU_BANK'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:246:12
+245	            "brexchange": "NSE",
+246	            "token": "NIFTY_PSU_BANK",
+247	            "instrumenttype": "INDEX",
+248	        },
+249	        {
+250	            "symbol": "NIFTYPVTBANK",
+251	            "brsymbol": "NIFTY PVT BANK",
+252	            "name": "Nifty Pvt Bank",
+253	            "exchange": "NSE_INDEX",
+254	            "brexchange": "NSE",
+255	            "token": "NIFTY_PVT_BANK",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_PVT_BANK'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:255:12
+254	            "brexchange": "NSE",
+255	            "token": "NIFTY_PVT_BANK",
+256	            "instrumenttype": "INDEX",
+257	        },
+258	        {
+259	            "symbol": "NIFTYINFRA",
+260	            "brsymbol": "NIFTY INFRA",
+261	            "name": "Nifty Infra",
+262	            "exchange": "NSE_INDEX",
+263	            "brexchange": "NSE",
+264	            "token": "NIFTY_INFRA",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_INFRA'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:264:12
+263	            "brexchange": "NSE",
+264	            "token": "NIFTY_INFRA",
+265	            "instrumenttype": "INDEX",
+266	        },
+267	        {
+268	            "symbol": "NIFTYCPSE",
+269	            "brsymbol": "NIFTY CPSE",
+270	            "name": "Nifty CPSE",
+271	            "exchange": "NSE_INDEX",
+272	            "brexchange": "NSE",
+273	            "token": "NIFTY_CPSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_CPSE'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:273:12
+272	            "brexchange": "NSE",
+273	            "token": "NIFTY_CPSE",
+274	            "instrumenttype": "INDEX",
+275	        },
+276	        {
+277	            "symbol": "NIFTYCOMMODITIES",
+278	            "brsymbol": "NIFTY COMMODITIES",
+279	            "name": "Nifty Commodities",
+280	            "exchange": "NSE_INDEX",
+281	            "brexchange": "NSE",
+282	            "token": "NIFTY_COMMODITIES",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_COMMODITIES'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:282:12
+281	            "brexchange": "NSE",
+282	            "token": "NIFTY_COMMODITIES",
+283	            "instrumenttype": "INDEX",
+284	        },
+285	        {
+286	            "symbol": "NIFTYCONSUMPTION",
+287	            "brsymbol": "NIFTY CONSUMPTION",
+288	            "name": "Nifty Consumption",
+289	            "exchange": "NSE_INDEX",
+290	            "brexchange": "NSE",
+291	            "token": "NIFTY_CONSUMPTION",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_CONSUMPTION'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:291:12
+290	            "brexchange": "NSE",
+291	            "token": "NIFTY_CONSUMPTION",
+292	            "instrumenttype": "INDEX",
+293	        },
+294	        {
+295	            "symbol": "NIFTYMNC",
+296	            "brsymbol": "NIFTY MNC",
+297	            "name": "Nifty MNC",
+298	            "exchange": "NSE_INDEX",
+299	            "brexchange": "NSE",
+300	            "token": "NIFTY_MNC",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_MNC'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:300:12
+299	            "brexchange": "NSE",
+300	            "token": "NIFTY_MNC",
+301	            "instrumenttype": "INDEX",
+302	        },
+303	        {
+304	            "symbol": "NIFTYPSE",
+305	            "brsymbol": "NIFTY PSE",
+306	            "name": "Nifty PSE",
+307	            "exchange": "NSE_INDEX",
+308	            "brexchange": "NSE",
+309	            "token": "NIFTY_PSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_PSE'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:309:12
+308	            "brexchange": "NSE",
+309	            "token": "NIFTY_PSE",
+310	            "instrumenttype": "INDEX",
+311	        },
+312	        {
+313	            "symbol": "NIFTYSERVSECTOR",
+314	            "brsymbol": "NIFTY SERV SECTOR",
+315	            "name": "Nifty Services Sector",
+316	            "exchange": "NSE_INDEX",
+317	            "brexchange": "NSE",
+318	            "token": "NIFTY_SERV_SECTOR",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_SERV_SECTOR'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:318:12
+317	            "brexchange": "NSE",
+318	            "token": "NIFTY_SERV_SECTOR",
+319	            "instrumenttype": "INDEX",
+320	        },
+321	        {
+322	            "symbol": "NIFTYGROWSECT15",
+323	            "brsymbol": "NIFTY GROWSECT 15",
+324	            "name": "Nifty Growth Sectors 15",
+325	            "exchange": "NSE_INDEX",
+326	            "brexchange": "NSE",
+327	            "token": "NIFTY_GROWSECT_15",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_GROWSECT_15'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:327:12
+326	            "brexchange": "NSE",
+327	            "token": "NIFTY_GROWSECT_15",
+328	            "instrumenttype": "INDEX",
+329	        },
+330	        # Thematic Indices
+331	        {
+332	            "symbol": "NIFTYDIVOPPS50",
+333	            "brsymbol": "NIFTY DIV OPPS 50",
+334	            "name": "Nifty Dividend Opportunities 50",
+335	            "exchange": "NSE_INDEX",
+336	            "brexchange": "NSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_DIV_OPPS_50'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:337:12
+336	            "brexchange": "NSE",
+337	            "token": "NIFTY_DIV_OPPS_50",
+338	            "instrumenttype": "INDEX",
+339	        },
+340	        {
+341	            "symbol": "NIFTY50VALUE20",
+342	            "brsymbol": "NIFTY50 VALUE 20",
+343	            "name": "Nifty50 Value 20",
+344	            "exchange": "NSE_INDEX",
+345	            "brexchange": "NSE",
+346	            "token": "NIFTY50_VALUE_20",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY50_VALUE_20'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:346:12
+345	            "brexchange": "NSE",
+346	            "token": "NIFTY50_VALUE_20",
+347	            "instrumenttype": "INDEX",
+348	        },
+349	        {
+350	            "symbol": "NIFTYQUALITY30",
+351	            "brsymbol": "NIFTY Quality 30",
+352	            "name": "Nifty Quality 30",
+353	            "exchange": "NSE_INDEX",
+354	            "brexchange": "NSE",
+355	            "token": "NIFTY_QUALITY_30",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_QUALITY_30'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:355:12
+354	            "brexchange": "NSE",
+355	            "token": "NIFTY_QUALITY_30",
+356	            "instrumenttype": "INDEX",
+357	        },
+358	        # Liquidity Indices
+359	        {
+360	            "symbol": "NIFTYMIDLIQ15",
+361	            "brsymbol": "NIFTY Mid LIQ 15",
+362	            "name": "Nifty Midcap Liquid 15",
+363	            "exchange": "NSE_INDEX",
+364	            "brexchange": "NSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_MID_LIQ_15'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:365:12
+364	            "brexchange": "NSE",
+365	            "token": "NIFTY_MID_LIQ_15",
+366	            "instrumenttype": "INDEX",
+367	        },
+368	        {
+369	            "symbol": "NIFTY100LIQ15",
+370	            "brsymbol": "NIFTY100 LIQ 15",
+371	            "name": "Nifty100 Liquid 15",
+372	            "exchange": "NSE_INDEX",
+373	            "brexchange": "NSE",
+374	            "token": "NIFTY100_LIQ_15",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY100_LIQ_15'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:374:12
+373	            "brexchange": "NSE",
+374	            "token": "NIFTY100_LIQ_15",
+375	            "instrumenttype": "INDEX",
+376	        },
+377	        # Free Float Indices
+378	        {
+379	            "symbol": "NIFTYMID100FREE",
+380	            "brsymbol": "NIFTY MID100 FREE",
+381	            "name": "Nifty Midcap 100 Free Float",
+382	            "exchange": "NSE_INDEX",
+383	            "brexchange": "NSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_MID100_FREE'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:384:12
+383	            "brexchange": "NSE",
+384	            "token": "NIFTY_MID100_FREE",
+385	            "instrumenttype": "INDEX",
+386	        },
+387	        {
+388	            "symbol": "NIFTYSML100FREE",
+389	            "brsymbol": "NIFTY SML100 FREE",
+390	            "name": "Nifty Smallcap 100 Free Float",
+391	            "exchange": "NSE_INDEX",
+392	            "brexchange": "NSE",
+393	            "token": "NIFTY_SML100_FREE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY_SML100_FREE'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:393:12
+392	            "brexchange": "NSE",
+393	            "token": "NIFTY_SML100_FREE",
+394	            "instrumenttype": "INDEX",
+395	        },
+396	        # Strategy Indices (Leveraged/Inverse)
+397	        {
+398	            "symbol": "NIFTY50PR1XINV",
+399	            "brsymbol": "NIFTY50 PR 1x INV",
+400	            "name": "Nifty50 PR 1x Inverse",
+401	            "exchange": "NSE_INDEX",
+402	            "brexchange": "NSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY50_PR_1X_INV'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:403:12
+402	            "brexchange": "NSE",
+403	            "token": "NIFTY50_PR_1X_INV",
+404	            "instrumenttype": "INDEX",
+405	        },
+406	        {
+407	            "symbol": "NIFTY50PR2XLEV",
+408	            "brsymbol": "NIFTY50 PR 2x LEV",
+409	            "name": "Nifty50 PR 2x Leverage",
+410	            "exchange": "NSE_INDEX",
+411	            "brexchange": "NSE",
+412	            "token": "NIFTY50_PR_2X_LEV",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY50_PR_2X_LEV'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:412:12
+411	            "brexchange": "NSE",
+412	            "token": "NIFTY50_PR_2X_LEV",
+413	            "instrumenttype": "INDEX",
+414	        },
+415	        {
+416	            "symbol": "NIFTY50TR1XINV",
+417	            "brsymbol": "NIFTY50 TR 1x INV",
+418	            "name": "Nifty50 TR 1x Inverse",
+419	            "exchange": "NSE_INDEX",
+420	            "brexchange": "NSE",
+421	            "token": "NIFTY50_TR_1X_INV",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY50_TR_1X_INV'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:421:12
+420	            "brexchange": "NSE",
+421	            "token": "NIFTY50_TR_1X_INV",
+422	            "instrumenttype": "INDEX",
+423	        },
+424	        {
+425	            "symbol": "NIFTY50TR2XLEV",
+426	            "brsymbol": "NIFTY50 TR 2x LEV",
+427	            "name": "Nifty50 TR 2x Leverage",
+428	            "exchange": "NSE_INDEX",
+429	            "brexchange": "NSE",
+430	            "token": "NIFTY50_TR_2X_LEV",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NIFTY50_TR_2X_LEV'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:430:12
+429	            "brexchange": "NSE",
+430	            "token": "NIFTY50_TR_2X_LEV",
+431	            "instrumenttype": "INDEX",
+432	        },
+433	        # Volatility Index
+434	        {
+435	            "symbol": "INDIAVIX",
+436	            "brsymbol": "INDIA VIX",
+437	            "name": "India VIX",
+438	            "exchange": "NSE_INDEX",
+439	            "brexchange": "NSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'INDIA_VIX'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:440:12
+439	            "brexchange": "NSE",
+440	            "token": "INDIA_VIX",
+441	            "instrumenttype": "INDEX",
+442	        },
+443	    ]
+444	
+445	    # BSE Indices - brsymbol values from Samco API documentation
+446	    bse_indices = [
+447	        # Major Indices
+448	        {
+449	            "symbol": "SENSEX",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'SENSEX'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:454:12
+453	            "brexchange": "BSE",
+454	            "token": "SENSEX",
+455	            "instrumenttype": "INDEX",
+456	        },
+457	        {
+458	            "symbol": "BANKEX",
+459	            "brsymbol": "BANKEX",
+460	            "name": "S&P BSE BANKEX",
+461	            "exchange": "BSE_INDEX",
+462	            "brexchange": "BSE",
+463	            "token": "BANKEX",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BANKEX'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:463:12
+462	            "brexchange": "BSE",
+463	            "token": "BANKEX",
+464	            "instrumenttype": "INDEX",
+465	        },
+466	        {
+467	            "symbol": "SENSEX50",
+468	            "brsymbol": "SNSX50",
+469	            "name": "S&P BSE SENSEX 50",
+470	            "exchange": "BSE_INDEX",
+471	            "brexchange": "BSE",
+472	            "token": "SENSEX_50",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'SENSEX_50'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:472:12
+471	            "brexchange": "BSE",
+472	            "token": "SENSEX_50",
+473	            "instrumenttype": "INDEX",
+474	        },
+475	        {
+476	            "symbol": "BSENXT50",
+477	            "brsymbol": "SNXT50",
+478	            "name": "S&P BSE SENSEX Next 50",
+479	            "exchange": "BSE_INDEX",
+480	            "brexchange": "BSE",
+481	            "token": "BSE_NXT_50",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_NXT_50'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:481:12
+480	            "brexchange": "BSE",
+481	            "token": "BSE_NXT_50",
+482	            "instrumenttype": "INDEX",
+483	        },
+484	        # Sectoral Indices
+485	        {
+486	            "symbol": "BSEIT",
+487	            "brsymbol": "BSE IT",
+488	            "name": "S&P BSE IT",
+489	            "exchange": "BSE_INDEX",
+490	            "brexchange": "BSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_IT'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:491:12
+490	            "brexchange": "BSE",
+491	            "token": "BSE_IT",
+492	            "instrumenttype": "INDEX",
+493	        },
+494	        {
+495	            "symbol": "BSEHC",
+496	            "brsymbol": "BSE HC",
+497	            "name": "S&P BSE Healthcare",
+498	            "exchange": "BSE_INDEX",
+499	            "brexchange": "BSE",
+500	            "token": "BSE_HC",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_HC'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:500:12
+499	            "brexchange": "BSE",
+500	            "token": "BSE_HC",
+501	            "instrumenttype": "INDEX",
+502	        },
+503	        {
+504	            "symbol": "BSECG",
+505	            "brsymbol": "BSE CG",
+506	            "name": "S&P BSE Capital Goods",
+507	            "exchange": "BSE_INDEX",
+508	            "brexchange": "BSE",
+509	            "token": "BSE_CG",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_CG'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:509:12
+508	            "brexchange": "BSE",
+509	            "token": "BSE_CG",
+510	            "instrumenttype": "INDEX",
+511	        },
+512	        {
+513	            "symbol": "BSECD",
+514	            "brsymbol": "BSE CD",
+515	            "name": "S&P BSE Consumer Durables",
+516	            "exchange": "BSE_INDEX",
+517	            "brexchange": "BSE",
+518	            "token": "BSE_CD",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_CD'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:518:12
+517	            "brexchange": "BSE",
+518	            "token": "BSE_CD",
+519	            "instrumenttype": "INDEX",
+520	        },
+521	        {
+522	            "symbol": "BSEPSU",
+523	            "brsymbol": "BSEPSU",
+524	            "name": "S&P BSE PSU",
+525	            "exchange": "BSE_INDEX",
+526	            "brexchange": "BSE",
+527	            "token": "BSE_PSU",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_PSU'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:527:12
+526	            "brexchange": "BSE",
+527	            "token": "BSE_PSU",
+528	            "instrumenttype": "INDEX",
+529	        },
+530	        {
+531	            "symbol": "BSEFMC",
+532	            "brsymbol": "BSEFMC",
+533	            "name": "S&P BSE Fast Moving Consumer Goods",
+534	            "exchange": "BSE_INDEX",
+535	            "brexchange": "BSE",
+536	            "token": "BSE_FMC",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_FMC'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:536:12
+535	            "brexchange": "BSE",
+536	            "token": "BSE_FMC",
+537	            "instrumenttype": "INDEX",
+538	        },
+539	        {
+540	            "symbol": "BSEMETAL",
+541	            "brsymbol": "METAL",
+542	            "name": "S&P BSE Metal",
+543	            "exchange": "BSE_INDEX",
+544	            "brexchange": "BSE",
+545	            "token": "BSE_METAL",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_METAL'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:545:12
+544	            "brexchange": "BSE",
+545	            "token": "BSE_METAL",
+546	            "instrumenttype": "INDEX",
+547	        },
+548	        {
+549	            "symbol": "BSEOILGAS",
+550	            "brsymbol": "OILGAS",
+551	            "name": "S&P BSE Oil & Gas",
+552	            "exchange": "BSE_INDEX",
+553	            "brexchange": "BSE",
+554	            "token": "BSE_OILGAS",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_OILGAS'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:554:12
+553	            "brexchange": "BSE",
+554	            "token": "BSE_OILGAS",
+555	            "instrumenttype": "INDEX",
+556	        },
+557	        {
+558	            "symbol": "BSEAUTO",
+559	            "brsymbol": "AUTO",
+560	            "name": "S&P BSE Auto",
+561	            "exchange": "BSE_INDEX",
+562	            "brexchange": "BSE",
+563	            "token": "BSE_AUTO",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_AUTO'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:563:12
+562	            "brexchange": "BSE",
+563	            "token": "BSE_AUTO",
+564	            "instrumenttype": "INDEX",
+565	        },
+566	        {
+567	            "symbol": "BSEPOWER",
+568	            "brsymbol": "POWER",
+569	            "name": "S&P BSE Power",
+570	            "exchange": "BSE_INDEX",
+571	            "brexchange": "BSE",
+572	            "token": "BSE_POWER",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_POWER'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:572:12
+571	            "brexchange": "BSE",
+572	            "token": "BSE_POWER",
+573	            "instrumenttype": "INDEX",
+574	        },
+575	        {
+576	            "symbol": "BSEREALTY",
+577	            "brsymbol": "REALTY",
+578	            "name": "S&P BSE Realty",
+579	            "exchange": "BSE_INDEX",
+580	            "brexchange": "BSE",
+581	            "token": "BSE_REALTY",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_REALTY'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:581:12
+580	            "brexchange": "BSE",
+581	            "token": "BSE_REALTY",
+582	            "instrumenttype": "INDEX",
+583	        },
+584	        {
+585	            "symbol": "BSETECK",
+586	            "brsymbol": "TECK",
+587	            "name": "S&P BSE Teck",
+588	            "exchange": "BSE_INDEX",
+589	            "brexchange": "BSE",
+590	            "token": "BSE_TECK",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_TECK'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:590:12
+589	            "brexchange": "BSE",
+590	            "token": "BSE_TECK",
+591	            "instrumenttype": "INDEX",
+592	        },
+593	        {
+594	            "symbol": "BSECDGS",
+595	            "brsymbol": "CDGS",
+596	            "name": "S&P BSE Consumer Discretionary Goods & Services",
+597	            "exchange": "BSE_INDEX",
+598	            "brexchange": "BSE",
+599	            "token": "BSE_CDGS",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_CDGS'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:599:12
+598	            "brexchange": "BSE",
+599	            "token": "BSE_CDGS",
+600	            "instrumenttype": "INDEX",
+601	        },
+602	        {
+603	            "symbol": "BSEBASMTR",
+604	            "brsymbol": "BASMTR",
+605	            "name": "S&P BSE Basic Materials",
+606	            "exchange": "BSE_INDEX",
+607	            "brexchange": "BSE",
+608	            "token": "BSE_BASMTR",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_BASMTR'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:608:12
+607	            "brexchange": "BSE",
+608	            "token": "BSE_BASMTR",
+609	            "instrumenttype": "INDEX",
+610	        },
+611	        # Thematic Indices
+612	        {
+613	            "symbol": "BSEGREENX",
+614	            "brsymbol": "GREENX",
+615	            "name": "S&P BSE Greenex",
+616	            "exchange": "BSE_INDEX",
+617	            "brexchange": "BSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_GREENX'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:618:12
+617	            "brexchange": "BSE",
+618	            "token": "BSE_GREENX",
+619	            "instrumenttype": "INDEX",
+620	        },
+621	        {
+622	            "symbol": "BSECARBON",
+623	            "brsymbol": "CARBON",
+624	            "name": "S&P BSE Carbonex",
+625	            "exchange": "BSE_INDEX",
+626	            "brexchange": "BSE",
+627	            "token": "BSE_CARBON",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_CARBON'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:627:12
+626	            "brexchange": "BSE",
+627	            "token": "BSE_CARBON",
+628	            "instrumenttype": "INDEX",
+629	        },
+630	        {
+631	            "symbol": "BSEIPO",
+632	            "brsymbol": "BSEIPO",
+633	            "name": "S&P BSE IPO",
+634	            "exchange": "BSE_INDEX",
+635	            "brexchange": "BSE",
+636	            "token": "BSE_IPO",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_IPO'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:636:12
+635	            "brexchange": "BSE",
+636	            "token": "BSE_IPO",
+637	            "instrumenttype": "INDEX",
+638	        },
+639	        {
+640	            "symbol": "SMEIPO",
+641	            "brsymbol": "SMEIPO",
+642	            "name": "S&P BSE SME IPO",
+643	            "exchange": "BSE_INDEX",
+644	            "brexchange": "BSE",
+645	            "token": "SME_IPO",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'SME_IPO'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:645:12
+644	            "brexchange": "BSE",
+645	            "token": "SME_IPO",
+646	            "instrumenttype": "INDEX",
+647	        },
+648	        # Market Cap Indices
+649	        {
+650	            "symbol": "BSEALLCAP",
+651	            "brsymbol": "ALLCAP",
+652	            "name": "S&P BSE AllCap",
+653	            "exchange": "BSE_INDEX",
+654	            "brexchange": "BSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_ALLCAP'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:655:12
+654	            "brexchange": "BSE",
+655	            "token": "BSE_ALLCAP",
+656	            "instrumenttype": "INDEX",
+657	        },
+658	        {
+659	            "symbol": "BSELRGCAP",
+660	            "brsymbol": "LRGCAP",
+661	            "name": "S&P BSE LargeCap",
+662	            "exchange": "BSE_INDEX",
+663	            "brexchange": "BSE",
+664	            "token": "BSE_LRGCAP",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_LRGCAP'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:664:12
+663	            "brexchange": "BSE",
+664	            "token": "BSE_LRGCAP",
+665	            "instrumenttype": "INDEX",
+666	        },
+667	        {
+668	            "symbol": "BSEMIDSEL",
+669	            "brsymbol": "MIDSEL",
+670	            "name": "S&P BSE MidCap Select",
+671	            "exchange": "BSE_INDEX",
+672	            "brexchange": "BSE",
+673	            "token": "BSE_MIDSEL",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_MIDSEL'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:673:12
+672	            "brexchange": "BSE",
+673	            "token": "BSE_MIDSEL",
+674	            "instrumenttype": "INDEX",
+675	        },
+676	        {
+677	            "symbol": "BSESMLSEL",
+678	            "brsymbol": "SMLSEL",
+679	            "name": "S&P BSE SmallCap Select",
+680	            "exchange": "BSE_INDEX",
+681	            "brexchange": "BSE",
+682	            "token": "BSE_SMLSEL",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_SMLSEL'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:682:12
+681	            "brexchange": "BSE",
+682	            "token": "BSE_SMLSEL",
+683	            "instrumenttype": "INDEX",
+684	        },
+685	        # Dollex Indices
+686	        {
+687	            "symbol": "BSEDOL30",
+688	            "brsymbol": "DOL30",
+689	            "name": "S&P BSE Dollex 30",
+690	            "exchange": "BSE_INDEX",
+691	            "brexchange": "BSE",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_DOL30'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:692:12
+691	            "brexchange": "BSE",
+692	            "token": "BSE_DOL30",
+693	            "instrumenttype": "INDEX",
+694	        },
+695	        {
+696	            "symbol": "BSEDOL100",
+697	            "brsymbol": "DOL100",
+698	            "name": "S&P BSE Dollex 100",
+699	            "exchange": "BSE_INDEX",
+700	            "brexchange": "BSE",
+701	            "token": "BSE_DOL100",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_DOL100'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:701:12
+700	            "brexchange": "BSE",
+701	            "token": "BSE_DOL100",
+702	            "instrumenttype": "INDEX",
+703	        },
+704	        {
+705	            "symbol": "BSEDOL200",
+706	            "brsymbol": "DOL200",
+707	            "name": "S&P BSE Dollex 200",
+708	            "exchange": "BSE_INDEX",
+709	            "brexchange": "BSE",
+710	            "token": "BSE_DOL200",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'BSE_DOL200'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:710:12
+709	            "brexchange": "BSE",
+710	            "token": "BSE_DOL200",
+711	            "instrumenttype": "INDEX",
+712	        },
+713	    ]
+714	
+715	    # Combine all indices
+716	    all_indices = nse_indices + bse_indices
+717	
+718	    # Add default values for other required columns
+719	    for idx in all_indices:
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:830:8
+829	        "Symbol Code": "token",
+830	        "Token": "token",
+831	        "token": "token",
+832	        "Lot Size": "lotsize",
+833	        "lotSize": "lotsize",
+834	        "Tick Size": "tick_size",
+835	        "tickSize": "tick_size",
+836	        "Expiry Date": "expiry",
+837	        "expiryDate": "expiry",
+838	        "Strike Price": "strike",
+839	        "strikePrice": "strike",
+840	    }
+841	
+842	    # Only rename columns that exist
+843	    existing_cols = {k: v for k, v in column_mapping.items() if k in df.columns}
+844	    df = df.rename(columns=existing_cols)
+845	
+846	    # Set brexchange same as exchange (broker's exchange naming)
+847	    if "exchange" in df.columns:
+848	        df["brexchange"] = df["exchange"]
+849	
+850	    # Set brsymbol (broker's symbol) before any transformations
+851	    if "brsymbol" in df.columns:
+852	        df["symbol"] = df["brsymbol"]
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'token'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\samco\database\master_contract_db.py:831:8
+830	        "Token": "token",
+831	        "token": "token",
+832	        "Lot Size": "lotsize",
+833	        "lotSize": "lotsize",
+834	        "Tick Size": "tick_size",
+835	        "tickSize": "tick_size",
+836	        "Expiry Date": "expiry",
+837	        "expiryDate": "expiry",
+838	        "Strike Price": "strike",
+839	        "strikePrice": "strike",
+840	    }
+841	
+842	    # Only rename columns that exist
+843	    existing_cols = {k: v for k, v in column_mapping.items() if k in df.columns}
+844	    df = df.rename(columns=existing_cols)
+845	
+846	    # Set brexchange same as exchange (broker's exchange naming)
+847	    if "exchange" in df.columns:
+848	        df["brexchange"] = df["exchange"]
+849	
+850	    # Set brsymbol (broker's symbol) before any transformations
+851	    if "brsymbol" in df.columns:
+852	        df["symbol"] = df["brsymbol"]
+853	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '1'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\shoonya\database\master_contract_db.py:705:12
+704	            "brexchange": "BSE_INDEX",
+705	            "token": "1",
+706	            "expiry": "",
+707	            "strike": -1,
+708	            "lotsize": 1,
+709	            "instrumenttype": "INDEX",
+710	            "tick_size": 0.05,
+711	        },
+712	        {
+713	            "symbol": "BANKEX",
+714	            "brsymbol": "BANKEX",
+715	            "name": "BANKEX",
+716	            "exchange": "BSE_INDEX",
+717	            "brexchange": "BSE_INDEX",
+718	            "token": "12",
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '12'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\shoonya\database\master_contract_db.py:718:12
+717	            "brexchange": "BSE_INDEX",
+718	            "token": "12",
+719	            "expiry": "",
+720	            "strike": -1,
+721	            "lotsize": 1,
+722	            "instrumenttype": "INDEX",
+723	            "tick_size": 0.05,
+724	        },
+725	    ]
+726	
+727	    # Create DataFrame from the manual index data
+728	    bse_index_df = pd.DataFrame(bse_index_data)
+729	
+730	    # Concatenate the regular BSE data with the manual index data
+731	    df_combined = pd.concat([df_filtered, bse_index_df], ignore_index=True)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\shoonya\streaming\shoonya_adapter.py:818:20
+817	                        new_client.stop()
+818	                    except Exception:
+819	                        pass
+820	                    return
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\shoonya\streaming\shoonya_adapter.py:1172:12
+1171	                self.cleanup_zmq()
+1172	            except Exception:
+1173	                pass
+1174	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\shoonya\streaming\shoonya_adapter.py:1179:8
+1178	            self.cleanup()
+1179	        except Exception:
+1180	            pass
+1181	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\shoonya\streaming\shoonya_websocket.py:93:8
+92	            self.stop()
+93	        except Exception:
+94	            pass
+95	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: ''
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\tradejini\api\nxtradstream.py:179:21
+178	        self.L1_dict = {}
+179	        self.token = ""
+180	        self.version = version
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: ''
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\broker\tradejini\streaming\nxtradstream.py:179:21
+178	        self.L1_dict = {}
+179	        self.token = ""
+180	        self.version = version
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\upstox\streaming\upstox_adapter.py:318:8
+317	            self.cleanup()
+318	        except Exception:
+319	            # Can't use logger in __del__ reliably
+320	            pass
+321	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\wisdom\streaming\wisdom_adapter.py:227:24
+226	                            client.disconnect()
+227	                        except Exception:
+228	                            pass
+229	                        break
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zebu\streaming\zebu_adapter.py:472:8
+471	            self.cleanup()
+472	        except Exception:
+473	            pass
+474	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\api\auth_api.py:57:12
+56	                    error_message = error_detail.get("message", str(e))
+57	            except:
+58	                pass
+59	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\api\data.py:113:8
+112	                error_msg = error_detail.get("message", error_msg)
+113	        except:
+114	            pass
+115	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\api\funds.py:33:8
+32	                error_message = error_detail.get("message", str(e))
+33	        except:
+34	            pass
+35	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\api\order_api.py:72:8
+71	                error_msg = error_detail.get("message", error_msg)
+72	        except:
+73	            pass
+74	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\database\master_contract_db.py:129:8
+128	                error_message = error_detail.get('message', str(e))
+129	        except:
+130	            pass
+131	            
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_adapter.py:763:12
+762	                self.cleanup()
+763	            except Exception:
+764	                pass
+765	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_adapter.py:769:12
+768	                self.cleanup_zmq()
+769	            except Exception:
+770	                pass
+771	        except Exception:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_adapter.py:771:8
+770	                pass
+771	        except Exception:
+772	            # Can't use logger in __del__ reliably
+773	            pass
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_websocket.py:493:16
+492	                    await self.websocket.close()
+493	                except Exception:
+494	                    pass
+495	                self.websocket = None
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_websocket.py:556:16
+555	                    self.on_error(e)
+556	                except Exception:
+557	                    pass
+558	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_websocket.py:873:16
+872	                        tick["depth"] = depth
+873	                except Exception:
+874	                    pass
+875	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_websocket.py:1048:20
+1047	                        future.result(timeout=2)  # Short timeout in destructor
+1048	                    except Exception:
+1049	                        pass
+1050	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\broker\zerodha\streaming\zerodha_websocket.py:1054:8
+1053	                    self.ws_thread.join(timeout=1)
+1054	        except Exception:
+1055	            # Can't reliably log in __del__, just ensure we don't raise
+1056	            pass
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\database\historify_db.py:907:4
+906	            return timing["start_offset"] // 1000
+907	    except Exception:
+908	        pass
+909	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:976:20
+975	        # Without FLOOR(), floating-point division can cause incorrect bucketing
+976	        query = f"""
+977	            SELECT
+978	                (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+979	                {market_open_seconds} +
+980	                FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+981	                as timestamp,
+982	                FIRST(open ORDER BY timestamp) as open,
+983	                MAX(high) as high,
+984	                MIN(low) as low,
+985	                LAST(close ORDER BY timestamp) as close,
+986	                SUM(volume) as volume,
+987	                LAST(oi ORDER BY timestamp) as oi
+988	            FROM market_data
+989	            WHERE symbol = ? AND exchange = ? AND interval = '1m'
+990	        """
+991	        params = [symbol.upper(), exchange.upper()]
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:1106:20
+1105	        # (frontend will interpret as UTC which visually shows the IST date)
+1106	        query = f"""
+1107	            SELECT
+1108	                EPOCH({group_expr}) as timestamp,
+1109	                FIRST(open ORDER BY timestamp) as open,
+1110	                MAX(high) as high,
+1111	                MIN(low) as low,
+1112	                LAST(close ORDER BY timestamp) as close,
+1113	                SUM(volume) as volume,
+1114	                LAST(oi ORDER BY timestamp) as oi
+1115	            FROM market_data
+1116	            WHERE symbol = ? AND exchange = ? AND interval = 'D'
+1117	        """
+1118	        params = [symbol.upper(), exchange.upper()]
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:1406:20
+1405	
+1406	        query = f"""
+1407	            SELECT
+1408	                symbol, exchange, interval,
+1409	                strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+1410	                strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+1411	                open, high, low, close, volume, oi
+1412	            FROM market_data
+1413	            WHERE {where_clause}
+1414	            ORDER BY symbol, exchange, interval, timestamp
+1415	        """
+1416	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2346:24
+2345	        # Get record count first
+2346	        count_query = f"SELECT COUNT(*) FROM market_data WHERE {where_clause}"
+2347	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2356:31
+2355	            # Build the query string for COPY - need to embed values for COPY command
+2356	            export_query = f"""
+2357	                COPY (
+2358	                    SELECT
+2359	                        symbol, exchange, interval, timestamp,
+2360	                        open, high, low, close, volume, oi,
+2361	                        to_timestamp(timestamp) as datetime
+2362	                    FROM market_data
+2363	                    WHERE {where_clause}
+2364	                    ORDER BY symbol, exchange, interval, timestamp
+2365	                ) TO '{abs_output}'
+2366	                (FORMAT PARQUET, COMPRESSION '{compression}')
+2367	            """
+2368	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2373:35
+2372	                # Re-execute with DataFrame approach for safety
+2373	                select_query = f"""
+2374	                    SELECT
+2375	                        symbol, exchange, interval, timestamp,
+2376	                        open, high, low, close, volume, oi
+2377	                    FROM market_data
+2378	                    WHERE {where_clause}
+2379	                    ORDER BY symbol, exchange, interval, timestamp
+2380	                """
+2381	                df = conn.execute(select_query, params).fetchdf()
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2386:33
+2385	                # No params - can use COPY directly
+2386	                conn.execute(f"""
+2387	                    COPY (
+2388	                        SELECT
+2389	                            symbol, exchange, interval, timestamp,
+2390	                            open, high, low, close, volume, oi,
+2391	                            to_timestamp(timestamp) as datetime
+2392	                        FROM market_data
+2393	                        ORDER BY symbol, exchange, interval, timestamp
+2394	                    ) TO '{abs_output}'
+2395	                    (FORMAT PARQUET, COMPRESSION '{compression}')
+2396	                """)
+2397	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2461:20
+2460	
+2461	        query = f"""
+2462	            SELECT
+2463	                symbol, exchange, interval,
+2464	                strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+2465	                strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+2466	                open, high, low, close, volume, oi
+2467	            FROM market_data
+2468	            WHERE {where_clause}
+2469	            ORDER BY symbol, exchange, interval, timestamp
+2470	        """
+2471	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2666:40
+2665	
+2666	                            query = f"""
+2667	                                SELECT
+2668	                                    (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+2669	                                    {market_open_seconds} +
+2670	                                    FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+2671	                                    as ts,
+2672	                                    FIRST(open ORDER BY timestamp) as open,
+2673	                                    MAX(high) as high,
+2674	                                    MIN(low) as low,
+2675	                                    LAST(close ORDER BY timestamp) as close,
+2676	                                    SUM(volume) as volume,
+2677	                                    LAST(oi ORDER BY timestamp) as oi
+2678	                                FROM market_data
+2679	                                WHERE symbol = ? AND exchange = ? AND interval = '1m'
+2680	                                AND ((timestamp + {ist_offset}) % 86400) >= {market_open_seconds}
+2681	                            """
+2682	                            params = [sym, exch]
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\database\historify_db.py:2769:12
+2768	                os.remove(abs_output)
+2769	            except Exception:
+2770	                pass
+2771	        return False, str(e), 0
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2828:20
+2827	
+2828	        query = f"""
+2829	            SELECT
+2830	                symbol, exchange, interval,
+2831	                strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+2832	                strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+2833	                open, high, low, close, volume, oi
+2834	            FROM market_data
+2835	            WHERE {where_clause}
+2836	            ORDER BY symbol, exchange, interval, timestamp
+2837	        """
+2838	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:2897:20
+2896	
+2897	        query = f"""
+2898	            SELECT
+2899	                COUNT(*) as total_records,
+2900	                COUNT(DISTINCT symbol) as symbol_count,
+2901	                COUNT(DISTINCT exchange) as exchange_count,
+2902	                COUNT(DISTINCT interval) as interval_count,
+2903	                MIN(timestamp) as first_timestamp,
+2904	                MAX(timestamp) as last_timestamp
+2905	            FROM market_data
+2906	            WHERE {where_clause}
+2907	        """
+2908	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:3185:18
+3184	        params.append(schedule_id)
+3185	        query = f"UPDATE historify_schedules SET {', '.join(updates)} WHERE id = ?"
+3186	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\database\historify_db.py:3337:18
+3336	        params.append(execution_id)
+3337	        query = f"UPDATE historify_schedule_executions SET {', '.join(updates)} WHERE id = ?"
+3338	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'None'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\database\telegram_db.py:469:12
+468	        return {
+469	            "bot_token": None,
+470	            "token": None,
+471	            "is_active": False,
+472	            "bot_username": None,
+473	            "max_message_length": 4096,
+474	            "rate_limit_per_minute": 30,
+475	            "broadcast_enabled": True,
+476	        }
+477	
+478	    except Exception as e:
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'None'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\database\telegram_db.py:470:12
+469	            "bot_token": None,
+470	            "token": None,
+471	            "is_active": False,
+472	            "bot_username": None,
+473	            "max_message_length": 4096,
+474	            "rate_limit_per_minute": 30,
+475	            "broadcast_enabled": True,
+476	        }
+477	
+478	    except Exception as e:
+479	        logger.exception(f"Failed to get bot config: {str(e)}")
+
+--------------------------------------------------
+>> Issue: [B201:flask_debug_true] A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code.
+   Severity: High   Confidence: Medium
+   CWE: CWE-94 (https://cwe.mitre.org/data/definitions/94.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b201_flask_debug_true.html
+   Location: .\examples\python\flask_optionchain.py:199:4
+198	if __name__ == "__main__":
+199	    app.run(host="127.0.0.1", port=5001, debug=True)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\sandbox\execution_thread.py:315:8
+314	                return True
+315	        except Exception:
+316	            pass
+317	
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\sandbox\order_manager.py:1095:22
+1094	        micro = now.microsecond
+1095	        rand_suffix = random.randint(0, 99)
+1096	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\sandbox\position_manager.py:184:8
+183	                return Decimal(str(sym_info.contract_value))
+184	        except Exception:
+185	            pass
+186	        return Decimal("1.0")
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\services\historify_service.py:1673:20
+1672	            # Random delay between 1-3 seconds (configurable)
+1673	            delay = random.uniform(delay_min, delay_max)
+1674	            logger.debug(f"Waiting {delay:.1f}s before next download...")
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\iv_chart_service.py:420:20
+419	                        vega_value = round(black_vega(flag, underlying_close, strike, years_to_expiry, interest_rate, iv_decimal), 4)
+420	                    except Exception:
+421	                        pass
+422	            except Exception:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\iv_smile_service.py:90:20
+89	                                ce_iv = round(iv_val, 2)
+90	                    except Exception:
+91	                        pass
+92	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\iv_smile_service.py:108:20
+107	                                pe_iv = round(iv_val, 2)
+108	                    except Exception:
+109	                        pass
+110	
+
+--------------------------------------------------
+>> Issue: [B113:request_without_timeout] Call to requests without timeout
+   Severity: Medium   Confidence: Low
+   CWE: CWE-400 (https://cwe.mitre.org/data/definitions/400.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b113_request_without_timeout.html
+   Location: .\services\openposition_service.py:136:32
+135	        host_server = get_host_server()
+136	        positionbook_response = requests.post(
+137	            f"{host_server}/api/v1/positionbook", json=positionbook_request
+138	        )
+139	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\telegram_alert_service.py:388:16
+387	                        logger.info(f"Using username from session: {username}")
+388	                except:
+389	                    pass
+390	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\telegram_bot_service.py:586:12
+585	                    loop.run_until_complete(self.http_client.aclose())
+586	            except:
+587	                pass
+588	            loop.close()
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\telegram_bot_service.py:618:12
+617	                )
+618	            except:
+619	                pass  # If we can't send the message, just ignore
+620	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\telegram_bot_service.py:1780:12
+1779	                await loading_msg.delete()
+1780	            except:
+1781	                pass
+1782	            await update.message.reply_text(f"❌ Error generating charts: {str(e)}")
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\telegram_bot_service.py:1978:12
+1977	                total_pnl += pnl
+1978	            except:
+1979	                pass
+1980	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\services\telegram_bot_service_fixed.py:1189:12
+1188	                await loading_msg.delete()
+1189	            except:
+1190	                pass
+1191	            await update.message.reply_text(f"❌ Error generating charts: {str(e)}")
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: .\upgrade\migrate_all.py:21:0
+20	import os
+21	import subprocess
+22	import sys
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: .\upgrade\migrate_all.py:80:17
+79	        # Run the migration script
+80	        result = subprocess.run(
+81	            [sys.executable, script_path], cwd=PROJECT_ROOT, capture_output=False, text=True
+82	        )
+83	
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\upgrade\migrate_historify.py:282:42
+281	            for table in required_tables:
+282	                result = conn.execute(f"""
+283	                    SELECT COUNT(*) FROM information_schema.tables
+284	                    WHERE table_name = '{table}'
+285	                """).fetchone()
+286	                if result[0] == 0:
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\upgrade\migrate_historify_scheduler.py:66:30
+65	    """Check if a table exists in the database."""
+66	    result = conn.execute(f"""
+67	        SELECT COUNT(*) FROM information_schema.tables
+68	        WHERE table_name = '{table_name}'
+69	    """).fetchone()
+70	    return result[0] > 0
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b608_hardcoded_sql_expressions.html
+   Location: .\upgrade\migrate_sandbox.py:422:29
+421	                result = conn.execute(
+422	                    text(f"""
+423	                    SELECT name FROM sqlite_master
+424	                    WHERE type='table' AND name='{table}'
+425	                """)
+426	                )
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'TEXT'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b105_hardcoded_password_string.html
+   Location: .\upgrade\migrate_smtp_simple.py:217:12
+216	            "smtp_username": "VARCHAR(255)",
+217	            "smtp_password_encrypted": "TEXT",
+218	            "smtp_use_tls": "BOOLEAN DEFAULT 1",  # SQLite uses 1 for TRUE
+219	            "smtp_from_email": "VARCHAR(255)",
+220	            "smtp_helo_hostname": "VARCHAR(255)",
+221	        }
+222	
+223	        # Find missing columns
+224	        missing_columns = {
+225	            name: dtype for name, dtype in smtp_columns.items() if name not in existing_columns
+226	        }
+
+--------------------------------------------------
+>> Issue: [B108:hardcoded_tmp_directory] Probable insecure usage of temp file/directory.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-377 (https://cwe.mitre.org/data/definitions/377.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b108_hardcoded_tmp_directory.html
+   Location: .\utils\env_check.py:63:51
+62	                parts = line.split()
+63	                if len(parts) >= 4 and parts[1] == '/tmp':
+64	                    mount_options = parts[3].split(',')
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\env_check.py:291:4
+290	            broker_name = match.group(1).lower()
+291	    except:
+292	        pass
+293	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\health_monitor.py:383:8
+382	            pass  # WebSocket proxy not available
+383	        except Exception:
+384	            pass  # Error checking WebSocket connections
+385	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\logging.py:92:8
+91	                        return False
+92	        except Exception:
+93	            pass
+94	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\logging.py:128:8
+127	                        return False
+128	        except Exception:
+129	            pass
+130	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\logging.py:163:8
+162	                record.args = tuple(filtered_args)
+163	        except Exception:
+164	            # If filtering fails, don't block the log message
+165	            pass
+166	
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: .\utils\logging.py:211:16
+210	                # Try to enable ANSI escape sequences on Windows
+211	                import subprocess
+212	
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b607_start_process_with_partial_path.html
+   Location: .\utils\logging.py:213:25
+212	
+213	                result = subprocess.run(
+214	                    ["reg", "query", "HKCU\\Console", "/v", "VirtualTerminalLevel"],
+215	                    capture_output=True,
+216	                    text=True,
+217	                )
+218	                if result.returncode == 0 and "VirtualTerminalLevel" in result.stdout:
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: .\utils\logging.py:213:25
+212	
+213	                result = subprocess.run(
+214	                    ["reg", "query", "HKCU\\Console", "/v", "VirtualTerminalLevel"],
+215	                    capture_output=True,
+216	                    text=True,
+217	                )
+218	                if result.returncode == 0 and "VirtualTerminalLevel" in result.stdout:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\logging.py:220:12
+219	                    return True
+220	            except:
+221	                pass
+222	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\logging.py:291:8
+290	                log_file.unlink()
+291	        except Exception:
+292	            # Skip files that can't be processed
+293	            pass
+294	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\utils\ngrok_manager.py:205:8
+204	            return _ngrok_tunnel.public_url
+205	        except:
+206	            pass
+207	    return None
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\websocket_proxy\base_adapter.py:84:22
+83	        # Try a random port between start_port and 65535
+84	        random_port = random.randint(start_port, 65535)
+85	        if random_port not in BaseBrokerWebSocketAdapter._bound_ports and is_port_available(
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: .\websocket_proxy\base_adapter.py:212:60
+211	            for attempt in range(5):
+212	                port = find_free_zmq_port(start_port=5556 + random.randint(0, 1000))
+213	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\websocket_proxy\connection_manager.py:727:24
+726	                            adapter.cleanup_zmq = original_cleanup
+727	                        except Exception:
+728	                            pass  # Adapter may already be in bad state
+729	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\websocket_proxy\server.py:211:28
+210	                                self.server.close()
+211	                            except:
+212	                                pass
+213	                        else:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\websocket_proxy\server.py:274:16
+273	                    self.socket.close()
+274	                except Exception:
+275	                    pass  # Ignore errors during cleanup
+276	                finally:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\websocket_proxy\server.py:282:16
+281	                    self.context.term()
+282	                except Exception:
+283	                    pass  # Ignore errors during cleanup
+284	                finally:
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\websocket_proxy\server.py:286:8
+285	                    self.context = None
+286	        except Exception:
+287	            pass  # Suppress all errors in cleanup
+288	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\websocket_proxy\server.py:298:8
+297	            self._cleanup_zmq_sync()
+298	        except Exception:
+299	            pass  # Cannot raise in __del__
+300	
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: .\websocket_proxy\server.py:419:20
+418	                        await self.send_error(client_id, "PROCESSING_ERROR", str(e))
+419	                    except:
+420	                        pass
+421	        except websockets.exceptions.ConnectionClosed as e:
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 190864
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 266
+		Medium: 34
+		High: 2
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 24
+		Medium: 113
+		High: 165
+Files skipped (0):

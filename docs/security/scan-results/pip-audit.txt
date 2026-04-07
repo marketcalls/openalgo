@@ -1,0 +1,4 @@
+No known vulnerabilities found
+Name       Skip Reason
+---------- ---------------------------------------------------------------------------
+openalgoui Dependency not found on PyPI and could not be audited: openalgoui (2.0.0.2)

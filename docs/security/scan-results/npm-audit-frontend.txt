@@ -1,0 +1,14 @@
+# npm audit report
+
+vite  7.0.0 - 7.3.1
+Severity: high
+Vite Vulnerable to Arbitrary File Read via Vite Dev Server WebSocket - https://github.com/advisories/GHSA-p9ff-h696-f583
+Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling - https://github.com/advisories/GHSA-4w7w-66w2-5vf9
+Vite: `server.fs.deny` bypassed with queries - https://github.com/advisories/GHSA-v2wj-q39q-566r
+fix available via `npm audit fix`
+node_modules/vite
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
