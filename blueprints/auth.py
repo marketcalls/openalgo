@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import time
 
 from flask import (
     Blueprint,
@@ -218,6 +219,7 @@ def reset_password():
                 # Generate a secure token for the email reset
                 token = secrets.token_urlsafe(32)
                 session["reset_token"] = token
+                session["reset_token_created"] = time.time()
                 session["reset_email"] = email
 
                 # Create reset link
@@ -249,6 +251,7 @@ def reset_password():
             # Generate a secure token for the password reset
             token = secrets.token_urlsafe(32)
             session["reset_token"] = token
+            session["reset_token_created"] = time.time()
             session["reset_email"] = email
 
             return jsonify({"status": "success", "message": "TOTP verified", "token": token})
@@ -272,6 +275,16 @@ def reset_password():
         if not valid_token or email != session.get("reset_email"):
             return jsonify({"status": "error", "message": "Invalid or expired reset token."}), 400
 
+        # Enforce 15-minute expiration on reset tokens
+        token_created = session.get("reset_token_created", 0)
+        if time.time() - token_created > 900:  # 900 seconds = 15 minutes
+            session.pop("reset_token", None)
+            session.pop("reset_token_created", None)
+            session.pop("reset_email", None)
+            session.pop("reset_method", None)
+            session.pop("email_reset_token", None)
+            return jsonify({"status": "error", "message": "Reset token has expired. Please start over."}), 400
+
         # Validate password strength
         from utils.auth_utils import validate_password_strength
 
@@ -286,6 +299,7 @@ def reset_password():
 
             # Clear reset session data for security
             session.pop("reset_token", None)
+            session.pop("reset_token_created", None)
             session.pop("reset_email", None)
             session.pop("reset_method", None)
             session.pop("email_reset_token", None)

@@ -16,16 +16,16 @@ The most impactful open findings fall into three categories: (1) **externally ex
 
 All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
 
-**Current status:** 2 findings resolved, 2 mitigated, 2 removed (single-user N/A), 47 open. Of the 47 open, 8 are High, 24 are Medium, and 15 are Low.
+**Current status:** 3 findings resolved, 2 mitigated, 2 removed (single-user N/A), 46 open. Of the 46 open, 8 are High, 24 are Medium, and 14 are Low.
 
 | Severity | Total | Open | Resolved | Mitigated | Removed |
 |----------|-------|------|----------|-----------|---------|
 | Critical | 1 | 0 | 1 | 0 | 0 |
 | High | 10 | 8 | 1 | 1 | 0 |
 | Medium | 24 | 24 | 0 | 0 | 0 |
-| Low | 16 | 15 | 0 | 1 | 0 |
+| Low | 16 | 14 | 1 | 1 | 0 |
 | N/A | 2 | 0 | 0 | 0 | 2 |
-| **Total** | **53** | **47** | **2** | **2** | **2** |
+| **Total** | **53** | **46** | **3** | **2** | **2** |
 
 Note: 2 findings removed as not applicable to single-user architecture.
 14 findings downgraded due to single-user context, local-only MCP, and SEBI static IP policy.
@@ -37,7 +37,7 @@ Note: 2 findings removed as not applicable to single-user architecture.
 | VULN-001 | Critical | Low | Mitigated | All official install scripts auto-generate unique secrets |
 | VULN-003 | Critical | Critical | Resolved | `install/ubuntu-ip.sh` deleted |
 | VULN-004 | High | Low | Open | Single-user; requires MITM on TLS to exploit |
-| VULN-005 | High | Low | Open | Single-user; user resets own password |
+| VULN-005 | High | Low | Resolved | 15-minute token expiry added |
 | VULN-006 | High | -- | Removed | Single-user; user views own TOTP secret |
 | VULN-007 | High | High | Open | API key in URL query params; externally exploitable |
 | VULN-008 | High | High | Open | Samco secret plaintext in DB; defense-in-depth |
@@ -122,15 +122,15 @@ Fix: Clear and regenerate the session immediately after successful authenticatio
 
 ### VULN-005: Password Reset Token Has No Expiration and Is Stored Only in Session
 
-Severity: Low (single-user app; user resets own password; session theft already grants full access)
-File: blueprints/auth.py (lines 218-254, 260-297, 302-332)
+Severity: Low -- **RESOLVED**
+File: blueprints/auth.py
 CWE: CWE-640
 
-What: Password reset tokens (generated via `secrets.token_urlsafe(32)`) are stored in the Flask session (`session["reset_token"]`) with no explicit expiration. The token remains valid for as long as the session exists, which can be up to the next 3:00 AM IST (potentially 24+ hours). Furthermore, when using the email-based reset flow, the reset link embeds the token in the URL, but validation only checks `session.get("reset_token")` -- meaning the reset link only works in the same browser session that requested it, which is a usability problem, and the token persists indefinitely within that session.
+What: Password reset tokens were stored in the Flask session with no explicit expiration. The token remained valid for as long as the session existed (potentially 24+ hours).
 
-Risk: A password reset token obtained through any session leak (e.g., XSS, shared computer, session cookie theft) can be replayed hours later. There is no time-bound invalidation, and the token is not single-use since it persists in the session even after inspection via the email link route (`reset_password_email`) -- it is only cleared after the password is actually changed.
+Risk: A password reset token obtained through any session leak could be replayed hours later.
 
-Fix: Add a timestamp to the reset token (`session["reset_token_created"]`) and enforce a short expiration window (e.g., 15 minutes). Validate the timestamp in the `step == "password"` handler. Additionally, invalidate the token immediately after successful password change (already done) and also on any failed attempt.
+Fix: Added `session["reset_token_created"] = time.time()` when generating tokens and a 15-minute expiry check (`time.time() - token_created > 900`) before accepting the token. Session data is fully cleared on expiry.
 
 ---
 
@@ -878,7 +878,7 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 
 - VULN-001: Add startup check that refuses to start if APP_KEY or API_KEY_PEPPER matches sample defaults (defense-in-depth for manual deployments)
 - VULN-004: Regenerate session ID after successful login (low priority for single-user)
-- VULN-005: Add 15-minute expiration to password reset tokens (low priority for single-user)
+- ~~VULN-005: Add 15-minute expiration to password reset tokens~~ -- **RESOLVED**
 - VULN-017: Read MCP API key from environment variable instead of sys.argv (low priority; local MCP only)
 - VULN-018: Add read-only mode flag and optional order size limit to MCP server (defense-in-depth)
 - VULN-028: Replace str(e) in error responses with generic messages; log details server-side only
