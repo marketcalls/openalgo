@@ -10,9 +10,9 @@ Auditor: Claude Code
 
 | Severity | Count |
 |----------|-------|
-| Critical | 1 |
-| High | 7 |
-| Medium | 14 |
+| Critical | 2 |
+| High | 10 |
+| Medium | 18 |
 | Low | 3 |
 
 ## Critical Findings
@@ -28,6 +28,20 @@ What: The `.sample.env` file ships with pre-generated, deterministic values for 
 Risk: Anyone who reads the open-source repository knows both secrets. An attacker can forge Flask session cookies (using the known `APP_KEY`), impersonate any user, and decrypt all stored broker auth tokens and API keys (using the known `API_KEY_PEPPER` via the Fernet KDF). This is a complete authentication bypass for any deployment using the default values.
 
 Fix: Add a startup validation in `utils/env_check.py` that reads the hardcoded sample values and compares them to the loaded `.env` values. If `APP_KEY` or `API_KEY_PEPPER` matches the sample file defaults, refuse to start and print an error instructing the user to generate new values with `secrets.token_hex(32)`.
+
+---
+
+### VULN-029: Telegram DB Encryption Uses Hardcoded Fallback Pepper and Salt
+
+Severity: Critical
+File: database/telegram_db.py (lines 57-58)
+CWE: CWE-798
+
+What: The `get_encryption_key()` function uses `os.getenv("API_KEY_PEPPER", "default-pepper-change-in-production")` as a fallback. If the environment variable is unset, all Telegram user API keys are encrypted with the publicly known string `"default-pepper-change-in-production"`. The salt is also derived from a configurable environment variable with a weak default: `os.getenv("TELEGRAM_KEY_SALT", "telegram-openalgo-salt")`.
+
+Risk: This is a compound failure: both the pepper and salt have hardcoded defaults. Since the repository is open source, any attacker who obtains the database can decrypt every Telegram user's API key using these known values. Each API key grants full trading access to that user's broker account.
+
+Fix: Remove the default values for both `API_KEY_PEPPER` and `TELEGRAM_KEY_SALT` and fail fast if they are not set, matching the pattern established in `auth_db.py`.
 
 ---
 
@@ -142,6 +156,48 @@ What: The OAuth callback handler for Compositedge and RMoney explicitly skips th
 Risk: An attacker who can trigger a valid OAuth callback (e.g., by initiating an OAuth flow from their own Compositedge/RMoney account) can gain admin-level access to the OpenAlgo instance without knowing the admin username or password. This is because the callback auto-assigns the admin user identity to the session. This completely bypasses the platform's login authentication for these two brokers.
 
 Fix: Remove the automatic admin user fallback. Require that the session contains a valid `user` before processing any broker callback. If the session is lost during OAuth redirect, redirect to the login page and preserve the OAuth callback parameters (state, code) for replay after successful authentication.
+
+---
+
+### VULN-030: Telegram Bot Token Stored in Plaintext in Database
+
+Severity: High
+File: database/telegram_db.py (line 125)
+CWE: CWE-312
+
+What: The `BotConfig.token` column stores the Telegram bot token as plaintext `Text`. While user API keys in the same module are encrypted with Fernet (`encrypted_api_key` column), the bot token itself receives no encryption. The `update_bot_config()` function writes the value directly via `bot_config.token = value` and `get_bot_config()` returns it in plaintext.
+
+Risk: The Telegram bot token grants full control over the bot -- allowing an attacker to impersonate it, read all messages users send to the bot (including commands with sensitive parameters), send arbitrary messages to all registered users, and exfiltrate user-to-bot communications. If the database file is compromised, this token is immediately exploitable.
+
+Fix: Encrypt the bot token before storage using the existing `fernet` instance already initialized in the module, and decrypt on retrieval in `get_bot_config()`.
+
+---
+
+### VULN-031: Flow Workflow Stores API Key in Plaintext
+
+Severity: High
+File: database/flow_db.py (lines 73-75, 266-271)
+CWE: CWE-312
+
+What: The `FlowWorkflow.api_key` column is a `String(255)` that stores the user's OpenAlgo API key in plaintext. When `activate_workflow()` is called (line 266), the API key is passed through and stored unencrypted via `update_workflow()`. This key is later used for webhook execution.
+
+Risk: The plaintext API key in the `flow_workflows` table has the same privileges as the user's full API key -- it can place orders, cancel orders, and perform all trading operations. Database theft exposes all active workflow API keys, giving an attacker full trading access.
+
+Fix: Import `encrypt_token`/`decrypt_token` from `auth_db` and encrypt the API key before storing in `activate_workflow()`. Decrypt it when reading in `get_workflow()` or at the point of use.
+
+---
+
+### VULN-032: TOTP Secret Stored in Plaintext in User Database
+
+Severity: High
+File: database/user_db.py (line 67)
+CWE: CWE-312
+
+What: The `User.totp_secret` column stores the TOTP seed as a plaintext `String(32)`. This seed is used for password reset functionality (`verify_totp` at line 94, `get_totp_uri` at line 88). No encryption is applied when the secret is created in `add_user()` at line 109 where `pyotp.random_base32()` is written directly.
+
+Risk: If the database is stolen, an attacker possessing the TOTP secret can generate valid TOTP codes at any time, bypassing the second factor entirely. Combined with a brute-forced or phished password, this completely defeats the password reset protection.
+
+Fix: Encrypt `totp_secret` using `encrypt_token()` from `auth_db` before storage, and decrypt when generating TOTP codes or URIs.
 
 ---
 
@@ -354,6 +410,62 @@ What: The `Auth` database model has no `token_expiry` or `expires_at` column. Wh
 Risk: Stale tokens are silently used for order placement, leading to failed trades that are only detected after the broker rejects the request. In high-frequency or automated trading scenarios, this can cause cascading failures. The cache TTL is aligned to session expiry time (lines 73-111), but this is a cache expiry optimization, not a token validity check -- a cached stale token is simply replaced with the same stale token from the database.
 
 Fix: Add an `expires_at` column to the `Auth` model. Populate it during `upsert_auth()` based on known broker token lifetimes (or the `expires_in` value from the auth response). In `get_auth_token()`, check `expires_at` before returning the token and return `None` (or trigger re-auth) if expired.
+
+---
+
+### VULN-033: Order Logs and Traffic Logs Accumulate Indefinitely
+
+Severity: Medium
+File: database/apilog_db.py (entire file), database/traffic_db.py (lines 45-96)
+CWE: CWE-779
+
+What: The `order_logs` table (in `apilog_db.py`) and `traffic_logs` table (in `traffic_db.py`) have no purge, retention, or cleanup mechanism. While `latency_db.py` has `purge_old_data_logs()` and `health_db.py` has `purge_old_metrics()`, both order logs and traffic logs grow without bound. Traffic logs also contain IP addresses and request paths which constitute retained PII without a defined retention policy.
+
+Risk: On an active trading system processing many API calls per day, the unbounded log tables will cause the SQLite database files to grow continuously. This leads to disk exhaustion, degraded query performance, and potential denial of service.
+
+Fix: Add `purge_old_logs(days=30)` functions to both `apilog_db.py` and `traffic_db.py`, similar to the existing pattern in `latency_db.py`. Wire them into the same periodic cleanup schedule used for health metrics and latency data.
+
+---
+
+### VULN-034: No File Permission Enforcement on SQLite Database Files
+
+Severity: Medium
+File: database/ (multiple files), db/ (directory)
+CWE: CWE-732
+
+What: All database files in the `db/` directory (`openalgo.db`, `logs.db`, `latency.db`, `health.db`, `sandbox.db`, `historify.duckdb`) are created with default OS permissions. No code in the database layer sets restrictive permissions on these files after creation. The `os.makedirs(db_dir, exist_ok=True)` calls create directories with default permissions.
+
+Risk: On a shared Linux server (common deployment), any local user can read the SQLite files, which contain encrypted auth tokens, hashed passwords, API keys, SMTP credentials, Telegram bot tokens, and all order/trading history. Even the encrypted values can be attacked offline since the encryption keys are derived from a single environment variable.
+
+Fix: After creating database files and directories, explicitly set permissions to `0o700` for directories and `0o600` for files. Add a startup check that warns if database files are world-readable.
+
+---
+
+### VULN-035: DuckDB COPY TO Command with String-Interpolated File Path
+
+Severity: Medium
+File: database/historify_db.py (lines 2386-2396)
+CWE: CWE-89
+
+What: In the `export_to_parquet()` function, when there are no filter parameters, the DuckDB `COPY TO` command is built using f-string interpolation with `abs_output` and `compression` embedded directly into the SQL string. While `abs_output` has path validation (must be in temp directory), the path itself is not sanitized for SQL injection characters like single quotes. The `compression` parameter is a function parameter that could receive arbitrary input.
+
+Risk: If a temp directory path contains a single quote or if the `compression` parameter is ever exposed to user input, an attacker could inject arbitrary DuckDB SQL commands. DuckDB SQL injection could read arbitrary files from the filesystem or write to arbitrary locations.
+
+Fix: Escape single quotes in `abs_output` or validate that it contains only safe characters. Whitelist the `compression` parameter to only accept known values (`zstd`, `snappy`, `gzip`, `none`) at the top of the function.
+
+---
+
+### VULN-036: Strategy Encryption Key Stored as File on Disk
+
+Severity: Medium
+File: database/python_strategy_db.py (key management functions)
+CWE: CWE-922
+
+What: The Python strategy encryption key is stored as a file on disk (`db/strategy_encryption.key`). While it is gitignored, there is no file permission enforcement on this key file. The key is used to encrypt/decrypt uploaded Python strategy source code.
+
+Risk: If the key file is readable by other users on the system, they can decrypt all stored Python strategies. Combined with the world-readable database files (VULN-034), this allows extraction of proprietary trading algorithms.
+
+Fix: Set file permissions to `0o600` when creating the key file. Consider deriving the key from `API_KEY_PEPPER` instead of storing a separate key file.
 
 ---
 
