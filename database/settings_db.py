@@ -5,6 +5,8 @@ import os
 
 from cachetools import TTLCache
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from sqlalchemy import Boolean, Column, Integer, MetaData, String, Text, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -111,12 +113,25 @@ def set_analyze_mode(mode: bool):
         del _settings_cache["analyze_mode"]
 
 
-def _get_encryption_key():
-    """Get or create encryption key for SMTP password"""
-    # Use API_KEY_PEPPER as the base for encryption key
+def _get_encryption_key_legacy():
+    """Legacy key derivation for migrating existing SMTP passwords"""
     pepper = os.getenv("API_KEY_PEPPER", "default-pepper-key")
-    # Create a stable key from the pepper
     key = base64.urlsafe_b64encode(pepper.ljust(32)[:32].encode())
+    return key
+
+
+def _get_encryption_key():
+    """Get encryption key for SMTP password using PBKDF2"""
+    pepper = os.getenv("API_KEY_PEPPER")
+    if not pepper:
+        raise ValueError("API_KEY_PEPPER environment variable is required for SMTP encryption")
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b"openalgo_smtp_salt",
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
     return key
 
 

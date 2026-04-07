@@ -16,16 +16,16 @@ The most impactful open findings fall into three categories: (1) **externally ex
 
 All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
 
-**Current status:** 3 findings resolved, 2 mitigated, 2 removed (single-user N/A), 46 open. Of the 46 open, 7 are High, 25 are Medium, and 14 are Low.
+**Current status:** 8 findings resolved, 2 mitigated, 2 removed (single-user N/A), 41 open. Of the 41 open, 3 are High, 24 are Medium, and 14 are Low.
 
 | Severity | Total | Open | Resolved | Mitigated | Removed |
 |----------|-------|------|----------|-----------|---------|
 | Critical | 1 | 0 | 1 | 0 | 0 |
-| High | 9 | 7 | 1 | 1 | 0 |
-| Medium | 25 | 25 | 0 | 0 | 0 |
+| High | 9 | 3 | 5 | 1 | 0 |
+| Medium | 25 | 24 | 1 | 0 | 0 |
 | Low | 16 | 14 | 1 | 1 | 0 |
 | N/A | 2 | 0 | 0 | 0 | 2 |
-| **Total** | **53** | **46** | **3** | **2** | **2** |
+| **Total** | **53** | **41** | **8** | **2** | **2** |
 
 Note: 2 findings removed as not applicable to single-user architecture.
 14 findings downgraded due to single-user context, local-only MCP, and SEBI static IP policy.
@@ -40,13 +40,13 @@ Note: 2 findings removed as not applicable to single-user architecture.
 | VULN-005 | High | Low | Resolved | 15-minute token expiry added |
 | VULN-006 | High | -- | Removed | Single-user; user views own TOTP secret |
 | VULN-007 | High | Medium | Open | Accepted risk; required by TradingView/GoCharting/Chartink integrations |
-| VULN-008 | High | High | Open | Samco secret plaintext in DB; defense-in-depth |
-| VULN-009 | High | High | Open | Hardcoded fallback encryption key |
+| VULN-008 | High | High | Resolved | Samco secret now encrypted via encrypt_token(); migration encrypts existing data |
+| VULN-009 | High | High | Resolved | Removed fallback key; uses PBKDF2 KDF; migration re-encrypts SMTP passwords |
 | VULN-010 | High | High | Open | OAuth CSRF; externally exploitable |
 | VULN-011 | High | -- | Removed | Single-user; only one user exists, auto-assign is correct |
-| VULN-012 | High | High | Open | Telegram bot token plaintext in DB |
-| VULN-013 | High | High | Open | Flow API key plaintext in DB |
-| VULN-014 | High | Medium | Open | Single-user; DB theft already grants password hash access |
+| VULN-012 | High | High | Resolved | Telegram bot token now encrypted via fernet; migration encrypts existing data |
+| VULN-013 | High | High | Resolved | Flow API key now encrypted via encrypt_token(); migration encrypts existing data |
+| VULN-014 | High | Medium | Resolved | TOTP secret now encrypted via encrypt_token(); migration encrypts existing data |
 | VULN-015 | High | High | Open | API key in localStorage; XSS exploitable externally |
 | VULN-016 | High | High | Open | Hardcoded Fyers OAuth state; externally exploitable |
 | VULN-017 | High | Low | Open | Local MCP only; single-user machine; process list visible only to same user |
@@ -150,7 +150,7 @@ Fix: Cannot move to `X-API-KEY` header as TradingView, GoCharting, and Chartink 
 
 ### VULN-008: Samco Secret API Key Stored in Plaintext in Database
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: database/auth_db.py (lines 156, 751-767)
 CWE: CWE-312
 
@@ -164,7 +164,7 @@ Fix: Encrypt the secret API key before storage using the existing `encrypt_token
 
 ### VULN-009: SMTP Encryption Uses Hardcoded Fallback Key "default-pepper-key"
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: database/settings_db.py (line 117)
 CWE: CWE-798
 
@@ -192,7 +192,7 @@ Fix: For all OAuth brokers: (1) generate a cryptographically random state using 
 
 ### VULN-012: Telegram Bot Token Stored in Plaintext in Database
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: database/telegram_db.py (line 125)
 CWE: CWE-312
 
@@ -206,7 +206,7 @@ Fix: Encrypt the bot token before storage using the existing `fernet` instance a
 
 ### VULN-013: Flow Workflow Stores API Key in Plaintext
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: database/flow_db.py (lines 73-75, 266-271)
 CWE: CWE-312
 
@@ -220,7 +220,7 @@ Fix: Import `encrypt_token`/`decrypt_token` from `auth_db` and encrypt the API k
 
 ### VULN-014: TOTP Secret Stored in Plaintext in User Database
 
-Severity: Medium (single-user app; DB theft already grants ability to modify password hash directly)
+Severity: Medium -- **RESOLVED**
 File: database/user_db.py (line 67)
 CWE: CWE-312
 

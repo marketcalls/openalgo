@@ -264,11 +264,22 @@ def delete_workflow(workflow_id):
 
 
 def activate_workflow(workflow_id, api_key=None):
-    """Activate a workflow and optionally store the API key for webhook execution"""
+    """Activate a workflow and optionally store the API key (encrypted) for webhook execution"""
+    from database.auth_db import encrypt_token
+
     kwargs = {"is_active": True}
     if api_key:
-        kwargs["api_key"] = api_key
+        kwargs["api_key"] = encrypt_token(api_key)
     return update_workflow(workflow_id, **kwargs)
+
+
+def get_workflow_api_key(workflow):
+    """Get decrypted API key from a workflow"""
+    from database.auth_db import decrypt_token
+
+    if workflow and workflow.api_key:
+        return decrypt_token(workflow.api_key)
+    return None
 
 
 def deactivate_workflow(workflow_id):

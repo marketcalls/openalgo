@@ -763,7 +763,7 @@ def samco_save_secret_key(user_id, secret_api_key):
             )
             db_session.add(record)
             logger.info(f"Created placeholder auth record for samco user {user_id}")
-        record.secret_api_key = secret_api_key
+        record.secret_api_key = encrypt_token(secret_api_key)
         db_session.commit()
         return True
     except Exception as e:
@@ -836,7 +836,7 @@ def samco_get_secret_key(user_id):
     """Get the stored secret API key for a Samco user."""
     record = _get_samco_auth(user_id)
     if record and record.secret_api_key:
-        return record.secret_api_key
+        return decrypt_token(record.secret_api_key)
     return None
 
 

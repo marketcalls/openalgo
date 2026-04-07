@@ -58,6 +58,8 @@ MIGRATIONS = [
     ("migrate_market_holidays.py", "2026 Market Holiday Calendar Update"),
     ("migrate_leverage.py", "Leverage Configuration for Crypto"),
     ("migrate_samco_auth.py", "Samco 2FA Authentication"),
+    # Security migrations
+    ("migrate_encrypt_sensitive_data.py", "Encrypt Plaintext Sensitive Data (VULN-008/009/012/013/014)"),
 ]
 
 

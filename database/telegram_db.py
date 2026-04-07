@@ -452,9 +452,15 @@ def get_bot_config() -> dict:
         config = db_session.query(BotConfig).filter_by(id=1).first()
 
         if config:
+            decrypted_token = None
+            if config.token:
+                try:
+                    decrypted_token = fernet.decrypt(config.token.encode()).decode()
+                except Exception:
+                    decrypted_token = config.token  # Fallback for unencrypted legacy data
             return {
-                "bot_token": config.token,
-                "token": config.token,  # Alias for backward compatibility
+                "bot_token": decrypted_token,
+                "token": decrypted_token,  # Alias for backward compatibility
                 "is_active": config.is_active,
                 "bot_username": config.bot_username,
                 "max_message_length": config.max_message_length,
@@ -493,9 +499,9 @@ def update_bot_config(config: dict) -> bool:
 
         # Update fields (map bot_token to token for database)
         for key, value in config.items():
-            # Handle the bot_token -> token mapping
+            # Handle the bot_token -> token mapping (encrypt before storing)
             if key == "bot_token":
-                bot_config.token = value
+                bot_config.token = fernet.encrypt(value.encode()).decode() if value else None
             elif hasattr(bot_config, key) and key not in ["id", "created_at"]:
                 setattr(bot_config, key, value)
 

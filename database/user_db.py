@@ -6,7 +6,7 @@ import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from cachetools import TTLCache
-from sqlalchemy import Boolean, Column, Integer, String, create_engine
+from sqlalchemy import Boolean, Column, Integer, String, Text, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -64,7 +64,7 @@ class User(Base):
     username = Column(String(80), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)  # Increased length for Argon2 hash
-    totp_secret = Column(String(32), nullable=False)  # For TOTP-based password reset
+    totp_secret = Column(Text, nullable=False)  # Encrypted TOTP secret for password reset
     is_admin = Column(Boolean, default=False)
 
     def set_password(self, password):
@@ -85,15 +85,24 @@ class User(Base):
         except VerifyMismatchError:
             return False
 
+    def _get_totp_secret_plain(self):
+        """Get the plaintext TOTP secret (handles both encrypted and legacy plaintext)"""
+        from database.auth_db import decrypt_token
+
+        decrypted = decrypt_token(self.totp_secret)
+        if decrypted:
+            return decrypted
+        return self.totp_secret  # Fallback for unencrypted legacy data
+
     def get_totp_uri(self):
         """Get the TOTP URI for QR code generation"""
-        return pyotp.totp.TOTP(self.totp_secret).provisioning_uri(
+        return pyotp.totp.TOTP(self._get_totp_secret_plain()).provisioning_uri(
             name=self.email, issuer_name="OpenAlgo"
         )
 
     def verify_totp(self, token):
         """Verify TOTP token"""
-        totp = pyotp.TOTP(self.totp_secret)
+        totp = pyotp.TOTP(self._get_totp_secret_plain())
         return totp.verify(token)
 
 
@@ -105,9 +114,11 @@ def init_db():
 
 def add_user(username, email, password, is_admin=False):
     try:
-        # Generate TOTP secret for the user
+        from database.auth_db import encrypt_token
+
+        # Generate TOTP secret for the user (encrypted at rest)
         totp_secret = pyotp.random_base32()
-        user = User(username=username, email=email, totp_secret=totp_secret, is_admin=is_admin)
+        user = User(username=username, email=email, totp_secret=encrypt_token(totp_secret), is_admin=is_admin)
         user.set_password(password)
         db_session.add(user)
         db_session.commit()
