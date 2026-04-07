@@ -191,6 +191,12 @@ def get_margin_data(auth_token):
                                 logger.debug(f"Fetched LTP for {symbol}: {ltp}")
                     except Exception as e:
                         logger.warning(f"Could not batch fetch LTP: {e}")
+                        # Fallback: try to use API-provided unrealized P&L if batch fetch fails
+                        if not ltp_map:
+                            logger.info("Using API-provided unrealized P&L as fallback")
+                            total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
+                            # Still calculate realized P&L from positions
+                            # (continue with position loop but skip unrealized calculation)
 
                 # Now calculate P&L for each position
                 for position in positions:
@@ -227,15 +233,24 @@ def get_margin_data(auth_token):
                         # Open position - calculate both realized and unrealized P&L
                         # Calculate realized P&L for the closed portion
                         if total_sell_qty > 0 and total_buy_qty > 0:
-                            # Average buy price including carry-forward
-                            avg_buy_price = total_buy_amt / total_buy_qty if total_buy_qty > 0 else 0
-                            # Realized P&L = sellAmt - (avg_buy_price × sell_qty)
-                            realized_pnl = total_sell_amt - (avg_buy_price * total_sell_qty)
+                            if net_qty > 0:
+                                # Net long position - some bought shares were sold
+                                # Realized P&L = sellAmt - (avg_buy_price × sell_qty)
+                                avg_buy_price = total_buy_amt / total_buy_qty if total_buy_qty > 0 else 0
+                                realized_pnl = total_sell_amt - (avg_buy_price * total_sell_qty)
+                            elif net_qty < 0:
+                                # Net short position - some sold shares were bought back
+                                # Realized P&L = (avg_sell_price × buy_qty) - buyAmt
+                                avg_sell_price = total_sell_amt / total_sell_qty if total_sell_qty > 0 else 0
+                                realized_pnl = (avg_sell_price * total_buy_qty) - total_buy_amt
+                            else:
+                                # Should not reach here (net_qty == 0 handled above)
+                                realized_pnl = 0.0
+
                             total_realised += realized_pnl
                             logger.debug(
                                 f"Partial Realized P&L for {position.get('trdSym')}: "
-                                f"sold {total_sell_qty} @ avg {avg_buy_price:.2f}, "
-                                f"realized={realized_pnl:.2f}"
+                                f"net_qty={net_qty}, realized={realized_pnl:.2f}"
                             )
 
                         # Calculate unrealized PnL for open positions
@@ -264,19 +279,21 @@ def get_margin_data(auth_token):
                             logger.debug(f"Could not get LTP for {position.get('trdSym')}: {e}")
                             ltp = 0.0
 
-                        # Calculate unrealized PnL
-                        if ltp > 0 and avg_price > 0:
-                            unrealized = (ltp - avg_price) * net_qty
-                            total_unrealised += unrealized
-                            logger.debug(
-                                f"Open Position {position.get('trdSym')}: qty={net_qty}, "
-                                f"avg={avg_price:.2f}, ltp={ltp:.2f}, unrealized={unrealized:.2f}"
-                            )
-                        else:
-                            logger.debug(
-                                f"Could not calculate unrealized PnL for {position.get('trdSym')}: "
-                                f"avg_price={avg_price:.2f}, ltp={ltp:.2f}"
-                            )
+                        # Calculate unrealized PnL only if we have LTP data
+                        # If batch fetch failed, unrealized P&L was already set from API fallback
+                        if ltp_map:  # Only calculate if we have LTP data
+                            if ltp > 0 and avg_price > 0:
+                                unrealized = (ltp - avg_price) * net_qty
+                                total_unrealised += unrealized
+                                logger.debug(
+                                    f"Open Position {position.get('trdSym')}: qty={net_qty}, "
+                                    f"avg={avg_price:.2f}, ltp={ltp:.2f}, unrealized={unrealized:.2f}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"Could not calculate unrealized PnL for {position.get('trdSym')}: "
+                                    f"avg_price={avg_price:.2f}, ltp={ltp:.2f}"
+                                )
 
                 logger.info(
                     f"Calculated PnL from positions - Realized: {total_realised:.2f}, "
