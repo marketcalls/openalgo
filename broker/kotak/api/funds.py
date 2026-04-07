@@ -167,21 +167,60 @@ def get_margin_data(auth_token):
                                 f"buyAmt={buy_amt}, sellAmt={sell_amt}, realized={realized_pnl:.2f}"
                             )
                     else:
-                        # Open position - use rpnl for partial realized P&L
-                        rpnl = safe_float(position.get("rpnl"))
-                        total_realised += rpnl
+                        # Open position - calculate both realized and unrealized P&L
+                        # For partially closed positions, we need to calculate realized P&L
+                        # from the closed portion
+                        buy_amt = safe_float(position.get("buyAmt"))
+                        sell_amt = safe_float(position.get("sellAmt"))
+
+                        # Calculate realized P&L for the closed portion
+                        if fl_sell_qty > 0 and fl_buy_qty > 0:
+                            # Average buy price
+                            avg_buy_price = buy_amt / fl_buy_qty if fl_buy_qty > 0 else 0
+                            # Realized P&L = sellAmt - (avg_buy_price × sell_qty)
+                            realized_pnl = sell_amt - (avg_buy_price * fl_sell_qty)
+                            total_realised += realized_pnl
+                            logger.info(
+                                f"Partial Realized P&L for {position.get('trdSym')}: "
+                                f"sold {fl_sell_qty} @ avg {avg_buy_price:.2f}, "
+                                f"realized={realized_pnl:.2f}"
+                            )
 
                         # Calculate unrealized PnL for open positions
-                        # Determine average price based on position direction
+                        # Kotak API doesn't provide flBuyAvg/flSellAvg, so calculate from amounts
+                        avg_price = 0.0
                         if net_qty > 0:
-                            # Long position - use buy average
-                            avg_price = safe_float(position.get("flBuyAvg"))
+                            # Long position - calculate buy average from buyAmt / flBuyQty
+                            if fl_buy_qty > 0:
+                                avg_price = buy_amt / fl_buy_qty
                         else:
-                            # Short position - use sell average
-                            avg_price = safe_float(position.get("flSellAvg"))
+                            # Short position - calculate sell average from sellAmt / flSellQty
+                            if fl_sell_qty > 0:
+                                avg_price = sell_amt / fl_sell_qty
 
-                        # Get current LTP
-                        ltp = safe_float(position.get("ltp"))
+                        # Get current LTP - Kotak positions API doesn't provide ltp
+                        # We need to fetch it from quotes API
+                        ltp = 0.0
+                        try:
+                            from broker.kotak.api.data import BrokerData
+                            from broker.kotak.mapping.transform_data import map_exchange
+
+                            # Get OpenAlgo exchange format
+                            oa_exchange = map_exchange(position.get("exSeg"))
+
+                            # Get OpenAlgo symbol from database
+                            from database.token_db import get_symbol
+                            token = position.get("tok")
+                            oa_symbol = get_symbol(token, oa_exchange)
+
+                            if oa_symbol and oa_exchange:
+                                broker_data = BrokerData(auth_token)
+                                quotes_response = broker_data.get_quotes(oa_symbol, oa_exchange)
+                                if quotes_response:
+                                    ltp = safe_float(quotes_response.get("ltp"))
+                                    logger.debug(f"Fetched LTP for {position.get('trdSym')}: {ltp}")
+                        except Exception as e:
+                            logger.debug(f"Could not fetch LTP for {position.get('trdSym')}: {e}")
 
                         # Calculate unrealized PnL
                         if ltp > 0 and avg_price > 0:
@@ -189,7 +228,12 @@ def get_margin_data(auth_token):
                             total_unrealised += unrealized
                             logger.info(
                                 f"Open Position {position.get('trdSym')}: qty={net_qty}, "
-                                f"avg={avg_price}, ltp={ltp}, unrealized={unrealized:.2f}, rpnl={rpnl:.2f}"
+                                f"avg={avg_price:.2f}, ltp={ltp:.2f}, unrealized={unrealized:.2f}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Could not calculate unrealized PnL for {position.get('trdSym')}: "
+                                f"avg_price={avg_price:.2f}, ltp={ltp:.2f}"
                             )
 
                 logger.info(
