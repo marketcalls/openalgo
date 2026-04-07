@@ -38,10 +38,7 @@ def generate_consent(dhan_client_id):
         url = f"{AUTH_BASE_URL}/app/generate-consent"
 
         logger.info(f"Generating consent for Dhan Client ID: {dhan_client_id}")
-        logger.info(f"Using API Key: {BROKER_API_KEY[:8] if BROKER_API_KEY else 'None'}...")
-        logger.info(
-            f"Using API Secret: {BROKER_API_SECRET[:8] if BROKER_API_SECRET else 'None'}..."
-        )
+        logger.debug("API credentials configured: %s", bool(BROKER_API_KEY and BROKER_API_SECRET))
 
         # Make the POST request with the client_id as a query parameter
         # The client_id parameter is REQUIRED for generate-consent
@@ -115,8 +112,8 @@ def consume_consent(token_id):
                     "ddpi_status": data.get("givenPowerOfAttorney", False),
                     "token_expiry": data.get("expiryTime"),
                 }
-                logger.debug(f"Access Token obtained: {access_token}")
-                logger.debug(f"Additional Data: {additional_data}")
+                logger.debug("Access token obtained successfully")
+                logger.debug("Additional data keys: %s", list(additional_data.keys()) if additional_data else "None")
                 return access_token, additional_data
             else:
                 return None, "Access token not found in response"

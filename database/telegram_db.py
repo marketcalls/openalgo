@@ -54,7 +54,9 @@ TELEGRAM_KEY_SALT = os.getenv("TELEGRAM_KEY_SALT", "telegram-openalgo-salt").enc
 
 def get_encryption_key():
     """Generate a Fernet key for encrypting API keys"""
-    pepper = os.getenv("API_KEY_PEPPER", "default-pepper-change-in-production")
+    pepper = os.getenv("API_KEY_PEPPER")
+    if not pepper:
+        raise ValueError("API_KEY_PEPPER environment variable is required for Telegram encryption")
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,

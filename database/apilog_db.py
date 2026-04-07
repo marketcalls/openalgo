@@ -75,3 +75,22 @@ def async_log_order(api_type, request_data, response_data):
         logger.exception(f"Error saving order log: {e}")
     finally:
         db_session.remove()
+
+
+def purge_old_order_logs(days=30):
+    """Purge order logs older than specified days"""
+    try:
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        deleted = db_session.query(OrderLog).filter(OrderLog.created_at < cutoff).delete()
+        db_session.commit()
+        if deleted:
+            logger.info(f"Purged {deleted} order logs older than {days} days")
+        return deleted
+    except Exception as e:
+        logger.exception(f"Error purging order logs: {e}")
+        db_session.rollback()
+        return 0
+    finally:
+        db_session.remove()

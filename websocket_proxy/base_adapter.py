@@ -200,7 +200,7 @@ class BaseBrokerWebSocketAdapter(ABC):
 
             if default_port not in self._bound_ports and is_port_available(default_port):
                 try:
-                    self.socket.bind(f"tcp://*:{default_port}")
+                    self.socket.bind(f"tcp://127.0.0.1:{default_port}")
                     self._bound_ports.add(default_port)
                     self.logger.info(f"Bound to default port {default_port}")
                     return default_port
@@ -216,7 +216,7 @@ class BaseBrokerWebSocketAdapter(ABC):
                     continue
 
                 try:
-                    self.socket.bind(f"tcp://*:{port}")
+                    self.socket.bind(f"tcp://127.0.0.1:{port}")
                     self._bound_ports.add(port)
                     self.logger.info(f"Successfully bound to port {port}")
                     return port

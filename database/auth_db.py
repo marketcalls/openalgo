@@ -53,6 +53,9 @@ PEPPER = _pepper_value
 
 
 # Setup Fernet encryption for auth tokens
+# Note: Salt is static but each deployment has a unique API_KEY_PEPPER (auto-generated
+# by all install scripts), so the derived key is unique per deployment. Changing the salt
+# would break decryption of all existing encrypted data (auth tokens, API keys, etc.).
 def get_encryption_key():
     """Generate a Fernet key from the pepper"""
     kdf = PBKDF2HMAC(
@@ -151,6 +154,7 @@ class Auth(Base):
     broker = Column(String(20), nullable=False)
     user_id = Column(String(255), nullable=True)  # Add user_id column
     is_revoked = Column(Boolean, default=False)
+    expires_at = Column(DateTime, nullable=True)  # Token expiry time
 
     # Samco 2FA fields
     secret_api_key = Column(Text, nullable=True)
@@ -212,7 +216,7 @@ def decrypt_token(encrypted_token):
         return None
 
 
-def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=False):
+def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=False, expires_at=None):
     """Store encrypted auth token and feed token if provided.
 
     Also publishes cache invalidation events via ZeroMQ for multi-process deployments.
@@ -229,6 +233,7 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         auth_obj.broker = broker
         auth_obj.user_id = user_id
         auth_obj.is_revoked = revoke
+        auth_obj.expires_at = expires_at
     else:
         auth_obj = Auth(
             name=name,
@@ -237,6 +242,7 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
             broker=broker,
             user_id=user_id,
             is_revoked=revoke,
+            expires_at=expires_at,
         )
         db_session.add(auth_obj)
     db_session.commit()
@@ -585,9 +591,12 @@ def get_username_by_apikey(provided_api_key):
 
 def get_broker_name(provided_api_key):
     """Get only the broker name for a valid API key with caching"""
+    # Use hashed key for cache (consistent with verify_api_key pattern)
+    cache_key = hashlib.sha256(provided_api_key.encode()).hexdigest()
+
     # Check if broker name is in cache
-    if provided_api_key in broker_cache:
-        return broker_cache[provided_api_key]
+    if cache_key in broker_cache:
+        return broker_cache[cache_key]
 
     # Not in cache, need to look it up
     user_id = verify_api_key(provided_api_key)
@@ -597,7 +606,7 @@ def get_broker_name(provided_api_key):
             auth_obj = Auth.query.filter_by(name=user_id).first()
             if auth_obj and not auth_obj.is_revoked:
                 # Cache the broker name
-                broker_cache[provided_api_key] = auth_obj.broker
+                broker_cache[cache_key] = auth_obj.broker
                 return auth_obj.broker
             else:
                 logger.warning(f"No valid broker found for user_id '{user_id}'.")

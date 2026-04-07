@@ -16,16 +16,16 @@ The most impactful open findings fall into three categories: (1) **externally ex
 
 All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
 
-**Current status:** 11 findings resolved, 2 mitigated, 2 removed (single-user N/A), 38 open. **0 High severity open.** Of the 38 open, 24 are Medium and 14 are Low.
+**Current status:** 26 findings resolved, 2 mitigated, 2 removed (single-user N/A), 23 open. **0 Critical or High severity open.** Of the 23 open, 12 are Medium and 11 are Low.
 
 | Severity | Total | Open | Resolved | Mitigated | Removed |
 |----------|-------|------|----------|-----------|---------|
 | Critical | 1 | 0 | 1 | 0 | 0 |
-| High | 9 | 0 | 8 | 1 | 0 |
-| Medium | 25 | 24 | 1 | 0 | 0 |
-| Low | 16 | 14 | 1 | 1 | 0 |
+| High | 10 | 0 | 9 | 1 | 0 |
+| Medium | 25 | 12 | 12 | 1 | 0 |
+| Low | 15 | 11 | 4 | 0 | 0 |
 | N/A | 2 | 0 | 0 | 0 | 2 |
-| **Total** | **53** | **38** | **11** | **2** | **2** |
+| **Total** | **53** | **23** | **26** | **2** | **2** |
 
 Note: 2 findings removed as not applicable to single-user architecture.
 14 findings downgraded due to single-user context, local-only MCP, and SEBI static IP policy.
@@ -52,29 +52,29 @@ Note: 2 findings removed as not applicable to single-user architecture.
 | VULN-017 | High | Low | Open | Local MCP only; single-user machine; process list visible only to same user |
 | VULN-018 | High | Medium | Open | Local MCP only; user controls AI assistant; residual prompt injection risk |
 | VULN-019 | High | High | Resolved | `install/ubuntu-ip.sh` deleted |
-| VULN-020 | High | High | Mitigated | ZMQ not exposed via firewall in install scripts |
-| VULN-002 | Critical | Medium | Open | Pepper fallback dead code for install.sh; TELEGRAM_KEY_SALT hardcoded |
-| VULN-021 | Medium | Low | Open | Single-user server; memory dump = full server access |
-| VULN-022 | Medium | Medium | Open | Static KDF salt |
+| VULN-020 | High | High | Resolved | ZMQ now binds to 127.0.0.1 instead of 0.0.0.0 |
+| VULN-002 | Critical | Medium | Resolved | Removed hardcoded fallback pepper; fails fast if API_KEY_PEPPER missing |
+| VULN-021 | Medium | Low | Resolved | Cache key now uses SHA256 hash consistent with verify_api_key() |
+| VULN-022 | Medium | Medium | Mitigated | Static salt with unique pepper per deployment; documented trade-off |
 | VULN-023 | Medium | Medium | Open | CSRF disableable |
-| VULN-024 | Medium | Medium | Open | Unbounded basket order list |
-| VULN-025 | Medium | Medium | Open | Symbol/strategy field validation |
-| VULN-026 | Medium | Medium | Open | SmartOrder position_size range |
+| VULN-024 | Medium | Medium | Resolved | Basket orders limited to max 50 via validate.Length |
+| VULN-025 | Medium | Medium | Resolved | All symbol fields: Length(1,50); all strategy fields: Length(1,100) |
+| VULN-026 | Medium | Medium | Resolved | position_size: Range(-1000000, 1000000) |
 | VULN-027 | Medium | Medium | Open | Webhook auth; externally exploitable |
-| VULN-028 | Medium | Medium | Open | Error info leak to external callers |
+| VULN-028 | Medium | Medium | Resolved | str(e) replaced with generic messages in error responses |
 | VULN-029 | Medium | Medium | Open | No request body size limit |
 | VULN-030 | Medium | Medium | Open | CORS allows all origins |
 | VULN-031 | Medium | Medium | Open | Chartink scan_name validation |
-| VULN-032 | Medium | Low | Open | Single-user server; logs on own server |
-| VULN-033 | Medium | Low | Open | Single-user server; logs on own server |
-| VULN-034 | Medium | Medium | Open | XSS in Dhan OAuth redirect |
-| VULN-035 | Medium | Medium | Open | No token expiry detection |
-| VULN-036 | Medium | Medium | Open | Unbounded log retention |
+| VULN-032 | Medium | Low | Resolved | Auth tokens redacted from broker log output |
+| VULN-033 | Medium | Low | Resolved | Dhan API secret/key prefixes removed from logs |
+| VULN-034 | Medium | Medium | Resolved | Inline JS redirect replaced with Flask redirect() |
+| VULN-035 | Medium | Medium | Resolved | expires_at column added to Auth model; migration created |
+| VULN-036 | Medium | Medium | Resolved | purge_old_order_logs() and purge_old_traffic_logs() added |
 | VULN-037 | Medium | Low | Open | Single-user server; typically one OS user |
-| VULN-038 | Medium | Medium | Open | DuckDB SQL interpolation |
+| VULN-038 | Medium | Medium | Resolved | Compression parameter whitelisted before SQL interpolation |
 | VULN-039 | Medium | Low | Open | Single-user server; file access = full control |
-| VULN-040 | Medium | Medium | Open | Weak PRNG for OAuth state |
-| VULN-041 | Medium | Medium | Open | Open redirect in login |
+| VULN-040 | Medium | Medium | Resolved | random.choices() replaced with secrets.token_urlsafe(32) |
+| VULN-041 | Medium | Medium | Resolved | Login redirect validated: must start with / and not // |
 | VULN-042 | Medium | Medium | Open | CSP connect-src too broad |
 | VULN-043 | Medium | Medium | Open | CSP unsafe-inline |
 | VULN-044 | Medium | Low | Open | Single-user; can only DoS themselves |

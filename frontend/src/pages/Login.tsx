@@ -113,10 +113,13 @@ export default function Login() {
 
       const data = await response.json()
 
+      // Validate redirect is a safe relative path (prevent open redirect)
+      const isSafeRedirect = (path: string) => path.startsWith('/') && !path.startsWith('//')
+
       if (data.status === 'error') {
         setError(data.message || 'Login failed. Please try again.')
         // Handle redirect for setup
-        if (data.redirect) {
+        if (data.redirect && isSafeRedirect(data.redirect)) {
           navigate(data.redirect)
         }
       } else {
@@ -124,7 +127,8 @@ export default function Login() {
         setLogin(username, '')
         showToast.success('Login successful', 'system')
         // Use redirect from response if provided, otherwise go to broker
-        navigate(data.redirect || '/broker')
+        const target = data.redirect && isSafeRedirect(data.redirect) ? data.redirect : '/broker'
+        navigate(target)
       }
     } catch (err) {
       setError('Login failed. Please try again.')

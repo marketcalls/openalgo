@@ -416,7 +416,7 @@ def delete_strategy_route(strategy_id):
             return jsonify({"status": "error", "error": "Failed to delete strategy"}), 500
     except Exception as e:
         logger.exception(f"Error deleting strategy {strategy_id}: {str(e)}")
-        return jsonify({"status": "error", "error": str(e)}), 500
+        return jsonify({"status": "error", "error": "An unexpected error occurred"}), 500
 
 
 @chartink_bp.route("/<int:strategy_id>/configure", methods=["GET", "POST"])
@@ -941,4 +941,4 @@ def webhook(webhook_id):
 
     except Exception as e:
         logger.exception(f"Error processing webhook: {str(e)}")
-        return jsonify({"status": "error", "error": str(e)}), 500
+        return jsonify({"status": "error", "error": "An unexpected error occurred"}), 500

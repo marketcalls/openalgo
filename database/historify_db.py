@@ -2312,6 +2312,12 @@ def export_to_parquet(
     """
     import tempfile
 
+    # Whitelist compression to prevent SQL injection in COPY command
+    allowed_compressions = {"zstd", "snappy", "gzip", "none"}
+    if compression.lower() not in allowed_compressions:
+        return False, f"Invalid compression: must be one of {allowed_compressions}", 0
+    compression = compression.lower()
+
     try:
         # Build WHERE clause
         conditions = []

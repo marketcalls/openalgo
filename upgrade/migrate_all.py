@@ -60,6 +60,7 @@ MIGRATIONS = [
     ("migrate_samco_auth.py", "Samco 2FA Authentication"),
     # Security migrations
     ("migrate_encrypt_sensitive_data.py", "Encrypt Plaintext Sensitive Data (VULN-008/009/012/013/014)"),
+    ("migrate_token_expiry.py", "Token Expiry Column (VULN-035)"),
 ]
 
 

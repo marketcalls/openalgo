@@ -849,22 +849,8 @@ def dhan_initiate_oauth():
         # Get the login URL
         login_url = get_login_url(consent_app_id)
         if login_url:
-            logger.info(f"Redirecting to Dhan OAuth login URL: {login_url}")
-            # Return a page that will redirect via JavaScript
-            # This ensures the browser properly redirects to the external URL
-            return f'''
-            <html>
-            <head>
-                <title>Redirecting to Dhan...</title>
-            </head>
-            <body>
-                <p>Redirecting to Dhan login page...</p>
-                <script>
-                    window.location.href = "{login_url}";
-                </script>
-            </body>
-            </html>
-            '''
+            logger.info("Redirecting to Dhan OAuth login")
+            return redirect(login_url)
         else:
             error_message = "Failed to generate login URL"
             logger.error(error_message)

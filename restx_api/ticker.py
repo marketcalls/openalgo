@@ -260,11 +260,11 @@ class Ticker(Resource):
             except Exception as e:
                 logger.exception(f"Error in broker_module.get_history: {e}")
                 if response_format == "txt":
-                    response = TextResponse(str(e))
+                    response = TextResponse("Error fetching market data")
                     response.content_type = "text/plain"
                     response.json = {"request_id": f"ticker_{symbol}_{history_data['interval']}"}
                     return response, 500
-                return make_response(jsonify({"status": "error", "message": str(e)}), 500)
+                return make_response(jsonify({"status": "error", "message": "Error fetching market data"}), 500)
 
         except ValidationError as err:
             if response_format == "txt":

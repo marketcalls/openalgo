@@ -487,6 +487,25 @@ class InvalidAPIKeyTracker(LogBase):
             return []
 
 
+def purge_old_traffic_logs(days=30):
+    """Purge traffic logs older than specified days"""
+    try:
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        deleted = logs_session.query(TrafficLog).filter(TrafficLog.timestamp < cutoff).delete()
+        logs_session.commit()
+        if deleted:
+            logger.info(f"Purged {deleted} traffic logs older than {days} days")
+        return deleted
+    except Exception as e:
+        logger.exception(f"Error purging traffic logs: {e}")
+        logs_session.rollback()
+        return 0
+    finally:
+        logs_session.remove()
+
+
 def init_logs_db():
     """Initialize the logs database"""
     # Extract directory from database URL and create if it doesn't exist

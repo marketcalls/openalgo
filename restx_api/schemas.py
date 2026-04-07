@@ -2,6 +2,10 @@ from marshmallow import Schema, ValidationError, fields, post_load, validate
 
 from utils.constants import CRYPTO_EXCHANGES, VALID_EXCHANGES
 
+# Reusable validators for symbol and strategy fields
+_symbol_validator = validate.Length(min=1, max=50, error="Symbol must be between 1 and 50 characters.")
+_strategy_validator = validate.Length(min=1, max=100, error="Strategy must be between 1 and 100 characters.")
+
 
 def _coerce_quantity_to_int(data):
     """Convert quantity from float to int for non-crypto exchanges.
@@ -21,9 +25,9 @@ def _coerce_quantity_to_int(data):
 
 class OrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
-    symbol = fields.Str(required=True)
+    symbol = fields.Str(required=True, validate=_symbol_validator)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Float(
         required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
@@ -54,15 +58,21 @@ class OrderSchema(Schema):
 
 class SmartOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
-    symbol = fields.Str(required=True)
+    symbol = fields.Str(required=True, validate=_symbol_validator)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Float(
         required=True,
         validate=validate.Range(min=0, error="Quantity must be a non-negative number."),
     )
-    position_size = fields.Float(required=True)
+    position_size = fields.Float(
+        required=True,
+        validate=validate.Range(
+            min=-1000000, max=1000000,
+            error="Position size must be between -1,000,000 and 1,000,000."
+        ),
+    )
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
     )
@@ -86,9 +96,9 @@ class SmartOrderSchema(Schema):
 
 class ModifyOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
-    symbol = fields.Str(required=True)
+    symbol = fields.Str(required=True, validate=_symbol_validator)
     orderid = fields.Str(required=True)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     product = fields.Str(required=True, validate=validate.OneOf(["MIS", "NRML", "CNC"]))
@@ -117,23 +127,23 @@ class ModifyOrderSchema(Schema):
 
 class CancelOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
     orderid = fields.Str(required=True)
 
 
 class ClosePositionSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
 
 
 class CancelAllOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
 
 
 class BasketOrderItemSchema(Schema):
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
-    symbol = fields.Str(required=True)
+    symbol = fields.Str(required=True, validate=_symbol_validator)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Float(
         required=True, validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number.")
@@ -161,17 +171,19 @@ class BasketOrderItemSchema(Schema):
 
 class BasketOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
     orders = fields.List(
-        fields.Nested(BasketOrderItemSchema), required=True
-    )  # List of order details
+        fields.Nested(BasketOrderItemSchema),
+        required=True,
+        validate=validate.Length(min=1, max=50, error="Basket must contain 1 to 50 orders."),
+    )
 
 
 class SplitOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
-    symbol = fields.Str(required=True)
+    symbol = fields.Str(required=True, validate=_symbol_validator)
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Float(
         required=True,
@@ -204,9 +216,9 @@ class SplitOrderSchema(Schema):
 
 class OptionsOrderSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
     underlying = fields.Str(
-        required=True
+        required=True, validate=_symbol_validator
     )  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE, or NIFTY28NOV24FUT)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE, NFO, BFO)
     expiry_date = fields.Str(
@@ -289,8 +301,8 @@ class OptionsMultiOrderSchema(Schema):
     """Schema for options multi-order with multiple legs sharing common underlying"""
 
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    strategy = fields.Str(required=True)
-    underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
+    strategy = fields.Str(required=True, validate=_strategy_validator)
+    underlying = fields.Str(required=True, validate=_symbol_validator)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(
         required=False
@@ -309,7 +321,7 @@ class SyntheticFutureSchema(Schema):
     """Schema for synthetic future calculation"""
 
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
-    underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
+    underlying = fields.Str(required=True, validate=_symbol_validator)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28OCT25)
 

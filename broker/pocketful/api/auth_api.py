@@ -149,11 +149,10 @@ def get_authorization_url():
         # Define scopes - add more as needed
         scope = "orders holdings"
 
-        # Generate a random state for security
-        import random
-        import string
+        # Generate a cryptographically secure state for CSRF protection
+        import secrets
 
-        state = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+        state = secrets.token_urlsafe(32)
 
         # Build the authorization URL
         params = {

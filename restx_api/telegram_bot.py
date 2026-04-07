@@ -240,7 +240,7 @@ class StartBot(Resource):
         except Exception as e:
             logger.exception("Error starting bot")
             return make_response(
-                jsonify({"status": "error", "message": f"Failed to start bot: {str(e)}"}), 500
+                jsonify({"status": "error", "message": "Failed to start bot"}), 500
             )
 
 
@@ -270,7 +270,7 @@ class StopBot(Resource):
         except Exception as e:
             logger.exception("Error stopping bot")
             return make_response(
-                jsonify({"status": "error", "message": f"Failed to stop bot: {str(e)}"}), 500
+                jsonify({"status": "error", "message": "Failed to stop bot"}), 500
             )
 
 

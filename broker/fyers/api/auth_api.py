@@ -61,7 +61,7 @@ def authenticate_broker(request_token: str) -> tuple[str | None, dict[str, Any] 
         # Get shared HTTP client with connection pooling
         client = get_httpx_client()
 
-        logger.debug(f"Authenticating with FYERS API. Request: {json.dumps(payload, indent=2)}")
+        logger.debug("Authenticating with FYERS API")
 
         # Make the authentication request
         response = client.post(
@@ -74,7 +74,7 @@ def authenticate_broker(request_token: str) -> tuple[str | None, dict[str, Any] 
         # Process the response
         response.raise_for_status()
         auth_data = response.json()
-        logger.debug(f"FYERS auth API response: {json.dumps(auth_data, indent=2)}")
+        logger.debug("FYERS auth API response status: %s", auth_data.get("s"))
 
         if auth_data.get("s") == "ok":
             access_token = auth_data.get("access_token")
