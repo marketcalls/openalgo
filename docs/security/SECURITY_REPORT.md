@@ -11,9 +11,9 @@ Auditor: Claude Code
 | Severity | Count |
 |----------|-------|
 | Critical | 1 |
-| High | 4 |
-| Medium | 10 |
-| Low | 2 |
+| High | 7 |
+| Medium | 14 |
+| Low | 3 |
 
 ## Critical Findings
 
@@ -86,6 +86,62 @@ What: Multiple endpoints accept the API key via URL query parameter (`request.ar
 Risk: An attacker who gains access to any system that logs HTTP requests (web server logs, reverse proxy logs, load balancer logs, browser history, or network monitoring tools) can extract valid API keys and execute unauthorized trades on real brokerage accounts. This is especially severe because OpenAlgo is typically deployed behind reverse proxies like nginx which log full request URLs by default.
 
 Fix: Move API key authentication to the `X-API-KEY` request header for all GET endpoints. For endpoints that must remain GET (like TradingView chart integration), use a short-lived session token instead of the raw API key. At minimum, add documentation warning users about the URL-logged credential risk and configure server-side log redaction.
+
+---
+
+### VULN-019: Samco Secret API Key Stored in Plaintext in Database
+
+Severity: High
+File: database/auth_db.py (lines 156, 751-767)
+CWE: CWE-312
+
+What: The Samco broker's permanent secret API key is stored unencrypted in the `secret_api_key` column of the `auth` table. The `samco_save_secret_key()` function at line 766 directly assigns the plaintext value `record.secret_api_key = secret_api_key` without calling `encrypt_token()`, even though the same file implements Fernet encryption for auth tokens and API keys. This secret key is a permanent credential used daily to generate access tokens for trading.
+
+Risk: If an attacker gains read access to the SQLite database file `db/openalgo.db` (via backup exposure, directory traversal, or local file access), they obtain the permanent Samco secret API key in cleartext. Combined with the user ID and password (stored in `.env`), this provides persistent access to the Samco trading account. Unlike session tokens that expire daily, this secret key is permanent and does not rotate.
+
+Fix: Encrypt the secret API key before storage using the existing `encrypt_token()` function, and decrypt it on retrieval using `decrypt_token()`. In `samco_save_secret_key()`, change `record.secret_api_key = secret_api_key` to `record.secret_api_key = encrypt_token(secret_api_key)`. In `samco_get_secret_key()`, change `return record.secret_api_key` to `return decrypt_token(record.secret_api_key)`.
+
+---
+
+### VULN-020: SMTP Encryption Uses Hardcoded Fallback Key "default-pepper-key"
+
+Severity: High
+File: database/settings_db.py (line 117)
+CWE: CWE-798
+
+What: The `_get_encryption_key()` function used to encrypt SMTP passwords falls back to the hardcoded string `"default-pepper-key"` when the `API_KEY_PEPPER` environment variable is not set: `pepper = os.getenv("API_KEY_PEPPER", "default-pepper-key")`. While `auth_db.py` correctly fails fast if the pepper is missing (lines 41-51), `settings_db.py` silently falls back to a publicly visible default. Additionally, the key derivation at line 119 uses `pepper.ljust(32)[:32]` (simple padding/truncation) instead of a proper KDF like PBKDF2, making it trivially reversible.
+
+Risk: If the `API_KEY_PEPPER` environment variable is absent or fails to load for the settings module, all SMTP passwords are encrypted with a key derivable from the publicly known string `"default-pepper-key"`. An attacker with access to the database can decrypt SMTP credentials, potentially gaining access to the email account used for alerts and OTP delivery.
+
+Fix: Remove the default fallback value and raise an error if `API_KEY_PEPPER` is missing, matching the behavior in `auth_db.py`. Replace the simplistic padding-based key derivation with the same PBKDF2HMAC approach used in `auth_db.py`'s `get_encryption_key()`.
+
+---
+
+### VULN-021: No OAuth State Parameter Validation Across All OAuth Broker Flows (CSRF)
+
+Severity: High
+File: blueprints/brlogin.py (lines 580-601, 756-758), broker/pocketful/api/auth_api.py (lines 152-156), frontend/src/pages/BrokerSelect.tsx (lines 186-191)
+CWE: CWE-352
+
+What: None of the OAuth broker callback handlers in `brlogin.py` validate the `state` parameter against a server-side stored value. For Pocketful, a state is generated and stored in `localStorage` on the client (line 188 of BrokerSelect.tsx) but is never validated on the server-side callback (line 601 of brlogin.py passes `state` to `auth_function` but `authenticate_broker` ignores it). For all other OAuth brokers (Zerodha, Upstox, Fyers, Flattrade, Zebu, Shoonya), no state parameter is generated or validated at all -- the callback handler on line 757 simply accepts the `code` parameter without any CSRF protection.
+
+Risk: An attacker can craft a malicious OAuth callback URL with a stolen or replayed authorization code and trick an authenticated user into visiting it. This forces the victim's OpenAlgo session to be linked to the attacker's broker account (login CSRF), or allows the attacker to inject their own authorization code into the victim's session. Since this platform handles real money trades, a successful attack could result in unauthorized trading on the wrong account.
+
+Fix: For all OAuth brokers: (1) generate a cryptographically random state using `secrets.token_urlsafe(32)` before redirecting to the broker OAuth page, (2) store it in the Flask session, (3) on callback, compare `request.args.get("state")` against `session.pop("state")` and reject the request if they do not match or if the state is missing.
+
+---
+
+### VULN-027: Compositedge and RMoney OAuth Callbacks Bypass Session Authentication
+
+Severity: High
+File: blueprints/brlogin.py (lines 44-48, 170-178, 693-748, 772-788)
+CWE: CWE-287
+
+What: The OAuth callback handler for Compositedge and RMoney explicitly skips the session user check (lines 44-48): when `"user" not in session`, instead of rejecting the request, it proceeds with authentication. Later (lines 774-783), if the session user is missing, it automatically fetches the "admin user" from the database using `find_user_by_username()` and sets the session to that admin user. This means any unauthenticated HTTP request to `/<broker>/callback` with valid broker credentials (e.g., an OAuth redirect from Compositedge or RMoney) can establish an authenticated session as the admin user without ever logging in.
+
+Risk: An attacker who can trigger a valid OAuth callback (e.g., by initiating an OAuth flow from their own Compositedge/RMoney account) can gain admin-level access to the OpenAlgo instance without knowing the admin username or password. This is because the callback auto-assigns the admin user identity to the session. This completely bypasses the platform's login authentication for these two brokers.
+
+Fix: Remove the automatic admin user fallback. Require that the session contains a valid `user` before processing any broker callback. If the session is lost during OAuth redirect, redirect to the login page and preserve the OAuth callback parameters (state, code) for replay after successful authentication.
 
 ---
 
@@ -245,6 +301,62 @@ Fix: Validate the `scan_name` against a strict allowlist or use exact-match patt
 
 ---
 
+### VULN-022: Broker Auth Tokens and Credentials Logged in Plaintext Across Multiple Brokers
+
+Severity: Medium
+File: broker/dhan/api/auth_api.py (line 118), broker/compositedge/api/auth_api.py (lines 38, 92), broker/fyers/api/auth_api.py (line 77), broker/kotak/api/auth_api.py (lines 86, 121, 147), broker/fivepaisaxts/api/auth_api.py (lines 34, 88), broker/iifl/api/auth_api.py (lines 34, 88), broker/ibulls/api/auth_api.py (lines 34, 88), broker/rmoney/api/auth_api.py (line 82)
+CWE: CWE-532
+
+What: Multiple broker authentication modules log sensitive credentials to application logs. Dhan logs the full access token at line 118: `logger.debug(f"Access Token obtained: {access_token}")`. Compositedge logs auth and feed tokens at lines 38 and 92. Fyers logs the complete auth API response including access_token and refresh_token at line 77. Kotak logs the full TOTP login response (which contains tokens) at line 86 and the MPIN validation response at line 121. The fivepaisaxts, iifl, ibulls, and rmoney brokers all log auth and feed tokens at `logger.info` level (not just debug). These logs are stored in `db/logs.db`.
+
+Risk: Auth tokens in log files can be harvested by anyone with access to the log database, log aggregation systems, or backup files. Tokens logged at `info` level are particularly dangerous as they appear in normal production logging. A compromised log store gives an attacker valid session tokens for placing trades on the user's broker account.
+
+Fix: Never log raw auth tokens, access tokens, or credentials. Replace all instances with redacted versions (e.g., `token[:8] + "..."` or simply `"[REDACTED]"`). For Fyers line 77, filter sensitive fields from `auth_data` before logging. Change all remaining `logger.info` token logs to not include the token value at all.
+
+---
+
+### VULN-023: Dhan API Secret Prefix Logged at INFO Level
+
+Severity: Medium
+File: broker/dhan/api/auth_api.py (lines 42-43)
+CWE: CWE-532
+
+What: The `generate_consent()` function logs the first 8 characters of the `BROKER_API_SECRET` at INFO level: `logger.info(f"Using API Secret: {BROKER_API_SECRET[:8] if BROKER_API_SECRET else 'None'}...")`. While only a prefix is logged, this is done at INFO level (not debug), meaning it appears in production logs during every Dhan OAuth authentication attempt. This also logs the API key prefix at the same level (line 41).
+
+Risk: Logging secret prefixes in production reveals enough information to significantly reduce the search space for brute-force attacks against the API secret. Combined with other leaked information, this could help an attacker reconstruct the full secret. The INFO level ensures these appear in all standard log configurations.
+
+Fix: Remove the API secret logging entirely. If debugging is needed, log only that credentials were found (e.g., `logger.debug("API credentials configured: True")`), never any portion of the secret value.
+
+---
+
+### VULN-025: JavaScript Injection via Unescaped URL in Dhan OAuth Redirect Page
+
+Severity: Medium
+File: blueprints/brlogin.py (lines 843-855)
+CWE: CWE-79
+
+What: The `dhan_initiate_oauth()` function constructs an HTML page with an inline JavaScript redirect using an f-string that directly interpolates the `login_url` variable into a `<script>` tag without escaping: `window.location.href = "{login_url}"`. The `login_url` is constructed from `get_login_url(consent_app_id)` where `consent_app_id` comes from the Dhan API response. If the Dhan API response is compromised (e.g., via man-in-the-middle) or if the consent_app_id contains characters that break out of the JavaScript string context (such as `";alert(1);//`), arbitrary JavaScript could execute in the user's browser.
+
+Risk: While the `consent_app_id` is typically a safe alphanumeric value from Dhan's API, the pattern of injecting server-controlled data into inline JavaScript without escaping is a persistent XSS vector. If the upstream API is compromised or manipulated, this could be used to steal session cookies, redirect to phishing pages, or perform actions on behalf of the authenticated user.
+
+Fix: Replace the inline HTML/JavaScript redirect with a standard Flask `redirect()` call: `return redirect(login_url)`. This eliminates the XSS vector entirely and is the standard pattern used for other broker OAuth redirects in the same file.
+
+---
+
+### VULN-028: No Token Expiry Detection or Refresh Across All Brokers
+
+Severity: Medium
+File: database/auth_db.py (lines 143-153, 269-315), broker/*/api/order_api.py (all audited brokers)
+CWE: CWE-613
+
+What: The `Auth` database model has no `token_expiry` or `expires_at` column. When tokens are stored via `upsert_auth()`, no expiry time is recorded. The `get_auth_token()` function returns tokens regardless of how old they are, as long as `is_revoked` is False. None of the 8 audited broker order APIs check whether the stored token is still valid before sending it to the broker. While the Fyers auth response includes `expires_in` (auth_api.py line 95), this value is stored in a transient dict but never persisted. Most Indian broker tokens expire daily (at 3 AM IST), but the application has no mechanism to detect or handle this except through broker API error responses.
+
+Risk: Stale tokens are silently used for order placement, leading to failed trades that are only detected after the broker rejects the request. In high-frequency or automated trading scenarios, this can cause cascading failures. The cache TTL is aligned to session expiry time (lines 73-111), but this is a cache expiry optimization, not a token validity check -- a cached stale token is simply replaced with the same stale token from the database.
+
+Fix: Add an `expires_at` column to the `Auth` model. Populate it during `upsert_auth()` based on known broker token lifetimes (or the `expires_in` value from the auth response). In `get_auth_token()`, check `expires_at` before returning the token and return `None` (or trigger re-auth) if expired.
+
+---
+
 ## Low Findings
 
 ### VULN-008: REDIRECT_URL Leaked to Unauthenticated Users
@@ -272,6 +384,20 @@ What: The CSRF token time limit is configured as: if `CSRF_TIME_LIMIT` is empty 
 Risk: A stolen or leaked CSRF token remains valid for the entire duration of the user's session (which can be up to 24 hours until the 3:00 AM IST cutoff). This gives an attacker a wider window to use a captured CSRF token for cross-site request forgery attacks.
 
 Fix: Set a reasonable default CSRF time limit (e.g., 3600 seconds / 1 hour) in the `.sample.env` file instead of leaving it empty. Change the fallback in `app.py` from `None` to a sensible default like `3600`.
+
+---
+
+### VULN-026: Pocketful OAuth State Generated with Non-Cryptographic PRNG
+
+Severity: Low
+File: broker/pocketful/api/auth_api.py (lines 153-156), frontend/src/pages/BrokerSelect.tsx (lines 65-73)
+CWE: CWE-330
+
+What: Both the server-side and client-side implementations of Pocketful's OAuth state parameter use non-cryptographic random number generators. The server-side uses Python's `random.choices()` (line 156), which is Mersenne Twister and predictable if the seed can be inferred. The client-side uses `Math.random()` (line 69 of BrokerSelect.tsx), which is also not cryptographically secure. The state parameter is meant to prevent CSRF attacks in OAuth flows.
+
+Risk: An attacker who can observe a small number of generated state values may be able to predict future state values due to the weak PRNG, defeating the CSRF protection that the state parameter is intended to provide. This is a lower severity finding since (per VULN-021) the state is not actually validated on the server side, making this issue moot until VULN-021 is fixed.
+
+Fix: On the server side, replace `random.choices()` with `secrets.token_urlsafe(32)`. On the client side, replace `Math.random()` with `crypto.getRandomValues()`. However, fixing VULN-021 (server-side state validation) should be prioritized first, as without validation, the state generation quality is irrelevant.
 
 ---
 
