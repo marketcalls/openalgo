@@ -88,6 +88,10 @@ export const useAuthStore = create<AuthStore>()(
     }),
     {
       name: 'openalgo-auth',
+      partialize: (state) => ({
+        user: state.user,
+        isAuthenticated: state.isAuthenticated,
+      }),
     }
   )
 )

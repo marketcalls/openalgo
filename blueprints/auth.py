@@ -74,12 +74,18 @@ def get_broker_config():
     # Return full config only for authenticated users
     if "user" in session:
         BROKER_API_KEY = os.getenv("BROKER_API_KEY")
+
+        # Generate OAuth state for CSRF protection
+        oauth_state = secrets.token_urlsafe(32)
+        session["oauth_state"] = oauth_state
+
         return jsonify(
             {
                 "status": "success",
                 "broker_name": broker_name,
                 "broker_api_key": BROKER_API_KEY,
                 "redirect_url": REDIRECT_URL,
+                "oauth_state": oauth_state,
             }
         )
 

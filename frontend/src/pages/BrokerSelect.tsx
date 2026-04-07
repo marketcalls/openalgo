@@ -52,6 +52,7 @@ interface BrokerConfig {
   broker_name: string
   broker_api_key: string
   redirect_url: string
+  oauth_state?: string
 }
 
 // Helper function to get Flattrade API key
@@ -61,16 +62,7 @@ function getFlattradeApiKey(fullKey: string): string {
   return parts.length > 1 ? parts[1] : fullKey
 }
 
-// Generate random state for OAuth
-function generateRandomState(): string {
-  const length = 16
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  let result = ''
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return result
-}
+// BrokerConfig now includes server-generated oauth_state for CSRF protection
 
 export default function BrokerSelect() {
   const { user } = useAuthStore()
@@ -168,11 +160,11 @@ export default function BrokerSelect() {
       }
 
       case 'fyers':
-        loginUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c`
+        loginUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&state=${encodeURIComponent(brokerConfig.oauth_state || '')}`
         break
 
       case 'upstox':
-        loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${broker_api_key}&redirect_uri=${redirect_url}`
+        loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${broker_api_key}&redirect_uri=${redirect_url}&state=${encodeURIComponent(brokerConfig.oauth_state || '')}`
         break
 
       case 'zerodha':
@@ -180,14 +172,12 @@ export default function BrokerSelect() {
         break
 
       case 'paytm':
-        loginUrl = `https://login.paytmmoney.com/merchant-login?apiKey=${broker_api_key}&state={default}`
+        loginUrl = `https://login.paytmmoney.com/merchant-login?apiKey=${broker_api_key}&state=${encodeURIComponent(brokerConfig.oauth_state || '')}`
         break
 
       case 'pocketful': {
-        const state = generateRandomState()
-        localStorage.setItem('pocketful_oauth_state', state)
         const scope = 'orders holdings'
-        loginUrl = `https://trade.pocketful.in/oauth2/auth?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`
+        loginUrl = `https://trade.pocketful.in/oauth2/auth?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(brokerConfig.oauth_state || '')}`
         break
       }
 

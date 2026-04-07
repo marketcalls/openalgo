@@ -754,6 +754,18 @@ def broker_callback(broker, para=None):
             return jsonify({"error": f"Error processing request: {str(e)}"}), 500
 
     else:
+        # Validate OAuth state parameter for brokers that support it (CSRF protection)
+        oauth_brokers_with_state = {"fyers", "upstox", "paytm", "pocketful"}
+        if broker in oauth_brokers_with_state:
+            callback_state = request.args.get("state")
+            session_state = session.pop("oauth_state", None)
+            if not callback_state or not session_state or callback_state != session_state:
+                logger.warning(f"OAuth state mismatch for {broker}: expected={session_state}, got={callback_state}")
+                return handle_auth_failure(
+                    "OAuth state validation failed. Please try logging in again.",
+                    forward_url="broker.html",
+                )
+
         code = request.args.get("code") or request.args.get("request_token")
         logger.debug(f"Generic broker - The code is {code}")
         auth_token, error_message = auth_function(code)

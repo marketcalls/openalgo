@@ -16,16 +16,16 @@ The most impactful open findings fall into three categories: (1) **externally ex
 
 All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
 
-**Current status:** 8 findings resolved, 2 mitigated, 2 removed (single-user N/A), 41 open. Of the 41 open, 3 are High, 24 are Medium, and 14 are Low.
+**Current status:** 11 findings resolved, 2 mitigated, 2 removed (single-user N/A), 38 open. **0 High severity open.** Of the 38 open, 24 are Medium and 14 are Low.
 
 | Severity | Total | Open | Resolved | Mitigated | Removed |
 |----------|-------|------|----------|-----------|---------|
 | Critical | 1 | 0 | 1 | 0 | 0 |
-| High | 9 | 3 | 5 | 1 | 0 |
+| High | 9 | 0 | 8 | 1 | 0 |
 | Medium | 25 | 24 | 1 | 0 | 0 |
 | Low | 16 | 14 | 1 | 1 | 0 |
 | N/A | 2 | 0 | 0 | 0 | 2 |
-| **Total** | **53** | **41** | **8** | **2** | **2** |
+| **Total** | **53** | **38** | **11** | **2** | **2** |
 
 Note: 2 findings removed as not applicable to single-user architecture.
 14 findings downgraded due to single-user context, local-only MCP, and SEBI static IP policy.
@@ -42,13 +42,13 @@ Note: 2 findings removed as not applicable to single-user architecture.
 | VULN-007 | High | Medium | Open | Accepted risk; required by TradingView/GoCharting/Chartink integrations |
 | VULN-008 | High | High | Resolved | Samco secret now encrypted via encrypt_token(); migration encrypts existing data |
 | VULN-009 | High | High | Resolved | Removed fallback key; uses PBKDF2 KDF; migration re-encrypts SMTP passwords |
-| VULN-010 | High | High | Open | OAuth CSRF; externally exploitable |
+| VULN-010 | High | High | Resolved | OAuth state generated server-side, stored in session, validated on callback |
 | VULN-011 | High | -- | Removed | Single-user; only one user exists, auto-assign is correct |
 | VULN-012 | High | High | Resolved | Telegram bot token now encrypted via fernet; migration encrypts existing data |
 | VULN-013 | High | High | Resolved | Flow API key now encrypted via encrypt_token(); migration encrypts existing data |
 | VULN-014 | High | Medium | Resolved | TOTP secret now encrypted via encrypt_token(); migration encrypts existing data |
-| VULN-015 | High | High | Open | API key in localStorage; XSS exploitable externally |
-| VULN-016 | High | High | Open | Hardcoded Fyers OAuth state; externally exploitable |
+| VULN-015 | High | High | Resolved | apiKey excluded from Zustand localStorage persistence via partialize |
+| VULN-016 | High | High | Resolved | Fyers now uses server-generated OAuth state from /auth/broker-config |
 | VULN-017 | High | Low | Open | Local MCP only; single-user machine; process list visible only to same user |
 | VULN-018 | High | Medium | Open | Local MCP only; user controls AI assistant; residual prompt injection risk |
 | VULN-019 | High | High | Resolved | `install/ubuntu-ip.sh` deleted |
@@ -178,7 +178,7 @@ Fix: Remove the default fallback value and raise an error if `API_KEY_PEPPER` is
 
 ### VULN-010: No OAuth State Parameter Validation Across All OAuth Broker Flows (CSRF)
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: blueprints/brlogin.py (lines 580-601, 756-758), broker/pocketful/api/auth_api.py (lines 152-156), frontend/src/pages/BrokerSelect.tsx (lines 186-191)
 CWE: CWE-352
 
@@ -234,7 +234,7 @@ Fix: Encrypt `totp_secret` using `encrypt_token()` from `auth_db` before storage
 
 ### VULN-015: API Key Persisted in localStorage via Zustand
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: frontend/src/stores/authStore.ts (lines 24-93), frontend/src/components/auth/AuthSync.tsx (line 41)
 CWE: CWE-922
 
@@ -248,7 +248,7 @@ Fix: Add a `partialize` option to the `persist` config to exclude `apiKey` from 
 
 ### VULN-016: Hardcoded OAuth State Parameter for Fyers Broker Enables CSRF
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: frontend/src/pages/BrokerSelect.tsx (line 171)
 CWE: CWE-352
 
