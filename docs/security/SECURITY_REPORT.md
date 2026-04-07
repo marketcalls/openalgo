@@ -16,13 +16,13 @@ The most impactful open findings fall into three categories: (1) **externally ex
 
 All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
 
-**Current status:** 3 findings resolved, 2 mitigated, 2 removed (single-user N/A), 46 open. Of the 46 open, 8 are High, 24 are Medium, and 14 are Low.
+**Current status:** 3 findings resolved, 2 mitigated, 2 removed (single-user N/A), 46 open. Of the 46 open, 7 are High, 25 are Medium, and 14 are Low.
 
 | Severity | Total | Open | Resolved | Mitigated | Removed |
 |----------|-------|------|----------|-----------|---------|
 | Critical | 1 | 0 | 1 | 0 | 0 |
-| High | 10 | 8 | 1 | 1 | 0 |
-| Medium | 24 | 24 | 0 | 0 | 0 |
+| High | 9 | 7 | 1 | 1 | 0 |
+| Medium | 25 | 25 | 0 | 0 | 0 |
 | Low | 16 | 14 | 1 | 1 | 0 |
 | N/A | 2 | 0 | 0 | 0 | 2 |
 | **Total** | **53** | **46** | **3** | **2** | **2** |
@@ -39,7 +39,7 @@ Note: 2 findings removed as not applicable to single-user architecture.
 | VULN-004 | High | Low | Open | Single-user; requires MITM on TLS to exploit |
 | VULN-005 | High | Low | Resolved | 15-minute token expiry added |
 | VULN-006 | High | -- | Removed | Single-user; user views own TOTP secret |
-| VULN-007 | High | High | Open | API key in URL query params; externally exploitable |
+| VULN-007 | High | Medium | Open | Accepted risk; required by TradingView/GoCharting/Chartink integrations |
 | VULN-008 | High | High | Open | Samco secret plaintext in DB; defense-in-depth |
 | VULN-009 | High | High | Open | Hardcoded fallback encryption key |
 | VULN-010 | High | High | Open | OAuth CSRF; externally exploitable |
@@ -134,17 +134,17 @@ Fix: Added `session["reset_token_created"] = time.time()` when generating tokens
 
 ---
 
-### VULN-007: API Key Exposed in URL Query Parameters Across Multiple Endpoints
+### VULN-007: API Key Exposed in URL Query Parameters on GET Endpoints
 
-Severity: High
+Severity: Medium (accepted risk; required by external platform integrations)
 File: restx_api/chart_api.py (line 37), restx_api/instruments.py (line 55), restx_api/ticker.py (line 156), restx_api/telegram_bot.py (lines 113, 356, 542, 573)
 CWE: CWE-598
 
-What: Multiple endpoints accept the API key via URL query parameter (`request.args.get("apikey")`). The chart GET endpoint, instruments GET endpoint, ticker GET endpoint, and several Telegram bot endpoints all read `apikey` from the query string. URL query parameters are logged in web server access logs, browser history, proxy logs, CDN logs, and HTTP Referer headers. Since the API key grants full trading authority (place orders, cancel orders, close positions), this exposure in logs creates a persistent credential leakage risk.
+What: Several GET endpoints accept the API key via URL query parameter (`request.args.get("apikey")`). URL query parameters can appear in web server access logs, browser history, and proxy logs. These GET endpoints exist to serve external platforms (TradingView chart integration, GoCharting, Chartink webhooks) and embedded contexts that cannot set custom HTTP headers. The primary order-placement POST endpoints accept the API key in the JSON request body, which is the standard pattern.
 
-Risk: An attacker who gains access to any system that logs HTTP requests (web server logs, reverse proxy logs, load balancer logs, browser history, or network monitoring tools) can extract valid API keys and execute unauthorized trades on real brokerage accounts. This is especially severe because OpenAlgo is typically deployed behind reverse proxies like nginx which log full request URLs by default.
+Risk: On a single-user self-hosted deployment, nginx access logs on the same server contain the API key in URL strings. An attacker who gains log access already has server access (and thus full control). The risk is primarily in shared log aggregation services or backup systems that capture full URLs.
 
-Fix: Move API key authentication to the `X-API-KEY` request header for all GET endpoints. For endpoints that must remain GET (like TradingView chart integration), use a short-lived session token instead of the raw API key. At minimum, add documentation warning users about the URL-logged credential risk and configure server-side log redaction.
+Fix: Cannot move to `X-API-KEY` header as TradingView, GoCharting, and Chartink webhook integrations require query parameter or JSON body authentication. Mitigate by configuring nginx to redact query strings from access logs (e.g., `log_format` with `$uri` instead of `$request_uri`). This is an accepted architectural trade-off for external platform compatibility.
 
 ---
 
@@ -852,7 +852,7 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 
 **Credential handling:**
 - VULN-002: Remove hardcoded fallback pepper/salt in telegram_db.py; fail fast if env vars missing; add TELEGRAM_KEY_SALT to install.sh
-- VULN-007: Move API key from URL query parameters to X-API-KEY header for GET endpoints
+- VULN-007: Configure nginx log redaction for query strings (accepted risk; cannot move to headers due to TradingView/GoCharting/Chartink integration requirements)
 - VULN-021: Hash API key before using as broker_cache key (consistency fix)
 - VULN-022: Replace static KDF salt with per-deployment random salt
 - VULN-032, VULN-033: Redact all auth tokens and credentials from log output across all brokers
