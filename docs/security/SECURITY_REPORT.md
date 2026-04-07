@@ -6,14 +6,19 @@ Auditor: Claude Code
 
 ## Summary
 
-[To be filled after all phases]
+This audit covered authentication, session management, API security, input validation, broker credential handling (8 brokers), database storage, frontend security, infrastructure/deployment, and dependency analysis across OpenAlgo's 190,000+ lines of Python and TypeScript code. The audit combined manual code review with automated scanning (Bandit, pip-audit, npm audit).
+
+The most critical class of findings involves **hardcoded cryptographic secrets and fallback keys** (VULN-001, VULN-002, VULN-009) that ship in the open-source repository and are silently used if operators do not generate unique values. Since these secrets protect broker authentication tokens, API keys, and SMTP credentials, a deployment using defaults is fully compromised to anyone who reads the source code. The second most impactful class is **plaintext storage of sensitive data** in SQLite databases (VULN-008, VULN-012, VULN-013, VULN-014) -- because SQLite stores the entire database as a single file, theft of one file exposes TOTP secrets, Telegram bot tokens, flow API keys, and Samco credentials without any decryption step.
+
+The overall security posture shows a well-intentioned design with Argon2 hashing, Fernet encryption, CSRF protection, and rate limiting. However, inconsistent application of these controls (some modules encrypt, others don't; some caches hash keys, others store plaintext) creates exploitable gaps. The deployment infrastructure (install scripts, Docker configuration, MCP server) introduces additional risk through insecure defaults: plaintext HTTP, world-readable secrets, and unrestricted AI-agent trading capabilities. Addressing the Critical and High findings would substantially reduce the risk of unauthorized trading and credential theft.
 
 | Severity | Count |
 |----------|-------|
 | Critical | 3 |
-| High | 16 |
+| High | 17 |
 | Medium | 28 |
 | Low | 5 |
+| **Total** | **53** |
 
 ## Critical Findings
 
@@ -31,7 +36,7 @@ Fix: Add a startup validation in `utils/env_check.py` that reads the hardcoded s
 
 ---
 
-### VULN-029: Telegram DB Encryption Uses Hardcoded Fallback Pepper and Salt
+### VULN-002: Telegram DB Encryption Uses Hardcoded Fallback Pepper and Salt
 
 Severity: Critical
 File: database/telegram_db.py (lines 57-58)
@@ -45,7 +50,7 @@ Fix: Remove the default values for both `API_KEY_PEPPER` and `TELEGRAM_KEY_SALT`
 
 ---
 
-### VULN-045: Install Script Deploys Production Trading Platform Over Plain HTTP Without TLS
+### VULN-003: Install Script Deploys Production Trading Platform Over Plain HTTP Without TLS
 
 Severity: Critical
 File: install/ubuntu-ip.sh (lines 369, 375, 404, 477)
@@ -61,7 +66,7 @@ Fix: Either remove this script or add a prominent warning that it is only for lo
 
 ## High Findings
 
-### VULN-002: Session Fixation - No Session Regeneration After Login
+### VULN-004: Session Fixation - No Session Regeneration After Login
 
 Severity: High
 File: blueprints/auth.py (lines 133-137), utils/auth_utils.py (lines 340-356)
@@ -75,7 +80,7 @@ Fix: Clear and regenerate the session immediately after successful authenticatio
 
 ---
 
-### VULN-003: Password Reset Token Has No Expiration and Is Stored Only in Session
+### VULN-005: Password Reset Token Has No Expiration and Is Stored Only in Session
 
 Severity: High
 File: blueprints/auth.py (lines 218-254, 260-297, 302-332)
@@ -89,7 +94,7 @@ Fix: Add a timestamp to the reset token (`session["reset_token_created"]`) and e
 
 ---
 
-### VULN-004: TOTP Secret Exposed via Profile API Endpoint
+### VULN-006: TOTP Secret Exposed via Profile API Endpoint
 
 Severity: High
 File: blueprints/auth.py (lines 805, 816)
@@ -103,7 +108,7 @@ Fix: Do not return `totp_secret` in the API response. The QR code already contai
 
 ---
 
-### VULN-010: API Key Exposed in URL Query Parameters Across Multiple Endpoints
+### VULN-007: API Key Exposed in URL Query Parameters Across Multiple Endpoints
 
 Severity: High
 File: restx_api/chart_api.py (line 37), restx_api/instruments.py (line 55), restx_api/ticker.py (line 156), restx_api/telegram_bot.py (lines 113, 356, 542, 573)
@@ -117,7 +122,7 @@ Fix: Move API key authentication to the `X-API-KEY` request header for all GET e
 
 ---
 
-### VULN-019: Samco Secret API Key Stored in Plaintext in Database
+### VULN-008: Samco Secret API Key Stored in Plaintext in Database
 
 Severity: High
 File: database/auth_db.py (lines 156, 751-767)
@@ -131,7 +136,7 @@ Fix: Encrypt the secret API key before storage using the existing `encrypt_token
 
 ---
 
-### VULN-020: SMTP Encryption Uses Hardcoded Fallback Key "default-pepper-key"
+### VULN-009: SMTP Encryption Uses Hardcoded Fallback Key "default-pepper-key"
 
 Severity: High
 File: database/settings_db.py (line 117)
@@ -145,7 +150,7 @@ Fix: Remove the default fallback value and raise an error if `API_KEY_PEPPER` is
 
 ---
 
-### VULN-021: No OAuth State Parameter Validation Across All OAuth Broker Flows (CSRF)
+### VULN-010: No OAuth State Parameter Validation Across All OAuth Broker Flows (CSRF)
 
 Severity: High
 File: blueprints/brlogin.py (lines 580-601, 756-758), broker/pocketful/api/auth_api.py (lines 152-156), frontend/src/pages/BrokerSelect.tsx (lines 186-191)
@@ -159,7 +164,7 @@ Fix: For all OAuth brokers: (1) generate a cryptographically random state using 
 
 ---
 
-### VULN-027: Compositedge and RMoney OAuth Callbacks Bypass Session Authentication
+### VULN-011: Compositedge and RMoney OAuth Callbacks Bypass Session Authentication
 
 Severity: High
 File: blueprints/brlogin.py (lines 44-48, 170-178, 693-748, 772-788)
@@ -173,7 +178,7 @@ Fix: Remove the automatic admin user fallback. Require that the session contains
 
 ---
 
-### VULN-030: Telegram Bot Token Stored in Plaintext in Database
+### VULN-012: Telegram Bot Token Stored in Plaintext in Database
 
 Severity: High
 File: database/telegram_db.py (line 125)
@@ -187,7 +192,7 @@ Fix: Encrypt the bot token before storage using the existing `fernet` instance a
 
 ---
 
-### VULN-031: Flow Workflow Stores API Key in Plaintext
+### VULN-013: Flow Workflow Stores API Key in Plaintext
 
 Severity: High
 File: database/flow_db.py (lines 73-75, 266-271)
@@ -201,7 +206,7 @@ Fix: Import `encrypt_token`/`decrypt_token` from `auth_db` and encrypt the API k
 
 ---
 
-### VULN-032: TOTP Secret Stored in Plaintext in User Database
+### VULN-014: TOTP Secret Stored in Plaintext in User Database
 
 Severity: High
 File: database/user_db.py (line 67)
@@ -215,7 +220,7 @@ Fix: Encrypt `totp_secret` using `encrypt_token()` from `auth_db` before storage
 
 ---
 
-### VULN-037: API Key Persisted in localStorage via Zustand
+### VULN-015: API Key Persisted in localStorage via Zustand
 
 Severity: High
 File: frontend/src/stores/authStore.ts (lines 24-93), frontend/src/components/auth/AuthSync.tsx (line 41)
@@ -229,7 +234,7 @@ Fix: Add a `partialize` option to the `persist` config to exclude `apiKey` from 
 
 ---
 
-### VULN-038: Hardcoded OAuth State Parameter for Fyers Broker Enables CSRF
+### VULN-016: Hardcoded OAuth State Parameter for Fyers Broker Enables CSRF
 
 Severity: High
 File: frontend/src/pages/BrokerSelect.tsx (line 171)
@@ -243,7 +248,7 @@ Fix: Generate a cryptographically random state per OAuth request using `crypto.r
 
 ---
 
-### VULN-046: MCP Server Accepts API Key via Command-Line Argument Visible in Process List
+### VULN-017: MCP Server Accepts API Key via Command-Line Argument Visible in Process List
 
 Severity: High
 File: mcp/mcpserver.py (lines 9-16)
@@ -257,7 +262,7 @@ Fix: Read the API key from an environment variable (`OPENALGO_API_KEY`) or a con
 
 ---
 
-### VULN-047: MCP Server Exposes Unrestricted Live Trading Operations Without Confirmation
+### VULN-018: MCP Server Exposes Unrestricted Live Trading Operations Without Confirmation
 
 Severity: High
 File: mcp/mcpserver.py (lines 24-461)
@@ -271,13 +276,13 @@ Fix: Implement a confirmation mechanism for destructive operations (place orders
 
 ---
 
-### VULN-050: Install Script Exposes WebSocket Port 8765 Directly to the Internet
+### VULN-019: Install Script Exposes WebSocket Port 8765 Directly to the Internet
 
 Severity: High
 File: install/ubuntu-ip.sh (line 287)
 CWE: CWE-668
 
-What: The `ubuntu-ip.sh` script explicitly opens port 8765 in the firewall with `sudo ufw allow 8765/tcp`. Combined with the lack of TLS (VULN-045), the WebSocket proxy server is directly exposed to the internet without any transport-layer security. While the WebSocket proxy does require API key authentication at the application level, this authentication occurs over plaintext.
+What: The `ubuntu-ip.sh` script explicitly opens port 8765 in the firewall with `sudo ufw allow 8765/tcp`. Combined with the lack of TLS (VULN-003), the WebSocket proxy server is directly exposed to the internet without any transport-layer security. While the WebSocket proxy does require API key authentication at the application level, this authentication occurs over plaintext.
 
 Risk: The WebSocket port is reachable from the internet without TLS encryption. API keys transmitted during authentication can be intercepted by network observers. The exposed port also increases the attack surface for connection-flooding DoS attacks against the WebSocket server.
 
@@ -285,7 +290,7 @@ Fix: Remove the `ufw allow 8765/tcp` rule. The WebSocket should only be accessib
 
 ---
 
-### VULN-051: ZeroMQ Publisher Binds to All Interfaces Exposing Internal Message Bus
+### VULN-020: ZeroMQ Publisher Binds to All Interfaces Exposing Internal Message Bus
 
 Severity: High
 File: websocket_proxy/base_adapter.py (lines 203, 219)
@@ -301,7 +306,7 @@ Fix: Change the bind address from `tcp://*:{port}` to `tcp://127.0.0.1:{port}` i
 
 ## Medium Findings
 
-### VULN-005: Plaintext API Key Used as Cache Key in `broker_cache`
+### VULN-021: Plaintext API Key Used as Cache Key in `broker_cache`
 
 Severity: Medium
 File: database/auth_db.py (lines 589-600)
@@ -315,7 +320,7 @@ Fix: Change `get_broker_name()` to use a SHA256 hash of the API key as the cache
 
 ---
 
-### VULN-006: Static Salt in Fernet Key Derivation Reduces KDF Diversity
+### VULN-022: Static Salt in Fernet Key Derivation Reduces KDF Diversity
 
 Severity: Medium
 File: database/auth_db.py (lines 58-65)
@@ -329,7 +334,7 @@ Fix: Generate a random salt during initial setup, store it alongside the encrypt
 
 ---
 
-### VULN-007: CSRF Protection Is Configurable and Can Be Disabled via Environment Variable
+### VULN-023: CSRF Protection Is Configurable and Can Be Disabled via Environment Variable
 
 Severity: Medium
 File: app.py (lines 279-280), .sample.env (line 235)
@@ -343,7 +348,7 @@ Fix: Log a prominent warning at startup when CSRF is disabled. Consider removing
 
 ---
 
-### VULN-011: Unbounded Basket Order List Enables Resource Exhaustion
+### VULN-024: Unbounded Basket Order List Enables Resource Exhaustion
 
 Severity: Medium
 File: restx_api/schemas.py (lines 165-167)
@@ -357,7 +362,7 @@ Fix: Add `validate=validate.Length(min=1, max=50)` (or a suitable maximum) to th
 
 ---
 
-### VULN-012: Symbol and Strategy Fields Lack Length and Character Validation
+### VULN-025: Symbol and Strategy Fields Lack Length and Character Validation
 
 Severity: Medium
 File: restx_api/schemas.py (lines 24-26, 57-59, 89-92, 136, 174)
@@ -371,7 +376,7 @@ Fix: Add `validate=validate.Length(min=1, max=50)` and a regex pattern validator
 
 ---
 
-### VULN-013: SmartOrder position_size Has No Range Validation
+### VULN-026: SmartOrder position_size Has No Range Validation
 
 Severity: Medium
 File: restx_api/schemas.py (line 65)
@@ -385,7 +390,7 @@ Fix: Add `validate=validate.Range(min=-1000000, max=1000000)` (or appropriate bo
 
 ---
 
-### VULN-014: Webhook Endpoints Lack Per-Request Authentication
+### VULN-027: Webhook Endpoints Lack Per-Request Authentication
 
 Severity: Medium
 File: blueprints/strategy.py (lines 868-870), blueprints/chartink.py (lines 785-787)
@@ -399,7 +404,7 @@ Fix: Add an optional HMAC signature verification header (e.g., `X-Webhook-Secret
 
 ---
 
-### VULN-015: Error Responses Leak Internal Exception Details
+### VULN-028: Error Responses Leak Internal Exception Details
 
 Severity: Medium
 File: blueprints/chartink.py (line 944), restx_api/ticker.py (lines 263, 267), restx_api/telegram_bot.py (lines 243, 273)
@@ -413,7 +418,7 @@ Fix: Replace all instances of `str(e)` in client-facing error responses with gen
 
 ---
 
-### VULN-016: No Global Request Body Size Limit
+### VULN-029: No Global Request Body Size Limit
 
 Severity: Medium
 File: app.py (entire file - absent configuration)
@@ -421,13 +426,13 @@ CWE: CWE-400
 
 What: The Flask application does not set `MAX_CONTENT_LENGTH`, which means there is no global limit on the size of incoming request bodies. Flask defaults to accepting unlimited request body sizes. A search of the entire codebase confirms `MAX_CONTENT_LENGTH` is never configured. While individual schemas validate field lengths (e.g., `apikey` max 256 chars), there is no protection against a malicious client sending a multi-gigabyte JSON payload. Flask will attempt to parse the entire body into memory before any schema validation occurs.
 
-Risk: An attacker (authenticated or not, since the body is parsed before API key verification) can send extremely large HTTP request bodies to any API endpoint, consuming server memory and potentially causing an out-of-memory crash. This is a denial-of-service vector. Combined with the unbounded basket order list (VULN-011), a single request could consume gigabytes of memory.
+Risk: An attacker (authenticated or not, since the body is parsed before API key verification) can send extremely large HTTP request bodies to any API endpoint, consuming server memory and potentially causing an out-of-memory crash. This is a denial-of-service vector. Combined with the unbounded basket order list (VULN-024), a single request could consume gigabytes of memory.
 
 Fix: Set `app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024` (10 MB or appropriate limit) in `app.py` to enforce a global request body size limit. Flask will automatically return a 413 (Request Entity Too Large) response for oversized payloads before attempting to parse them.
 
 ---
 
-### VULN-017: CORS Default Allows All Origins When Not Explicitly Configured
+### VULN-030: CORS Default Allows All Origins When Not Explicitly Configured
 
 Severity: Medium
 File: cors.py (lines 16-20, 56)
@@ -441,7 +446,7 @@ Fix: Change the default behavior when `CORS_ENABLED` is `FALSE` to explicitly de
 
 ---
 
-### VULN-018: Webhook Queues Orders Using Unvalidated Scan Name as Action
+### VULN-031: Webhook Queues Orders Using Unvalidated Scan Name as Action
 
 Severity: Medium
 File: blueprints/chartink.py (lines 808-829)
@@ -449,13 +454,13 @@ CWE: CWE-20
 
 What: The Chartink webhook handler determines the trading action (BUY/SELL) by performing substring matching on the `scan_name` field from the incoming webhook payload: `if "BUY" in scan_name` / `elif "SELL" in scan_name`. The `scan_name` is provided by the external Chartink service in the webhook body and is not validated against a predefined set of expected values. If the scan_name contains both "BUY" and "SELL" (e.g., "BUY_THEN_SELL_STRATEGY"), only the first match wins due to if/elif ordering. More critically, anyone who knows the webhook_id can craft a request with any `scan_name` to trigger arbitrary BUY or SELL orders.
 
-Risk: An attacker who obtains the webhook UUID can craft requests with manipulated `scan_name` values to trigger unintended buy or sell orders. The substring matching approach means ambiguous names like "BUYBACK_SELL" would match "BUY" instead of "SELL", potentially causing incorrect trade direction. Combined with the webhook-id-only authentication (VULN-014), this allows full control over trade direction.
+Risk: An attacker who obtains the webhook UUID can craft requests with manipulated `scan_name` values to trigger unintended buy or sell orders. The substring matching approach means ambiguous names like "BUYBACK_SELL" would match "BUY" instead of "SELL", potentially causing incorrect trade direction. Combined with the webhook-id-only authentication (VULN-027), this allows full control over trade direction.
 
 Fix: Validate the `scan_name` against a strict allowlist or use exact-match patterns instead of substring matching. Consider requiring the action to be explicitly specified in the webhook payload with validation, rather than inferring it from a free-text scan name.
 
 ---
 
-### VULN-022: Broker Auth Tokens and Credentials Logged in Plaintext Across Multiple Brokers
+### VULN-032: Broker Auth Tokens and Credentials Logged in Plaintext Across Multiple Brokers
 
 Severity: Medium
 File: broker/dhan/api/auth_api.py (line 118), broker/compositedge/api/auth_api.py (lines 38, 92), broker/fyers/api/auth_api.py (line 77), broker/kotak/api/auth_api.py (lines 86, 121, 147), broker/fivepaisaxts/api/auth_api.py (lines 34, 88), broker/iifl/api/auth_api.py (lines 34, 88), broker/ibulls/api/auth_api.py (lines 34, 88), broker/rmoney/api/auth_api.py (line 82)
@@ -469,7 +474,7 @@ Fix: Never log raw auth tokens, access tokens, or credentials. Replace all insta
 
 ---
 
-### VULN-023: Dhan API Secret Prefix Logged at INFO Level
+### VULN-033: Dhan API Secret Prefix Logged at INFO Level
 
 Severity: Medium
 File: broker/dhan/api/auth_api.py (lines 42-43)
@@ -483,7 +488,7 @@ Fix: Remove the API secret logging entirely. If debugging is needed, log only th
 
 ---
 
-### VULN-025: JavaScript Injection via Unescaped URL in Dhan OAuth Redirect Page
+### VULN-034: JavaScript Injection via Unescaped URL in Dhan OAuth Redirect Page
 
 Severity: Medium
 File: blueprints/brlogin.py (lines 843-855)
@@ -497,7 +502,7 @@ Fix: Replace the inline HTML/JavaScript redirect with a standard Flask `redirect
 
 ---
 
-### VULN-028: No Token Expiry Detection or Refresh Across All Brokers
+### VULN-035: No Token Expiry Detection or Refresh Across All Brokers
 
 Severity: Medium
 File: database/auth_db.py (lines 143-153, 269-315), broker/*/api/order_api.py (all audited brokers)
@@ -511,7 +516,7 @@ Fix: Add an `expires_at` column to the `Auth` model. Populate it during `upsert_
 
 ---
 
-### VULN-033: Order Logs and Traffic Logs Accumulate Indefinitely
+### VULN-036: Order Logs and Traffic Logs Accumulate Indefinitely
 
 Severity: Medium
 File: database/apilog_db.py (entire file), database/traffic_db.py (lines 45-96)
@@ -525,7 +530,7 @@ Fix: Add `purge_old_logs(days=30)` functions to both `apilog_db.py` and `traffic
 
 ---
 
-### VULN-034: No File Permission Enforcement on SQLite Database Files
+### VULN-037: No File Permission Enforcement on SQLite Database Files
 
 Severity: Medium
 File: database/ (multiple files), db/ (directory)
@@ -539,7 +544,7 @@ Fix: After creating database files and directories, explicitly set permissions t
 
 ---
 
-### VULN-035: DuckDB COPY TO Command with String-Interpolated File Path
+### VULN-038: DuckDB COPY TO Command with String-Interpolated File Path
 
 Severity: Medium
 File: database/historify_db.py (lines 2386-2396)
@@ -553,7 +558,7 @@ Fix: Escape single quotes in `abs_output` or validate that it contains only safe
 
 ---
 
-### VULN-036: Strategy Encryption Key Stored as File on Disk
+### VULN-039: Strategy Encryption Key Stored as File on Disk
 
 Severity: Medium
 File: database/python_strategy_db.py (key management functions)
@@ -561,13 +566,13 @@ CWE: CWE-922
 
 What: The Python strategy encryption key is stored as a file on disk (`db/strategy_encryption.key`). While it is gitignored, there is no file permission enforcement on this key file. The key is used to encrypt/decrypt uploaded Python strategy source code.
 
-Risk: If the key file is readable by other users on the system, they can decrypt all stored Python strategies. Combined with the world-readable database files (VULN-034), this allows extraction of proprietary trading algorithms.
+Risk: If the key file is readable by other users on the system, they can decrypt all stored Python strategies. Combined with the world-readable database files (VULN-037), this allows extraction of proprietary trading algorithms.
 
 Fix: Set file permissions to `0o600` when creating the key file. Consider deriving the key from `API_KEY_PEPPER` instead of storing a separate key file.
 
 ---
 
-### VULN-039: Weak PRNG Used for Pocketful OAuth State Parameter
+### VULN-040: Weak PRNG Used for Pocketful OAuth State Parameter
 
 Severity: Medium
 File: frontend/src/pages/BrokerSelect.tsx (lines 65-73)
@@ -581,7 +586,7 @@ Fix: Replace `Math.random()` with `crypto.randomUUID()` for cryptographically se
 
 ---
 
-### VULN-040: Server-Controlled Redirect Path Navigated Without Validation
+### VULN-041: Server-Controlled Redirect Path Navigated Without Validation
 
 Severity: Medium
 File: frontend/src/pages/Login.tsx (lines 119-120, 127)
@@ -617,13 +622,13 @@ CWE: CWE-16
 
 What: The recommended and default CSP configuration includes `'unsafe-inline'` in the `script-src` directive. This was noted as needed for Socket.IO, but it effectively disables the primary XSS mitigation that CSP provides. Any injected inline `<script>` tag or inline event handler will execute without being blocked by CSP.
 
-Risk: The entire purpose of `script-src` in CSP is to prevent inline script execution -- the most common XSS attack vector. With `'unsafe-inline'` present, CSP provides no protection against reflected or stored XSS attacks. Combined with the API key in localStorage (VULN-037) and unrestricted `connect-src` (VULN-042), a single XSS injection could steal trading credentials and exfiltrate them.
+Risk: The entire purpose of `script-src` in CSP is to prevent inline script execution -- the most common XSS attack vector. With `'unsafe-inline'` present, CSP provides no protection against reflected or stored XSS attacks. Combined with the API key in localStorage (VULN-015) and unrestricted `connect-src` (VULN-042), a single XSS injection could steal trading credentials and exfiltrate them.
 
 Fix: Remove `'unsafe-inline'` from `script-src` and use nonces or hashes instead. Generate a per-request nonce and pass it to both the CSP header and any required inline scripts.
 
 ---
 
-### VULN-048: WebSocket Proxy Has No Per-Client Subscription Limit
+### VULN-044: WebSocket Proxy Has No Per-Client Subscription Limit
 
 Severity: Medium
 File: websocket_proxy/server.py (lines 937-1047)
@@ -637,7 +642,7 @@ Fix: Add a per-request and per-client subscription limit check in `subscribe_cli
 
 ---
 
-### VULN-049: Dockerfile Sets World-Readable .env File Permissions
+### VULN-045: Dockerfile Sets World-Readable .env File Permissions
 
 Severity: Medium
 File: Dockerfile (line 51)
@@ -651,7 +656,7 @@ Fix: Change the Dockerfile from `chmod 666 /app/.env` to `chmod 600 /app/.env`, 
 
 ---
 
-### VULN-052: start.sh Writes Plaintext Secrets to .env File With Fallback to /tmp
+### VULN-046: start.sh Writes Plaintext Secrets to .env File With Fallback to /tmp
 
 Severity: Medium
 File: start.sh (lines 34-140)
@@ -665,7 +670,7 @@ Fix: Write the `.env` file with `chmod 600` permissions. Remove the `/tmp/.env` 
 
 ---
 
-### VULN-053: Install Scripts Write Secrets Into .env With Overly Broad File Permissions
+### VULN-047: Install Scripts Write Secrets Into .env With Overly Broad File Permissions
 
 Severity: Medium
 File: install/install.sh (lines 694-709), install/ubuntu-ip.sh (lines 359-372)
@@ -679,7 +684,7 @@ Fix: After writing the `.env` file, set its permissions to `chmod 600` and ensur
 
 ---
 
-### VULN-054: HTTP Requests to Broker APIs Made Without Timeout
+### VULN-048: HTTP Requests to Broker APIs Made Without Timeout
 
 Severity: Medium
 File: blueprints/chartink.py (lines 92, 128), blueprints/strategy.py (lines 114, 150), broker/aliceblue/streaming/aliceblue_client.py (lines 137, 151, 164, 198, 302), and 24+ additional locations across broker modules
@@ -695,7 +700,7 @@ Fix: Add `timeout=30` (or appropriate value) to all `requests.post()` and `reque
 
 ## Low Findings
 
-### VULN-008: REDIRECT_URL Leaked to Unauthenticated Users
+### VULN-049: REDIRECT_URL Leaked to Unauthenticated Users
 
 Severity: Low
 File: blueprints/auth.py (lines 86-93)
@@ -709,7 +714,7 @@ Fix: Set `redirect_url` to `None` in the unauthenticated response branch, matchi
 
 ---
 
-### VULN-009: CSRF Time Limit Defaults to None (No Expiration)
+### VULN-050: CSRF Time Limit Defaults to None (No Expiration)
 
 Severity: Low
 File: app.py (lines 296-303), .sample.env (lines 239-240)
@@ -723,7 +728,7 @@ Fix: Set a reasonable default CSRF time limit (e.g., 3600 seconds / 1 hour) in t
 
 ---
 
-### VULN-026: Pocketful OAuth State Generated with Non-Cryptographic PRNG
+### VULN-051: Pocketful OAuth State Generated with Non-Cryptographic PRNG
 
 Severity: Low
 File: broker/pocketful/api/auth_api.py (lines 153-156), frontend/src/pages/BrokerSelect.tsx (lines 65-73)
@@ -731,13 +736,13 @@ CWE: CWE-330
 
 What: Both the server-side and client-side implementations of Pocketful's OAuth state parameter use non-cryptographic random number generators. The server-side uses Python's `random.choices()` (line 156), which is Mersenne Twister and predictable if the seed can be inferred. The client-side uses `Math.random()` (line 69 of BrokerSelect.tsx), which is also not cryptographically secure. The state parameter is meant to prevent CSRF attacks in OAuth flows.
 
-Risk: An attacker who can observe a small number of generated state values may be able to predict future state values due to the weak PRNG, defeating the CSRF protection that the state parameter is intended to provide. This is a lower severity finding since (per VULN-021) the state is not actually validated on the server side, making this issue moot until VULN-021 is fixed.
+Risk: An attacker who can observe a small number of generated state values may be able to predict future state values due to the weak PRNG, defeating the CSRF protection that the state parameter is intended to provide. This is a lower severity finding since (per VULN-010) the state is not actually validated on the server side, making this issue moot until VULN-021 is fixed.
 
-Fix: On the server side, replace `random.choices()` with `secrets.token_urlsafe(32)`. On the client side, replace `Math.random()` with `crypto.getRandomValues()`. However, fixing VULN-021 (server-side state validation) should be prioritized first, as without validation, the state generation quality is irrelevant.
+Fix: On the server side, replace `random.choices()` with `secrets.token_urlsafe(32)`. On the client side, replace `Math.random()` with `crypto.getRandomValues()`. However, fixing VULN-010 (server-side state validation) should be prioritized first, as without validation, the state generation quality is irrelevant.
 
 ---
 
-### VULN-044: Missing X-Content-Type-Options and Strict-Transport-Security Headers
+### VULN-052: Missing X-Content-Type-Options and Strict-Transport-Security Headers
 
 Severity: Low
 File: csp.py (lines 124-170)
@@ -751,7 +756,7 @@ Fix: Add these headers to `get_security_headers()` in `csp.py`: `X-Content-Type-
 
 ---
 
-### VULN-055: Vite Dev Server Has Known File Read and Path Traversal Vulnerabilities
+### VULN-053: Vite Dev Server Has Known File Read and Path Traversal Vulnerabilities
 
 Severity: Low
 File: frontend/package.json (vite 7.0.0 - 7.3.1)
@@ -778,3 +783,62 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 ---
 
 ## Recommendations
+
+### Immediate (fix before next release)
+
+- VULN-001: Add startup check that refuses to start if APP_KEY or API_KEY_PEPPER matches the sample defaults
+- VULN-002: Remove hardcoded fallback pepper/salt in telegram_db.py; fail fast if env vars missing
+- VULN-003: Add TLS requirement or prominent warning to ubuntu-ip.sh install script
+- VULN-009: Remove hardcoded "default-pepper-key" fallback in settings_db.py; fail fast if missing
+- VULN-010: Implement OAuth state parameter validation across all broker callback handlers
+- VULN-011: Remove automatic admin user fallback in Compositedge/RMoney OAuth callbacks
+- VULN-008, VULN-012, VULN-013, VULN-014: Encrypt Samco secret key, Telegram bot token, Flow API key, and TOTP secret at rest using existing encrypt_token()
+- VULN-015: Exclude apiKey from Zustand localStorage persistence via partialize option
+- VULN-016: Replace hardcoded Fyers OAuth state with crypto.randomUUID()
+- VULN-017: Read MCP API key from environment variable instead of sys.argv
+- VULN-018: Add confirmation mechanism and operation allowlist to MCP server
+- VULN-019: Remove ufw allow 8765/tcp from ubuntu-ip.sh; proxy WebSocket through Nginx
+- VULN-020: Bind ZeroMQ to 127.0.0.1 instead of 0.0.0.0
+
+### Short-term (fix within 2-4 weeks)
+
+**Credential handling:**
+- VULN-007: Move API key from URL query parameters to X-API-KEY header for GET endpoints
+- VULN-021: Hash API key before using as broker_cache key (consistency fix)
+- VULN-022: Replace static KDF salt with per-deployment random salt
+- VULN-032, VULN-033: Redact all auth tokens and credentials from log output across all brokers
+
+**Input validation:**
+- VULN-024: Add max length to basket order list (validate.Length(max=50))
+- VULN-025: Add length and character pattern validation to symbol/strategy fields
+- VULN-026: Add range validation to SmartOrder position_size
+- VULN-029: Set Flask MAX_CONTENT_LENGTH to 10MB
+- VULN-031: Validate Chartink scan_name against allowlist instead of substring matching
+
+**Session and CSRF:**
+- VULN-004: Regenerate session ID after successful login
+- VULN-005: Add 15-minute expiration to password reset tokens
+- VULN-023: Log warning when CSRF is disabled; require FLASK_ENV=development
+
+**Infrastructure:**
+- VULN-027: Add optional HMAC signature verification for webhook endpoints
+- VULN-030: Default CORS to deny all origins when CORS_ENABLED is FALSE
+- VULN-034: Replace inline JavaScript redirect in Dhan OAuth with Flask redirect()
+- VULN-037, VULN-039, VULN-045, VULN-046, VULN-047: Set restrictive file permissions (0600) on .env, database files, and encryption key files
+- VULN-048: Add timeout parameter to all requests.post/get calls
+
+### Long-term (ongoing improvements)
+
+- VULN-006: Require re-authentication before displaying TOTP secret; remove raw secret from API response
+- VULN-028: Replace str(e) in error responses with generic messages; log details server-side only
+- VULN-035: Add token expiry tracking column and proactive re-auth
+- VULN-036: Implement log retention policies for order_logs and traffic_logs tables
+- VULN-040, VULN-051: Replace Math.random()/random.choices() with cryptographic PRNGs for OAuth state
+- VULN-041: Validate server-provided redirect paths on the frontend before navigating
+- VULN-042: Restrict CSP connect-src to specific WebSocket origins instead of bare wss:/ws: schemes
+- VULN-043: Remove 'unsafe-inline' from CSP script-src; migrate to nonce-based inline scripts
+- VULN-044: Add per-client subscription limits to WebSocket proxy
+- VULN-052: Add X-Content-Type-Options and Strict-Transport-Security headers
+- VULN-038: Parameterize DuckDB COPY TO paths and whitelist compression values
+- VULN-049, VULN-050: Set CSRF time limit default to 3600s; restrict redirect_url to authenticated users
+- VULN-053: Update Vite to patched version via npm audit fix
