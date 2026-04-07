@@ -11,9 +11,9 @@ Auditor: Claude Code
 | Severity | Count |
 |----------|-------|
 | Critical | 2 |
-| High | 10 |
-| Medium | 18 |
-| Low | 3 |
+| High | 12 |
+| Medium | 23 |
+| Low | 4 |
 
 ## Critical Findings
 
@@ -198,6 +198,34 @@ What: The `User.totp_secret` column stores the TOTP seed as a plaintext `String(
 Risk: If the database is stolen, an attacker possessing the TOTP secret can generate valid TOTP codes at any time, bypassing the second factor entirely. Combined with a brute-forced or phished password, this completely defeats the password reset protection.
 
 Fix: Encrypt `totp_secret` using `encrypt_token()` from `auth_db` before storage, and decrypt when generating TOTP codes or URIs.
+
+---
+
+### VULN-037: API Key Persisted in localStorage via Zustand
+
+Severity: High
+File: frontend/src/stores/authStore.ts (lines 24-93), frontend/src/components/auth/AuthSync.tsx (line 41)
+CWE: CWE-922
+
+What: The `useAuthStore` uses Zustand's `persist` middleware with `name: 'openalgo-auth'`, which serializes the entire store -- including the `apiKey` field -- into `localStorage`. The `AuthSync` component calls `setApiKey(data.api_key)` on every session sync, writing the plaintext trading API key into `localStorage['openalgo-auth']`. There is no `partialize` option to exclude the key from persistence.
+
+Risk: Any XSS vulnerability (including via browser extensions, injected scripts, or the `'unsafe-inline'` CSP policy) can trivially read `localStorage.getItem('openalgo-auth')` and extract the trading API key. This key grants full order placement, cancellation, and account query capabilities. Unlike session cookies (which have `httpOnly` protection), localStorage is fully accessible to JavaScript.
+
+Fix: Add a `partialize` option to the `persist` config to exclude `apiKey` from localStorage persistence. The API key is already fetched from the server on each page load via `AuthSync`, so persistence is unnecessary.
+
+---
+
+### VULN-038: Hardcoded OAuth State Parameter for Fyers Broker Enables CSRF
+
+Severity: High
+File: frontend/src/pages/BrokerSelect.tsx (line 171)
+CWE: CWE-352
+
+What: The Fyers OAuth authorization URL uses a hardcoded, static `state` parameter value `2e9b44629ebb28226224d09db3ffb47c`. The OAuth `state` parameter exists specifically to prevent cross-site request forgery during the authorization code flow, and it must be a unique, unpredictable value per session that is validated on the callback.
+
+Risk: An attacker can craft a malicious link that initiates the Fyers OAuth flow with the attacker's authorization code, causing the victim's OpenAlgo instance to authenticate with the attacker's brokerage account. This is a classic OAuth CSRF attack. Since this application handles real financial transactions, an attacker could trick a user into trading on a manipulated account, or intercept the legitimate user's authorization code via a race condition.
+
+Fix: Generate a cryptographically random state per OAuth request using `crypto.randomUUID()`, store it in `sessionStorage`, and validate it on callback.
 
 ---
 
@@ -469,6 +497,62 @@ Fix: Set file permissions to `0o600` when creating the key file. Consider derivi
 
 ---
 
+### VULN-039: Weak PRNG Used for Pocketful OAuth State Parameter
+
+Severity: Medium
+File: frontend/src/pages/BrokerSelect.tsx (lines 65-73)
+CWE: CWE-330
+
+What: The `generateRandomState()` function uses `Math.random()` to generate the OAuth state parameter for Pocketful broker authentication. `Math.random()` is not cryptographically secure -- its output can be predicted if an attacker observes a few values, and it has low entropy on some engines.
+
+Risk: A predictable OAuth state parameter weakens the CSRF protection it is meant to provide. An attacker who can predict or brute-force the state value could perform an OAuth CSRF attack against Pocketful broker authentication.
+
+Fix: Replace `Math.random()` with `crypto.randomUUID()` for cryptographically secure state generation.
+
+---
+
+### VULN-040: Server-Controlled Redirect Path Navigated Without Validation
+
+Severity: Medium
+File: frontend/src/pages/Login.tsx (lines 119-120, 127)
+CWE: CWE-601
+
+What: After login, the frontend calls `navigate(data.redirect)` using the `redirect` field from the server's JSON response without any client-side validation. While the backend currently only returns internal paths like `/setup`, `/broker`, or `/dashboard`, the value comes from a server response that could be manipulated if an attacker performs a man-in-the-middle attack, or if a future backend code change introduces a user-controlled redirect.
+
+Risk: If the `data.redirect` value ever contains a URL like `//evil.com` or `https://evil.com`, the user would be redirected to an attacker-controlled site after a successful login. In the context of a financial application, this could be used for credential phishing.
+
+Fix: Validate that `data.redirect` is a relative path starting with `/` and does not start with `//` before navigating.
+
+---
+
+### VULN-042: CSP connect-src Allows WebSocket Connections to Any Origin
+
+Severity: Medium
+File: csp.py (line 43), .sample.env (line 198)
+CWE: CWE-942
+
+What: The `connect-src` CSP directive defaults to `'self' wss: ws:` and the sample `.env` files set `CSP_CONNECT_SRC = "'self' wss: ws: https://cdn.socket.io"`. The bare `wss:` and `ws:` scheme-sources allow the application's JavaScript to establish WebSocket connections to any host on the internet, not just the application's own WebSocket server.
+
+Risk: If an XSS vulnerability is exploited (made easier by `'unsafe-inline'` in `script-src`), the attacker's injected script can exfiltrate data -- including the API key from localStorage, session tokens, trading positions, and order data -- over a WebSocket connection to an attacker-controlled server.
+
+Fix: Restrict `connect-src` to only the specific WebSocket origins the application actually needs (e.g., `wss://127.0.0.1:8765`).
+
+---
+
+### VULN-043: CSP script-src Includes 'unsafe-inline' Weakening XSS Protection
+
+Severity: Medium
+File: .sample.env (line 186), csp.py (line 28)
+CWE: CWE-16
+
+What: The recommended and default CSP configuration includes `'unsafe-inline'` in the `script-src` directive. This was noted as needed for Socket.IO, but it effectively disables the primary XSS mitigation that CSP provides. Any injected inline `<script>` tag or inline event handler will execute without being blocked by CSP.
+
+Risk: The entire purpose of `script-src` in CSP is to prevent inline script execution -- the most common XSS attack vector. With `'unsafe-inline'` present, CSP provides no protection against reflected or stored XSS attacks. Combined with the API key in localStorage (VULN-037) and unrestricted `connect-src` (VULN-042), a single XSS injection could steal trading credentials and exfiltrate them.
+
+Fix: Remove `'unsafe-inline'` from `script-src` and use nonces or hashes instead. Generate a per-request nonce and pass it to both the CSP header and any required inline scripts.
+
+---
+
 ## Low Findings
 
 ### VULN-008: REDIRECT_URL Leaked to Unauthenticated Users
@@ -510,6 +594,20 @@ What: Both the server-side and client-side implementations of Pocketful's OAuth 
 Risk: An attacker who can observe a small number of generated state values may be able to predict future state values due to the weak PRNG, defeating the CSRF protection that the state parameter is intended to provide. This is a lower severity finding since (per VULN-021) the state is not actually validated on the server side, making this issue moot until VULN-021 is fixed.
 
 Fix: On the server side, replace `random.choices()` with `secrets.token_urlsafe(32)`. On the client side, replace `Math.random()` with `crypto.getRandomValues()`. However, fixing VULN-021 (server-side state validation) should be prioritized first, as without validation, the state generation quality is irrelevant.
+
+---
+
+### VULN-044: Missing X-Content-Type-Options and Strict-Transport-Security Headers
+
+Severity: Low
+File: csp.py (lines 124-170)
+CWE: CWE-693
+
+What: The `get_security_headers()` function in `csp.py` only sets `Referrer-Policy` and `Permissions-Policy` headers. The application does not set `X-Content-Type-Options: nosniff` or `Strict-Transport-Security` (HSTS) anywhere in the codebase. While `frame-ancestors` in CSP covers clickjacking, these other standard security headers are absent.
+
+Risk: Without `X-Content-Type-Options: nosniff`, browsers may MIME-sniff API responses (e.g., JSON containing user-controlled data) and interpret them as HTML, potentially enabling XSS via content-type confusion. Without HSTS, users connecting over HTTP (even temporarily) are vulnerable to SSL stripping attacks, which is critical for a financial application where an attacker on a shared network could intercept trading credentials.
+
+Fix: Add these headers to `get_security_headers()` in `csp.py`: `X-Content-Type-Options: nosniff` unconditionally, and `Strict-Transport-Security: max-age=31536000; includeSubDomains` when `HOST_SERVER` starts with `https://`.
 
 ---
 
