@@ -458,17 +458,30 @@ def broker_callback(broker, para=None):
             return redirect(zebu_login_url)
 
     elif broker == "shoonya":
-        if request.method == "GET":
-            # Redirect to React TOTP page
-            return redirect("/broker/shoonya/totp")
-
-        elif request.method == "POST":
-            userid = request.form.get("userid")
-            password = request.form.get("password")
-            totp_code = request.form.get("totp")
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
+        code = request.args.get("code")
+        if code:
+            logger.debug("Shoonya broker - OAuth callback received")
+            auth_token, error_message = auth_function(code)
             forward_url = "broker.html"
+        else:
+            # Initial visit — redirect to Shoonya OAuth login page
+            logger.info("Redirecting to Shoonya OAuth login page")
+            # BROKER_API_KEY format: userid:::client_id
+            full_api_key = os.getenv("BROKER_API_KEY")
+            if not full_api_key:
+                return handle_auth_failure(
+                    "BROKER_API_KEY not configured in environment",
+                    forward_url="broker.html",
+                )
+            parts = full_api_key.split(":::", 1)
+            if len(parts) != 2 or not parts[1]:
+                return handle_auth_failure(
+                    "BROKER_API_KEY must be in format userid:::client_id",
+                    forward_url="broker.html",
+                )
+            client_id = parts[1]  # OAuth client_id
+            shoonya_login_url = f"https://api.shoonya.com/OAuthlogin/authorize/oauth?client_id={client_id}"
+            return redirect(shoonya_login_url)
 
     elif broker == "firstock":
         if request.method == "GET":

@@ -80,7 +80,7 @@ def test_rate_limit_configuration():
     expected_vars = {
         "API_RATE_LIMIT": "50 per second",
         "ORDER_RATE_LIMIT": "10 per second",
-        "SMART_ORDER_RATE_LIMIT": "2 per second",
+        "SMART_ORDER_RATE_LIMIT": "10 per second",
         "WEBHOOK_RATE_LIMIT": "100 per minute",
         "STRATEGY_RATE_LIMIT": "200 per minute",
         "LOGIN_RATE_LIMIT_MIN": "5 per minute",
