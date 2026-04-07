@@ -12,8 +12,8 @@ Auditor: Claude Code
 |----------|-------|
 | Critical | 3 |
 | High | 16 |
-| Medium | 27 |
-| Low | 4 |
+| Medium | 28 |
+| Low | 5 |
 
 ## Critical Findings
 
@@ -679,6 +679,20 @@ Fix: After writing the `.env` file, set its permissions to `chmod 600` and ensur
 
 ---
 
+### VULN-054: HTTP Requests to Broker APIs Made Without Timeout
+
+Severity: Medium
+File: blueprints/chartink.py (lines 92, 128), blueprints/strategy.py (lines 114, 150), broker/aliceblue/streaming/aliceblue_client.py (lines 137, 151, 164, 198, 302), and 24+ additional locations across broker modules
+CWE: CWE-400
+
+What: Bandit scan identified 24+ instances of `requests.post()` and `requests.get()` calls without a `timeout` parameter across the codebase. Key locations include the strategy webhook handlers (which make internal API calls to place orders), the Chartink webhook handlers, and multiple broker streaming client implementations. Without a timeout, these HTTP calls will block indefinitely if the remote server does not respond, tying up the server thread.
+
+Risk: If a broker API becomes unresponsive or a network issue occurs, the calling thread will hang indefinitely. In the strategy webhook handlers, this means incoming webhook requests from TradingView will queue up and eventually exhaust the server's thread pool, causing a denial of service for all trading operations. Since these are order-placement requests, hung threads could also prevent time-sensitive orders from being processed.
+
+Fix: Add `timeout=30` (or appropriate value) to all `requests.post()` and `requests.get()` calls. For order-critical paths (strategy/chartink webhooks), use a shorter timeout (e.g., 10 seconds) and handle `requests.Timeout` exceptions gracefully.
+
+---
+
 ## Low Findings
 
 ### VULN-008: REDIRECT_URL Leaked to Unauthenticated Users
@@ -734,6 +748,32 @@ What: The `get_security_headers()` function in `csp.py` only sets `Referrer-Poli
 Risk: Without `X-Content-Type-Options: nosniff`, browsers may MIME-sniff API responses (e.g., JSON containing user-controlled data) and interpret them as HTML, potentially enabling XSS via content-type confusion. Without HSTS, users connecting over HTTP (even temporarily) are vulnerable to SSL stripping attacks, which is critical for a financial application where an attacker on a shared network could intercept trading credentials.
 
 Fix: Add these headers to `get_security_headers()` in `csp.py`: `X-Content-Type-Options: nosniff` unconditionally, and `Strict-Transport-Security: max-age=31536000; includeSubDomains` when `HOST_SERVER` starts with `https://`.
+
+---
+
+### VULN-055: Vite Dev Server Has Known File Read and Path Traversal Vulnerabilities
+
+Severity: Low
+File: frontend/package.json (vite 7.0.0 - 7.3.1)
+CWE: CWE-22
+
+What: npm audit identified 3 high-severity vulnerabilities in Vite 7.0.0-7.3.1: arbitrary file read via WebSocket (GHSA-p9ff-h696-f583), path traversal in optimized deps `.map` handling (GHSA-4w7w-66w2-5vf9), and `server.fs.deny` bypass with queries (GHSA-v2wj-q39q-566r). These are all in the Vite dev server, which is a devDependency used only during development (not included in production builds).
+
+Risk: These vulnerabilities only affect developers running `npm run dev` locally. An attacker on the same network could read arbitrary files from the developer's machine via the Vite dev server. The production deployment is not affected since Vite is a build tool and its dev server is not deployed.
+
+Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. While this is dev-only, developers should keep development tools updated to protect their local environments.
+
+---
+
+### Scan Results Summary
+
+**Bandit (Python static analysis)**: 302 issues total. 2 High (both false positives: MD5 for test data generation in sandbox, Flask debug=True in example file). 34 Medium (requests without timeout -- 1 added as VULN-054; bind-all-interfaces and file permissions already covered). 266 Low (mostly try/except/pass patterns in cleanup code -- acceptable in __del__ and shutdown handlers).
+
+**pip-audit (Python dependency vulnerabilities)**: No known vulnerabilities found in any of the 155 pinned dependencies.
+
+**npm audit (Frontend dependency vulnerabilities)**: 1 high-severity package (Vite dev server) with 3 CVEs -- dev-only, added as VULN-055.
+
+**Dependency pinning**: Python dependencies are pinned to exact versions in `pyproject.toml` with `uv.lock` for reproducible builds. Frontend dependencies use semver ranges in `package.json` with `package-lock.json` for lock-file reproducibility.
 
 ---
 
