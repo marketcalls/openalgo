@@ -188,8 +188,9 @@ def get_margin_data(auth_token):
                                 symbol = quote_item["symbol"]
                                 exchange = quote_item["exchange"]
                                 ltp = safe_float(quote_item["data"].get("ltp"))
-                                ltp_map[f"{symbol}_{exchange}"] = ltp
-                                logger.debug(f"Fetched LTP for {symbol}: {ltp}")
+                                if ltp > 0:  # Only add valid LTP values
+                                    ltp_map[f"{symbol}_{exchange}"] = ltp
+                                    logger.debug(f"Fetched LTP for {symbol}: {ltp}")
 
                         # Check if we got any usable LTP data
                         if not ltp_map and symbols_to_fetch:
@@ -198,13 +199,21 @@ def get_margin_data(auth_token):
                     except Exception as e:
                         logger.warning(f"Could not batch fetch LTP: {e}")
                         use_api_fallback = True
+                else:
+                    # No open positions to fetch LTP for, but we might still have unrealized P&L from API
+                    # This handles the case where all positions are closed but API reports unrealized P&L
+                    pass
 
-                    # Fallback: use API-provided unrealized P&L if batch fetch failed or returned no data
-                    if use_api_fallback:
-                        logger.info("Using API-provided unrealized P&L as fallback")
-                        total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
-                        # Still calculate realized P&L from positions
-                        # (continue with position loop but skip unrealized calculation)
+                # Fallback: use API-provided unrealized P&L if batch fetch failed or returned no data
+                if use_api_fallback:
+                    logger.info("Using API-provided unrealized P&L as fallback")
+                    total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
+                    # Still calculate realized P&L from positions
+                    # (continue with position loop but skip unrealized calculation)
+
+                # Track positions with missing LTP data
+                positions_with_missing_ltp = 0
+                positions_needing_ltp = 0
 
                 # Now calculate P&L for each position
                 for position in positions:
@@ -283,9 +292,16 @@ def get_margin_data(auth_token):
                             oa_symbol = get_symbol(token, oa_exchange)
 
                             ltp = ltp_map.get(f"{oa_symbol}_{oa_exchange}", 0.0)
+
+                            # Track if we're missing LTP for positions that need it
+                            if ltp == 0.0:
+                                positions_with_missing_ltp += 1
+                            positions_needing_ltp += 1
                         except Exception as e:
                             logger.debug(f"Could not get LTP for {position.get('trdSym')}: {e}")
                             ltp = 0.0
+                            positions_with_missing_ltp += 1
+                            positions_needing_ltp += 1
 
                         # Calculate unrealized PnL only if we have LTP data
                         # If batch fetch failed or returned no data, unrealized P&L was set from API fallback
@@ -307,6 +323,14 @@ def get_margin_data(auth_token):
                     f"Calculated PnL from positions - Realized: {total_realised:.2f}, "
                     f"Unrealized: {total_unrealised:.2f}"
                 )
+
+                # If we have open positions but couldn't get LTP for any of them, fall back to API unrealized P&L
+                if not use_api_fallback and positions_needing_ltp > 0 and positions_with_missing_ltp == positions_needing_ltp:
+                    logger.warning(
+                        f"Could not get LTP for any of {positions_needing_ltp} open positions, "
+                        "falling back to API-provided unrealized P&L"
+                    )
+                    total_unrealised = safe_float(margin_data.get('UnrealizedMtomPrsnt'))
 
             else:
                 logger.warning("Could not fetch positions, using API-provided PnL values")
