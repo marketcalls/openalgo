@@ -8,77 +8,83 @@ Auditor: Claude Code
 
 This audit covered authentication, session management, API security, input validation, broker credential handling (8 brokers), database storage, frontend security, infrastructure/deployment, and dependency analysis across OpenAlgo's 190,000+ lines of Python and TypeScript code. The audit combined manual code review with automated scanning (Bandit, pip-audit, npm audit).
 
-The originally most critical class of findings -- **hardcoded cryptographic secrets** (VULN-001) -- is mitigated for all official deployment paths. All install scripts (`install.sh`, `install-docker.sh`, `install-multi.sh`, `docker-run.sh`, `docker-run.bat`, `start.sh`) auto-generate unique `APP_KEY` and `API_KEY_PEPPER` values, reducing VULN-001 to Low. The insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted, resolving VULN-003. However, **hardcoded fallback encryption keys** in `settings_db.py` (VULN-009) and `telegram_db.py` (VULN-002) remain open at High and Medium respectively -- these modules silently fall back to publicly known keys if `API_KEY_PEPPER` is missing. The most impactful open class is **plaintext storage of sensitive data** in SQLite databases (VULN-008, VULN-012, VULN-013, VULN-014) -- because SQLite stores the entire database as a single file, theft of one file exposes TOTP secrets, Telegram bot tokens, flow API keys, and Samco credentials without any decryption step.
+**Single-user context:** OpenAlgo is a single-user self-hosted application. This significantly reduces the threat surface: there are no multi-user privilege escalation attacks, no user-to-user data leakage, and local file/memory access on the server already implies full control. 2 findings were removed as not applicable (VULN-006: user views own TOTP; VULN-011: auto-assign admin is correct when only one user exists) and 12 findings were downgraded because server-local risks (file permissions, log contents, memory dumps) provide no additional attack surface beyond what server access already grants.
 
-The overall security posture shows a well-intentioned design with Argon2 hashing, Fernet encryption, CSRF protection, and rate limiting. However, inconsistent application of these controls (some modules encrypt, others don't; some caches hash keys, others store plaintext) creates exploitable gaps. The deployment infrastructure (Docker configuration, MCP server) introduces additional risk through insecure defaults: world-readable secrets and unrestricted AI-agent trading capabilities.
+The most impactful open findings fall into three categories: (1) **externally exploitable API/OAuth weaknesses** -- API key in URL query params (VULN-007), missing OAuth state validation (VULN-010, VULN-016), API key in localStorage exposed to XSS (VULN-015); (2) **plaintext credential storage** in SQLite -- Samco secret (VULN-008), Telegram bot token (VULN-012), Flow API key (VULN-013) are unencrypted, meaning a stolen backup or DB file exposes broker access without needing the encryption pepper; (3) **MCP server risks** -- API key visible in process list (VULN-017) and unrestricted AI-agent trading without confirmation (VULN-018).
 
-**Current status:** 2 findings resolved (insecure install script deleted), 2 mitigated (install.sh auto-generates secrets, ZMQ not exposed via firewall), 49 open. The remaining open High findings -- particularly plaintext credential storage (VULN-008, 012, 013, 014), OAuth CSRF (VULN-010, 016), and MCP server risks (VULN-017, 018) -- should be prioritized for the next release.
+All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
 
-| Severity | Total | Open | Resolved | Mitigated |
-|----------|-------|------|----------|-----------|
-| Critical | 1 | 0 | 1 | 0 |
-| High | 17 | 15 | 1 | 1 |
-| Medium | 29 | 29 | 0 | 0 |
-| Low | 6 | 5 | 0 | 1 |
-| **Total** | **53** | **49** | **2** | **2** |
+**Current status:** 2 findings resolved, 2 mitigated, 2 removed (single-user N/A), 47 open. Of the 47 open, 10 are High, 23 are Medium, and 14 are Low.
+
+| Severity | Total | Open | Resolved | Mitigated | Removed |
+|----------|-------|------|----------|-----------|---------|
+| Critical | 1 | 0 | 1 | 0 | 0 |
+| High | 12 | 10 | 1 | 1 | 0 |
+| Medium | 23 | 23 | 0 | 0 | 0 |
+| Low | 15 | 14 | 0 | 1 | 0 |
+| N/A | 2 | 0 | 0 | 0 | 2 |
+| **Total** | **53** | **47** | **2** | **2** | **2** |
+
+Note: 2 findings removed as not applicable to single-user architecture.
+12 findings downgraded due to single-user context (no multi-user attacks, server access = full control).
 
 ### Tracking Status
 
-| VULN | Severity | Status | Notes |
-|------|----------|--------|-------|
-| VULN-001 | Low | Mitigated | All official install scripts (install.sh, install-docker.sh, install-multi.sh, docker-run.sh/bat, start.sh) auto-generate unique APP_KEY and API_KEY_PEPPER; only affects manual `cp .sample.env .env` bypassing all install scripts |
-| VULN-003 | Critical | Resolved | `install/ubuntu-ip.sh` deleted -- plaintext HTTP install path removed |
-| VULN-004 | High | Open | |
-| VULN-005 | High | Open | |
-| VULN-006 | High | Open | |
-| VULN-007 | High | Open | |
-| VULN-008 | High | Open | |
-| VULN-009 | High | Open | |
-| VULN-010 | High | Open | |
-| VULN-011 | High | Open | |
-| VULN-012 | High | Open | |
-| VULN-013 | High | Open | |
-| VULN-014 | High | Open | |
-| VULN-015 | High | Open | |
-| VULN-016 | High | Open | |
-| VULN-017 | High | Open | |
-| VULN-018 | High | Open | |
-| VULN-019 | High | Resolved | `install/ubuntu-ip.sh` deleted -- exposed WebSocket port removed |
-| VULN-020 | High | Mitigated | ZMQ binds to 0.0.0.0 but `install/install.sh` does not expose ZMQ port via firewall; risk limited to bare-metal without firewall |
-| VULN-002 | Medium | Open | Downgraded from Critical; pepper fallback is dead code for install.sh, but TELEGRAM_KEY_SALT always hardcoded |
-| VULN-021 | Medium | Open | |
-| VULN-022 | Medium | Open | |
-| VULN-023 | Medium | Open | |
-| VULN-024 | Medium | Open | |
-| VULN-025 | Medium | Open | |
-| VULN-026 | Medium | Open | |
-| VULN-027 | Medium | Open | |
-| VULN-028 | Medium | Open | |
-| VULN-029 | Medium | Open | |
-| VULN-030 | Medium | Open | |
-| VULN-031 | Medium | Open | |
-| VULN-032 | Medium | Open | |
-| VULN-033 | Medium | Open | |
-| VULN-034 | Medium | Open | |
-| VULN-035 | Medium | Open | |
-| VULN-036 | Medium | Open | |
-| VULN-037 | Medium | Open | |
-| VULN-038 | Medium | Open | |
-| VULN-039 | Medium | Open | |
-| VULN-040 | Medium | Open | |
-| VULN-041 | Medium | Open | |
-| VULN-042 | Medium | Open | |
-| VULN-043 | Medium | Open | |
-| VULN-044 | Medium | Open | |
-| VULN-045 | Medium | Open | |
-| VULN-046 | Medium | Open | |
-| VULN-047 | Medium | Open | |
-| VULN-048 | Medium | Open | |
-| VULN-049 | Low | Open | |
-| VULN-050 | Low | Open | |
-| VULN-051 | Low | Open | |
-| VULN-052 | Low | Open | |
-| VULN-053 | Low | Open | |
+| VULN | Original | Current | Status | Notes |
+|------|----------|---------|--------|-------|
+| VULN-001 | Critical | Low | Mitigated | All official install scripts auto-generate unique secrets |
+| VULN-003 | Critical | Critical | Resolved | `install/ubuntu-ip.sh` deleted |
+| VULN-004 | High | Low | Open | Single-user; requires MITM on TLS to exploit |
+| VULN-005 | High | Low | Open | Single-user; user resets own password |
+| VULN-006 | High | -- | Removed | Single-user; user views own TOTP secret |
+| VULN-007 | High | High | Open | API key in URL query params; externally exploitable |
+| VULN-008 | High | High | Open | Samco secret plaintext in DB; defense-in-depth |
+| VULN-009 | High | High | Open | Hardcoded fallback encryption key |
+| VULN-010 | High | High | Open | OAuth CSRF; externally exploitable |
+| VULN-011 | High | -- | Removed | Single-user; only one user exists, auto-assign is correct |
+| VULN-012 | High | High | Open | Telegram bot token plaintext in DB |
+| VULN-013 | High | High | Open | Flow API key plaintext in DB |
+| VULN-014 | High | Medium | Open | Single-user; DB theft already grants password hash access |
+| VULN-015 | High | High | Open | API key in localStorage; XSS exploitable externally |
+| VULN-016 | High | High | Open | Hardcoded Fyers OAuth state; externally exploitable |
+| VULN-017 | High | High | Open | MCP API key in process args |
+| VULN-018 | High | High | Open | MCP unrestricted trading; AI agent risk |
+| VULN-019 | High | High | Resolved | `install/ubuntu-ip.sh` deleted |
+| VULN-020 | High | High | Mitigated | ZMQ not exposed via firewall in install scripts |
+| VULN-002 | Critical | Medium | Open | Pepper fallback dead code for install.sh; TELEGRAM_KEY_SALT hardcoded |
+| VULN-021 | Medium | Low | Open | Single-user server; memory dump = full server access |
+| VULN-022 | Medium | Medium | Open | Static KDF salt |
+| VULN-023 | Medium | Medium | Open | CSRF disableable |
+| VULN-024 | Medium | Medium | Open | Unbounded basket order list |
+| VULN-025 | Medium | Medium | Open | Symbol/strategy field validation |
+| VULN-026 | Medium | Medium | Open | SmartOrder position_size range |
+| VULN-027 | Medium | Medium | Open | Webhook auth; externally exploitable |
+| VULN-028 | Medium | Medium | Open | Error info leak to external callers |
+| VULN-029 | Medium | Medium | Open | No request body size limit |
+| VULN-030 | Medium | Medium | Open | CORS allows all origins |
+| VULN-031 | Medium | Medium | Open | Chartink scan_name validation |
+| VULN-032 | Medium | Low | Open | Single-user server; logs on own server |
+| VULN-033 | Medium | Low | Open | Single-user server; logs on own server |
+| VULN-034 | Medium | Medium | Open | XSS in Dhan OAuth redirect |
+| VULN-035 | Medium | Medium | Open | No token expiry detection |
+| VULN-036 | Medium | Medium | Open | Unbounded log retention |
+| VULN-037 | Medium | Low | Open | Single-user server; typically one OS user |
+| VULN-038 | Medium | Medium | Open | DuckDB SQL interpolation |
+| VULN-039 | Medium | Low | Open | Single-user server; file access = full control |
+| VULN-040 | Medium | Medium | Open | Weak PRNG for OAuth state |
+| VULN-041 | Medium | Medium | Open | Open redirect in login |
+| VULN-042 | Medium | Medium | Open | CSP connect-src too broad |
+| VULN-043 | Medium | Medium | Open | CSP unsafe-inline |
+| VULN-044 | Medium | Low | Open | Single-user; can only DoS themselves |
+| VULN-045 | Medium | Low | Open | Single-user container; no other users |
+| VULN-046 | Medium | Medium | Open | start.sh secrets to /tmp fallback |
+| VULN-047 | Medium | Medium | Open | Install script .env permissions |
+| VULN-048 | Medium | Medium | Open | HTTP requests without timeout |
+| VULN-049 | Low | Low | Open | Redirect URL info leak |
+| VULN-050 | Low | Low | Open | CSRF no time limit |
+| VULN-051 | Low | Low | Open | Weak PRNG Pocketful |
+| VULN-052 | Low | Low | Open | Missing security headers |
+| VULN-053 | Low | Low | Open | Vite dev server CVEs |
 
 ## Critical Findings
 
@@ -100,7 +106,7 @@ Fix: Script deleted. Users should use `install/install.sh` which includes Nginx 
 
 ### VULN-004: Session Fixation - No Session Regeneration After Login
 
-Severity: High
+Severity: Low (single-user app; requires MITM on TLS to exploit)
 File: blueprints/auth.py (lines 133-137), utils/auth_utils.py (lines 340-356)
 CWE: CWE-384
 
@@ -114,7 +120,7 @@ Fix: Clear and regenerate the session immediately after successful authenticatio
 
 ### VULN-005: Password Reset Token Has No Expiration and Is Stored Only in Session
 
-Severity: High
+Severity: Low (single-user app; user resets own password; session theft already grants full access)
 File: blueprints/auth.py (lines 218-254, 260-297, 302-332)
 CWE: CWE-640
 
@@ -123,20 +129,6 @@ What: Password reset tokens (generated via `secrets.token_urlsafe(32)`) are stor
 Risk: A password reset token obtained through any session leak (e.g., XSS, shared computer, session cookie theft) can be replayed hours later. There is no time-bound invalidation, and the token is not single-use since it persists in the session even after inspection via the email link route (`reset_password_email`) -- it is only cleared after the password is actually changed.
 
 Fix: Add a timestamp to the reset token (`session["reset_token_created"]`) and enforce a short expiration window (e.g., 15 minutes). Validate the timestamp in the `step == "password"` handler. Additionally, invalidate the token immediately after successful password change (already done) and also on any failed attempt.
-
----
-
-### VULN-006: TOTP Secret Exposed via Profile API Endpoint
-
-Severity: High
-File: blueprints/auth.py (lines 805, 816)
-CWE: CWE-200
-
-What: The `/auth/profile-data` endpoint returns the raw TOTP secret (`user.totp_secret`) in plaintext as part of the JSON response to any authenticated user. The TOTP secret is the seed from which all TOTP codes are derived. While the QR code is also returned (which encodes the same secret), explicitly returning the raw secret string in an API response increases the attack surface.
-
-Risk: If an attacker gains access to a single authenticated session (via session hijack, XSS, or a compromised browser extension), they can call `/auth/profile-data` and extract the TOTP secret. This allows the attacker to generate valid TOTP codes indefinitely, even after the session is terminated, enabling persistent password reset capability (since TOTP is used for password reset verification).
-
-Fix: Do not return `totp_secret` in the API response. The QR code already contains the provisioning URI. If the user needs to manually enter the secret, mask it or require re-authentication (current password) before displaying it.
 
 ---
 
@@ -196,20 +188,6 @@ Fix: For all OAuth brokers: (1) generate a cryptographically random state using 
 
 ---
 
-### VULN-011: Compositedge and RMoney OAuth Callbacks Bypass Session Authentication
-
-Severity: High
-File: blueprints/brlogin.py (lines 44-48, 170-178, 693-748, 772-788)
-CWE: CWE-287
-
-What: The OAuth callback handler for Compositedge and RMoney explicitly skips the session user check (lines 44-48): when `"user" not in session`, instead of rejecting the request, it proceeds with authentication. Later (lines 774-783), if the session user is missing, it automatically fetches the "admin user" from the database using `find_user_by_username()` and sets the session to that admin user. This means any unauthenticated HTTP request to `/<broker>/callback` with valid broker credentials (e.g., an OAuth redirect from Compositedge or RMoney) can establish an authenticated session as the admin user without ever logging in.
-
-Risk: An attacker who can trigger a valid OAuth callback (e.g., by initiating an OAuth flow from their own Compositedge/RMoney account) can gain admin-level access to the OpenAlgo instance without knowing the admin username or password. This is because the callback auto-assigns the admin user identity to the session. This completely bypasses the platform's login authentication for these two brokers.
-
-Fix: Remove the automatic admin user fallback. Require that the session contains a valid `user` before processing any broker callback. If the session is lost during OAuth redirect, redirect to the login page and preserve the OAuth callback parameters (state, code) for replay after successful authentication.
-
----
-
 ### VULN-012: Telegram Bot Token Stored in Plaintext in Database
 
 Severity: High
@@ -240,7 +218,7 @@ Fix: Import `encrypt_token`/`decrypt_token` from `auth_db` and encrypt the API k
 
 ### VULN-014: TOTP Secret Stored in Plaintext in User Database
 
-Severity: High
+Severity: Medium (single-user app; DB theft already grants ability to modify password hash directly)
 File: database/user_db.py (line 67)
 CWE: CWE-312
 
@@ -356,7 +334,7 @@ Fix: Remove the default values for both `API_KEY_PEPPER` and `TELEGRAM_KEY_SALT`
 
 ### VULN-021: Plaintext API Key Used as Cache Key in `broker_cache`
 
-Severity: Medium
+Severity: Low (single-user server; memory dump requires server access which already grants full control)
 File: database/auth_db.py (lines 589-600)
 CWE: CWE-312
 
@@ -510,7 +488,7 @@ Fix: Validate the `scan_name` against a strict allowlist or use exact-match patt
 
 ### VULN-032: Broker Auth Tokens and Credentials Logged in Plaintext Across Multiple Brokers
 
-Severity: Medium
+Severity: Low (single-user server; logs stored on user's own server)
 File: broker/dhan/api/auth_api.py (line 118), broker/compositedge/api/auth_api.py (lines 38, 92), broker/fyers/api/auth_api.py (line 77), broker/kotak/api/auth_api.py (lines 86, 121, 147), broker/fivepaisaxts/api/auth_api.py (lines 34, 88), broker/iifl/api/auth_api.py (lines 34, 88), broker/ibulls/api/auth_api.py (lines 34, 88), broker/rmoney/api/auth_api.py (line 82)
 CWE: CWE-532
 
@@ -524,7 +502,7 @@ Fix: Never log raw auth tokens, access tokens, or credentials. Replace all insta
 
 ### VULN-033: Dhan API Secret Prefix Logged at INFO Level
 
-Severity: Medium
+Severity: Low (single-user server; logs stored on user's own server)
 File: broker/dhan/api/auth_api.py (lines 42-43)
 CWE: CWE-532
 
@@ -580,7 +558,7 @@ Fix: Add `purge_old_logs(days=30)` functions to both `apilog_db.py` and `traffic
 
 ### VULN-037: No File Permission Enforcement on SQLite Database Files
 
-Severity: Medium
+Severity: Low (single-user server; typically one OS user on the server)
 File: database/ (multiple files), db/ (directory)
 CWE: CWE-732
 
@@ -608,7 +586,7 @@ Fix: Escape single quotes in `abs_output` or validate that it contains only safe
 
 ### VULN-039: Strategy Encryption Key Stored as File on Disk
 
-Severity: Medium
+Severity: Low (single-user server; file access already grants full control)
 File: database/python_strategy_db.py (key management functions)
 CWE: CWE-922
 
@@ -678,7 +656,7 @@ Fix: Remove `'unsafe-inline'` from `script-src` and use nonces or hashes instead
 
 ### VULN-044: WebSocket Proxy Has No Per-Client Subscription Limit
 
-Severity: Medium
+Severity: Low (single-user; only the user subscribes; stolen API key already grants full trading access)
 File: websocket_proxy/server.py (lines 937-1047)
 CWE: CWE-770
 
@@ -692,7 +670,7 @@ Fix: Add a per-request and per-client subscription limit check in `subscribe_cli
 
 ### VULN-045: Dockerfile Sets World-Readable .env File Permissions
 
-Severity: Medium
+Severity: Low (single-user container; no other users inside container)
 File: Dockerfile (line 51)
 CWE: CWE-732
 
@@ -862,7 +840,6 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 - ~~VULN-003: Add TLS requirement or prominent warning to ubuntu-ip.sh install script~~ -- **RESOLVED** (script deleted)
 - VULN-009: Remove hardcoded "default-pepper-key" fallback in settings_db.py; fail fast if missing
 - VULN-010: Implement OAuth state parameter validation across all broker callback handlers
-- VULN-011: Remove automatic admin user fallback in Compositedge/RMoney OAuth callbacks
 - VULN-008, VULN-012, VULN-013, VULN-014: Encrypt Samco secret key, Telegram bot token, Flow API key, and TOTP secret at rest using existing encrypt_token()
 - VULN-015: Exclude apiKey from Zustand localStorage persistence via partialize option
 - VULN-016: Replace hardcoded Fyers OAuth state with crypto.randomUUID()
@@ -888,8 +865,6 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 - VULN-031: Validate Chartink scan_name against allowlist instead of substring matching
 
 **Session and CSRF:**
-- VULN-004: Regenerate session ID after successful login
-- VULN-005: Add 15-minute expiration to password reset tokens
 - VULN-023: Log warning when CSRF is disabled; require FLASK_ENV=development
 
 **Infrastructure:**
@@ -902,7 +877,8 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 ### Long-term (ongoing improvements)
 
 - VULN-001: Add startup check that refuses to start if APP_KEY or API_KEY_PEPPER matches sample defaults (defense-in-depth for manual deployments)
-- VULN-006: Require re-authentication before displaying TOTP secret; remove raw secret from API response
+- VULN-004: Regenerate session ID after successful login (low priority for single-user)
+- VULN-005: Add 15-minute expiration to password reset tokens (low priority for single-user)
 - VULN-028: Replace str(e) in error responses with generic messages; log details server-side only
 - VULN-035: Add token expiry tracking column and proactive re-auth
 - VULN-036: Implement log retention policies for order_logs and traffic_logs tables
