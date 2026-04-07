@@ -16,19 +16,19 @@ The most impactful open findings fall into three categories: (1) **externally ex
 
 All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
 
-**Current status:** 2 findings resolved, 2 mitigated, 2 removed (single-user N/A), 47 open. Of the 47 open, 10 are High, 23 are Medium, and 14 are Low.
+**Current status:** 2 findings resolved, 2 mitigated, 2 removed (single-user N/A), 47 open. Of the 47 open, 8 are High, 24 are Medium, and 15 are Low.
 
 | Severity | Total | Open | Resolved | Mitigated | Removed |
 |----------|-------|------|----------|-----------|---------|
 | Critical | 1 | 0 | 1 | 0 | 0 |
-| High | 12 | 10 | 1 | 1 | 0 |
-| Medium | 23 | 23 | 0 | 0 | 0 |
-| Low | 15 | 14 | 0 | 1 | 0 |
+| High | 10 | 8 | 1 | 1 | 0 |
+| Medium | 24 | 24 | 0 | 0 | 0 |
+| Low | 16 | 15 | 0 | 1 | 0 |
 | N/A | 2 | 0 | 0 | 0 | 2 |
 | **Total** | **53** | **47** | **2** | **2** | **2** |
 
 Note: 2 findings removed as not applicable to single-user architecture.
-12 findings downgraded due to single-user context (no multi-user attacks, server access = full control).
+14 findings downgraded due to single-user context, local-only MCP, and SEBI static IP policy.
 
 ### Tracking Status
 
@@ -49,8 +49,8 @@ Note: 2 findings removed as not applicable to single-user architecture.
 | VULN-014 | High | Medium | Open | Single-user; DB theft already grants password hash access |
 | VULN-015 | High | High | Open | API key in localStorage; XSS exploitable externally |
 | VULN-016 | High | High | Open | Hardcoded Fyers OAuth state; externally exploitable |
-| VULN-017 | High | High | Open | MCP API key in process args |
-| VULN-018 | High | High | Open | MCP unrestricted trading; AI agent risk |
+| VULN-017 | High | Low | Open | Local MCP only; single-user machine; process list visible only to same user |
+| VULN-018 | High | Medium | Open | Local MCP only; user controls AI assistant; residual prompt injection risk |
 | VULN-019 | High | High | Resolved | `install/ubuntu-ip.sh` deleted |
 | VULN-020 | High | High | Mitigated | ZMQ not exposed via firewall in install scripts |
 | VULN-002 | Critical | Medium | Open | Pepper fallback dead code for install.sh; TELEGRAM_KEY_SALT hardcoded |
@@ -262,29 +262,29 @@ Fix: Generate a cryptographically random state per OAuth request using `crypto.r
 
 ### VULN-017: MCP Server Accepts API Key via Command-Line Argument Visible in Process List
 
-Severity: High
+Severity: Low (local MCP only; single-user machine; process list visible only to same user)
 File: mcp/mcpserver.py (lines 9-16)
 CWE: CWE-214
 
-What: The MCP server reads the OpenAlgo API key directly from `sys.argv[1]`. When the MCP server is launched, the API key appears as a plaintext argument in the process list (visible via `ps aux`, `/proc/*/cmdline`, or task manager). Any user or process with access to the system's process list can read this key. This API key provides full trading capabilities -- the MCP server exposes tools for placing orders, modifying orders, canceling orders, closing all positions, and accessing account funds.
+What: The MCP server reads the OpenAlgo API key directly from `sys.argv[1]`. When the MCP server is launched, the API key appears as a plaintext argument in the process list (visible via `ps aux`, `/proc/*/cmdline`, or task manager).
 
-Risk: On multi-user or shared systems, any local user can harvest the API key from the process table and gain full trading control over the victim's brokerage account, including placing, modifying, and canceling orders with real money.
+Risk: On a single-user machine running a local MCP client (Claude Desktop, Cursor, Windsurf), the process list is only visible to the same user who configured the MCP server. The MCP server communicates via stdio with the local client and does not expose any network port. The risk is limited to malware on the same machine that scans process arguments.
 
-Fix: Read the API key from an environment variable (`OPENALGO_API_KEY`) or a configuration file with restrictive permissions (0600) instead of command-line arguments. Remove the `sys.argv` approach entirely.
+Fix: Read the API key from an environment variable (`OPENALGO_API_KEY`) instead of command-line arguments. Low priority given single-user local context.
 
 ---
 
 ### VULN-018: MCP Server Exposes Unrestricted Live Trading Operations Without Confirmation
 
-Severity: High
+Severity: Medium (local MCP only; user intentionally configures and controls the AI assistant)
 File: mcp/mcpserver.py (lines 24-461)
 CWE: CWE-862
 
-What: The MCP server exposes 30+ tools via the Model Context Protocol, including `place_order`, `place_smart_order`, `place_basket_order`, `place_split_order`, `place_options_order`, `place_options_multi_order`, `modify_order`, `cancel_order`, `cancel_all_orders`, `close_all_positions`, and `analyzer_toggle`. These tools can execute real trades with real money. There is no secondary confirmation mechanism, no rate limiting, no order size validation, and no guard preventing the MCP client (an AI agent) from toggling from analyzer mode to live mode and then placing orders.
+What: The MCP server exposes 30+ tools via the Model Context Protocol, including `place_order`, `place_smart_order`, `place_basket_order`, `cancel_all_orders`, `close_all_positions`, and `analyzer_toggle`. These tools can execute real trades with real money. There is no secondary confirmation mechanism, no rate limiting, and no guard preventing the AI from toggling analyzer mode.
 
-Risk: An AI agent interacting through MCP could inadvertently (through prompt injection or hallucination) place large orders, cancel all positions, or switch from paper trading to live trading, resulting in significant financial losses. The lack of any confirmation step or guardrail means a single misinterpreted instruction could trigger irreversible financial transactions.
+Risk: The MCP server is a local-only subprocess (stdio-based, no network port) that the user intentionally configures in their local AI client (Claude Desktop, Cursor, Windsurf). The user controls what prompts they send. The residual risk is prompt injection via untrusted data (e.g., pasting external content that contains hidden instructions) or AI hallucination causing unintended tool calls. MCP clients like Claude Desktop already provide tool-call approval prompts.
 
-Fix: Implement a confirmation mechanism for destructive operations (place orders, close positions, toggle analyzer mode). Add configurable order size limits, a configurable allowlist of permitted operations, and require explicit opt-in to live trading mode. Consider making the MCP server read-only by default.
+Fix: Consider adding a read-only mode flag and an optional order size limit as defense-in-depth. Low-to-medium priority given the local-only, user-controlled context.
 
 ---
 
@@ -845,8 +845,6 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 - VULN-008, VULN-012, VULN-013, VULN-014: Encrypt Samco secret key, Telegram bot token, Flow API key, and TOTP secret at rest using existing encrypt_token()
 - VULN-015: Exclude apiKey from Zustand localStorage persistence via partialize option
 - VULN-016: Replace hardcoded Fyers OAuth state with crypto.randomUUID()
-- VULN-017: Read MCP API key from environment variable instead of sys.argv
-- VULN-018: Add confirmation mechanism and operation allowlist to MCP server
 - ~~VULN-019: Remove ufw allow 8765/tcp from ubuntu-ip.sh; proxy WebSocket through Nginx~~ -- **RESOLVED** (script deleted)
 - VULN-020: Bind ZeroMQ to 127.0.0.1 instead of 0.0.0.0
 
@@ -881,6 +879,8 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 - VULN-001: Add startup check that refuses to start if APP_KEY or API_KEY_PEPPER matches sample defaults (defense-in-depth for manual deployments)
 - VULN-004: Regenerate session ID after successful login (low priority for single-user)
 - VULN-005: Add 15-minute expiration to password reset tokens (low priority for single-user)
+- VULN-017: Read MCP API key from environment variable instead of sys.argv (low priority; local MCP only)
+- VULN-018: Add read-only mode flag and optional order size limit to MCP server (defense-in-depth)
 - VULN-028: Replace str(e) in error responses with generic messages; log details server-side only
 - VULN-035: Add token expiry tracking column and proactive re-auth
 - VULN-036: Implement log retention policies for order_logs and traffic_logs tables
