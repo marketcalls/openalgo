@@ -298,17 +298,18 @@ def copy_from_dataframe(df):
     logger.info("Performing Bulk Insert")
     data_dict = df.to_dict(orient="records")
 
-    existing_tokens = {result.token for result in db_session.query(SymToken.token).all()}
-    filtered_data = [row for row in data_dict if row["token"] not in existing_tokens]
-
-    if not filtered_data:
+    if not data_dict:
         logger.info("No new records to insert")
         return
 
     try:
-        db_session.bulk_insert_mappings(SymToken, filtered_data)
+        # Insert in batches to avoid memory issues with very large datasets
+        batch_size = 5000
+        for i in range(0, len(data_dict), batch_size):
+            batch = data_dict[i : i + batch_size]
+            db_session.bulk_insert_mappings(SymToken, batch)
         db_session.commit()
-        logger.info(f"Inserted {len(filtered_data)} records")
+        logger.info(f"Inserted {len(data_dict)} records")
     except Exception as exc:
         db_session.rollback()
         logger.exception(f"Bulk insert failed: {exc}")
@@ -866,7 +867,7 @@ def _download_segment(segment):
     for ext in ("json", "csv"):
         url = f"{BASE_URL}/contractfiles/{segment}.{ext}"
         try:
-            response = client.get(url)
+            response = client.get(url, timeout=30.0)
         except Exception as exc:
             logger.warning(f"Contract download failed for {segment}.{ext}: {exc}")
             continue
@@ -904,14 +905,23 @@ def master_contract_download():
         init_db()
         delete_symtoken_table()
 
+        # Download all segments in parallel (like Angel/Zerodha's single-call approach)
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         frames = []
-        for segment in SEGMENTS:
-            try:
-                df = _download_segment(segment)
-                if not df.empty:
-                    frames.append(df)
-            except Exception as exc:
-                logger.warning(f"Failed segment {segment}: {exc}")
+        with ThreadPoolExecutor(max_workers=min(len(SEGMENTS), 6)) as executor:
+            future_to_segment = {
+                executor.submit(_download_segment, segment): segment
+                for segment in SEGMENTS
+            }
+            for future in as_completed(future_to_segment):
+                segment = future_to_segment[future]
+                try:
+                    df = future.result()
+                    if not df.empty:
+                        frames.append(df)
+                except Exception as exc:
+                    logger.warning(f"Failed segment {segment}: {exc}")
 
         if not frames:
             raise Exception("No contract data downloaded from any segment")
