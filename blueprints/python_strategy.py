@@ -7,6 +7,7 @@ Note: Each strategy runs in a separate process for complete isolation
 """
 
 import json
+import uuid
 import logging
 import os
 import platform
@@ -20,6 +21,7 @@ from pathlib import Path
 
 import psutil
 import pytz
+import requests as http_requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from flask import (
@@ -35,7 +37,13 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from database.market_calendar_db import get_market_hours_status, is_market_holiday, is_market_open
+from database.auth_db import get_api_key_for_tradingview
+from database.market_calendar_db import (
+    get_market_hours_status,
+    is_market_holiday,
+    is_market_open,
+)
+from limiter import limiter
 from utils.session import check_session_validity
 
 # Setup logging
@@ -131,7 +139,20 @@ def load_configs():
         try:
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 STRATEGY_CONFIGS = json.load(f)
-            logger.debug(f"Loaded {len(STRATEGY_CONFIGS)} strategy configurations")
+            # Backfill webhook_id for legacy strategies
+            changed = False
+            for sid, cfg in STRATEGY_CONFIGS.items():
+                if "webhook_id" not in cfg:
+                    cfg["webhook_id"] = str(uuid.uuid4())
+                    changed = True
+            if changed:
+                save_configs()
+                logger.info(
+                    "Backfilled webhook_id for legacy strategies"
+                )
+            logger.debug(
+                f"Loaded {len(STRATEGY_CONFIGS)} strategy configs"
+            )
         except Exception as e:
             logger.exception(f"Failed to load configs: {e}")
             STRATEGY_CONFIGS = {}
@@ -1499,6 +1520,7 @@ def new_strategy():
                 "is_scheduled": True,  # Always enabled by default
                 "created_at": ist_now.isoformat(),
                 "user_id": user_id,
+                "webhook_id": str(uuid.uuid4()),
                 "schedule_start": schedule_start,
                 "schedule_stop": schedule_stop,
                 "schedule_days": schedule_days,
@@ -2047,12 +2069,15 @@ def get_schedule_status(config):
 @python_strategy_bp.route("/api/strategies")
 @check_session_validity
 def api_get_strategies():
-    """API: Get all strategies as JSON"""
+    """API: Get all strategies for current user as JSON"""
     cleanup_dead_processes()
+    user_id = session.get("user")
     strategies = []
 
     for strategy_id, config in STRATEGY_CONFIGS.items():
-        # Determine status with detailed schedule info
+        if config.get("user_id") != user_id:
+            continue
+
         if config.get("is_running"):
             status = "running"
             status_message = "Running"
@@ -2067,6 +2092,7 @@ def api_get_strategies():
                 "id": strategy_id,
                 "name": config.get("name", ""),
                 "file_name": config.get("file_name", ""),
+                "webhook_id": config.get("webhook_id"),
                 "status": status,
                 "status_message": status_message,
                 "is_running": config.get("is_running", False),
@@ -2133,13 +2159,16 @@ def api_strategy_events():
 @python_strategy_bp.route("/api/strategy/<strategy_id>")
 @check_session_validity
 def api_get_strategy(strategy_id):
-    """API: Get single strategy as JSON"""
+    """API: Get single strategy as JSON (ownership verified)"""
     if strategy_id not in STRATEGY_CONFIGS:
         return jsonify({"status": "error", "message": "Strategy not found"}), 404
 
     config = STRATEGY_CONFIGS[strategy_id]
 
-    # Determine status with detailed schedule info
+    user_id = session.get("user")
+    if config.get("user_id") != user_id:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
     if config.get("is_running"):
         status = "running"
         status_message = "Running"
@@ -2157,6 +2186,7 @@ def api_get_strategy(strategy_id):
                 "manually_stopped": config.get("manually_stopped", False),
                 "name": config.get("name", ""),
                 "file_name": config.get("file_name", ""),
+                "webhook_id": config.get("webhook_id"),
                 "status": status,
                 "is_running": config.get("is_running", False),
                 "is_scheduled": config.get("is_scheduled", False),
@@ -2464,6 +2494,73 @@ def save_strategy(strategy_id):
     except Exception as e:
         logger.exception(f"Failed to save strategy {strategy_id}: {e}")
         return jsonify({"status": "error", "message": f"Failed to save: {str(e)}"}), 500
+
+
+# =============================================================================
+# Webhook API for External Platforms (TradingView, ChartInk, etc.)
+# =============================================================================
+
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
+BASE_URL = os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
+
+
+@python_strategy_bp.route("/webhook/<webhook_id>", methods=["POST"])
+@limiter.limit(WEBHOOK_RATE_LIMIT)
+def webhook(webhook_id):
+    try:
+        config = None
+        strategy_id = None
+        for sid, cfg in STRATEGY_CONFIGS.items():
+            if cfg.get("webhook_id") == webhook_id:
+                config = cfg
+                strategy_id = sid
+                break
+
+        if not config:
+            return jsonify({"status": "error", "message": "Invalid webhook ID"}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"status": "error", "message": "No JSON data received"}), 400
+
+        user_id = config.get("user_id")
+        if not user_id:
+            return jsonify({"status": "error", "message": "Strategy has no user"}), 400
+
+        api_key = get_api_key_for_tradingview(user_id)
+        if not api_key:
+            return jsonify({"status": "error", "message": "No API key found"}), 401
+
+        data["apikey"] = api_key
+        if "strategy" not in data:
+            data["strategy"] = config.get("name", strategy_id)
+
+        is_options = all(k in data for k in ("underlying", "offset", "option_type"))
+
+        if is_options:
+            endpoint = f"{BASE_URL}/api/v1/optionsorder"
+        elif "position_size" in data:
+            endpoint = f"{BASE_URL}/api/v1/placesmartorder"
+        else:
+            endpoint = f"{BASE_URL}/api/v1/placeorder"
+
+        resp = http_requests.post(endpoint, json=data, timeout=30)
+        content_type = resp.headers.get("content-type", "")
+        if content_type.startswith("application/json"):
+            result = resp.json()
+        else:
+            result = {"message": resp.text}
+
+        order_type = endpoint.split('/')[-1]
+        logger.info(
+            f"Webhook [{strategy_id}] -> {order_type}: "
+            f"{resp.status_code}"
+        )
+        return jsonify({"status": "success" if resp.ok else "error", **result}), resp.status_code
+
+    except Exception as e:
+        logger.exception(f"Webhook error: {e}")
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 
 # Cleanup on shutdown
