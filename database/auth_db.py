@@ -591,6 +591,8 @@ def get_username_by_apikey(provided_api_key):
 
 def get_broker_name(provided_api_key):
     """Get only the broker name for a valid API key with caching"""
+    import hashlib
+
     # Use hashed key for cache (consistent with verify_api_key pattern)
     cache_key = hashlib.sha256(provided_api_key.encode()).hexdigest()
 
