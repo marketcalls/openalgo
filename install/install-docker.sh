@@ -42,7 +42,7 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
     [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
@@ -114,7 +114,7 @@ done
 while true; do
     log "\nValid brokers:" "$BLUE"
     echo "fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, deltaexchange,"
-    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, ibulls, iifl,"
+    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, ibulls, iifl, iiflcapital,"
     echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
     echo "rmoney, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha,"
     echo ""
