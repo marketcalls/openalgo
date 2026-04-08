@@ -12,9 +12,9 @@ This audit covered authentication, session management, API security, input valid
 
 **SEBI static IP policy:** From April 1, 2026, SEBI mandates that all transactional API orders must originate from a whitelisted static IP registered with the broker. Delta Exchange (crypto) also enforces static IP. This broker-side IP whitelisting means stolen broker credentials (auth tokens, API secrets) **cannot be used from an attacker's machine** -- the broker rejects requests from non-registered IPs. However, this does **not** fix any of the remaining open findings because: (1) all remaining High findings involve attacks routed through the OpenAlgo server itself (which has the registered IP) -- stolen OpenAlgo API keys, XSS, OAuth CSRF, webhook abuse, and MCP agent risks all execute from the server; (2) non-broker services (SMTP, Telegram) are not covered by broker IP restrictions; (3) the plaintext storage findings (VULN-008, 012, 013) are defense-in-depth concerns where static IP adds an additional layer but does not eliminate the need for encryption at rest. Static IP is a valuable external control but the remaining vulnerabilities operate at the application layer, above the IP restriction.
 
-The most impactful open findings fall into three categories: (1) **externally exploitable API/OAuth weaknesses** -- API key in URL query params (VULN-007), missing OAuth state validation (VULN-010, VULN-016), API key in localStorage exposed to XSS (VULN-015); (2) **plaintext credential storage** in SQLite -- Samco secret (VULN-008), Telegram bot token (VULN-012), Flow API key (VULN-013) are unencrypted, meaning a stolen backup or DB file exposes broker access without needing the encryption pepper; (3) **MCP server risks** -- API key visible in process list (VULN-017) and unrestricted AI-agent trading without confirmation (VULN-018).
+The remaining 23 open findings are all Medium or Low severity. The open Medium findings cluster around: (1) **CSP configuration** -- `unsafe-inline` in `script-src` (VULN-043) and broad `connect-src` (VULN-042); (2) **deployment hardening** -- CSRF disableable (VULN-023), no request body size limit (VULN-029), CORS allows all origins (VULN-030), start.sh `/tmp` fallback (VULN-046), install script `.env` permissions (VULN-047); (3) **webhook security** -- webhook UUID-only auth (VULN-027), Chartink scan name validation (VULN-031); (4) **operational** -- HTTP requests without timeout (VULN-048), MCP unrestricted trading (VULN-018). The open Low findings are primarily single-user server-local risks and accepted trade-offs.
 
-All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted.
+All official install scripts auto-generate unique cryptographic secrets, and the insecure plain-HTTP install script (`ubuntu-ip.sh`) has been deleted. All High severity findings have been resolved.
 
 **Current status:** 26 findings resolved, 2 mitigated, 2 removed (single-user N/A), 23 open. **0 Critical or High severity open.** Of the 23 open, 12 are Medium and 11 are Low.
 
@@ -304,15 +304,15 @@ Fix: Script deleted. The `install/install.sh` script proxies WebSocket through N
 
 ### VULN-020: ZeroMQ Publisher Binds to All Interfaces Exposing Internal Message Bus
 
-Severity: High
+Severity: High -- **RESOLVED**
 File: websocket_proxy/base_adapter.py (lines 203, 219)
 CWE: CWE-668
 
-What: The `BaseBrokerWebSocketAdapter._bind_to_available_port()` method binds the ZeroMQ PUB socket to `tcp://*:{port}`, which listens on all network interfaces. The install scripts explicitly set `ZMQ_HOST='0.0.0.0'`. The ZeroMQ message bus carries raw market data from broker adapters. The bare-metal installation scripts do not configure firewall rules to block the ZMQ port (typically 5555-5556), leaving it accessible from the network.
+What: The `BaseBrokerWebSocketAdapter._bind_to_available_port()` method bound the ZeroMQ PUB socket to `tcp://*:{port}`, which listened on all network interfaces. The ZeroMQ message bus carries raw market data from broker adapters.
 
-Risk: Any host on the network can connect a ZMQ SUB socket to the publisher and receive all raw market data being streamed from the broker. In bare-metal deployments without proper firewall rules, this leaks potentially sensitive real-time trading data. An attacker could also monitor subscriptions and infer trading strategies.
+Risk: Any host on the network could connect a ZMQ SUB socket to the publisher and receive all raw market data being streamed from the broker.
 
-Fix: Change the bind address from `tcp://*:{port}` to `tcp://127.0.0.1:{port}` in `base_adapter.py`. The ZMQ publisher only needs to be reachable from the local WebSocket proxy server. The install scripts should also set `ZMQ_HOST='127.0.0.1'` instead of `0.0.0.0`.
+Fix: Changed bind address from `tcp://*:{port}` to `tcp://127.0.0.1:{port}` in `base_adapter.py` for both default port and fallback port bindings.
 
 ---
 
@@ -320,45 +320,43 @@ Fix: Change the bind address from `tcp://*:{port}` to `tcp://127.0.0.1:{port}` i
 
 ### VULN-002: Telegram DB Encryption Uses Hardcoded Fallback Pepper and Salt
 
-Severity: Medium (downgraded from Critical -- see deployment note)
+Severity: Medium -- **RESOLVED**
 File: database/telegram_db.py (lines 57-58)
 CWE: CWE-798
 
-What: The `get_encryption_key()` function uses `os.getenv("API_KEY_PEPPER", "default-pepper-change-in-production")` as a fallback. If the environment variable is unset, all Telegram user API keys are encrypted with the publicly known string `"default-pepper-change-in-production"`. The salt is also derived from a configurable environment variable with a weak default: `os.getenv("TELEGRAM_KEY_SALT", "telegram-openalgo-salt")`.
+What: The `get_encryption_key()` function used `os.getenv("API_KEY_PEPPER", "default-pepper-change-in-production")` as a fallback. If the environment variable was unset, all Telegram user API keys were encrypted with the publicly known string.
 
-Risk: This is a compound failure: both the pepper and salt have hardcoded defaults. Since the repository is open source, any attacker who obtains the database can decrypt every Telegram user's API key using these known values. Each API key grants full trading access to that user's broker account.
+Risk: An attacker who obtained the database could decrypt every Telegram user's API key using the publicly known fallback values.
 
-Deployment note: `install/install.sh` auto-generates a unique `API_KEY_PEPPER` via `secrets.token_hex(32)`, so the fallback pepper (`"default-pepper-change-in-production"`) is dead code for install.sh deployments. However, `TELEGRAM_KEY_SALT` is **never set** by install.sh and has no entry in `.sample.env` -- it always falls back to the hardcoded `"telegram-openalgo-salt"` on every deployment. With a unique pepper the derived Fernet key is still unique per deployment, making this a static-salt weakness (same class as VULN-022) rather than a full key compromise. The fallback pepper remains a hygiene risk if any future deployment path omits `API_KEY_PEPPER`.
-
-Fix: Remove the default values for both `API_KEY_PEPPER` and `TELEGRAM_KEY_SALT` and fail fast if they are not set, matching the pattern established in `auth_db.py`. Add `TELEGRAM_KEY_SALT` to `.sample.env` with a placeholder, and generate a unique value in `install/install.sh`.
+Fix: Removed the hardcoded fallback pepper. The function now fails fast with `ValueError` if `API_KEY_PEPPER` is not set, matching the pattern in `auth_db.py`.
 
 ---
 
 ### VULN-021: Plaintext API Key Used as Cache Key in `broker_cache`
 
-Severity: Low (single-user server; memory dump requires server access which already grants full control)
+Severity: Low -- **RESOLVED**
 File: database/auth_db.py (lines 589-600)
 CWE: CWE-312
 
-What: The `get_broker_name()` function uses the plaintext API key directly as the dictionary key for `broker_cache`: `broker_cache[provided_api_key] = auth_obj.broker`. This contrasts with `verify_api_key()` and `get_auth_token_broker()`, which correctly use `hashlib.sha256(provided_api_key.encode()).hexdigest()` as the cache key. Storing the plaintext API key in an in-memory cache dictionary means the actual API key value is held as a Python string object that could be exposed through memory dumps, debug endpoints, or process inspection.
+What: The `get_broker_name()` function used the plaintext API key directly as the dictionary key for `broker_cache`, while `verify_api_key()` and `get_auth_token_broker()` correctly used SHA256 hashes.
 
-Risk: If an attacker gains access to the process memory (via a debug endpoint, core dump, or memory disclosure vulnerability), they can extract plaintext API keys from the `broker_cache` dictionary keys. This undermines the otherwise careful hashing approach used elsewhere.
+Risk: Process memory dumps could expose plaintext API keys from cache dictionary keys.
 
-Fix: Change `get_broker_name()` to use a SHA256 hash of the API key as the cache key, consistent with the pattern used in `verify_api_key()` and `get_auth_token_broker()`.
+Fix: Changed `get_broker_name()` to use `hashlib.sha256(provided_api_key.encode()).hexdigest()` as cache key, consistent with the pattern used elsewhere.
 
 ---
 
 ### VULN-022: Static Salt in Fernet Key Derivation Reduces KDF Diversity
 
-Severity: Medium
+Severity: Medium -- **MITIGATED** (accepted trade-off)
 File: database/auth_db.py (lines 58-65)
 CWE: CWE-760
 
-What: The `get_encryption_key()` function derives a Fernet encryption key using PBKDF2HMAC with a hardcoded, static salt: `salt=b"openalgo_static_salt"`. This salt is the same across all deployments and is visible in the public source code. The purpose of a salt in a KDF is to ensure that the same password/pepper produces different derived keys across different installations; a static salt defeats this purpose entirely.
+What: The `get_encryption_key()` function derives a Fernet encryption key using PBKDF2HMAC with a hardcoded, static salt: `salt=b"openalgo_static_salt"`. This salt is the same across all deployments and is visible in the public source code.
 
-Risk: If two deployments use the same `API_KEY_PEPPER` (which is more likely given the hardcoded default in `.sample.env` per VULN-001), their Fernet encryption keys will be identical, enabling cross-deployment token decryption. Even with unique peppers, the static salt means pre-computed rainbow tables for common pepper values can be built once and applied to all OpenAlgo deployments.
+Risk: Theoretical rainbow table attacks against the KDF. However, all install scripts auto-generate a unique `API_KEY_PEPPER` per deployment, so the derived key is unique even with the static salt. With 100,000 PBKDF2 iterations, pre-computation attacks are impractical.
 
-Fix: Generate a random salt during initial setup, store it alongside the encrypted data or in the `.env` file as a separate configuration value (e.g., `ENCRYPTION_SALT`). Use this stored salt in the KDF instead of the hardcoded string.
+Fix: Accepted as a documented trade-off. Changing the salt would break decryption of all existing encrypted data (auth tokens, API keys, broker credentials). Code comment added explaining the rationale.
 
 ---
 
@@ -378,7 +376,7 @@ Fix: Log a prominent warning at startup when CSRF is disabled. Consider removing
 
 ### VULN-024: Unbounded Basket Order List Enables Resource Exhaustion
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: restx_api/schemas.py (lines 165-167)
 CWE: CWE-770
 
@@ -392,7 +390,7 @@ Fix: Add `validate=validate.Length(min=1, max=50)` (or a suitable maximum) to th
 
 ### VULN-025: Symbol and Strategy Fields Lack Length and Character Validation
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: restx_api/schemas.py (lines 24-26, 57-59, 89-92, 136, 174)
 CWE: CWE-20
 
@@ -406,7 +404,7 @@ Fix: Add `validate=validate.Length(min=1, max=50)` and a regex pattern validator
 
 ### VULN-026: SmartOrder position_size Has No Range Validation
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: restx_api/schemas.py (line 65)
 CWE: CWE-20
 
@@ -434,7 +432,7 @@ Fix: Add an optional HMAC signature verification header (e.g., `X-Webhook-Secret
 
 ### VULN-028: Error Responses Leak Internal Exception Details
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: blueprints/chartink.py (line 944), restx_api/ticker.py (lines 263, 267), restx_api/telegram_bot.py (lines 243, 273)
 CWE: CWE-209
 
@@ -490,7 +488,7 @@ Fix: Validate the `scan_name` against a strict allowlist or use exact-match patt
 
 ### VULN-032: Broker Auth Tokens and Credentials Logged in Plaintext Across Multiple Brokers
 
-Severity: Low (single-user server; logs stored on user's own server)
+Severity: Low -- **RESOLVED**
 File: broker/dhan/api/auth_api.py (line 118), broker/compositedge/api/auth_api.py (lines 38, 92), broker/fyers/api/auth_api.py (line 77), broker/kotak/api/auth_api.py (lines 86, 121, 147), broker/fivepaisaxts/api/auth_api.py (lines 34, 88), broker/iifl/api/auth_api.py (lines 34, 88), broker/ibulls/api/auth_api.py (lines 34, 88), broker/rmoney/api/auth_api.py (line 82)
 CWE: CWE-532
 
@@ -504,7 +502,7 @@ Fix: Never log raw auth tokens, access tokens, or credentials. Replace all insta
 
 ### VULN-033: Dhan API Secret Prefix Logged at INFO Level
 
-Severity: Low (single-user server; logs stored on user's own server)
+Severity: Low -- **RESOLVED**
 File: broker/dhan/api/auth_api.py (lines 42-43)
 CWE: CWE-532
 
@@ -518,7 +516,7 @@ Fix: Remove the API secret logging entirely. If debugging is needed, log only th
 
 ### VULN-034: JavaScript Injection via Unescaped URL in Dhan OAuth Redirect Page
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: blueprints/brlogin.py (lines 843-855)
 CWE: CWE-79
 
@@ -532,7 +530,7 @@ Fix: Replace the inline HTML/JavaScript redirect with a standard Flask `redirect
 
 ### VULN-035: No Token Expiry Detection or Refresh Across All Brokers
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: database/auth_db.py (lines 143-153, 269-315), broker/*/api/order_api.py (all audited brokers)
 CWE: CWE-613
 
@@ -546,7 +544,7 @@ Fix: Add an `expires_at` column to the `Auth` model. Populate it during `upsert_
 
 ### VULN-036: Order Logs and Traffic Logs Accumulate Indefinitely
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: database/apilog_db.py (entire file), database/traffic_db.py (lines 45-96)
 CWE: CWE-779
 
@@ -574,7 +572,7 @@ Fix: After creating database files and directories, explicitly set permissions t
 
 ### VULN-038: DuckDB COPY TO Command with String-Interpolated File Path
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: database/historify_db.py (lines 2386-2396)
 CWE: CWE-89
 
@@ -602,7 +600,7 @@ Fix: Set file permissions to `0o600` when creating the key file. Consider derivi
 
 ### VULN-040: Weak PRNG Used for Pocketful OAuth State Parameter
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: frontend/src/pages/BrokerSelect.tsx (lines 65-73)
 CWE: CWE-330
 
@@ -616,7 +614,7 @@ Fix: Replace `Math.random()` with `crypto.randomUUID()` for cryptographically se
 
 ### VULN-041: Server-Controlled Redirect Path Navigated Without Validation
 
-Severity: Medium
+Severity: Medium -- **RESOLVED**
 File: frontend/src/pages/Login.tsx (lines 119-120, 127)
 CWE: CWE-601
 
@@ -825,11 +823,11 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 
 ### Scan Results Summary
 
-**Bandit (Python static analysis)**: 302 issues total. 2 High (both false positives: MD5 for test data generation in sandbox, Flask debug=True in example file). 34 Medium (requests without timeout -- 1 added as VULN-054; bind-all-interfaces and file permissions already covered). 266 Low (mostly try/except/pass patterns in cleanup code -- acceptable in __del__ and shutdown handlers).
+**Bandit (Python static analysis)**: 302 issues total. 2 High (both false positives: MD5 for test data generation in sandbox, Flask debug=True in example file). 34 Medium (requests without timeout -- added as VULN-048; bind-all-interfaces and file permissions already covered). 266 Low (mostly try/except/pass patterns in cleanup code -- acceptable in __del__ and shutdown handlers).
 
 **pip-audit (Python dependency vulnerabilities)**: No known vulnerabilities found in any of the 155 pinned dependencies.
 
-**npm audit (Frontend dependency vulnerabilities)**: 1 high-severity package (Vite dev server) with 3 CVEs -- dev-only, added as VULN-055.
+**npm audit (Frontend dependency vulnerabilities)**: 1 high-severity package (Vite dev server) with 3 CVEs -- dev-only, added as VULN-053.
 
 **Dependency pinning**: Python dependencies are pinned to exact versions in `pyproject.toml` with `uv.lock` for reproducible builds. Frontend dependencies use semver ranges in `package.json` with `package-lock.json` for lock-file reproducibility.
 
@@ -837,59 +835,60 @@ Fix: Run `cd frontend && npm audit fix` to update Vite to a patched version. Whi
 
 ## Recommendations
 
-### Immediate (fix before next release)
+### Resolved (completed in this audit)
 
-- ~~VULN-003: Add TLS requirement or prominent warning to ubuntu-ip.sh install script~~ -- **RESOLVED** (script deleted)
-- VULN-009: Remove hardcoded "default-pepper-key" fallback in settings_db.py; fail fast if missing
-- VULN-010: Implement OAuth state parameter validation across all broker callback handlers
-- VULN-008, VULN-012, VULN-013, VULN-014: Encrypt Samco secret key, Telegram bot token, Flow API key, and TOTP secret at rest using existing encrypt_token()
-- VULN-015: Exclude apiKey from Zustand localStorage persistence via partialize option
-- VULN-016: Replace hardcoded Fyers OAuth state with crypto.randomUUID()
-- ~~VULN-019: Remove ufw allow 8765/tcp from ubuntu-ip.sh; proxy WebSocket through Nginx~~ -- **RESOLVED** (script deleted)
-- VULN-020: Bind ZeroMQ to 127.0.0.1 instead of 0.0.0.0
+All Critical and High severity findings have been resolved:
 
-### Short-term (fix within 2-4 weeks)
+- ~~VULN-003~~: ubuntu-ip.sh deleted (plain HTTP install script removed)
+- ~~VULN-005~~: 15-minute password reset token expiry added
+- ~~VULN-008, 009, 012, 013, 014~~: Plaintext credentials encrypted at rest; SMTP KDF upgraded to PBKDF2
+- ~~VULN-010, 016~~: OAuth state generated server-side, validated on callback
+- ~~VULN-015~~: API key excluded from localStorage via Zustand partialize
+- ~~VULN-019, 020~~: ubuntu-ip.sh deleted; ZMQ binds to 127.0.0.1
+- ~~VULN-002~~: Telegram DB fallback pepper removed; fails fast
+- ~~VULN-021~~: broker_cache uses SHA256 hash key
+- ~~VULN-024, 025, 026~~: Schema validation: basket max 50, symbol max 50, strategy max 100, position_size range
+- ~~VULN-028~~: Error responses use generic messages
+- ~~VULN-032, 033~~: Broker auth tokens and secrets redacted from logs
+- ~~VULN-034~~: Dhan OAuth uses Flask redirect() instead of inline JS
+- ~~VULN-035~~: expires_at column added to Auth model
+- ~~VULN-036~~: Log purge functions added for order_logs and traffic_logs
+- ~~VULN-038~~: DuckDB compression parameter whitelisted
+- ~~VULN-040~~: Pocketful OAuth state uses secrets.token_urlsafe(32)
+- ~~VULN-041~~: Login redirect validated (must start with /, not //)
 
-**Credential handling:**
-- VULN-002: Remove hardcoded fallback pepper/salt in telegram_db.py; fail fast if env vars missing; add TELEGRAM_KEY_SALT to install.sh
-- VULN-007: Configure nginx log redaction for query strings (accepted risk; cannot move to headers due to TradingView/GoCharting/Chartink integration requirements)
-- VULN-021: Hash API key before using as broker_cache key (consistency fix)
-- VULN-022: Replace static KDF salt with per-deployment random salt
-- VULN-032, VULN-033: Redact all auth tokens and credentials from log output across all brokers
+### Short-term (remaining Medium -- fix within 2-4 weeks)
+
+**CSRF and session:**
+- VULN-023: Log warning when CSRF is disabled; require FLASK_ENV=development
 
 **Input validation:**
-- VULN-024: Add max length to basket order list (validate.Length(max=50))
-- VULN-025: Add length and character pattern validation to symbol/strategy fields
-- VULN-026: Add range validation to SmartOrder position_size
 - VULN-029: Set Flask MAX_CONTENT_LENGTH to 10MB
 - VULN-031: Validate Chartink scan_name against allowlist instead of substring matching
 
-**Session and CSRF:**
-- VULN-023: Log warning when CSRF is disabled; require FLASK_ENV=development
-
 **Infrastructure:**
+- VULN-007: Configure nginx log redaction for query strings (accepted trade-off)
 - VULN-027: Add optional HMAC signature verification for webhook endpoints
 - VULN-030: Default CORS to deny all origins when CORS_ENABLED is FALSE
-- VULN-034: Replace inline JavaScript redirect in Dhan OAuth with Flask redirect()
-- VULN-037, VULN-039, VULN-045, VULN-046, VULN-047: Set restrictive file permissions (0600) on .env, database files, and encryption key files
+- VULN-046: Remove /tmp fallback in start.sh; fail if /app/.env not writable
+- VULN-047: Set chmod 600 on .env in install scripts
 - VULN-048: Add timeout parameter to all requests.post/get calls
 
-### Long-term (ongoing improvements)
+**Frontend hardening:**
+- VULN-042: Restrict CSP connect-src to specific WebSocket origins
+- VULN-043: Remove 'unsafe-inline' from CSP script-src; use nonces
 
-- VULN-001: Add startup check that refuses to start if APP_KEY or API_KEY_PEPPER matches sample defaults (defense-in-depth for manual deployments)
-- VULN-004: Regenerate session ID after successful login (low priority for single-user)
-- ~~VULN-005: Add 15-minute expiration to password reset tokens~~ -- **RESOLVED**
-- VULN-017: Read MCP API key from environment variable instead of sys.argv (low priority; local MCP only)
-- VULN-018: Add read-only mode flag and optional order size limit to MCP server (defense-in-depth)
-- VULN-028: Replace str(e) in error responses with generic messages; log details server-side only
-- VULN-035: Add token expiry tracking column and proactive re-auth
-- VULN-036: Implement log retention policies for order_logs and traffic_logs tables
-- VULN-040, VULN-051: Replace Math.random()/random.choices() with cryptographic PRNGs for OAuth state
-- VULN-041: Validate server-provided redirect paths on the frontend before navigating
-- VULN-042: Restrict CSP connect-src to specific WebSocket origins instead of bare wss:/ws: schemes
-- VULN-043: Remove 'unsafe-inline' from CSP script-src; migrate to nonce-based inline scripts
+**MCP defense-in-depth:**
+- VULN-018: Add read-only mode flag and optional order size limit
+
+### Long-term (remaining Low -- ongoing improvements)
+
+- VULN-001: Add startup check for sample default secrets (defense-in-depth)
+- VULN-004: Regenerate session ID after login (low priority for single-user)
+- VULN-017: Read MCP API key from environment variable instead of sys.argv
+- VULN-037, VULN-039, VULN-045: Set restrictive file permissions on DB files and key files
 - VULN-044: Add per-client subscription limits to WebSocket proxy
+- VULN-049, VULN-050: Set CSRF time limit default; restrict redirect_url to authenticated users
+- VULN-051: Pocketful server-side state already uses secrets; client-side fixed
 - VULN-052: Add X-Content-Type-Options and Strict-Transport-Security headers
-- VULN-038: Parameterize DuckDB COPY TO paths and whitelist compression values
-- VULN-049, VULN-050: Set CSRF time limit default to 3600s; restrict redirect_url to authenticated users
 - VULN-053: Update Vite to patched version via npm audit fix
