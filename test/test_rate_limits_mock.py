@@ -40,7 +40,7 @@ class MockAPI:
             "/api/v1/placeorder": env_values.get("ORDER_RATE_LIMIT", "10 per second"),
             "/api/v1/modifyorder": env_values.get("ORDER_RATE_LIMIT", "10 per second"),
             "/api/v1/cancelorder": env_values.get("ORDER_RATE_LIMIT", "10 per second"),
-            "/api/v1/placesmartorder": env_values.get("SMART_ORDER_RATE_LIMIT", "2 per second"),
+            "/api/v1/placesmartorder": env_values.get("SMART_ORDER_RATE_LIMIT", "10 per second"),
             "/api/v1/quotes": env_values.get("API_RATE_LIMIT", "50 per second"),
             "/api/v1/depth": env_values.get("API_RATE_LIMIT", "50 per second"),
             "/api/v1/history": env_values.get("API_RATE_LIMIT", "50 per second"),

@@ -1,6 +1,8 @@
 import http.client
 import json
 import os
+import threading
+import time
 import urllib.parse
 
 from broker.zerodha.mapping.transform_data import (
@@ -90,11 +92,57 @@ def get_holdings(auth):
     return get_api_response("/portfolio/holdings", auth)
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            logger.info("Position book served from cache")
+            return cached["data"]
+
+    # Cache miss or expired — fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
 def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
 
-    positions_data = get_positions(auth)
+    positions_data = _get_cached_positions(auth)
     net_qty = "0"
 
     if positions_data and positions_data.get("status") and positions_data.get("data"):
@@ -193,50 +241,63 @@ def place_smartorder_api(data, auth):
             logger.info("Missing required parameters in place_smartorder_api")
             return res, response_data, orderid
 
-        position_size = int(data.get("position_size", "0"))
+        # Per-symbol lock: only one smart order per symbol executes at a time.
+        # Queued orders wait, then get fresh position data after cache invalidation.
+        symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        # Get current open position for the symbol
-        current_position = int(
-            get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
-        )
+        with symbol_lock:
+            position_size = int(data.get("position_size", "0"))
 
-        logger.info(f"position_size: {position_size}")
-        logger.info(f"Open Position: {current_position}")
+            # Get current open position for the symbol
+            current_position = int(
+                get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+            )
 
-        # Determine action based on position_size and current_position
-        action = None
-        quantity = 0
+            logger.info(f"position_size: {position_size}")
+            logger.info(f"Open Position: {current_position}")
 
-        if position_size == 0 and current_position > 0:
-            action = "SELL"
-            quantity = abs(current_position)
-        elif position_size == 0 and current_position < 0:
-            action = "BUY"
-            quantity = abs(current_position)
-        elif current_position == 0:
-            action = "BUY" if position_size > 0 else "SELL"
-            quantity = abs(position_size)
-        else:
-            if position_size > current_position:
-                action = "BUY"
-                quantity = position_size - current_position
-            elif position_size < current_position:
+            # Determine action based on position_size and current_position
+            action = None
+            quantity = 0
+
+            if position_size == 0 and current_position == 0:
+                # No position exists, no target position — use action and qty from request
+                action = data.get("action", "BUY").upper()
+                quantity = int(data.get("quantity", "0"))
+            elif position_size == 0 and current_position > 0:
                 action = "SELL"
-                quantity = current_position - position_size
+                quantity = abs(current_position)
+            elif position_size == 0 and current_position < 0:
+                action = "BUY"
+                quantity = abs(current_position)
+            elif current_position == 0:
+                action = "BUY" if position_size > 0 else "SELL"
+                quantity = abs(position_size)
+            else:
+                if position_size > current_position:
+                    action = "BUY"
+                    quantity = position_size - current_position
+                elif position_size < current_position:
+                    action = "SELL"
+                    quantity = current_position - position_size
 
-        if action and quantity > 0:
-            # Prepare data for placing the order
-            order_data = data.copy()
-            order_data["action"] = action
-            order_data["quantity"] = str(quantity)
+            if action and quantity > 0:
+                # Prepare data for placing the order
+                order_data = data.copy()
+                order_data["action"] = action
+                order_data["quantity"] = str(quantity)
 
-            # Place the order
-            res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
-            return res, response, orderid
-        else:
-            logger.info("No action required or invalid quantity")
-            response_data = {"status": "success", "message": "No action required"}
-            return res, response_data, orderid
+                # Place the order
+                res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
+
+                # Invalidate cache so next queued order gets fresh position data
+                _invalidate_position_cache(AUTH_TOKEN)
+
+                return res, response, orderid
+            else:
+                logger.info("No action required or invalid quantity")
+                response_data = {"status": "success", "message": "No action needed. Position already matched."}
+                return res, response_data, orderid
 
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {e}"

@@ -1239,7 +1239,7 @@ limiter = Limiter(
 | Login (per hour) | 25/hour | `LOGIN_RATE_LIMIT_HOUR` | `brlogin.py` — `/<broker>/callback` |
 | API | 50/second | `API_RATE_LIMIT` | All `restx_api/` endpoints |
 | Orders | 10/second | `ORDER_RATE_LIMIT` | Order placement/cancellation |
-| Smart Orders | 2/second | `SMART_ORDER_RATE_LIMIT` | Multi-leg strategies |
+| Smart Orders | 10/second | `SMART_ORDER_RATE_LIMIT` | Multi-leg strategies |
 | Webhooks | 100/minute | `WEBHOOK_RATE_LIMIT` | TradingView/Chartink webhooks |
 | Strategy | 200/minute | `STRATEGY_RATE_LIMIT` | Strategy execution |
 
