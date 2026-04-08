@@ -17,7 +17,7 @@ class ShoonyaWebSocket:
     """Shoonya WebSocket client for real-time market data"""
 
     # Connection constants
-    WS_URL = "wss://api.shoonya.com/NorenWSTP/"
+    WS_URL = "wss://api.shoonya.com/NorenWSAPI/"
     CONNECTION_TIMEOUT = 15
     THREAD_JOIN_TIMEOUT = 5
 
@@ -26,11 +26,12 @@ class ShoonyaWebSocket:
     HEARTBEAT_TIMEOUT = 120
     PING_INTERVAL = 30
     PING_TIMEOUT = 10
+    HEARTBEAT_JOIN_TIMEOUT = 3
 
-    # Message types
-    MSG_TYPE_CONNECT = "c"
+    # Message types (OAuth WebSocket API)
+    MSG_TYPE_CONNECT = "a"
     MSG_TYPE_HEARTBEAT = "h"
-    MSG_TYPE_AUTH_ACK = "ck"
+    MSG_TYPE_AUTH_ACK = "ak"
     MSG_TYPE_TOUCHLINE_SUB = "t"
     MSG_TYPE_TOUCHLINE_UNSUB = "u"
     MSG_TYPE_DEPTH_SUB = "d"
@@ -223,7 +224,7 @@ class ShoonyaWebSocket:
             "uid": self.user_id,
             "actid": self.actid,
             "source": "API",
-            "susertoken": self.susertoken,
+            "accesstoken": self.susertoken,
         }
 
         try:

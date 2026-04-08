@@ -1,6 +1,8 @@
 import json
 import os
 from tokenize import Token
+import threading
+import time
 
 import httpx
 
@@ -67,6 +69,52 @@ def get_holdings(auth):
     return get_api_response("/portfolio/holdings", auth)
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
+
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     """
     Get the net quantity for a given symbol from the position book.
@@ -74,7 +122,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
-    positions_data = get_positions(auth)
+    positions_data = _get_cached_positions(auth)
 
     net_qty = "0"
 
@@ -209,6 +257,21 @@ def place_smartorder_api(data: dict, auth: str) -> tuple:
             logger.error(error_msg)
             return None, {"status": "error", "message": error_msg}, None
 
+        # Per-symbol lock: serialize smart orders per symbol
+        symbol_lock = _get_symbol_lock(symbol, exchange, product)
+        with symbol_lock:
+            return _place_smartorder_locked_ibulls(data, AUTH_TOKEN, symbol, exchange, product, action)
+
+    except Exception as e:
+        error_msg = f"Error in place_smartorder_api: {str(e)}"
+        logger.exception(error_msg)
+        return None, {"status": "error", "message": error_msg}, None
+
+
+def _place_smartorder_locked_ibulls(data, AUTH_TOKEN, symbol, exchange, product, action):
+    """Inner smart order logic for ibulls, called under per-symbol lock."""
+    res = None
+    try:
         try:
             quantity = int(data.get("quantity", "0"))
             position_size = int(data.get("position_size", "0"))
@@ -240,6 +303,14 @@ def place_smartorder_api(data: dict, auth: str) -> tuple:
         # The action and quantity parameters are ignored - only position_size matters
 
         logger.info(f"Smart Order Analysis: Current={current_position}, Target={position_size}")
+
+        # Special case: position_size=0 with no open position -> use action+qty from request
+        if position_size == 0 and current_position == 0 and quantity != 0:
+            order_data = data.copy()
+            logger.info(f"No position, pos_size=0: placing {action} for {quantity}")
+            res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
+            _invalidate_position_cache(AUTH_TOKEN)
+            return res, response, orderid
 
         # Calculate the position delta (difference between target and current)
         position_delta = position_size - current_position
@@ -290,6 +361,7 @@ def place_smartorder_api(data: dict, auth: str) -> tuple:
 
             logger.info(f"Placing {order_action} order for {order_quantity} shares of {symbol}")
             res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
+            _invalidate_position_cache(AUTH_TOKEN)
 
             if orderid:
                 logger.info(f"Order placed successfully. Order ID: {orderid}")
@@ -301,7 +373,7 @@ def place_smartorder_api(data: dict, auth: str) -> tuple:
         return None, {"status": "success", "message": response_msg or "No action needed"}, None
 
     except Exception as e:
-        error_msg = f"Error in place_smartorder_api: {str(e)}"
+        error_msg = f"Error in _place_smartorder_locked_ibulls: {str(e)}"
         logger.exception(error_msg)
         return None, {"status": "error", "message": error_msg}, None
 

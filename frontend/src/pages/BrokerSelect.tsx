@@ -32,6 +32,7 @@ const allBrokers = [
   { id: 'groww', name: 'Groww', authType: 'totp' },
   { id: 'ibulls', name: 'Ibulls', authType: 'totp' },
   { id: 'iifl', name: 'IIFL', authType: 'totp' },
+  { id: 'iiflcapital', name: 'IIFL Capital', authType: 'oauth' },
   { id: 'jainamxts', name: 'JainamXts', authType: 'totp' },
   { id: 'kotak', name: 'Kotak Securities', authType: 'totp' },
   { id: 'mstock', name: 'mStock by Mirae Asset', authType: 'totp' },
@@ -149,8 +150,14 @@ export default function BrokerSelect() {
       case 'tradejini':
       case 'wisdom':
       case 'zebu':
-        // TOTP brokers - redirect to callback page which shows form
+        // Brokers using callback route (form-based or redirect-based)
         loginUrl = `/${selectedBroker}/callback`
+        break
+
+      case 'iiflcapital':
+        // Route via backend callback endpoint to centralize URL generation and
+        // avoid provider-specific redirect parameter parsing differences.
+        loginUrl = '/iiflcapital/callback'
         break
 
       case 'dhan':

@@ -18,7 +18,7 @@ choreographer==1.2.1
 click==8.3.1
 colorama==0.4.6
 comm==0.2.3
-cryptography==46.0.5
+cryptography==46.0.6
 darkdetect==0.8.0
 debugpy==1.8.20
 decorator==5.2.1
@@ -98,7 +98,7 @@ pycparser==2.22
 pydantic==2.12.5
 pydantic-core==2.41.5
 pydantic-settings==2.13.1
-Pygments==2.19.2
+Pygments==2.20.0
 PyJWT==2.12.1
 pyngrok==7.5.1
 pyotp==2.9.0

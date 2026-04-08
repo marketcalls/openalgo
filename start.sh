@@ -48,7 +48,7 @@ BROKER_API_SECRET_MARKET = '${BROKER_API_SECRET_MARKET:-}'
 REDIRECT_URL = '${REDIRECT_URL}'
 
 # Valid Brokers Configuration
-VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha}'
+VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha}'
 
 # Security Configuration
 APP_KEY = '${APP_KEY}'
@@ -96,12 +96,11 @@ LOGIN_RATE_LIMIT_HOUR = '${LOGIN_RATE_LIMIT_HOUR:-25 per hour}'
 RESET_RATE_LIMIT = '${RESET_RATE_LIMIT:-15 per hour}'
 API_RATE_LIMIT = '${API_RATE_LIMIT:-50 per second}'
 ORDER_RATE_LIMIT = '${ORDER_RATE_LIMIT:-10 per second}'
-SMART_ORDER_RATE_LIMIT = '${SMART_ORDER_RATE_LIMIT:-2 per second}'
+SMART_ORDER_RATE_LIMIT = '${SMART_ORDER_RATE_LIMIT:-10 per second}'
 WEBHOOK_RATE_LIMIT = '${WEBHOOK_RATE_LIMIT:-100 per minute}'
 STRATEGY_RATE_LIMIT = '${STRATEGY_RATE_LIMIT:-200 per minute}'
 
 # API Configuration
-SMART_ORDER_DELAY = '${SMART_ORDER_DELAY:-0.5}'
 SESSION_EXPIRY_TIME = '${SESSION_EXPIRY_TIME:-03:00}'
 
 # CORS Configuration
