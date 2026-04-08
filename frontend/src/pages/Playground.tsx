@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { copyToClipboard } from "@/utils/clipboard";
 import { showToast } from "@/utils/toast";
 import { authApi } from "@/api/auth";
 import { Badge } from "@/components/ui/badge";
@@ -512,16 +513,16 @@ export default function Playground() {
     }
   };
 
-  const copyResponse = () => {
+  const copyResponse = async () => {
     if (responseData) {
-      navigator.clipboard.writeText(responseData);
+      await copyToClipboard(responseData);
       showToast.success("Response copied!", 'clipboard');
     }
   };
 
-  const copyApiKey = () => {
+  const copyApiKey = async () => {
     if (apiKey) {
-      navigator.clipboard.writeText(apiKey);
+      await copyToClipboard(apiKey);
       showToast.success("API key copied!", 'clipboard');
     }
   };
@@ -549,7 +550,7 @@ export default function Playground() {
     }
   };
 
-  const copyCurl = () => {
+  const copyCurl = async () => {
     if (!url) return;
 
     let curlUrl = url;
@@ -579,7 +580,7 @@ export default function Playground() {
       curl += ` \\\n  -d '${requestBody.replace(/'/g, "'\\''")}'`;
     }
 
-    navigator.clipboard.writeText(curl);
+    await copyToClipboard(curl);
     showToast.success("Copied as cURL", 'clipboard');
   };
 

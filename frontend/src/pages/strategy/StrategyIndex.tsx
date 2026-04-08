@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { copyToClipboard } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -74,7 +75,7 @@ export default function StrategyIndex() {
   const copyWebhookUrl = async (webhookId: string) => {
     const url = getWebhookUrl(webhookId)
     try {
-      await navigator.clipboard.writeText(url)
+      await copyToClipboard(url)
       setCopiedId(webhookId)
       showToast.success('Webhook URL copied to clipboard', 'clipboard')
       setTimeout(() => setCopiedId(null), 2000)

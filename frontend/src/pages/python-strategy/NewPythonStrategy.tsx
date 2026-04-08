@@ -1,6 +1,7 @@
 import { ArrowLeft, Clock, FileCode, Info, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { copyToClipboard } from '@/utils/clipboard'
 import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -362,7 +363,7 @@ export default function NewPythonStrategy() {
                 size="sm"
                 className="mt-4"
                 onClick={() => {
-                  navigator.clipboard.writeText(EXAMPLE_STRATEGY)
+                  copyToClipboard(EXAMPLE_STRATEGY)
                   showToast.success('Copied to clipboard', 'clipboard')
                 }}
               >
