@@ -765,7 +765,7 @@ def broker_callback(broker, para=None):
 
     else:
         # Validate OAuth state parameter for brokers that support it (CSRF protection)
-        oauth_brokers_with_state = {"fyers", "upstox", "paytm", "pocketful"}
+        oauth_brokers_with_state = {"fyers", "paytm"}
         if broker in oauth_brokers_with_state:
             callback_state = request.args.get("state")
             session_state = session.pop("oauth_state", None)
