@@ -7,6 +7,12 @@ from database.token_db import get_token
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
+# BrokerData.__init__ params: self (1) + auth_token (1) = 2 minimum.
+# If param_count > _MIN_BROKER_INIT_PARAMS, the broker also accepts feed_token.
+# If param_count > _MIN_BROKER_INIT_PARAMS_WITH_FEED, it also accepts user_id.
+_MIN_BROKER_INIT_PARAMS = 2
+_MIN_BROKER_INIT_PARAMS_WITH_FEED = 3
+
 # Initialize logger
 logger = get_logger(__name__)
 
@@ -96,9 +102,9 @@ def get_depth_with_auth(
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 3:  # More than self, auth_token, and feed_token
+            if param_count > _MIN_BROKER_INIT_PARAMS_WITH_FEED:
                 data_handler = broker_module.BrokerData(auth_token, feed_token, user_id)
-            elif param_count > 2:  # More than self and auth_token
+            elif param_count > _MIN_BROKER_INIT_PARAMS:
                 data_handler = broker_module.BrokerData(auth_token, feed_token)
             else:
                 data_handler = broker_module.BrokerData(auth_token)
