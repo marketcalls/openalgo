@@ -1,6 +1,8 @@
 import json
 import os
 import urllib.parse
+import threading
+import time
 
 import httpx
 
@@ -66,10 +68,56 @@ def get_holdings(auth_token):
     return get_api_response("/portfolio/v1/holdings", auth_token)
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
+
 def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
-    positions_data = get_positions(auth_token)
+    positions_data = _get_cached_positions(auth_token)
     logger.info(f"{positions_data}")
 
     net_qty = "0"
@@ -142,6 +190,17 @@ def place_smartorder_api(data, auth_token):
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
+
+    # Per-symbol lock: serialize smart orders per symbol
+    symbol_lock = _get_symbol_lock(symbol, exchange, product)
+
+    with symbol_lock:
+        return _place_smartorder_locked_kotak(data, auth_token, symbol, exchange, product)
+
+
+def _place_smartorder_locked_kotak(data, auth_token, symbol, exchange, product):
+    """Inner smart order logic for kotak, called under per-symbol lock."""
+    res = None
     position_size = int(data.get("position_size", "0"))
 
     # Get current open position for the symbol
@@ -163,8 +222,7 @@ def place_smartorder_api(data, auth_token):
         # logger.info(f"action : {action}")
         # logger.info(f"Quantity : {quantity}")
         res, response, orderid = place_order_api(data, auth_token)
-        # logger.info(f"{res}")
-        # logger.info(f"{response}")
+        _invalidate_position_cache(auth_token)
 
         return res, response, orderid
 
@@ -210,7 +268,7 @@ def place_smartorder_api(data, auth_token):
         # logger.info(f"{order_data}")
         # Place the order
         res, response, orderid = place_order_api(order_data, auth_token)
-        # logger.info(f"{res}")
+        _invalidate_position_cache(auth_token)
         logger.info(f"{response}")
         logger.info(f"{orderid}")
 

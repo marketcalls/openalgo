@@ -38,7 +38,7 @@ class Config:
     MODE_DEPTH = 3
 
     # Message types
-    MSG_AUTH = "ck"
+    MSG_AUTH = "ak"
     MSG_TOUCHLINE_FULL = "tf"
     MSG_TOUCHLINE_PARTIAL = "tk"
     MSG_DEPTH_FULL = "df"
@@ -312,9 +312,12 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = broker_name
 
         # Get Shoonya credentials
-        api_key = os.getenv("BROKER_API_KEY", "")
-        if api_key:
-            self.actid = api_key[:-2] if len(api_key) > 2 else api_key
+        # BROKER_API_KEY format: userid:::client_id
+        full_api_key = os.getenv("BROKER_API_KEY", "")
+        if full_api_key and ":::" in full_api_key:
+            self.actid = full_api_key.split(":::")[0]  # Trading user ID
+        elif full_api_key:
+            self.actid = full_api_key
         else:
             self.actid = user_id
 

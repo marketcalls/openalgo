@@ -12,8 +12,7 @@ from restx_api.schemas import SmartOrderSchema
 from services.place_smart_order_service import emit_analyzer_error, place_smart_order
 from utils.logging import get_logger
 
-SMART_ORDER_RATE_LIMIT = os.getenv("SMART_ORDER_RATE_LIMIT", "2 per second")
-SMART_ORDER_DELAY = os.getenv("SMART_ORDER_DELAY", "0.5")
+SMART_ORDER_RATE_LIMIT = os.getenv("SMART_ORDER_RATE_LIMIT", "10 per second")
 api = Namespace("place_smart_order", description="Place Smart Order API")
 
 # Initialize logger
@@ -53,7 +52,7 @@ class SmartOrder(Resource):
 
             # Call the service function to place the smart order
             success, response_data, status_code = place_smart_order(
-                order_data=order_data, api_key=api_key, smart_order_delay=SMART_ORDER_DELAY
+                order_data=order_data, api_key=api_key
             )
 
             return make_response(jsonify(response_data), status_code)

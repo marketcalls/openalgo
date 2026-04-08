@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import threading
 import time
 
 from broker.deltaexchange.api.baseurl import get_auth_headers, get_url
@@ -291,13 +292,59 @@ def get_holdings(auth):
     return []
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
+
 def get_open_position(tradingsymbol, exchange, product, auth):
     """
     Return the net position size (as string) for a given symbol.
     Positive = long, negative = short, "0" = flat.
     """
     br_symbol = get_br_symbol(tradingsymbol, exchange) or tradingsymbol
-    positions = get_positions(auth)
+    positions = _get_cached_positions(auth)
 
     if not isinstance(positions, list):
         logger.error(f"[DeltaExchange] Unexpected positions format for {tradingsymbol}")
@@ -463,46 +510,55 @@ def place_smartorder_api(data, auth):
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
-    position_size = float(data.get("position_size", "0"))
 
-    current_position = float(
-        get_open_position(symbol, exchange, map_product_type(product), auth)
-    )
-    logger.info(
-        f"[DeltaExchange] SmartOrder: target={position_size} current={current_position}"
-    )
+    # Per-symbol lock: serialize smart orders per symbol
+    symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-    if position_size == 0 and current_position == 0 and float(data["quantity"]) != 0:
-        return place_order_api(data, auth)
+    with symbol_lock:
+        position_size = float(data.get("position_size", "0"))
 
-    if position_size == current_position:
-        msg = (
-            "No OpenPosition Found. Not placing Exit order."
-            if float(data["quantity"]) == 0
-            else "No action needed. Position size matches current position"
+        current_position = float(
+            get_open_position(symbol, exchange, map_product_type(product), auth)
         )
-        return res, {"status": "success", "message": msg}, None
+        logger.info(
+            f"[DeltaExchange] SmartOrder: target={position_size} current={current_position}"
+        )
 
-    action = None
-    quantity = 0
+        if position_size == 0 and current_position == 0 and float(data["quantity"]) != 0:
+            result = place_order_api(data, auth)
+            _invalidate_position_cache(auth)
+            return result
 
-    if position_size == 0 and current_position > 0:
-        action, quantity = "SELL", abs(current_position)
-    elif position_size == 0 and current_position < 0:
-        action, quantity = "BUY", abs(current_position)
-    elif current_position == 0:
-        action = "BUY" if position_size > 0 else "SELL"
-        quantity = abs(position_size)
-    elif position_size > current_position:
-        action, quantity = "BUY", position_size - current_position
-    elif position_size < current_position:
-        action, quantity = "SELL", current_position - position_size
+        if position_size == current_position:
+            msg = (
+                "No OpenPosition Found. Not placing Exit order."
+                if float(data["quantity"]) == 0
+                else "No action needed. Position size matches current position"
+            )
+            return res, {"status": "success", "message": msg}, None
 
-    if action:
-        order_data = data.copy()
-        order_data["action"] = action
-        order_data["quantity"] = str(quantity)
-        return place_order_api(order_data, auth)
+        action = None
+        quantity = 0
+
+        if position_size == 0 and current_position > 0:
+            action, quantity = "SELL", abs(current_position)
+        elif position_size == 0 and current_position < 0:
+            action, quantity = "BUY", abs(current_position)
+        elif current_position == 0:
+            action = "BUY" if position_size > 0 else "SELL"
+            quantity = abs(position_size)
+        elif position_size > current_position:
+            action, quantity = "BUY", position_size - current_position
+        elif position_size < current_position:
+            action, quantity = "SELL", current_position - position_size
+
+        if action:
+            order_data = data.copy()
+            order_data["action"] = action
+            order_data["quantity"] = str(quantity)
+            result = place_order_api(order_data, auth)
+            _invalidate_position_cache(auth)
+            return result
 
     return res, {"status": "success", "message": "No action needed"}, None
 
