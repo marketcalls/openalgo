@@ -41,10 +41,9 @@ def broker_callback(broker, para=None):
     logger.debug(f"Session contents: {dict(session)}")
     logger.info(f"Session has user key: {'user' in session}")
 
-    # Special handling for OAuth brokers that come from external OAuth and might lose session
-    if broker in ("compositedge", "rmoney") and "user" not in session:
-        # For Compositedge OAuth callback, we'll handle authentication differently
-        # The session will be established after successful auth token validation
+    # Special handling for brokers that come from external auth and might lose session
+    if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
+        # Session will be established after successful auth token validation
         logger.info(f"{broker} callback without session - will establish session after auth")
     # Special handling for mstock POST - check session but provide better error instead of redirect
     elif broker == "mstock" and request.method == "POST" and "user" not in session:
@@ -67,8 +66,9 @@ def broker_callback(broker, para=None):
     if not auth_function:
         return jsonify(error="Broker authentication function not found."), 404
 
-    # Initialize feed_token to None by default
+    # Initialize optional outputs used by different broker auth flows
     feed_token = None
+    user_id = None
 
     if broker == "fivepaisa":
         if request.method == "GET":
@@ -291,6 +291,74 @@ def broker_callback(broker, para=None):
 
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = "broker.html"
+
+    elif broker == "iiflcapital":
+        # IIFL Capital uses redirect login and callback params authCode + clientId
+        callback_args = request.values.to_dict(flat=True)
+        auth_code = (
+            callback_args.get("authCode")
+            or callback_args.get("authcode")
+            or callback_args.get("auth_code")
+            or callback_args.get("code")
+        )
+        client_id = (
+            callback_args.get("clientId")
+            or callback_args.get("clientid")
+            or callback_args.get("client_id")
+            or callback_args.get("clientCode")
+            or callback_args.get("clientcode")
+        )
+
+        # Some callback variants may not include clientId explicitly.
+        # Fall back to BROKER_API_KEY to avoid false failures.
+        if not client_id:
+            broker_api_key = (os.getenv("BROKER_API_KEY") or "").strip()
+            if ":::" in broker_api_key:
+                client_id = broker_api_key.split(":::", 1)[0].strip()
+            elif broker_api_key:
+                client_id = broker_api_key
+
+        if request.method == "GET":
+            # Initial hit from OpenAlgo broker page has no callback parameters.
+            if not callback_args:
+                referrer = (request.headers.get("Referer") or "").lower()
+                if "iiflcapital.com" in referrer:
+                    logger.warning(
+                        "IIFL Capital callback returned without auth params after broker login. "
+                        "This usually indicates redirect URL mismatch/whitelisting issue."
+                    )
+                    return handle_auth_failure(
+                        "IIFL Capital callback was received without auth parameters. "
+                        "Please verify the exact callback URL is whitelisted in IIFL "
+                        "and matches REDIRECT_URL (including protocol, host, port, and path).",
+                        forward_url="broker.html",
+                    )
+
+                from broker.iiflcapital.api.auth_api import get_login_url
+
+                login_url = get_login_url()
+                if not login_url:
+                    return handle_auth_failure(
+                        "IIFL Capital login URL could not be generated. "
+                        "Please verify BROKER_API_KEY and REDIRECT_URL.",
+                        forward_url="broker.html",
+                    )
+                return redirect(login_url)
+
+            # Callback reached OpenAlgo but required params were not provided.
+            if not auth_code or not client_id:
+                logger.warning(
+                    "IIFL Capital callback missing required params. "
+                    f"Received keys: {list(callback_args.keys())}"
+                )
+                return handle_auth_failure(
+                    "IIFL Capital callback did not include required auth parameters. "
+                    "Please verify callback URL registration and try again.",
+                    forward_url="broker.html",
+                )
+
+        auth_token, error_message = auth_function(auth_code, client_id)
         forward_url = "broker.html"
 
     elif broker == "jainamxts":
@@ -769,9 +837,9 @@ def broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney"]:
+        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney", "iiflcapital"]:
             # For OAuth brokers, handle missing session user
-            if broker in ("compositedge", "rmoney") and "user" not in session:
+            if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
                 # Get the admin user from the database
                 from database.user_db import find_user_by_username
 

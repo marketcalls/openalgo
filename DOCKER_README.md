@@ -27,7 +27,7 @@ chmod +x docker-run.sh
 
 ## Supported Brokers
 
-Zerodha, Fyers, Angel One, Dhan, Delta Exchange, Upstox, Shoonya, Flattrade, Kotak, IIFL, 5paisa, AliceBlue, Firstock, Groww, IndMoney, Motilal Oswal, MStock, Nubra, Paytm Money, Pocketful, RMoney, Samco, Tradejini, Zebu, and more.
+Zerodha, Fyers, Angel One, Dhan, Delta Exchange, Upstox, Shoonya, Flattrade, Kotak, IIFL, Iiflcapital, 5paisa, AliceBlue, Firstock, Groww, IndMoney, Motilal Oswal, MStock, Nubra, Paytm Money, Pocketful, RMoney, Samco, Tradejini, Zebu, and more.
 
 ## Management Commands
 
