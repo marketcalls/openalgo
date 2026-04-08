@@ -578,9 +578,19 @@ def broker_callback(broker, para=None):
         forward_url = "broker.html"
 
     elif broker == "pocketful":
+        # Validate OAuth state parameter (CSRF protection)
+        callback_state = request.args.get("state")
+        session_state = session.pop("oauth_state", None)
+        if not callback_state or not session_state or callback_state != session_state:
+            logger.warning(f"OAuth state mismatch for pocketful: expected={session_state}, got={callback_state}")
+            return handle_auth_failure(
+                "OAuth state validation failed. Please try logging in again.",
+                forward_url="broker.html",
+            )
+
         # Handle the OAuth2 authorization code from the callback
         auth_code = request.args.get("code")
-        state = request.args.get("state")
+        state = callback_state
         error = request.args.get("error")
         error_description = request.args.get("error_description")
 

@@ -67,8 +67,28 @@ def get_encryption_key():
     return Fernet(key)
 
 
-# Initialize Fernet cipher for API key encryption
-fernet = get_encryption_key()
+# Lazy-initialize Fernet cipher to avoid import-time failure if API_KEY_PEPPER is not yet set
+_fernet = None
+
+
+def _get_fernet():
+    """Get or initialize the Fernet cipher (lazy initialization)"""
+    global _fernet
+    if _fernet is None:
+        _fernet = get_encryption_key()
+    return _fernet
+
+
+# Backward-compatible alias for existing code that references module-level fernet
+class _LazyFernet:
+    """Proxy that delays Fernet initialization until first use"""
+    def encrypt(self, data):
+        return _get_fernet().encrypt(data)
+    def decrypt(self, data):
+        return _get_fernet().decrypt(data)
+
+
+fernet = _LazyFernet()
 
 # Create engine and session
 # Conditionally create engine based on DB type
