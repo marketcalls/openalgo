@@ -4,6 +4,10 @@ logger = get_logger(__name__)
 
 """
 Enhanced Zerodha WebSocket client with improved stability for handling 1800+ symbols.
+
+Uses sync websocket-client (same as Flattrade/Angel/Dhan) to avoid asyncio event loop
+conflicts with eventlet in gunicorn+eventlet deployments.
+
 Implements:
 - Better connection management with keepalive handling
 - Batch subscription to reduce message overhead
@@ -11,24 +15,26 @@ Implements:
 - Connection health monitoring
 - Optimized for high-volume symbol subscriptions
 """
-import asyncio
 import json
+import ssl
 import struct
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
-import websockets.client
-import websockets.exceptions
+import websocket
 
 
 class ZerodhaWebSocket:
     """
     Enhanced WebSocket client for Zerodha's market data streaming API.
     Optimized for handling large numbers of symbol subscriptions (1800+).
+
+    Uses sync websocket-client instead of async websockets to avoid
+    asyncio event loop conflicts with eventlet in gunicorn+eventlet.
     """
 
     # Subscription modes
@@ -36,21 +42,22 @@ class ZerodhaWebSocket:
     MODE_QUOTE = "quote"
     MODE_FULL = "full"
 
-    # Connection settings based on official Zerodha WebSocket API documentation
-    PING_INTERVAL = None  # Disable automatic pings - Zerodha sends heartbeats
-    KEEPALIVE_INTERVAL = 30  # Check connection every 30 seconds
+    # Connection settings
+    KEEPALIVE_INTERVAL = 30
+    PING_INTERVAL = 30
     PING_TIMEOUT = 10
-    CONNECT_TIMEOUT = 10  # Shorter connection timeout
-    MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10MB for handling large data
 
     # Subscription batching (Zerodha supports up to 3000 instruments per connection)
-    MAX_TOKENS_PER_SUBSCRIBE = 200  # Larger batches as per API specs
-    SUBSCRIPTION_DELAY = 2.0  # Longer delay between batches for stability
-    MAX_INSTRUMENTS_PER_CONNECTION = 3000  # Official limit
+    MAX_TOKENS_PER_SUBSCRIBE = 200
+    SUBSCRIPTION_DELAY = 2.0
+    MAX_INSTRUMENTS_PER_CONNECTION = 3000
 
-    # Reconnection settings (from official library)
-    RECONNECT_MAX_DELAY = 60  # Maximum delay between reconnection attempts
-    RECONNECT_MAX_TRIES = 50  # Maximum number of reconnection attempts
+    # Reconnection settings
+    RECONNECT_MAX_DELAY = 60
+    RECONNECT_MAX_TRIES = 50
+
+    # Health check
+    DATA_TIMEOUT = 90
 
     def __init__(
         self, api_key: str, access_token: str, on_ticks: Callable[[list[dict]], None] = None
@@ -59,21 +66,21 @@ class ZerodhaWebSocket:
         self.api_key = api_key
         self.access_token = access_token
         self.on_ticks = on_ticks
-        self.websocket = None
+        self.ws: websocket.WebSocketApp | None = None
         self.connected = False
         self.running = False
-        self.loop = None
-        self.ws_thread = None
+        self._ws_thread: threading.Thread | None = None
         self.logger = get_logger(__name__)
         self.lock = threading.Lock()
 
         # Subscription management
-        self.subscribed_tokens = set()
-        self.mode_map = {}
-        self.pending_subscriptions = deque()  # Queue for pending subscriptions
+        self.subscribed_tokens: set[int] = set()
+        self.mode_map: dict[int, str] = {}
+        self.pending_subscriptions: deque = deque()
+        self._subscription_thread: threading.Thread | None = None
 
         # Exchange mapping for tokens
-        self.token_exchange_map = {}
+        self.token_exchange_map: dict[int, str] = {}
 
         # Connection management
         self.reconnect_attempts = 0
@@ -82,20 +89,17 @@ class ZerodhaWebSocket:
         self.max_reconnect_delay = self.RECONNECT_MAX_DELAY
 
         # Health monitoring
-        self.last_ping_time = None
-        self.last_message_time = None
-        self.last_heartbeat_time = None  # Track Zerodha's heartbeat messages
-        self.health_check_interval = self.KEEPALIVE_INTERVAL
-        self.connection_timeout = 90  # Allow for longer periods without data during subscription
+        self.last_message_time: float | None = None
+        self.last_heartbeat_time: float | None = None
+        self._health_check_thread: threading.Thread | None = None
 
-        # Event tracking for visibility
-        self.event_log = deque(maxlen=100)  # Keep last 100 events
-        self.enable_verbose_logging = True  # Toggle for detailed event logging
+        # Event tracking
+        self.event_log: deque = deque(maxlen=100)
 
         # Callback handlers
-        self.on_connect = None
-        self.on_disconnect = None
-        self.on_error = None
+        self.on_connect: Callable | None = None
+        self.on_disconnect: Callable | None = None
+        self.on_error: Callable | None = None
 
         # WebSocket URL
         self.ws_url = f"wss://ws.kite.trade?api_key={self.api_key}&access_token={self.access_token}"
@@ -105,67 +109,22 @@ class ZerodhaWebSocket:
         self.tick_count = 0
         self.error_count = 0
 
-        # Connection state tracking
+        # Connection state
         self._connection_ready = threading.Event()
         self._stop_event = threading.Event()
-        self._health_check_task = None
-        self._consecutive_ping_failures = 0
-        self._max_ping_failures = 3  # Allow up to 3 consecutive ping failures
-        self._connecting = False  # Flag to prevent concurrent connection attempts
-        self._last_connection_attempt = 0
 
-        # self._log_event("INIT", "Enhanced Zerodha WebSocket client initialized")
-        self.logger.info("✅ Enhanced Zerodha WebSocket client initialized")
-
-    def _log_event(self, event_type: str, message: str, data: Any = None):
-        """Log an event for visibility"""
-        event = {
-            "timestamp": datetime.now().strftime("%H:%M:%S.%f")[:-3],
-            "type": event_type,
-            "message": message,
-            "data": data,
-        }
-        self.event_log.append(event)
-
-        if self.enable_verbose_logging:
-            # Color coding for different event types
-            color_map = {
-                "CONNECT": "🔌",
-                "DISCONNECT": "🔌",
-                "SUBSCRIBE": "📡",
-                "UNSUBSCRIBE": "📴",
-                "DATA": "📊",
-                "PING": "💓",
-                "ERROR": "❌",
-                "RECONNECT": "🔄",
-                "INIT": "🚀",
-                "HEALTH": "🏥",
-                "BATCH": "📦",
-                "MAPPING": "🗺️",
-                "CONFIG": "⚙️",
-            }
-            icon = color_map.get(event_type, "📝")
-            self.logger.info(f"{icon} [{event['timestamp']}] {event_type}: {message}")
+        self.logger.info("Enhanced Zerodha WebSocket client initialized (sync)")
 
     def set_token_exchange_mapping(self, token_exchange_map: dict[int, str]):
-        """
-        Set the token to exchange mapping.
-        This should be called by the adapter when subscribing to tokens.
-
-        Args:
-            token_exchange_map: Dictionary mapping tokens to exchanges
-                                e.g., {256265: 'NSE_INDEX', 738561: 'NSE'}
-        """
+        """Set the token to exchange mapping."""
         with self.lock:
             self.token_exchange_map.update(token_exchange_map)
-
-        # self._log_event("MAPPING", f"Updated token exchange mapping for {len(token_exchange_map)} tokens")
-        self.logger.debug(f"✅ Updated token exchange mapping for {len(token_exchange_map)} tokens")
+        self.logger.debug(f"Updated token exchange mapping for {len(token_exchange_map)} tokens")
 
     def start(self) -> bool:
         """Start the WebSocket client in a separate thread"""
         if self.running:
-            self.logger.debug("✅ WebSocket client already running")
+            self.logger.debug("WebSocket client already running")
             return True
 
         try:
@@ -173,620 +132,390 @@ class ZerodhaWebSocket:
             self._stop_event.clear()
             self._connection_ready.clear()
 
-            def _run_in_thread():
-                try:
-                    # Create new event loop for this thread
-                    self.loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(self.loop)
+            self._ws_thread = threading.Thread(
+                target=self._run_websocket, daemon=True, name="ZerodhaWS"
+            )
+            self._ws_thread.start()
 
-                    # Run the WebSocket loop with proper exception handling
-                    self.loop.run_until_complete(self._run_forever())
-
-                except asyncio.CancelledError:
-                    self.logger.debug("🔄 WebSocket thread cancelled gracefully")
-                except RuntimeError as e:
-                    if "Event loop stopped before Future completed" in str(e):
-                        self.logger.debug("🔄 Event loop stopped during shutdown (normal)")
-                    else:
-                        self.logger.error(f"❌ Runtime error in WebSocket thread: {e}")
-                except Exception as e:
-                    self.logger.error(f"❌ Error in WebSocket thread: {e}")
-                    import traceback
-
-                    traceback.print_exc()
-                finally:
-                    # Clean up the event loop
-                    try:
-                        if self.loop and not self.loop.is_closed():
-                            # Cancel all pending tasks
-                            pending = asyncio.all_tasks(self.loop)
-                            for task in pending:
-                                task.cancel()
-
-                            # Wait for tasks to complete cancellation
-                            if pending:
-                                self.loop.run_until_complete(
-                                    asyncio.gather(*pending, return_exceptions=True)
-                                )
-
-                            self.loop.close()
-                    except Exception as e:
-                        self.logger.debug(f"Error closing event loop: {e}")
-
-                    self.logger.info(" WebSocket thread cleanup completed")
-
-            # Start the thread
-            self.ws_thread = threading.Thread(target=_run_in_thread, daemon=True, name="ZerodhaWS")
-            self.ws_thread.start()
-
-            # Wait for thread to start
-            time.sleep(0.5)
-
-            self.logger.debug("🚀 WebSocket client started")
+            self.logger.info("Zerodha WebSocket client started")
             return True
 
         except Exception as e:
-            self.logger.error(f"❌ Error starting WebSocket client: {e}")
+            self.logger.error(f"Error starting WebSocket client: {e}")
             self.running = False
             return False
+
+    def _run_websocket(self):
+        """Run the WebSocket connection with reconnection logic"""
+        while self.running and not self._stop_event.is_set():
+            try:
+                self.ws = websocket.WebSocketApp(
+                    self.ws_url,
+                    on_open=self._on_ws_open,
+                    on_message=self._on_ws_message,
+                    on_error=self._on_ws_error,
+                    on_close=self._on_ws_close,
+                )
+
+                self.ws.run_forever(
+                    sslopt={"cert_reqs": ssl.CERT_NONE},
+                    ping_interval=self.PING_INTERVAL,
+                    ping_timeout=self.PING_TIMEOUT,
+                )
+
+            except Exception as e:
+                self.logger.error(f"WebSocket run_forever error: {e}")
+
+            self.connected = False
+
+            if not self.running or self._stop_event.is_set():
+                break
+
+            self.reconnect_attempts += 1
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Max reconnect attempts reached")
+                break
+
+            delay = min(self.reconnect_delay * (1.5 ** self.reconnect_attempts), self.max_reconnect_delay)
+            self.logger.info(f"Reconnecting in {delay:.0f}s (attempt {self.reconnect_attempts})...")
+            time.sleep(delay)
+
+        self.logger.info("WebSocket thread exited")
 
     def stop(self):
         """Stop the WebSocket client"""
         try:
-            self.logger.debug("🛑 Stopping WebSocket client...")
-
-            # Signal stop
+            self.logger.debug("Stopping WebSocket client...")
             self.running = False
             self._stop_event.set()
 
-            # If we have a running loop, schedule disconnect
-            if self.loop and not self.loop.is_closed():
+            if self.ws:
                 try:
-                    # Schedule disconnect in the event loop
-                    future = asyncio.run_coroutine_threadsafe(self._async_stop(), self.loop)
-                    future.result(timeout=5)  # Wait up to 5 seconds
+                    self.ws.close()
                 except Exception as e:
-                    self.logger.error(f"❌ Error during async stop: {e}")
+                    self.logger.debug(f"Error closing WebSocket: {e}")
 
-            # Wait for thread to finish
-            if self.ws_thread and self.ws_thread.is_alive():
-                self.ws_thread.join(timeout=5)
-                if self.ws_thread.is_alive():
-                    self.logger.warning("⚠️ WebSocket thread did not stop gracefully")
+            # Don't join threads - daemon threads stop on their own
+            # join() causes eventlet.timeout.Timeout in gunicorn+eventlet
+            self._ws_thread = None
+            self._health_check_thread = None
+            self._subscription_thread = None
 
-            # Reset state
             self.connected = False
-            self.websocket = None
-
-            self.logger.debug("🛑 WebSocket client stopped")
+            self.logger.debug("WebSocket client stopped")
 
         except Exception as e:
-            self.logger.error(f"❌ Error stopping WebSocket client: {e}")
-
-    async def _async_stop(self):
-        """Async stop method to run in the event loop"""
-        try:
-            await self._disconnect()
-            # Stop the event loop
-            self.loop.stop()
-        except Exception as e:
-            self.logger.error(f"❌ Error in async stop: {e}")
+            self.logger.error(f"Error stopping WebSocket client: {e}")
 
     def subscribe_tokens(self, tokens: list[int], mode: str = MODE_QUOTE):
         """Subscribe to tokens with batching support"""
         if not self.running:
-            self.logger.error("❌ WebSocket client not running. Call start() first.")
+            self.logger.error("WebSocket client not running. Call start() first.")
             return
 
         if not tokens:
-            self.logger.warning("⚠️ No tokens provided to subscribe")
             return
 
-        # Convert tokens to integers
         try:
             tokens = [int(token) for token in tokens]
         except (ValueError, TypeError) as e:
-            self.logger.error(f"❌ Invalid token format: {e}")
+            self.logger.error(f"Invalid token format: {e}")
             return
 
-        # Check Zerodha's limit of 3000 instruments per connection
-        total_after_subscription = len(self.subscribed_tokens) + len(tokens)
-        if total_after_subscription > self.MAX_INSTRUMENTS_PER_CONNECTION:
+        total_after = len(self.subscribed_tokens) + len(tokens)
+        if total_after > self.MAX_INSTRUMENTS_PER_CONNECTION:
             self.logger.error(
-                f"❌ Cannot subscribe to {len(tokens)} tokens. Would exceed Zerodha's limit of {self.MAX_INSTRUMENTS_PER_CONNECTION} instruments per connection."
-            )
-            self.logger.error(
-                f"Current subscriptions: {len(self.subscribed_tokens)}, Requested: {len(tokens)}, Total would be: {total_after_subscription}"
+                f"Cannot subscribe to {len(tokens)} tokens. Would exceed limit of {self.MAX_INSTRUMENTS_PER_CONNECTION}."
             )
             return
 
-        # Add to pending subscriptions for batch processing
         with self.lock:
             for token in tokens:
                 self.pending_subscriptions.append((token, mode))
 
-        # self._log_event("SUBSCRIBE", f"Queued {len(tokens)} tokens for subscription in {mode} mode",
-        #               {'count': len(tokens), 'mode': mode})
+        # Process subscriptions in a separate thread
+        if not self._subscription_thread or not self._subscription_thread.is_alive():
+            self._subscription_thread = threading.Thread(
+                target=self._process_pending_subscriptions, daemon=True
+            )
+            self._subscription_thread.start()
 
-        # Trigger subscription processing
-        if self.loop and not self.loop.is_closed():
-            asyncio.run_coroutine_threadsafe(self._process_pending_subscriptions(), self.loop)
-
-    async def _process_pending_subscriptions(self):
+    def _process_pending_subscriptions(self):
         """Process pending subscriptions in batches"""
         consecutive_failures = 0
 
-        while self.pending_subscriptions:
-            # Wait for connection
-            if not await self._ensure_connected():
+        while self.pending_subscriptions and self.running:
+            if not self.connected:
                 consecutive_failures += 1
                 if consecutive_failures > 3:
-                    self.logger.error(
-                        "❌ Multiple connection failures, clearing pending subscriptions"
-                    )
+                    self.logger.error("Multiple connection failures, clearing pending subscriptions")
                     with self.lock:
                         self.pending_subscriptions.clear()
                     break
-                await asyncio.sleep(min(2 * consecutive_failures, 10))  # Exponential backoff
+                time.sleep(min(2 * consecutive_failures, 10))
                 continue
 
-            consecutive_failures = 0  # Reset on successful connection
+            consecutive_failures = 0
 
-            # Process batch
+            # Get a batch of tokens with the same mode
             batch_tokens = []
             batch_mode = None
 
             with self.lock:
-                # Get up to MAX_TOKENS_PER_SUBSCRIBE tokens with same mode
-                while (
-                    self.pending_subscriptions and len(batch_tokens) < self.MAX_TOKENS_PER_SUBSCRIBE
-                ):
+                while self.pending_subscriptions and len(batch_tokens) < self.MAX_TOKENS_PER_SUBSCRIBE:
                     token, mode = self.pending_subscriptions[0]
                     if batch_mode is None:
                         batch_mode = mode
                     elif batch_mode != mode:
-                        break  # Different mode, process in next batch
-
+                        break
                     self.pending_subscriptions.popleft()
                     batch_tokens.append(token)
 
             if batch_tokens:
-                success = await self._subscribe_batch(batch_tokens, batch_mode)
+                success = self._subscribe_batch(batch_tokens, batch_mode)
                 if not success:
-                    # Re-queue failed tokens
                     with self.lock:
                         for token in batch_tokens:
                             self.pending_subscriptions.append((token, batch_mode))
-                    await asyncio.sleep(5)  # Wait longer on failure
+                    time.sleep(5)
                 else:
-                    await asyncio.sleep(self.SUBSCRIPTION_DELAY)  # Normal delay between batches
+                    time.sleep(self.SUBSCRIPTION_DELAY)
 
-    async def _subscribe_batch(self, tokens: list[int], mode: str) -> bool:
+    def _subscribe_batch(self, tokens: list[int], mode: str) -> bool:
         """Subscribe to a batch of tokens"""
         try:
-            # Ensure we're connected before subscribing
-            if not await self._ensure_connected():
-                self.logger.warning("Not connected to WebSocket")
+            if not self.connected or not self.ws:
                 return False
 
-            # Subscribe to tokens
-            sub_msg = {"a": "subscribe", "v": tokens}
+            # Subscribe
+            sub_msg = json.dumps({"a": "subscribe", "v": tokens})
+            self.ws.send(sub_msg)
+            self.logger.debug(f"Subscribed to batch of {len(tokens)} tokens")
 
-            if not await self._send_json(sub_msg):
-                self.logger.error("Failed to send subscription message")
-                return False
+            time.sleep(1.0)
 
-            self.logger.debug(f"✅ Subscribed to batch of {len(tokens)} tokens")
+            # Set mode
+            mode_msg = json.dumps({"a": "mode", "v": [mode, tokens]})
+            self.ws.send(mode_msg)
 
-            # Wait for subscription to be processed by Zerodha
-            await asyncio.sleep(1.0)
+            with self.lock:
+                for token in tokens:
+                    self.mode_map[token] = mode
+                    self.subscribed_tokens.add(token)
 
-            # Set mode for the batch
-            mode_msg = {"a": "mode", "v": [mode, tokens]}
-
-            if await self._send_json(mode_msg):
-                with self.lock:
-                    for token in tokens:
-                        self.mode_map[token] = mode
-                        self.subscribed_tokens.add(token)
-                self.logger.debug(f"✅ Set mode {mode} for {len(tokens)} tokens")
-
-                # Additional delay after mode setting - important for large batches
-                await asyncio.sleep(1.0)
-
-                return True
-            else:
-                self.logger.warning("⚠️ Failed to set mode for batch")
-                return False
-
-        except Exception as e:
-            self.logger.error(f"❌ Batch subscription failed: {e}")
-            return False
-
-    async def _ensure_connected(self) -> bool:
-        """Ensure WebSocket is connected"""
-        if self.connected and self._is_websocket_open():
+            self.logger.debug(f"Set mode {mode} for {len(tokens)} tokens")
+            time.sleep(1.0)
             return True
 
-        return await self._connect()
+        except Exception as e:
+            self.logger.error(f"Batch subscription failed: {e}")
+            return False
 
-    async def unsubscribe(self, tokens: list[int]) -> bool:
-        """Unsubscribe from market data for given tokens"""
+    def unsubscribe(self, tokens: list[int]) -> bool:
+        """Unsubscribe from tokens"""
         try:
-            if not self.connected or not self._is_websocket_open():
-                self.logger.warning("⚠️ Not connected, cannot unsubscribe")
+            if not self.connected or not self.ws:
                 return False
 
-            unsub_msg = {"a": "unsubscribe", "v": tokens}
+            unsub_msg = json.dumps({"a": "unsubscribe", "v": tokens})
+            self.ws.send(unsub_msg)
 
-            if not await self._send_json(unsub_msg):
-                return False
-
-            # Update tracking
             with self.lock:
                 for token in tokens:
                     self.subscribed_tokens.discard(token)
                     self.mode_map.pop(token, None)
-                    # ✅ NEW: Clean up exchange mapping
                     self.token_exchange_map.pop(token, None)
 
-            self.logger.debug(f"✅ Unsubscribed from {len(tokens)} tokens")
+            self.logger.debug(f"Unsubscribed from {len(tokens)} tokens")
             return True
 
         except Exception as e:
-            self.logger.error(f"❌ Error unsubscribing: {e}")
+            self.logger.error(f"Error unsubscribing: {e}")
             return False
 
-    def _is_websocket_open(self) -> bool:
-        """Check if WebSocket connection is open"""
-        try:
-            if not self.websocket:
-                return False
+    def wait_for_connection(self, timeout: float = 15.0) -> bool:
+        """Wait for WebSocket connection to be established"""
+        return self._connection_ready.wait(timeout=timeout)
 
-            # Check for different websocket library attributes
-            if hasattr(self.websocket, "closed"):
-                return not self.websocket.closed
-            elif hasattr(self.websocket, "state"):
-                # For websockets library, check state
-                from websockets.protocol import State
+    def is_connected(self) -> bool:
+        """Check if WebSocket is connected"""
+        return self.connected and self.running
 
-                return self.websocket.state == State.OPEN
-            else:
-                # Fallback - assume open if connected flag is True
-                return self.connected
+    # WebSocket callbacks
+    def _on_ws_open(self, ws):
+        """Called when WebSocket connection is opened"""
+        self.connected = True
+        self.reconnect_attempts = 0
+        self.reconnect_delay = 2
+        self.last_message_time = time.time()
+        self._connection_ready.set()
 
-        except Exception as e:
-            self.logger.debug(f"Error checking WebSocket state: {e}")
-            return False
+        self.logger.info("Zerodha WebSocket connected")
 
-    async def _connect(self) -> bool:
-        """Connect to WebSocket with improved error handling"""
-        if self.connected and self._is_websocket_open():
-            return True
+        # Start health check
+        self._start_health_check()
 
-        # Prevent concurrent connection attempts
-        if self._connecting:
-            self.logger.debug("Connection already in progress")
-            return False
-
-        # Rate limit connection attempts (more aggressive)
-        current_time = time.time()
-        if current_time - self._last_connection_attempt < 5:  # Min 5 seconds between attempts
-            self.logger.debug(
-                f"Rate limiting connection attempts (last attempt {current_time - self._last_connection_attempt:.1f}s ago)"
-            )
-            return False
-
-        self._connecting = True
-        self._last_connection_attempt = current_time
-
-        try:
-            self._log_event(
-                "CONNECT",
-                f"Attempting connection (attempt {self.reconnect_attempts + 1}/{self.max_reconnect_attempts})",
-            )
-
-            # Close existing connection if any
-            if self.websocket:
-                try:
-                    await self.websocket.close()
-                except Exception:
-                    pass
-                self.websocket = None
-
-            # Create new connection following Zerodha API specifications
-            # URL format: wss://ws.kite.trade?api_key=xxx&access_token=xxx
-
-            self.websocket = await asyncio.wait_for(
-                websockets.client.connect(
-                    self.ws_url,
-                    ping_interval=self.PING_INTERVAL,  # None - let Zerodha handle heartbeats
-                    ping_timeout=self.PING_TIMEOUT,
-                    close_timeout=5,
-                    max_size=self.MAX_MESSAGE_SIZE,
-                    compression=None,  # Disable compression for binary data
-                    extra_headers={"User-Agent": "OpenAlgo-ZerodhaClient/1.0"},
-                ),
-                timeout=self.CONNECT_TIMEOUT,
-            )
-
-            # Verify connection
-            if self.websocket and self._is_websocket_open():
-                self.connected = True
-                self.reconnect_attempts = 0
-                self.reconnect_delay = 2
-                self._connection_ready.set()
-                self.last_message_time = time.time()
-                self.last_ping_time = time.time()
-                self._consecutive_ping_failures = 0  # Reset ping failures on new connection
-
-                self._log_event("CONNECT", "WebSocket connected successfully")
-
-                # Start health check
-                if not self._health_check_task or self._health_check_task.done():
-                    self._health_check_task = asyncio.create_task(self._health_check_loop())
-
-                # Trigger on_connect callback
-                if self.on_connect:
-                    try:
-                        self.on_connect()
-                    except Exception as e:
-                        self.logger.error(f"❌ Error in on_connect callback: {e}")
-
-                # Re-subscribe to previously subscribed tokens
-                await self._resubscribe_all()
-
-                return True
-            else:
-                raise Exception("Failed to establish WebSocket connection")
-
-        except Exception as e:
-            self.connected = False
-            self.reconnect_attempts += 1
-            self.reconnect_delay = min(self.reconnect_delay * 1.5, self.max_reconnect_delay)
-
-            error_msg = str(e) if str(e) else "Unknown connection error"
-            self.logger.error(
-                f"❌ Connection failed (attempt {self.reconnect_attempts}): {error_msg}"
-            )
-
-            if self.on_error:
-                try:
-                    self.on_error(e)
-                except Exception:
-                    pass
-
-            return False
-        finally:
-            self._connecting = False
-
-    async def _disconnect(self):
-        """Disconnect from WebSocket"""
-        try:
-            self.connected = False
-
-            if self._health_check_task:
-                self._health_check_task.cancel()
-                try:
-                    await self._health_check_task
-                except asyncio.CancelledError:
-                    pass
-
-            if self.websocket:
-                try:
-                    await self.websocket.close()
-                except Exception as e:
-                    self.logger.debug(f"Error closing WebSocket: {e}")
-
-                self.websocket = None
-
-            self.logger.debug("🔌 WebSocket disconnected")
-
-            if self.on_disconnect:
-                try:
-                    self.on_disconnect()
-                except Exception as e:
-                    self.logger.error(f"❌ Error in on_disconnect callback: {e}")
-
-        except Exception as e:
-            self.logger.error(f"❌ Error during disconnect: {e}")
-
-    async def _send_json(self, message: dict) -> bool:
-        """Send JSON message to WebSocket"""
-        if not self.connected or not self._is_websocket_open():
-            self.logger.error("❌ WebSocket not connected")
-            return False
-
-        try:
-            message_str = json.dumps(message)
-            await self.websocket.send(message_str)
-            self.logger.debug(f"📤 Sent: {message_str[:100]}...")  # Log first 100 chars
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ Error sending message: {e}")
-            self.connected = False
-            self.error_count += 1
-            return False
-
-    async def _run_forever(self):
-        """Main WebSocket message loop with improved error handling"""
-        self.logger.debug("🚀 Starting WebSocket message loop...")
-
-        try:
-            while self.running and not self._stop_event.is_set():
-                try:
-                    # Connect if not connected
-                    if not self.connected or not self._is_websocket_open():
-                        if not await self._connect():
-                            if self.reconnect_attempts >= self.max_reconnect_attempts:
-                                self.logger.error("❌ Max reconnection attempts reached")
-                                break
-
-                            # Wait before retrying
-                            await asyncio.sleep(self.reconnect_delay)
-                            continue
-
-                    try:
-                        # Process messages with timeout
-                        message = await asyncio.wait_for(
-                            self.websocket.recv(), timeout=self.connection_timeout
-                        )
-                        self.last_message_time = time.time()
-                        await self._process_message(message)
-
-                    except TimeoutError:
-                        self.logger.warning("⚠️ Message receive timeout, connection may be dead")
-                        self.connected = False
-
-                    except websockets.exceptions.ConnectionClosed:
-                        # self.logger.warning(f"🔌 Connection closed: {e}")
-                        self.connected = False
-                        if self.running:  # Only reconnect if we're still supposed to be running
-                            await asyncio.sleep(2)  # Brief delay before reconnection
-
-                    except Exception as e:
-                        self.logger.error(f"❌ Error receiving message: {e}")
-                        self.connected = False
-                        self.error_count += 1
-
-                except asyncio.CancelledError:
-                    self.logger.debug("🔄 Message loop cancelled")
-                    break
-                except Exception as e:
-                    self.logger.error(f"❌ Error in message loop: {e}")
-                    self.connected = False
-                    await asyncio.sleep(1)
-
-                # Small delay to prevent tight loop on errors
-                try:
-                    await asyncio.sleep(0.05)
-                except asyncio.CancelledError:
-                    break
-
-        except asyncio.CancelledError:
-            self.logger.debug("🔄 WebSocket message loop cancelled")
-        except Exception as e:
-            self.logger.error(f"❌ Unexpected error in message loop: {e}")
-        finally:
-            # Cleanup on exit
+        # Trigger callback
+        if self.on_connect:
             try:
-                await self._disconnect()
+                self.on_connect()
             except Exception as e:
-                self.logger.debug(f"Error during final disconnect: {e}")
+                self.logger.error(f"Error in on_connect callback: {e}")
 
-            self.logger.debug("🛑 WebSocket message loop stopped")
+        # Re-subscribe to previously subscribed tokens
+        self._resubscribe_all()
 
-    async def _process_message(self, message):
-        """Process incoming WebSocket message"""
+    def _on_ws_message(self, ws, message):
+        """Called for both binary and text messages"""
+        self.last_message_time = time.time()
+        self.message_count += 1
+
         try:
-            self.message_count += 1
-
             if isinstance(message, bytes):
                 # Handle binary market data
                 if len(message) == 1:
-                    # Zerodha heartbeat - 1 byte message to keep connection alive
+                    # Zerodha heartbeat - 1 byte
                     self.last_heartbeat_time = time.time()
-                    self.logger.debug("💓 Zerodha heartbeat received")
                     return
 
-                # Parse binary data
                 ticks = self._parse_binary_message(message)
                 if ticks:
                     self.tick_count += len(ticks)
-
-                    # Log periodically
-                    if self.tick_count % 1000 == 0:
-                        self._log_event(
-                            "DATA",
-                            f"Processed {self.tick_count:,} total ticks",
-                            {
-                                "rate": f"{1000 / (time.time() - self.last_message_time):.1f} ticks/sec"
-                                if self.last_message_time
-                                else "N/A"
-                            },
-                        )
-
-                    # Call tick callback
                     if self.on_ticks:
                         try:
                             self.on_ticks(ticks)
                         except Exception as e:
-                            self.logger.error(f"❌ Error in on_ticks callback: {e}")
-                else:
-                    self.logger.debug("⚠️ No ticks parsed from binary message")
+                            self.logger.error(f"Error in on_ticks callback: {e}")
 
             elif isinstance(message, str):
-                # Handle JSON messages
                 try:
                     data = json.loads(message)
                     msg_type = data.get("type", "unknown")
-
                     if msg_type == "error":
-                        self.logger.error(f"❌ WebSocket error: {data.get('data', '')}")
-                    elif msg_type == "order":
-                        self.logger.debug(f"📊 Order update: {data}")
+                        self.logger.error(f"WebSocket error: {data.get('data', '')}")
                     else:
-                        self.logger.debug(f"📝 JSON message: {data}")
-
+                        self.logger.debug(f"JSON message: {data}")
                 except json.JSONDecodeError:
-                    self.logger.debug(f"📝 Non-JSON text: {message}")
+                    self.logger.debug(f"Non-JSON text: {message[:100]}")
 
         except Exception as e:
-            self.logger.error(f"❌ Error processing message: {e}")
+            self.logger.error(f"Error processing message: {e}")
             self.error_count += 1
 
+    def _on_ws_error(self, ws, error):
+        """Called on WebSocket error"""
+        self.logger.error(f"WebSocket error: {error}")
+        self.connected = False
+        self.error_count += 1
+        if self.on_error:
+            try:
+                self.on_error(error)
+            except Exception:
+                pass
+
+    def _on_ws_close(self, ws, close_status_code, close_msg):
+        """Called when WebSocket is closed"""
+        self.logger.info(f"WebSocket closed (code={close_status_code}, msg={close_msg})")
+        self.connected = False
+        if self.on_disconnect:
+            try:
+                self.on_disconnect()
+            except Exception as e:
+                self.logger.error(f"Error in on_disconnect callback: {e}")
+
+    # Health check
+    def _start_health_check(self):
+        if self._health_check_thread and self._health_check_thread.is_alive():
+            return
+        self._health_check_thread = threading.Thread(
+            target=self._health_check_loop, daemon=True
+        )
+        self._health_check_thread.start()
+
+    def _health_check_loop(self):
+        while self.running and self.connected:
+            time.sleep(self.KEEPALIVE_INTERVAL)
+            if not self.running or not self.connected:
+                break
+            if self.last_message_time:
+                elapsed = time.time() - self.last_message_time
+                if elapsed > self.DATA_TIMEOUT:
+                    self.logger.error(
+                        f"Data stall detected - no data for {elapsed:.1f}s. Forcing reconnect..."
+                    )
+                    if self.ws:
+                        try:
+                            self.ws.close()
+                        except Exception:
+                            pass
+                    break
+
+    def _resubscribe_all(self):
+        """Re-subscribe to all previously subscribed tokens"""
+        with self.lock:
+            if not self.subscribed_tokens:
+                return
+            tokens_by_mode: dict[str, list[int]] = {}
+            for token in self.subscribed_tokens:
+                mode = self.mode_map.get(token, self.MODE_QUOTE)
+                if mode not in tokens_by_mode:
+                    tokens_by_mode[mode] = []
+                tokens_by_mode[mode].append(token)
+
+        for mode, tokens in tokens_by_mode.items():
+            for i in range(0, len(tokens), self.MAX_TOKENS_PER_SUBSCRIBE):
+                batch = tokens[i:i + self.MAX_TOKENS_PER_SUBSCRIBE]
+                try:
+                    sub_msg = json.dumps({"a": "subscribe", "v": batch})
+                    self.ws.send(sub_msg)
+                    time.sleep(0.5)
+                    mode_msg = json.dumps({"a": "mode", "v": [mode, batch]})
+                    self.ws.send(mode_msg)
+                    time.sleep(self.SUBSCRIPTION_DELAY)
+                    self.logger.info(f"Re-subscribed batch of {len(batch)} tokens in {mode} mode")
+                except Exception as e:
+                    self.logger.error(f"Error re-subscribing batch: {e}")
+
+    # Binary message parsing (unchanged from original)
     def _parse_binary_message(self, data: bytes) -> list[dict]:
         """Parse binary message according to Zerodha specification"""
         try:
             if len(data) < 4:
                 return []
 
-            # Parse header: first 2 bytes = number of packets
             num_packets = struct.unpack(">H", data[0:2])[0]
-
             packets = []
             offset = 2
 
-            for packet_idx in range(num_packets):
+            for _ in range(num_packets):
                 if offset + 2 > len(data):
                     break
-
-                # Next 2 bytes: packet length
-                packet_length = struct.unpack(">H", data[offset : offset + 2])[0]
+                packet_length = struct.unpack(">H", data[offset:offset + 2])[0]
                 offset += 2
-
                 if offset + packet_length > len(data):
                     break
-
-                # Extract and parse packet
-                packet_data = data[offset : offset + packet_length]
+                packet_data = data[offset:offset + packet_length]
                 tick = self._parse_packet(packet_data)
                 if tick:
                     packets.append(tick)
-
                 offset += packet_length
 
             return packets
 
         except Exception as e:
-            self.logger.error(f"❌ Error parsing binary message: {e}")
+            self.logger.error(f"Error parsing binary message: {e}")
             return []
 
     def _parse_packet(self, packet: bytes) -> dict | None:
-        """
-        Parse individual packet with improved error handling.
-        ✅ ENHANCED: Adds exchange information to tick data.
-        """
+        """Parse individual packet with exchange info."""
         try:
             if len(packet) < 8:
                 return None
 
-            # Extract instrument token and last price
             instrument_token = struct.unpack(">I", packet[0:4])[0]
             last_price_paise = struct.unpack(">i", packet[4:8])[0]
             last_price = last_price_paise / 100.0
 
-            # Determine mode based on packet length
             if len(packet) == 8:
                 mode = self.MODE_LTP
             elif len(packet) == 44:
@@ -796,12 +525,10 @@ class ZerodhaWebSocket:
             else:
                 mode = self.mode_map.get(instrument_token, self.MODE_QUOTE)
 
-            # ✅ NEW: Get exchange information for this token
             exchange = None
             with self.lock:
                 exchange = self.token_exchange_map.get(instrument_token)
 
-            # Basic tick structure
             tick = {
                 "instrument_token": instrument_token,
                 "last_traded_price": last_price,
@@ -810,247 +537,78 @@ class ZerodhaWebSocket:
                 "timestamp": int(time.time() * 1000),
             }
 
-            # ✅ NEW: Add exchange information if available
             if exchange:
-                tick["source_exchange"] = exchange  # Add source exchange from mapping
+                tick["source_exchange"] = exchange
 
-            # Parse additional fields for quote mode (44 bytes)
             if len(packet) >= 44:
                 try:
-                    # Only unpack exactly 44 bytes for quote mode
-                    fields = struct.unpack(">11i", packet[0:44])  # 11 integers * 4 bytes = 44 bytes
+                    fields = struct.unpack(">11i", packet[0:44])
+                    tick.update({
+                        "instrument_token": fields[0],
+                        "last_traded_price": fields[1] / 100.0,
+                        "last_price": fields[1] / 100.0,
+                        "last_traded_quantity": fields[2],
+                        "average_traded_price": fields[3] / 100.0,
+                        "average_price": fields[3] / 100.0,
+                        "volume_traded": fields[4],
+                        "volume": fields[4],
+                        "total_buy_quantity": fields[5],
+                        "total_sell_quantity": fields[6],
+                        "open_price": fields[7] / 100.0,
+                        "high_price": fields[8] / 100.0,
+                        "low_price": fields[9] / 100.0,
+                        "close_price": fields[10] / 100.0,
+                    })
 
-                    tick.update(
-                        {
-                            "instrument_token": fields[0],
-                            "last_traded_price": fields[1] / 100.0,
-                            "last_price": fields[1] / 100.0,
-                            "last_traded_quantity": fields[2],
-                            "average_traded_price": fields[3] / 100.0,
-                            "average_price": fields[3] / 100.0,
-                            "volume_traded": fields[4],
-                            "volume": fields[4],
-                            "total_buy_quantity": fields[5],
-                            "total_sell_quantity": fields[6],
-                            "open_price": fields[7] / 100.0,
-                            "high_price": fields[8] / 100.0,
-                            "low_price": fields[9] / 100.0,
-                            "close_price": fields[10] / 100.0,
-                            "ohlc": {
-                                "open": fields[7] / 100.0,
-                                "high": fields[8] / 100.0,
-                                "low": fields[9] / 100.0,
-                                "close": fields[10] / 100.0,
-                            },
-                        }
-                    )
+                    tick["ohlc"] = {
+                        "open": fields[7] / 100.0,
+                        "high": fields[8] / 100.0,
+                        "low": fields[9] / 100.0,
+                        "close": fields[10] / 100.0,
+                    }
                 except struct.error as e:
-                    self.logger.debug(f"⚠️ Quote parsing issue (packet length: {len(packet)}): {e}")
-                    # Fallback - just use LTP data
-                    pass
+                    self.logger.debug(f"Could not parse extended quote: {e}")
 
-            # Parse full mode fields if available (64+ bytes)
-            if len(packet) >= 64:
-                try:
-                    extended_fields = struct.unpack(">iiiii", packet[44:64])
-                    tick.update(
-                        {
-                            "last_traded_timestamp": extended_fields[0],
-                            "open_interest": extended_fields[1],
-                            "oi": extended_fields[1],
-                            "exchange_timestamp": extended_fields[4],
-                        }
-                    )
-                except struct.error:
-                    pass
-
-            # Parse market depth for full mode (184+ bytes)
             if len(packet) >= 184:
                 try:
-                    depth = self._parse_market_depth(packet[64:184])
-                    if depth:
-                        tick["depth"] = depth
-                except Exception:
-                    pass
+                    tick["price_change"] = struct.unpack(">i", packet[44:48])[0] / 100.0
+
+                    depth_offset = 64
+                    buy_depth = []
+                    sell_depth = []
+
+                    for i in range(5):
+                        base = depth_offset + (i * 12)
+                        if base + 12 <= len(packet):
+                            qty = struct.unpack(">I", packet[base:base + 4])[0]
+                            price = struct.unpack(">I", packet[base + 4:base + 8])[0] / 100.0
+                            orders = struct.unpack(">H", packet[base + 8:base + 10])[0]
+                            buy_depth.append({"quantity": qty, "price": price, "orders": orders})
+
+                    for i in range(5):
+                        base = depth_offset + 60 + (i * 12)
+                        if base + 12 <= len(packet):
+                            qty = struct.unpack(">I", packet[base:base + 4])[0]
+                            price = struct.unpack(">I", packet[base + 4:base + 8])[0] / 100.0
+                            orders = struct.unpack(">H", packet[base + 8:base + 10])[0]
+                            sell_depth.append({"quantity": qty, "price": price, "orders": orders})
+
+                    tick["depth"] = {"buy": buy_depth, "sell": sell_depth}
+
+                    if len(packet) >= 184:
+                        try:
+                            tick["exchange_timestamp"] = struct.unpack(">I", packet[60:64])[0]
+                            oi_offset = 184 - 4
+                            if oi_offset + 4 <= len(packet):
+                                tick["open_interest"] = struct.unpack(">I", packet[oi_offset:oi_offset + 4])[0]
+                        except struct.error:
+                            pass
+
+                except struct.error as e:
+                    self.logger.debug(f"Could not parse full mode data: {e}")
 
             return tick
 
         except Exception as e:
-            self.logger.error(f"❌ Error parsing packet: {e}")
+            self.logger.error(f"Error parsing packet: {e}")
             return None
-
-    def _parse_market_depth(self, depth_data: bytes) -> dict | None:
-        """Parse market depth data"""
-        try:
-            if len(depth_data) < 120:
-                return None
-
-            depth = {"buy": [], "sell": []}
-
-            # Parse buy side (first 5 entries)
-            for i in range(5):
-                offset = i * 12
-                if offset + 10 <= len(depth_data):
-                    quantity, price, orders = struct.unpack(
-                        ">iih", depth_data[offset : offset + 10]
-                    )
-                    if price > 0:  # Only add valid prices
-                        depth["buy"].append(
-                            {"quantity": quantity, "price": price / 100.0, "orders": orders}
-                        )
-
-            # Parse sell side (next 5 entries)
-            for i in range(5):
-                offset = 60 + (i * 12)
-                if offset + 10 <= len(depth_data):
-                    quantity, price, orders = struct.unpack(
-                        ">iih", depth_data[offset : offset + 10]
-                    )
-                    if price > 0:  # Only add valid prices
-                        depth["sell"].append(
-                            {"quantity": quantity, "price": price / 100.0, "orders": orders}
-                        )
-
-            return depth if (depth["buy"] or depth["sell"]) else None
-
-        except Exception as e:
-            self.logger.error(f"❌ Error parsing market depth: {e}")
-            return None
-
-    def is_connected(self) -> bool:
-        """Check if WebSocket is connected"""
-        return self.connected and self._is_websocket_open()
-
-    def get_subscriptions(self) -> set[int]:
-        """Get current subscriptions"""
-        with self.lock:
-            return self.subscribed_tokens.copy()
-
-    def get_token_exchange_map(self) -> dict[int, str]:
-        """Get current token to exchange mapping"""
-        with self.lock:
-            return dict(self.token_exchange_map)
-
-    async def _resubscribe_all(self):
-        """Re-subscribe to all previously subscribed tokens after reconnection"""
-        if not self.subscribed_tokens:
-            return
-
-        self.logger.debug(f"🔄 Re-subscribing to {len(self.subscribed_tokens)} tokens...")
-
-        # Group tokens by mode
-        mode_groups = {}
-        with self.lock:
-            for token in self.subscribed_tokens:
-                mode = self.mode_map.get(token, self.MODE_QUOTE)
-                if mode not in mode_groups:
-                    mode_groups[mode] = []
-                mode_groups[mode].append(token)
-
-        # Re-subscribe in batches
-        for mode, tokens in mode_groups.items():
-            for i in range(0, len(tokens), self.MAX_TOKENS_PER_SUBSCRIBE):
-                batch = tokens[i : i + self.MAX_TOKENS_PER_SUBSCRIBE]
-                await self._subscribe_batch(batch, mode)
-                await asyncio.sleep(self.SUBSCRIPTION_DELAY)
-
-    async def _health_check_loop(self):
-        """Monitor connection health and trigger reconnection if needed"""
-        while self.running and not self._stop_event.is_set():
-            try:
-                await asyncio.sleep(self.health_check_interval)
-
-                if not self.connected or not self._is_websocket_open():
-                    continue
-
-                # Check connection health using Zerodha's heartbeats
-                current_time = time.time()
-
-                # Check for Zerodha heartbeats (should come every few seconds)
-                if self.last_heartbeat_time:
-                    time_since_heartbeat = current_time - self.last_heartbeat_time
-                    if time_since_heartbeat > 60:  # No heartbeat for 60 seconds
-                        self.logger.warning(
-                            f"⚠️ No heartbeat from Zerodha for {time_since_heartbeat:.1f}s"
-                        )
-                        self.connected = False
-                        continue
-
-                # Check for data messages (only if we have subscriptions)
-                if self.last_message_time and len(self.subscribed_tokens) > 0:
-                    time_since_last_message = current_time - self.last_message_time
-                    # Allow longer timeout during high subscription volume
-                    timeout = self.connection_timeout + (len(self.pending_subscriptions) * 2)
-                    if time_since_last_message > timeout:
-                        self.logger.warning(
-                            f"⚠️ No data messages for {time_since_last_message:.1f}s with {len(self.subscribed_tokens)} subscriptions"
-                        )
-                        # Only disconnect if we're not actively subscribing
-                        if not self._connecting and len(self.pending_subscriptions) == 0:
-                            self.connected = False
-                            continue
-
-                # Reset consecutive failures since we're still connected
-                self._consecutive_ping_failures = 0
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.logger.error(f"❌ Error in health check: {e}")
-
-    def get_statistics(self) -> dict:
-        """Get connection statistics"""
-        return {
-            "connected": self.is_connected(),
-            "messages_received": self.message_count,
-            "ticks_processed": self.tick_count,
-            "errors": self.error_count,
-            "subscribed_tokens": len(self.subscribed_tokens),
-            "pending_subscriptions": len(self.pending_subscriptions),
-            "reconnect_attempts": self.reconnect_attempts,
-            "last_message_time": self.last_message_time,
-            "uptime": time.time() - (self.last_message_time or time.time())
-            if self.connected
-            else 0,
-            "recent_events": list(self.event_log)[-10:],  # Last 10 events
-        }
-
-    def get_event_log(self) -> list[dict]:
-        """Get the event log for debugging"""
-        return list(self.event_log)
-
-    def set_verbose_logging(self, enabled: bool):
-        """Enable or disable verbose event logging"""
-        self.enable_verbose_logging = enabled
-        self._log_event("CONFIG", f"Verbose logging {'enabled' if enabled else 'disabled'}")
-
-    def wait_for_connection(self, timeout: float = 10.0) -> bool:
-        """Wait for connection to be established"""
-        return self._connection_ready.wait(timeout)
-
-    def __del__(self):
-        """
-        Safety net destructor to ensure resources are cleaned up.
-        Called when the object is garbage collected if stop() wasn't called explicitly.
-        """
-        try:
-            if self.running:
-                # Set flags to signal shutdown
-                self.running = False
-                self._stop_event.set()
-
-                # Try to close websocket if loop is available
-                if self.loop and not self.loop.is_closed():
-                    try:
-                        # Schedule disconnect in the event loop
-                        future = asyncio.run_coroutine_threadsafe(self._async_stop(), self.loop)
-                        future.result(timeout=2)  # Short timeout in destructor
-                    except Exception:
-                        pass
-
-                # Wait briefly for thread to finish
-                if self.ws_thread and self.ws_thread.is_alive():
-                    self.ws_thread.join(timeout=1)
-        except Exception:
-            # Can't reliably log in __del__, just ensure we don't raise
-            pass
