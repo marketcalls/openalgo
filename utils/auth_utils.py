@@ -10,6 +10,7 @@ from flask import current_app as app
 from flask import jsonify, redirect, request, session, url_for
 
 from database.auth_db import get_feed_token as db_get_feed_token
+from utils.ip_helper import get_real_ip
 from database.auth_db import upsert_auth
 from database.master_contract_status_db import (
     get_exchange_stats_from_db,
@@ -365,7 +366,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         username=user_session_key,
         session_id=session_id,
         device_info=request.headers.get("User-Agent", "")[:500],
-        ip_address=request.remote_addr,
+        ip_address=get_real_ip(),
         broker=broker,
     )
 
@@ -378,6 +379,20 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     })
 
     logger.info(f"User {user_session_key} logged in successfully with broker {broker}")
+
+    # Log OAuth login attempt (resume logins are logged separately in auth.py)
+    try:
+        from database.auth_db import log_login_attempt
+        log_login_attempt(
+            username=user_session_key,
+            ip_address=get_real_ip(),
+            device_info=request.headers.get("User-Agent", ""),
+            status="success",
+            login_type="oauth",
+            broker=broker,
+        )
+    except Exception:
+        pass  # Don't block login if logging fails
 
     # Store auth token in database
     inserted_id = upsert_auth(
