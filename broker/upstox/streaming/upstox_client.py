@@ -102,7 +102,7 @@ class UpstoxWebSocketClient:
 
     def _run_websocket(self):
         """Run the WebSocket connection with reconnection logic"""
-        attempt = 0
+        self._reconnect_attempts = 0
         while self.running:
             try:
                 # Enable keepalive pings (same as Dhan/Flattrade which work reliably).
@@ -121,14 +121,14 @@ class UpstoxWebSocketClient:
             if not self.running:
                 break
 
-            attempt += 1
-            if attempt >= self._reconnect_config["max_attempts"]:
+            self._reconnect_attempts += 1
+            if self._reconnect_attempts >= self._reconnect_config["max_attempts"]:
                 self.logger.error("Max reconnect attempts reached")
                 self._trigger_error("Max reconnect attempts reached")
                 break
 
-            delay = self._calculate_backoff_delay(attempt)
-            self.logger.info(f"Reconnecting in {delay}s (attempt {attempt})...")
+            delay = self._calculate_backoff_delay(self._reconnect_attempts)
+            self.logger.info(f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})...")
             time.sleep(delay)
 
             # Re-fetch WebSocket URL for reconnection
@@ -207,6 +207,7 @@ class UpstoxWebSocketClient:
         """Called when WebSocket connection is opened"""
         self.logger.info("Upstox WebSocket connection opened")
         self._connected = True
+        self._reconnect_attempts = 0
         self._last_message_time = time.time()
 
         # Start health check thread
