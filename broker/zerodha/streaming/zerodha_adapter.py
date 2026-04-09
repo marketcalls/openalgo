@@ -6,13 +6,12 @@ logger = get_logger(__name__)
 Fixed Zerodha WebSocket adapter that properly handles NIFTY index data.
 The key fixes are in the _handle_ticks method for proper topic generation.
 """
-import asyncio
 import json
 import os
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from database.auth_db import get_auth_token
 from database.token_db import get_token
@@ -358,9 +357,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 # Unsubscribe using WebSocket client
                 if self.ws_client:
-                    asyncio.run_coroutine_threadsafe(
-                        self.ws_client.unsubscribe([token]), self.ws_client.loop
-                    )
+                    self.ws_client.unsubscribe([token])
 
                 # Remove from tracking
                 del self.subscribed_symbols[key]
