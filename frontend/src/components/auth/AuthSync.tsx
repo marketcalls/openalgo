@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { useBrokerStore } from '@/stores/brokerStore'
+import { useSessionStore } from '@/stores/sessionStore'
 import { useThemeStore } from '@/stores/themeStore'
 
 interface AuthSyncProps {
@@ -16,6 +17,7 @@ export function AuthSync({ children }: AuthSyncProps) {
   const [isChecking, setIsChecking] = useState(true)
   const { setUser, setApiKey, logout } = useAuthStore()
   const { fetchCapabilities, clearCapabilities } = useBrokerStore()
+  const { setActiveSessionCount } = useSessionStore()
   const { syncAppMode } = useThemeStore()
 
   useEffect(() => {
@@ -44,6 +46,10 @@ export function AuthSync({ children }: AuthSyncProps) {
             await fetchCapabilities()
             // Also sync app mode from backend
             await syncAppMode()
+            // Sync active session count
+            if (data.active_sessions !== undefined) {
+              setActiveSessionCount(data.active_sessions)
+            }
           } else if (data.status === 'success' && data.authenticated && !data.logged_in) {
             // User is logged in but hasn't connected broker yet
             setUser({

@@ -3,6 +3,7 @@ import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { useAlertStore, type AlertCategories } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useSessionStore } from '@/stores/sessionStore'
 
 // Audio throttling configuration
 const AUDIO_THROTTLE_MS = 1000
@@ -152,6 +153,21 @@ export function useSocket() {
 
     const socket = socketRef.current
 
+    // Force logout from another device
+    socket.on('force_logout', (data: { message: string }) => {
+      playAlertSound('system')
+      // Clear auth store immediately
+      useAuthStore.getState().logout()
+      useSessionStore.getState().setActiveSessionCount(0)
+      // Show persistent toast and redirect after a short delay so user sees it
+      toast.error(data.message || 'Logged out from another device', {
+        duration: 10000,
+      })
+      setTimeout(() => {
+        window.location.href = '/login'
+      }, 2000)
+    })
+
     // Password change notification
     socket.on('password_change', (data: { message: string }) => {
       playAlertSound('system')
@@ -235,6 +251,11 @@ export function useSocket() {
         showCategoryToast(type, message, 'orders')
       }
     )
+
+    // Active sessions update (event-driven, no polling)
+    socket.on('active_sessions_update', (data: { count: number }) => {
+      useSessionStore.getState().setActiveSessionCount(data.count)
+    })
 
     // Analyzer update notification
     socket.on('analyzer_update', (data: AnalyzerUpdateData) => {

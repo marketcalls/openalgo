@@ -355,6 +355,28 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     session.permanent = True
     set_session_login_time()  # Set the login timestamp
 
+    # Register active session for multi-device tracking
+    import secrets
+    session_id = secrets.token_hex(32)
+    session["session_id"] = session_id  # Store in cookie for logout cleanup
+
+    from database.auth_db import register_session, get_active_sessions
+    register_session(
+        username=user_session_key,
+        session_id=session_id,
+        device_info=request.headers.get("User-Agent", "")[:500],
+        ip_address=request.remote_addr,
+        broker=broker,
+    )
+
+    # Emit session count update via SocketIO (event-driven, no polling)
+    from extensions import socketio
+    active = get_active_sessions(user_session_key)
+    socketio.emit("active_sessions_update", {
+        "count": len(active),
+        "sessions": active,
+    })
+
     logger.info(f"User {user_session_key} logged in successfully with broker {broker}")
 
     # Store auth token in database

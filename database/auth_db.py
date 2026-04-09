@@ -188,6 +188,115 @@ class ApiKeys(Base):
     )
 
 
+class ActiveSession(Base):
+    """Tracks active login sessions across devices for a user."""
+    __tablename__ = "active_sessions"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(255), nullable=False, index=True)
+    session_id = Column(String(64), unique=True, nullable=False)  # Random token to identify session
+    device_info = Column(String(500), nullable=True)  # User-Agent string
+    ip_address = Column(String(45), nullable=True)
+    broker = Column(String(20), nullable=True)
+    login_time = Column(DateTime(timezone=True), default=func.now())
+    last_seen = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        Index("idx_active_sessions_username", "username"),
+    )
+
+
+MAX_SESSIONS_PER_USER = 5  # Safety cap to prevent unbounded growth
+
+
+def register_session(username, session_id, device_info=None, ip_address=None, broker=None):
+    """Register a new active session for a user.
+    Replaces any previous session from the same user+IP to prevent accumulation.
+    Enforces a maximum of MAX_SESSIONS_PER_USER sessions per user.
+    """
+    try:
+        # Remove stale sessions from the same device (same user + IP)
+        if ip_address:
+            ActiveSession.query.filter_by(username=username, ip_address=ip_address).delete()
+
+        # Enforce per-user session cap — remove oldest if at limit
+        current_count = ActiveSession.query.filter_by(username=username).count()
+        if current_count >= MAX_SESSIONS_PER_USER:
+            oldest = ActiveSession.query.filter_by(username=username).order_by(
+                ActiveSession.login_time.asc()
+            ).first()
+            if oldest:
+                db_session.delete(oldest)
+
+        active = ActiveSession(
+            username=username,
+            session_id=session_id,
+            device_info=device_info,
+            ip_address=ip_address,
+            broker=broker,
+        )
+        db_session.add(active)
+        db_session.commit()
+        return True
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error registering session: {e}")
+        return False
+
+
+def remove_session(session_id):
+    """Remove a session when user logs out."""
+    try:
+        ActiveSession.query.filter_by(session_id=session_id).delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error removing session: {e}")
+
+
+def get_active_sessions(username):
+    """Get all active sessions for a user."""
+    try:
+        sessions = ActiveSession.query.filter_by(username=username).order_by(
+            ActiveSession.last_seen.desc()
+        ).all()
+        return [
+            {
+                "session_id": s.session_id,
+                "device_info": s.device_info,
+                "ip_address": s.ip_address,
+                "broker": s.broker,
+                "login_time": s.login_time.isoformat() if s.login_time else None,
+                "last_seen": s.last_seen.isoformat() if s.last_seen else None,
+            }
+            for s in sessions
+        ]
+    except Exception as e:
+        logger.error(f"Error getting active sessions: {e}")
+        return []
+
+
+def update_session_last_seen(session_id):
+    """Update last_seen timestamp for a session."""
+    try:
+        active = ActiveSession.query.filter_by(session_id=session_id).first()
+        if active:
+            active.last_seen = func.now()
+            db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error updating session last_seen: {e}")
+
+
+def clear_user_sessions(username):
+    """Clear all sessions for a user (e.g., on token revocation at 3 AM)."""
+    try:
+        ActiveSession.query.filter_by(username=username).delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error clearing user sessions: {e}")
+
+
 def init_db():
     from database.db_init_helper import init_db_with_logging
 
