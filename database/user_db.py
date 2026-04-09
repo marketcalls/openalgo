@@ -98,12 +98,33 @@ class User(Base):
 
 
 def init_db():
+    """Initialize the user database tables.
+
+    Creates the ``users`` table if it does not already exist,
+    using the shared ``db_init_helper`` for consistent startup
+    logging.
+    """
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "User DB", logger)
 
 
 def add_user(username, email, password, is_admin=False):
+    """Create a new user with a securely hashed password.
+
+    Hashes the provided password, generates a two-factor authentication
+    secret, and persists the new user record to the database.
+
+    Args:
+        username: Unique username for the new account.
+        email: Unique email address for the new account.
+        password: Plaintext password (will be hashed before storage).
+        is_admin: Whether the user should have administrator privileges.
+
+    Returns:
+        The newly created ``User`` instance on success, or ``None``
+        if a user with the same username or email already exists.
+    """
     try:
         # Generate TOTP secret for the user
         totp_secret = pyotp.random_base32()
