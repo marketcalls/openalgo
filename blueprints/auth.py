@@ -28,6 +28,7 @@ from extensions import socketio
 from limiter import limiter  # Import the limiter instance
 from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
+from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -181,7 +182,7 @@ def _try_resume_broker_session(username):
 def login():
     # Handle POST requests first (for React SPA / AJAX login)
     if request.method == "POST":
-        logger.info(f"[LOGIN] POST from IP={request.remote_addr}, UA={request.headers.get('User-Agent', '')[:80]}")
+        logger.info(f"[LOGIN] POST from IP={get_real_ip()}, UA={request.headers.get('User-Agent', '')[:80]}")
         logger.info(f"[LOGIN] Session state: user={session.get('user')}, logged_in={session.get('logged_in')}, broker={session.get('broker')}")
 
         # Check if setup is required
@@ -212,6 +213,9 @@ def login():
         username = request.form["username"]
         password = request.form["password"]
 
+        ip = get_real_ip()
+        ua = request.headers.get("User-Agent", "")
+
         if authenticate_user(username, password):
             session["user"] = username  # Set the username in the session
             logger.info(f"[LOGIN] Password auth success for: {username}")
@@ -221,12 +225,22 @@ def login():
             logger.info(f"[LOGIN] Resume result: {resumed is not None}, type={type(resumed).__name__ if resumed else 'None'}")
             if resumed:
                 logger.info(f"[LOGIN] Returning resume response to frontend")
+                from database.auth_db import log_login_attempt
+                log_login_attempt(username, ip, ua, status="success",
+                                  login_type="resume", broker=session.get("broker"))
                 return resumed
 
             # No valid broker session — redirect to broker login
             logger.info(f"[LOGIN] No valid broker session, redirecting to /broker")
+            from database.auth_db import log_login_attempt
+            log_login_attempt(username, ip, ua, status="success", login_type="password")
             return jsonify({"status": "success"}), 200
         else:
+            from database.auth_db import log_login_attempt
+            log_login_attempt(username, get_real_ip(),
+                              request.headers.get("User-Agent", ""),
+                              status="failed", login_type="password",
+                              failure_reason="invalid_credentials")
             return jsonify({"status": "error", "message": "Invalid credentials"}), 401
 
     # Handle GET requests - redirect to React frontend

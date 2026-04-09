@@ -7,6 +7,8 @@ import {
   Ban,
   Eye,
   EyeOff,
+  LogIn,
+  Monitor,
   Save,
   Shield,
   Trash2,
@@ -47,6 +49,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 interface SecuritySettings {
   auto_ban_enabled: boolean
@@ -91,6 +94,26 @@ interface APIAbuseIP {
   api_keys_tried: string
 }
 
+interface LoginAttemptEntry {
+  username: string
+  ip_address: string | null
+  device_info: string | null
+  status: string
+  login_type: string | null
+  broker: string | null
+  failure_reason: string | null
+  timestamp: string | null
+}
+
+interface ActiveSessionEntry {
+  session_id: string
+  device_info: string | null
+  ip_address: string | null
+  broker: string | null
+  login_time: string | null
+  last_seen: string | null
+}
+
 export default function SecurityDashboard() {
   const [isLoading, setIsLoading] = useState(true)
   const [settings, setSettings] = useState<SecuritySettings>({
@@ -111,6 +134,12 @@ export default function SecurityDashboard() {
   const [bannedIPs, setBannedIPs] = useState<BannedIP[]>([])
   const [suspiciousIPs, setSuspiciousIPs] = useState<SuspiciousIP[]>([])
   const [apiAbuseIPs, setAPIAbuseIPs] = useState<APIAbuseIP[]>([])
+
+  // Login activity & active sessions state
+  const [loginAttempts, setLoginAttempts] = useState<LoginAttemptEntry[]>([])
+  const [activeSessions, setActiveSessions] = useState<ActiveSessionEntry[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [loginFilter, setLoginFilter] = useState<string>('all')
 
   // Settings form state
   const [formSettings, setFormSettings] = useState<SecuritySettings>(settings)
@@ -260,6 +289,8 @@ export default function SecurityDashboard() {
   useEffect(() => {
     fetchDashboardData()
     fetchStats()
+    fetchLoginActivity()
+    fetchActiveSessions()
     // Refresh stats every 30 seconds
     const interval = setInterval(fetchStats, 30000)
     return () => clearInterval(interval)
@@ -297,6 +328,40 @@ export default function SecurityDashboard() {
       const response = await webClient.get<SecurityStats>('/security/stats')
       setStats(response.data)
     } catch (error) {
+    }
+  }
+
+  const fetchLoginActivity = async () => {
+    try {
+      const response = await webClient.get<{
+        status: string
+        attempts: LoginAttemptEntry[]
+      }>('/security/api/login-activity')
+      setLoginAttempts(Array.isArray(response.data.attempts) ? response.data.attempts : [])
+    } catch (error) {
+    }
+  }
+
+  const fetchActiveSessions = async () => {
+    try {
+      const response = await webClient.get<{
+        status: string
+        current_session_id: string | null
+        sessions: ActiveSessionEntry[]
+      }>('/security/api/active-sessions')
+      setActiveSessions(Array.isArray(response.data.sessions) ? response.data.sessions : [])
+      setCurrentSessionId(response.data.current_session_id || null)
+    } catch (error) {
+    }
+  }
+
+  const handleClearLoginHistory = async () => {
+    try {
+      await webClient.post('/security/api/login-activity/clear')
+      setLoginAttempts([])
+      showToast.success('Login history cleared', 'monitoring')
+    } catch (error) {
+      showToast.error('Failed to clear login history', 'monitoring')
     }
   }
 
@@ -541,6 +606,23 @@ export default function SecurityDashboard() {
         </p>
       </div>
 
+      <Tabs defaultValue="threats" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="threats" className="gap-1.5">
+            <Shield className="h-4 w-4" />
+            Threats
+          </TabsTrigger>
+          <TabsTrigger value="login-activity" className="gap-1.5">
+            <LogIn className="h-4 w-4" />
+            Login Activity
+          </TabsTrigger>
+          <TabsTrigger value="active-sessions" className="gap-1.5">
+            <Monitor className="h-4 w-4" />
+            Active Sessions
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="threats" className="space-y-6">
       {/* Security Settings Card */}
       <Card>
         <CardHeader>
@@ -1150,6 +1232,197 @@ export default function SecurityDashboard() {
           </div>
         </CardContent>
       </Card>
+
+        </TabsContent>
+
+        {/* Login Activity Tab */}
+        <TabsContent value="login-activity" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <LogIn className="h-5 w-5" />
+                    Login Activity
+                  </CardTitle>
+                  <CardDescription>
+                    {loginAttempts.length} login attempts recorded
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Select value={loginFilter} onValueChange={(v) => setLoginFilter(v)}>
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue placeholder="Filter" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="success">Success</SelectItem>
+                      <SelectItem value="failed">Failed</SelectItem>
+                      <SelectItem value="resumed">Resumed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" size="sm" onClick={fetchLoginActivity}>
+                    Refresh
+                  </Button>
+                  {loginAttempts.length > 0 && (
+                    <Button variant="destructive" size="sm" onClick={handleClearLoginHistory}>
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Time</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Username</TableHead>
+                      <TableHead>IP Address</TableHead>
+                      <TableHead>Broker</TableHead>
+                      <TableHead>Device</TableHead>
+                      <TableHead>Details</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(loginFilter === 'all'
+                      ? loginAttempts
+                      : loginAttempts.filter((a) => a.status === loginFilter)
+                    ).length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                          No login attempts recorded
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      (loginFilter === 'all'
+                        ? loginAttempts
+                        : loginAttempts.filter((a) => a.status === loginFilter)
+                      ).map((attempt, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell className="text-xs whitespace-nowrap">
+                            {attempt.timestamp
+                              ? new Date(attempt.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                              : '-'}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                attempt.status === 'success'
+                                  ? 'default'
+                                  : attempt.status === 'failed'
+                                    ? 'destructive'
+                                    : 'secondary'
+                              }
+                            >
+                              {attempt.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{attempt.login_type || '-'}</Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">{attempt.username}</TableCell>
+                          <TableCell className="font-mono text-sm">{attempt.ip_address || '-'}</TableCell>
+                          <TableCell>{attempt.broker || '-'}</TableCell>
+                          <TableCell className="text-xs max-w-[200px] truncate" title={attempt.device_info || ''}>
+                            {attempt.device_info
+                              ? attempt.device_info.replace(/^Mozilla\/5\.0\s*/, '').slice(0, 60)
+                              : '-'}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {attempt.failure_reason || ''}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Active Sessions Tab */}
+        <TabsContent value="active-sessions" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Monitor className="h-5 w-5" />
+                    Active Sessions
+                  </CardTitle>
+                  <CardDescription>
+                    {activeSessions.length} device{activeSessions.length !== 1 ? 's' : ''} currently logged in
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" onClick={fetchActiveSessions}>
+                  Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Login Time</TableHead>
+                      <TableHead>IP Address</TableHead>
+                      <TableHead>Broker</TableHead>
+                      <TableHead>Device</TableHead>
+                      <TableHead>Last Seen</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {activeSessions.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                          No active sessions
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      activeSessions.map((s) => (
+                        <TableRow key={s.session_id}>
+                          <TableCell className="text-xs whitespace-nowrap">
+                            {s.login_time
+                              ? new Date(s.login_time).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                              : '-'}
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">{s.ip_address || '-'}</TableCell>
+                          <TableCell>{s.broker || '-'}</TableCell>
+                          <TableCell className="text-xs max-w-[250px] truncate" title={s.device_info || ''}>
+                            {s.device_info
+                              ? s.device_info.replace(/^Mozilla\/5\.0\s*/, '').slice(0, 80)
+                              : '-'}
+                          </TableCell>
+                          <TableCell className="text-xs whitespace-nowrap">
+                            {s.last_seen
+                              ? new Date(s.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                              : '-'}
+                          </TableCell>
+                          <TableCell>
+                            {s.session_id === currentSessionId ? (
+                              <Badge variant="default">This device</Badge>
+                            ) : (
+                              <Badge variant="outline">Active</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+      </Tabs>
 
       {/* Unban Confirmation Dialog */}
       <AlertDialog open={!!unbanIP} onOpenChange={() => setUnbanIP(null)}>
