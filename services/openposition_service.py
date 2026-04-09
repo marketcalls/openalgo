@@ -2,15 +2,12 @@ import copy
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
-import requests
-
 from database.analyzer_db import async_log_analyzer
 from database.apilog_db import async_log_order
 from database.apilog_db import executor as log_executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from extensions import socketio
-from utils.config import get_host_server
 from utils.logging import get_logger
 
 # Initialize logger
@@ -125,31 +122,18 @@ def get_open_position_with_auth(
 
     # Live mode - get position from positionbook
     try:
-        # For internal service calls, we'll use the positionbook service directly
-        # But for now, we'll maintain compatibility by using the API endpoint
+        from services.positionbook_service import get_positionbook
 
-        # Prepare positionbook request with just apikey
-        positionbook_request = {"apikey": position_data.get("apikey")}
+        api_key = position_data.get("apikey")
+        success, positionbook_data, status_code = get_positionbook(api_key=api_key)
 
-        # Make request to positionbook API using HOST_SERVER from config
-        host_server = get_host_server()
-        positionbook_response = requests.post(
-            f"{host_server}/api/v1/positionbook", json=positionbook_request
-        )
-
-        if positionbook_response.status_code != 200:
-            error_response = {"status": "error", "message": "Failed to fetch positionbook"}
-            log_executor.submit(async_log_order, "openposition", original_data, error_response)
-            return False, error_response, positionbook_response.status_code
-
-        positionbook_data = positionbook_response.json()
-        if positionbook_data.get("status") != "success":
+        if not success:
             error_response = {
                 "status": "error",
-                "message": positionbook_data.get("message", "Error fetching positionbook"),
+                "message": positionbook_data.get("message", "Failed to fetch positionbook"),
             }
             log_executor.submit(async_log_order, "openposition", original_data, error_response)
-            return False, error_response, 500
+            return False, error_response, status_code
 
         # Find the specific position
         position_found = None

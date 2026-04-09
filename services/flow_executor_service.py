@@ -1161,7 +1161,9 @@ class NodeExecutor:
 
     def execute_http_request(self, node_data: dict) -> dict:
         """Execute HTTP Request node"""
-        import requests
+        import httpx
+
+        from utils.httpx_client import get_httpx_client
 
         method = self.get_str(node_data, "method", "GET").upper()
         url = self.get_str(node_data, "url", "")
@@ -1183,40 +1185,42 @@ class NodeExecutor:
 
         self.log(f"HTTP {method} {url}")
 
+        client = get_httpx_client()
+
         try:
             if method == "GET":
-                response = requests.get(url, headers=headers, timeout=timeout)
+                response = client.get(url, headers=headers, timeout=timeout)
             elif method == "POST":
                 try:
                     body_json = json.loads(body) if body else {}
-                    response = requests.post(url, json=body_json, headers=headers, timeout=timeout)
+                    response = client.post(url, json=body_json, headers=headers, timeout=timeout)
                 except json.JSONDecodeError:
-                    response = requests.post(url, data=body, headers=headers, timeout=timeout)
+                    response = client.post(url, content=body, headers=headers, timeout=timeout)
             elif method == "PUT":
                 try:
                     body_json = json.loads(body) if body else {}
-                    response = requests.put(url, json=body_json, headers=headers, timeout=timeout)
+                    response = client.put(url, json=body_json, headers=headers, timeout=timeout)
                 except json.JSONDecodeError:
-                    response = requests.put(url, data=body, headers=headers, timeout=timeout)
+                    response = client.put(url, content=body, headers=headers, timeout=timeout)
             elif method == "DELETE":
-                response = requests.delete(url, headers=headers, timeout=timeout)
+                response = client.delete(url, headers=headers, timeout=timeout)
             else:
                 return {"status": "error", "message": f"Unsupported method: {method}"}
 
             try:
                 response_data = response.json()
-            except:
+            except Exception:
                 response_data = response.text
 
             result = {
-                "status": "success" if response.ok else "error",
+                "status": "success" if response.is_success else "error",
                 "statusCode": response.status_code,
                 "data": response_data,
             }
             self.store_output(node_data, result)
             return result
 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             return {"status": "error", "message": str(e)}
 
     # === Condition Nodes ===
