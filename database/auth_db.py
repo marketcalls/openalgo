@@ -383,6 +383,12 @@ def clear_user_sessions(username):
 
 
 def init_db():
+    """Initialize the authentication database tables.
+
+    Creates the ``auth`` and ``api_keys`` tables if they do not
+    already exist, using the shared ``db_init_helper`` for
+    consistent startup logging.
+    """
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Auth DB", logger)
@@ -526,6 +532,15 @@ def get_auth_token_fresh(name):
 
 
 def get_auth_token_dbquery(name):
+    """Fetch the auth token record directly from the database.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:
@@ -546,7 +561,14 @@ def get_auth_token_dbquery(name):
 
 
 def get_feed_token(name):
-    """Get decrypted feed token"""
+    """Get the feed token for a user.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The feed token string, or ``None`` if unavailable.
+    """
     # Handle None or empty name gracefully
     if not name:
         logger.debug("get_feed_token called with empty/None name, returning None")
@@ -569,6 +591,15 @@ def get_feed_token(name):
 
 
 def get_feed_token_dbquery(name):
+    """Fetch the feed token record directly from the database.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:
