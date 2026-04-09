@@ -559,26 +559,15 @@ class OrderManager:
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
-            # Notify WebSocket execution engine to index and subscribe this symbol
-            try:
-                from sandbox.websocket_execution_engine import (
-                    get_websocket_execution_engine,
-                    is_websocket_execution_engine_running,
-                )
-
-                if is_websocket_execution_engine_running():
-                    engine = get_websocket_execution_engine()
-                    engine.notify_order_placed(order)
-            except Exception as e:
-                logger.debug(f"WebSocket execution engine notification skipped: {e}")
-
             # Execute orders immediately when conditions are already met
             # MARKET: always immediate, LIMIT: if marketable, SL/SL-M: if trigger already met
+            # This must happen BEFORE notifying the WebSocket engine to prevent
+            # duplicate execution (WebSocket tick arriving before immediate execution completes)
             if price_type == "MARKET" or (cached_quote and price_type in ["LIMIT", "SL", "SL-M"]):
                 try:
                     from sandbox.execution_engine import ExecutionEngine
 
-                    engine = ExecutionEngine()
+                    exec_engine = ExecutionEngine()
 
                     # Use cached quote from earlier check (already fetched above)
                     if cached_quote:
@@ -589,7 +578,7 @@ class OrderManager:
                             # In real exchanges, a marketable limit order gets price improvement
                             # e.g., BUY LIMIT 1500, LTP 1417 → fills at 1417
                             if ltp > 0:
-                                engine._execute_order(order, ltp)
+                                exec_engine._execute_order(order, ltp)
                                 logger.info(
                                     f"Marketable limit order {orderid} executed at LTP {ltp} (limit was {price})"
                                 )
@@ -600,7 +589,7 @@ class OrderManager:
                         elif price_type in ["SL", "SL-M"]:
                             # SL/SL-M with trigger already met: execute at LTP
                             if ltp > 0:
-                                engine._execute_order(order, ltp)
+                                exec_engine._execute_order(order, ltp)
                                 logger.info(
                                     f"{price_type} order {orderid} executed at LTP {ltp} (trigger already met)"
                                 )
@@ -610,7 +599,7 @@ class OrderManager:
                                 )
                         else:
                             # MARKET order: process normally (fills at bid/ask or LTP)
-                            engine._process_order(order, cached_quote)
+                            exec_engine._process_order(order, cached_quote)
                             logger.info(
                                 f"Market order {orderid} executed immediately"
                             )
@@ -621,6 +610,23 @@ class OrderManager:
                 except Exception as e:
                     logger.exception(f"Error executing order immediately: {e}")
                     # Order remains in 'open' status if execution fails
+
+            # Only notify WebSocket execution engine for orders that are STILL open
+            # (not already executed immediately above). This prevents the WebSocket
+            # engine from re-executing an already completed order.
+            db_session.refresh(order)
+            if order.order_status == "open":
+                try:
+                    from sandbox.websocket_execution_engine import (
+                        get_websocket_execution_engine,
+                        is_websocket_execution_engine_running,
+                    )
+
+                    if is_websocket_execution_engine_running():
+                        ws_engine = get_websocket_execution_engine()
+                        ws_engine.notify_order_placed(order)
+                except Exception as e:
+                    logger.debug(f"WebSocket execution engine notification skipped: {e}")
 
             return True, {"status": "success", "orderid": orderid, "mode": "analyze"}, 200
 
