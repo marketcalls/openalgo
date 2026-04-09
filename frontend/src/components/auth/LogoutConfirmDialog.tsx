@@ -43,6 +43,10 @@ export function LogoutConfirmDialog({
                   Open positions will remain as-is but will not be
                   managed automatically.
                 </li>
+                <li className="font-medium text-destructive">
+                  All devices connected to this account will be logged
+                  out immediately.
+                </li>
               </ul>
             </div>
           </AlertDialogDescription>

@@ -249,6 +249,7 @@ def fno_search_symbols_db(
         if primary_term:
 
             def sort_key(r):
+                """Sort results by relevance: exact match, prefix match, then alphabetical."""
                 name = r["name"] or ""
                 symbol = r["symbol"] or ""
                 # Priority 1: Exact match on name/underlying
@@ -302,6 +303,7 @@ def get_distinct_expiries(exchange: str = None, underlying: str = None) -> list[
 
         # Sort expiries chronologically
         def parse_expiry(exp_str):
+            """Parse an expiry date string into a datetime for chronological sorting."""
             try:
                 return datetime.strptime(exp_str, "%d-%b-%y")
             except ValueError:
@@ -350,7 +352,11 @@ def get_distinct_underlyings(exchange: str = None) -> list[str]:
 
 
 def init_db():
-    """Initialize the database"""
+    """Initialize the master contract database tables.
+
+    Creates the ``symtoken`` table if it does not already exist,
+    using the shared ``db_init_helper`` for consistent startup logging.
+    """
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Master Contract DB", logger)
