@@ -182,30 +182,35 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.token_modes[token] = max_mode_for_token
 
         if needs_ws_subscribe and self.ws_client and self.running:
-            try:
-                # Unsubscribe old mode if upgrading
-                if current_mstock_mode > 0 and token in self.token_correlation_ids:
-                    old_correlation_id = self.token_correlation_ids[token]
-                    if old_correlation_id in self.ws_client.subscriptions:
-                        self.ws_client.unsubscribe_stream(old_correlation_id)
-                        time.sleep(0.2)
-
-                # Subscribe with new mode
-                mstock_correlation_id = f"mstock_{token}_{subscribe_mode}"
-                result = self.ws_client.subscribe_stream(
-                    mstock_correlation_id, token, exchange_type, subscribe_mode
+            if not self.ws_client.is_connected():
+                self.logger.warning(
+                    f"WebSocket not connected, subscription for {symbol} stored locally but not sent to broker"
                 )
+            else:
+                try:
+                    # Unsubscribe old mode if upgrading
+                    if current_mstock_mode > 0 and token in self.token_correlation_ids:
+                        old_correlation_id = self.token_correlation_ids[token]
+                        if old_correlation_id in self.ws_client.subscriptions:
+                            self.ws_client.unsubscribe_stream(old_correlation_id)
+                            time.sleep(0.2)
 
-                if result:
-                    self.token_correlation_ids[token] = mstock_correlation_id
-                    self.logger.info(
-                        f"Subscribed to {symbol} (token: {token}) on {exchange} with mode {subscribe_mode}"
+                    # Subscribe with new mode
+                    mstock_correlation_id = f"mstock_{token}_{subscribe_mode}"
+                    result = self.ws_client.subscribe_stream(
+                        mstock_correlation_id, token, exchange_type, subscribe_mode
                     )
-                else:
-                    self.logger.warning(f"Failed to subscribe to {symbol} on {exchange}")
 
-            except Exception as e:
-                self.logger.error(f"Error subscribing: {str(e)}")
+                    if result:
+                        self.token_correlation_ids[token] = mstock_correlation_id
+                        self.logger.info(
+                            f"Subscribed to {symbol} (token: {token}) on {exchange} with mode {subscribe_mode}"
+                        )
+                    else:
+                        self.logger.warning(f"Failed to subscribe to {symbol} on {exchange}")
+
+                except Exception as e:
+                    self.logger.error(f"Error subscribing: {str(e)}")
 
         return {
             "status": "success",

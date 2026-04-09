@@ -192,7 +192,7 @@ class MstockWebSocket:
 
     def _run_websocket(self):
         """Run the WebSocket connection with reconnection"""
-        reconnect_attempts = 0
+        self._reconnect_attempts = 0
         max_attempts = 10
 
         while self.running:
@@ -211,13 +211,13 @@ class MstockWebSocket:
             if not self.running:
                 break
 
-            reconnect_attempts += 1
-            if reconnect_attempts >= max_attempts:
+            self._reconnect_attempts += 1
+            if self._reconnect_attempts >= max_attempts:
                 logger.error("Max reconnect attempts reached")
                 break
 
-            delay = min(2 * (1.5 ** reconnect_attempts), 60)
-            logger.info(f"Reconnecting in {delay:.0f}s (attempt {reconnect_attempts})...")
+            delay = min(2 * (1.5 ** self._reconnect_attempts), 60)
+            logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
             time.sleep(delay)
 
             # Recreate WebSocketApp for reconnection
@@ -233,6 +233,7 @@ class MstockWebSocket:
         """Called when WebSocket connection is opened"""
         logger.info("mstock WebSocket connected")
         self._connected = True
+        self._reconnect_attempts = 0
 
         # Send LOGIN message
         login_msg = f"LOGIN:{self.auth_token}"
