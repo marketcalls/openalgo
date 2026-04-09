@@ -28,6 +28,7 @@ from extensions import socketio
 from limiter import limiter  # Import the limiter instance
 from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
+from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -100,14 +101,93 @@ def check_setup_required():
     return jsonify({"status": "success", "needs_setup": needs_setup})
 
 
+def _try_resume_broker_session(username):
+    """
+    Check if the user has an existing valid broker session in the DB.
+    If so, validate it with a lightweight funds API call and resume
+    the session without requiring broker OAuth re-authentication.
+
+    Returns a JSON response if session was resumed, or None to proceed
+    with normal broker OAuth flow.
+    """
+    from database.auth_db import Auth, decrypt_token, get_auth_token_dbquery
+
+    try:
+        auth_obj = get_auth_token_dbquery(username)
+        if not auth_obj or auth_obj.is_revoked:
+            return None
+
+        # Decrypt the stored broker token
+        auth_token = decrypt_token(auth_obj.auth)
+        if not auth_token:
+            return None
+
+        broker = auth_obj.broker
+        feed_token = decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
+        user_id = auth_obj.user_id
+
+        # Validate token with a lightweight broker API call (funds)
+        import importlib
+        try:
+            broker_module = importlib.import_module(f"broker.{broker}.api.funds")
+            funds_data = broker_module.get_margin_data(auth_token)
+            # get_margin_data returns {} on failure (doesn't raise) — treat empty as invalid
+            if not funds_data:
+                logger.info(f"Broker token expired or invalid for {username} (empty funds response)")
+                return None
+        except Exception as e:
+            logger.info(f"Broker token validation failed for {username}: {e}")
+            return None
+
+        # Token is valid — resume the session via handle_auth_success
+        logger.info(f"Resuming existing broker session for {username} (broker: {broker})")
+
+        from utils.auth_utils import handle_auth_success
+        # Call handle_auth_success for its side effects (session setup, DB upsert,
+        # master contract loading) but ignore its response format — the login
+        # endpoint must always return JSON for the React frontend's fetch() call.
+        try:
+            handle_auth_success(
+                auth_token=auth_token,
+                user_session_key=username,
+                broker=broker,
+                feed_token=feed_token,
+                user_id=user_id,
+            )
+        except Exception as e:
+            logger.error(f"handle_auth_success failed during resume: {e}", exc_info=True)
+            # Clear partial session state and fall through to OAuth
+            session.pop("logged_in", None)
+            session.pop("AUTH_TOKEN", None)
+            session.pop("broker", None)
+            session.pop("session_id", None)
+            return None
+
+        logger.info(f"Session resume complete for {username}, redirecting to dashboard")
+        return jsonify({
+            "status": "success",
+            "message": "Broker session resumed",
+            "redirect": "/dashboard",
+            "broker": broker,
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error trying to resume broker session: {e}", exc_info=True)
+        return None
+
+
 @auth_bp.route("/login", methods=["GET", "POST"])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
     # Handle POST requests first (for React SPA / AJAX login)
     if request.method == "POST":
+        logger.info(f"[LOGIN] POST from IP={get_real_ip()}, UA={request.headers.get('User-Agent', '')[:80]}")
+        logger.info(f"[LOGIN] Session state: user={session.get('user')}, logged_in={session.get('logged_in')}, broker={session.get('broker')}")
+
         # Check if setup is required
         if find_user_by_username() is None:
+            logger.info("[LOGIN] No users exist, redirecting to setup")
             return jsonify(
                 {
                     "status": "error",
@@ -116,26 +196,51 @@ def login():
                 }
             ), 400
 
-        # Check if already logged in
-        if "user" in session:
-            return jsonify(
-                {"status": "success", "message": "Already logged in", "redirect": "/broker"}
-            ), 200
-
+        # Check if already logged in (check logged_in first — it means
+        # broker auth is complete; "user" alone means only password was done)
         if session.get("logged_in"):
+            logger.info(f"[LOGIN] Already fully logged in, redirecting to /dashboard")
             return jsonify(
                 {"status": "success", "message": "Already logged in", "redirect": "/dashboard"}
+            ), 200
+
+        if "user" in session:
+            logger.info(f"[LOGIN] User in session but not logged_in, redirecting to /broker")
+            return jsonify(
+                {"status": "success", "message": "Already logged in", "redirect": "/broker"}
             ), 200
 
         username = request.form["username"]
         password = request.form["password"]
 
+        ip = get_real_ip()
+        ua = request.headers.get("User-Agent", "")
+
         if authenticate_user(username, password):
             session["user"] = username  # Set the username in the session
-            logger.info(f"Login success for user: {username}")
-            # Redirect to broker login without marking as fully logged in
+            logger.info(f"[LOGIN] Password auth success for: {username}")
+
+            # Try to resume existing broker session (skip OAuth if token still valid)
+            resumed = _try_resume_broker_session(username)
+            logger.info(f"[LOGIN] Resume result: {resumed is not None}, type={type(resumed).__name__ if resumed else 'None'}")
+            if resumed:
+                logger.info(f"[LOGIN] Returning resume response to frontend")
+                from database.auth_db import log_login_attempt
+                log_login_attempt(username, ip, ua, status="success",
+                                  login_type="resume", broker=session.get("broker"))
+                return resumed
+
+            # No valid broker session — redirect to broker login
+            logger.info(f"[LOGIN] No valid broker session, redirecting to /broker")
+            from database.auth_db import log_login_attempt
+            log_login_attempt(username, ip, ua, status="success", login_type="password")
             return jsonify({"status": "success"}), 200
         else:
+            from database.auth_db import log_login_attempt
+            log_login_attempt(username, get_real_ip(),
+                              request.headers.get("User-Agent", ""),
+                              status="failed", login_type="password",
+                              failure_reason="invalid_credentials")
             return jsonify({"status": "error", "message": "Invalid credentials"}), 401
 
     # Handle GET requests - redirect to React frontend
@@ -541,6 +646,10 @@ def get_session_status():
         # Get API key for the user
         api_key = get_api_key_for_tradingview(session.get("user"))
 
+        # Include active session count
+        from database.auth_db import get_active_sessions
+        active_count = len(get_active_sessions(session.get("user")))
+
         return jsonify(
             {
                 "status": "success",
@@ -549,8 +658,13 @@ def get_session_status():
                 "user": session.get("user"),
                 "broker": session.get("broker"),
                 "api_key": api_key,
+                "active_sessions": active_count,
             }
         )
+
+    # Include active session count
+    from database.auth_db import get_active_sessions
+    active_count = len(get_active_sessions(session.get("user")))
 
     return jsonify(
         {
@@ -559,8 +673,28 @@ def get_session_status():
             "logged_in": session.get("logged_in", False),
             "user": session.get("user"),
             "broker": session.get("broker"),
+            "active_sessions": active_count,
         }
     )
+
+
+@auth_bp.route("/active-sessions", methods=["GET"])
+@check_session_validity
+def active_sessions():
+    """Return the list of active sessions for the current user."""
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Not authenticated"}), 401
+
+    from database.auth_db import get_active_sessions
+    sessions = get_active_sessions(session["user"])
+    current_session_id = session.get("session_id")
+
+    return jsonify({
+        "status": "success",
+        "count": len(sessions),
+        "current_session_id": current_session_id,
+        "sessions": sessions,
+    })
 
 
 @auth_bp.route("/app-info", methods=["GET"])
@@ -749,6 +883,21 @@ def logout():
             logger.info(f"Auth Revoked in the Database for user: {username}")
         else:
             logger.error(f"Failed to upsert auth token for user: {username}")
+
+        # Clear ALL sessions for this user (logout means all devices)
+        from database.auth_db import clear_user_sessions
+        clear_user_sessions(username)
+
+        # Notify all connected devices to logout immediately
+        socketio.emit("force_logout", {
+            "message": "You have been logged out from another device.",
+        })
+
+        # Update session count to 0
+        socketio.emit("active_sessions_update", {
+            "count": 0,
+            "sessions": [],
+        })
 
         # Clear entire session to ensure complete logout
         session.clear()

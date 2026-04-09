@@ -168,6 +168,14 @@ def revoke_user_tokens(revoke_db_tokens=True):
                     logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
                 else:
                     logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
+
+                # Clear all active sessions for this user (tokens are invalid now)
+                try:
+                    from database.auth_db import clear_user_sessions
+                    clear_user_sessions(username)
+                    logger.info(f"Auto-expiry: Cleared active sessions for user: {username}")
+                except Exception as session_error:
+                    logger.warning(f"Error clearing active sessions: {session_error}")
             else:
                 logger.info(
                     f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)"

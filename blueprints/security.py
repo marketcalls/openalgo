@@ -472,6 +472,63 @@ def update_security_settings():
         return jsonify({"error": "An internal error occurred"}), 500
 
 
+@security_bp.route("/api/login-activity", methods=["GET"])
+@check_session_validity
+@limiter.limit("60/minute")
+def login_activity():
+    """Get login attempt history for the security dashboard."""
+    try:
+        from database.auth_db import get_login_attempts
+
+        status_filter = request.args.get("status")  # 'success', 'failed', or None for all
+        limit = min(int(request.args.get("limit", 100)), 500)
+        attempts = get_login_attempts(limit=limit, status_filter=status_filter)
+        return jsonify({"status": "success", "attempts": attempts})
+    except Exception as e:
+        logger.exception(f"Error fetching login activity: {e}")
+        return jsonify({"status": "error", "attempts": []}), 500
+
+
+@security_bp.route("/api/login-activity/clear", methods=["POST"])
+@check_session_validity
+@limiter.limit("10/minute")
+def clear_login_activity():
+    """Clear all login attempt records."""
+    try:
+        from database.auth_db import clear_login_attempts
+
+        clear_login_attempts()
+        return jsonify({"status": "success", "message": "Login history cleared"})
+    except Exception as e:
+        logger.exception(f"Error clearing login activity: {e}")
+        return jsonify({"status": "error", "message": "Failed to clear history"}), 500
+
+
+@security_bp.route("/api/active-sessions", methods=["GET"])
+@check_session_validity
+@limiter.limit("60/minute")
+def active_sessions_list():
+    """Get all active sessions for the security dashboard."""
+    try:
+        from flask import session
+        from database.auth_db import get_active_sessions
+
+        username = session.get("user")
+        if not username:
+            return jsonify({"status": "error", "sessions": []}), 401
+
+        sessions = get_active_sessions(username)
+        current_session_id = session.get("session_id")
+        return jsonify({
+            "status": "success",
+            "current_session_id": current_session_id,
+            "sessions": sessions,
+        })
+    except Exception as e:
+        logger.exception(f"Error fetching active sessions: {e}")
+        return jsonify({"status": "error", "sessions": []}), 500
+
+
 @security_bp.teardown_app_request
 def shutdown_session(exception=None):
     logs_session.remove()

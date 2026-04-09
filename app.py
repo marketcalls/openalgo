@@ -778,36 +778,43 @@ threading.Thread(target=_restore_caches_background, daemon=True).start()
 # Database session cleanup (teardown handler)
 @app.teardown_appcontext
 def shutdown_database_sessions(exception=None):
-    """Remove scoped sessions after each request to prevent FD leaks"""
-    try:
-        from database.auth_db import db_session
-        db_session.remove()
-    except Exception as e:
-        logger.error(f"Error removing auth db_session: {e}")
+    """Remove all scoped sessions after each request to prevent FD leaks"""
+    # All (module, session_variable_name) pairs that use scoped_session.
+    # Each must be removed per-request to release the underlying DB connection
+    # and prevent file descriptor accumulation.
+    _sessions = [
+        # --- Previously cleaned up ---
+        ("database.auth_db", "db_session"),
+        ("database.traffic_db", "logs_session"),
+        ("database.apilog_db", "db_session"),
+        ("database.latency_db", "latency_session"),
+        ("database.health_db", "health_session"),
+        # --- Previously missing (caused FD leak) ---
+        ("database.settings_db", "db_session"),
+        ("database.strategy_db", "db_session"),
+        ("database.user_db", "db_session"),
+        ("database.action_center_db", "db_session"),
+        ("database.qty_freeze_db", "db_session"),
+        ("database.sandbox_db", "db_session"),
+        ("database.analyzer_db", "db_session"),
+        ("database.chart_prefs_db", "db_session"),
+        ("database.chartink_db", "db_session"),
+        ("database.flow_db", "db_session"),
+        ("database.leverage_db", "db_session"),
+        ("database.market_calendar_db", "db_session"),
+        ("database.telegram_db", "db_session"),
+        ("database.symbol", "db_session"),
+    ]
 
-    try:
-        from database.traffic_db import logs_session
-        logs_session.remove()
-    except Exception as e:
-        logger.error(f"Error removing logs_session: {e}")
-
-    try:
-        from database.apilog_db import db_session as apilog_session
-        apilog_session.remove()
-    except Exception as e:
-        logger.error(f"Error removing apilog_session: {e}")
-
-    try:
-        from database.latency_db import latency_session
-        latency_session.remove()
-    except Exception as e:
-        logger.error(f"Error removing latency_session: {e}")
-
-    try:
-        from database.health_db import health_session
-        health_session.remove()
-    except Exception as e:
-        logger.error(f"Error removing health_session: {e}")
+    for module_name, session_attr in _sessions:
+        try:
+            import importlib
+            mod = importlib.import_module(module_name)
+            session = getattr(mod, session_attr, None)
+            if session is not None:
+                session.remove()
+        except Exception:
+            pass
 
 
 # Integrate the WebSocket proxy server with the Flask app

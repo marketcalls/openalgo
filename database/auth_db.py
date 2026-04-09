@@ -188,7 +188,207 @@ class ApiKeys(Base):
     )
 
 
+class ActiveSession(Base):
+    """Tracks active login sessions across devices for a user."""
+    __tablename__ = "active_sessions"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(255), nullable=False, index=True)
+    session_id = Column(String(64), unique=True, nullable=False)  # Random token to identify session
+    device_info = Column(String(500), nullable=True)  # User-Agent string
+    ip_address = Column(String(45), nullable=True)
+    broker = Column(String(20), nullable=True)
+    login_time = Column(DateTime(timezone=True), default=func.now())
+    last_seen = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        Index("idx_active_sessions_username", "username"),
+    )
+
+
+class LoginAttempt(Base):
+    """Records all login attempts (successful and failed) for security auditing."""
+    __tablename__ = "login_attempts"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(255), nullable=False)
+    ip_address = Column(String(45), nullable=True)
+    device_info = Column(String(500), nullable=True)  # User-Agent
+    status = Column(String(20), nullable=False)  # 'success', 'failed', 'resumed'
+    login_type = Column(String(20), nullable=True)  # 'password', 'oauth', 'resume'
+    broker = Column(String(20), nullable=True)
+    failure_reason = Column(String(255), nullable=True)  # e.g. 'invalid_password', 'token_expired'
+    timestamp = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        Index("idx_login_attempts_username", "username"),
+        Index("idx_login_attempts_timestamp", "timestamp"),
+        Index("idx_login_attempts_status", "status"),
+    )
+
+
+def _now_ist():
+    """Get current time in IST."""
+    import pytz
+    return datetime.now(pytz.timezone("Asia/Kolkata"))
+
+
+def log_login_attempt(username, ip_address=None, device_info=None, status="failed",
+                      login_type="password", broker=None, failure_reason=None):
+    """Record a login attempt for audit purposes. All records are retained permanently."""
+    try:
+        attempt = LoginAttempt(
+            username=username,
+            ip_address=ip_address,
+            device_info=device_info[:500] if device_info else None,
+            status=status,
+            login_type=login_type,
+            broker=broker,
+            failure_reason=failure_reason,
+            timestamp=_now_ist(),
+        )
+        db_session.add(attempt)
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error logging login attempt: {e}")
+
+
+def get_login_attempts(limit=100, status_filter=None):
+    """Get recent login attempts, optionally filtered by status."""
+    try:
+        query = LoginAttempt.query.order_by(LoginAttempt.timestamp.desc())
+        if status_filter:
+            query = query.filter(LoginAttempt.status == status_filter)
+        attempts = query.limit(limit).all()
+        return [
+            {
+                "username": a.username,
+                "ip_address": a.ip_address,
+                "device_info": a.device_info,
+                "status": a.status,
+                "login_type": a.login_type,
+                "broker": a.broker,
+                "failure_reason": a.failure_reason,
+                "timestamp": a.timestamp.isoformat() if a.timestamp else None,
+            }
+            for a in attempts
+        ]
+    except Exception as e:
+        logger.error(f"Error getting login attempts: {e}")
+        return []
+
+
+def clear_login_attempts():
+    """Clear all login attempt records."""
+    try:
+        LoginAttempt.query.delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error clearing login attempts: {e}")
+
+
+MAX_SESSIONS_PER_USER = 5  # Safety cap to prevent unbounded growth
+
+
+def register_session(username, session_id, device_info=None, ip_address=None, broker=None):
+    """Register a new active session for a user.
+    Replaces any previous session from the same user+IP to prevent accumulation.
+    Enforces a maximum of MAX_SESSIONS_PER_USER sessions per user.
+    """
+    try:
+        # Remove stale sessions from the same device (same user + IP)
+        if ip_address:
+            ActiveSession.query.filter_by(username=username, ip_address=ip_address).delete()
+
+        # Enforce per-user session cap — remove oldest if at limit
+        current_count = ActiveSession.query.filter_by(username=username).count()
+        if current_count >= MAX_SESSIONS_PER_USER:
+            oldest = ActiveSession.query.filter_by(username=username).order_by(
+                ActiveSession.login_time.asc()
+            ).first()
+            if oldest:
+                db_session.delete(oldest)
+
+        now = _now_ist()
+        active = ActiveSession(
+            username=username,
+            session_id=session_id,
+            device_info=device_info,
+            ip_address=ip_address,
+            broker=broker,
+            login_time=now,
+            last_seen=now,
+        )
+        db_session.add(active)
+        db_session.commit()
+        return True
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error registering session: {e}")
+        return False
+
+
+def remove_session(session_id):
+    """Remove a session when user logs out."""
+    try:
+        ActiveSession.query.filter_by(session_id=session_id).delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error removing session: {e}")
+
+
+def get_active_sessions(username):
+    """Get all active sessions for a user."""
+    try:
+        sessions = ActiveSession.query.filter_by(username=username).order_by(
+            ActiveSession.last_seen.desc()
+        ).all()
+        return [
+            {
+                "session_id": s.session_id,
+                "device_info": s.device_info,
+                "ip_address": s.ip_address,
+                "broker": s.broker,
+                "login_time": s.login_time.isoformat() if s.login_time else None,
+                "last_seen": s.last_seen.isoformat() if s.last_seen else None,
+            }
+            for s in sessions
+        ]
+    except Exception as e:
+        logger.error(f"Error getting active sessions: {e}")
+        return []
+
+
+def update_session_last_seen(session_id):
+    """Update last_seen timestamp for a session."""
+    try:
+        active = ActiveSession.query.filter_by(session_id=session_id).first()
+        if active:
+            active.last_seen = _now_ist()
+            db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error updating session last_seen: {e}")
+
+
+def clear_user_sessions(username):
+    """Clear all sessions for a user (e.g., on token revocation at 3 AM)."""
+    try:
+        ActiveSession.query.filter_by(username=username).delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error clearing user sessions: {e}")
+
+
 def init_db():
+    """Initialize the authentication database tables.
+
+    Creates the ``auth`` and ``api_keys`` tables if they do not
+    already exist, using the shared ``db_init_helper`` for
+    consistent startup logging.
+    """
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Auth DB", logger)
@@ -332,6 +532,15 @@ def get_auth_token_fresh(name):
 
 
 def get_auth_token_dbquery(name):
+    """Fetch the auth token record directly from the database.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:
@@ -352,7 +561,14 @@ def get_auth_token_dbquery(name):
 
 
 def get_feed_token(name):
-    """Get decrypted feed token"""
+    """Get the feed token for a user.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The feed token string, or ``None`` if unavailable.
+    """
     # Handle None or empty name gracefully
     if not name:
         logger.debug("get_feed_token called with empty/None name, returning None")
@@ -375,6 +591,15 @@ def get_feed_token(name):
 
 
 def get_feed_token_dbquery(name):
+    """Fetch the feed token record directly from the database.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:

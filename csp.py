@@ -127,6 +127,15 @@ def get_security_headers():
     """
     headers = {}
 
+    # X-Frame-Options: prevent clickjacking
+    headers["X-Frame-Options"] = "DENY"
+
+    # X-Content-Type-Options: prevent MIME-type sniffing
+    headers["X-Content-Type-Options"] = "nosniff"
+
+    # X-XSS-Protection: legacy XSS protection for older browsers
+    headers["X-XSS-Protection"] = "1; mode=block"
+
     # Referrer Policy
     referrer_policy = os.getenv("REFERRER_POLICY", "strict-origin-when-cross-origin")
     if referrer_policy:
