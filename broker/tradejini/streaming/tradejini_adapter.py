@@ -34,6 +34,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.lock = threading.Lock()
         self.ws_url = None
+        self._connect_thread = None
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -111,7 +112,8 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        self._connect_thread = threading.Thread(target=self._connect_with_retry, daemon=True)
+        self._connect_thread.start()
 
     def _connect_with_retry(self) -> None:
         """Connect to Tradejini WebSocket with retry logic"""
@@ -338,7 +340,8 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Attempt to reconnect if we're still running
             if self.running:
-                threading.Thread(target=self._connect_with_retry, daemon=True).start()
+                self._connect_thread = threading.Thread(target=self._connect_with_retry, daemon=True)
+                self._connect_thread.start()
 
     def _on_data(self, ws, message) -> None:
         """Callback for market data from the WebSocket"""

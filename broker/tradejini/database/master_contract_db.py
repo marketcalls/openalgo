@@ -213,12 +213,6 @@ def process_scrip_data(scrip_data, group_info):
     # Get group name and format
     group_name = group_info.get("name", "")
 
-    # Common index symbol mappings
-    COMMON_INDEX_MAP = {
-        "NSE_INDEX": ["NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX"],
-        "BSE_INDEX": ["SENSEX", "BANKEX", "SENSEX50"],
-    }
-
     # Handle index data separately
     if group_name == "Index":
         # Process index records
@@ -232,16 +226,9 @@ def process_scrip_data(scrip_data, group_info):
                     # Map exchange for OpenAlgo format
                     exchange_map = {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX"}
 
-                    # Symbol mapping for special cases
-                    symbol_map = {"India VIX": "INDIAVIX", "SNXT50": "SENSEX50"}
-
-                    # Apply symbol mapping if needed
-                    if item["symbol"] in symbol_map:
-                        item["symbol"] = symbol_map[item["symbol"]]
-
                     record = {
-                        "symbol": item["symbol"],  # Use symbol field directly
-                        "brsymbol": item["dispName"],  # Use display name as broker symbol
+                        "symbol": item["symbol"],  # Raw symbol, normalized later via DataFrame
+                        "brsymbol": item["id"],  # Use id as broker symbol for reverse lookup
                         "name": item["dispName"],  # Use display name as full name
                         "exchange": exchange_map.get(raw_exchange, raw_exchange),
                         "brexchange": raw_exchange,
@@ -368,111 +355,109 @@ def process_scrip_data(scrip_data, group_info):
                             logger.info(f"Error processing option {item['id']}: {e}")
 
                 elif instr_type == "IDX":
-                    # Handle index symbols
-                    raw_exchange = parts[-1]  # Last part is exchange (NSE/BSE)
-
-                    # Map exchange for OpenAlgo format
-                    exchange_map = {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX"}
-
-                    # Get OpenAlgo exchange
-                    openalgo_exchange = exchange_map.get(raw_exchange, raw_exchange)
-
-                    # Check if this is a common index symbol
-                    if openalgo_exchange == "BSE_INDEX":
-                        # Handle BSE indices
-                        if item["symbol"].upper() in COMMON_INDEX_MAP[openalgo_exchange]["common"]:
-                            # Use common symbol format for main indices
-                            record = {
-                                "symbol": item["symbol"].upper(),  # Use uppercase symbol
-                                "brsymbol": item["id"],  # Use dispName as brsymbol
-                                "name": item.get(
-                                    "symbol", item["dispName"]
-                                ),  # Use symbol field if available
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                        elif (
-                            item["symbol"].upper()
-                            in COMMON_INDEX_MAP[openalgo_exchange]["sectoral"]
-                        ):
-                            # Use sectoral index format
-                            record = {
-                                "symbol": item["symbol"].upper(),  # Use uppercase symbol
-                                "brsymbol": COMMON_INDEX_MAP[openalgo_exchange]["sectoral"][
-                                    item["symbol"].upper()
-                                ],  # Use mapped brsymbol
-                                "name": item.get(
-                                    "symbol", item["dispName"]
-                                ),  # Use symbol field if available
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                        else:
-                            # Use regular symbol format
-                            record = {
-                                "symbol": item["dispName"],  # Use dispName for non-common symbols
-                                "brsymbol": item["id"],
-                                "name": item.get("symbol", item["dispName"]),
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                    else:
-                        # Handle NSE indices
-                        if item["symbol"].upper() in COMMON_INDEX_MAP[openalgo_exchange]:
-                            # Use common symbol format
-                            record = {
-                                "symbol": item["symbol"].upper(),  # Use uppercase symbol
-                                "brsymbol": item["id"],  # Use dispName as brsymbol
-                                "name": item.get(
-                                    "symbol", item["dispName"]
-                                ),  # Use symbol field if available
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
-                        else:
-                            # Use regular symbol format
-                            record = {
-                                "symbol": item["dispName"],  # Use dispName for non-common symbols
-                                "brsymbol": item["id"],
-                                "name": item.get("symbol", item["dispName"]),
-                                "exchange": openalgo_exchange,
-                                "brexchange": raw_exchange,
-                                "token": str(item["excToken"]),
-                                "expiry": "",
-                                "strike": 0,
-                                "lotsize": 1,
-                                "instrumenttype": "INDEX",
-                                "tick_size": 0.05,
-                            }
+                    # Index symbols are handled by the "Index" group above; skip here
+                    continue
             except Exception as e:
                 logger.error(f"Error processing item {item}: {e}")
                 continue
 
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+
+    if df.empty:
+        return df
+
+    # --- NSE Index Symbol Normalization (Tradejini symbol → OpenAlgo format) ---
+    # Listed symbols are mapped explicitly; unlisted symbols get basic cleanup
+    # (uppercase, spaces removed) to preserve them without breaking format.
+    nse_idx_mask = df["exchange"] == "NSE_INDEX"
+    nse_index_map = {
+        # Major NSE Indices
+        "NIFTY": "NIFTY",
+        "NIFTYNXT50": "NIFTYNXT50",
+        "FINNIFTY": "FINNIFTY",
+        "BANKNIFTY": "BANKNIFTY",
+        "MIDCPNIFTY": "MIDCPNIFTY",
+        "India VIX": "INDIAVIX",
+        # Broad Market Indices
+        "Nifty 100": "NIFTY100",
+        "Nifty 200": "NIFTY200",
+        "NIFTY 500": "NIFTY500",
+        # Sectoral Indices
+        "Nifty Auto": "NIFTYAUTO",
+        "Nifty Commodities": "NIFTYCOMMODITIES",
+        "Nifty Consumption": "NIFTYCONSUMPTION",
+        "Nifty Energy": "NIFTYENERGY",
+        "Nifty FMCG": "NIFTYFMCG",
+        "NIFTY HEALTHCARE": "NIFTYHEALTHCARE",
+        "Nifty Infra": "NIFTYINFRA",
+        "Nifty IT": "NIFTYIT",
+        "Nifty Media": "NIFTYMEDIA",
+        "Nifty Metal": "NIFTYMETAL",
+        "Nifty MNC": "NIFTYMNC",
+        "NIFTY OIL AND GAS": "NIFTYOILANDGAS",
+        "Nifty Pharma": "NIFTYPHARMA",
+        "Nifty PSE": "NIFTYPSE",
+        "Nifty PSU Bank": "NIFTYPSUBANK",
+        "Nifty Pvt Bank": "NIFTYPVTBANK",
+        # Market Cap Indices
+        "Nifty Midcap 50": "NIFTYMIDCAP50",
+        "NIFTY MIDCAP 100": "NIFTYMIDCAP100",
+        "NIFTY SMLCAP 50": "NIFTYSMLCAP50",
+        "NIFTY SMLCAP 100": "NIFTYSMLCAP100",
+        # Other Indices
+        "NIFTY INDIA MFG": "NIFTYINDIAMFG",
+        "Nifty MidSml Hlth": "NIFTYMIDSMLHLTH",
+        "Nifty Tata 25 Cap": "NIFTYTATA25CAP",
+    }
+    original_nse = df.loc[nse_idx_mask, "symbol"]
+    mapped_nse = original_nse.map(nse_index_map)
+    # For unmapped symbols, keep raw symbol with basic cleanup (uppercase, no spaces)
+    fallback_nse = original_nse.str.upper().str.replace(" ", "", regex=False)
+    df.loc[nse_idx_mask, "symbol"] = mapped_nse.fillna(fallback_nse)
+
+    # --- BSE Index Symbol Normalization (Tradejini symbol → OpenAlgo format) ---
+    # Applied only to BSE_INDEX rows to avoid conflicts with equity symbols
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    bse_index_map = {
+        # Major BSE Indices
+        "SENSEX": "SENSEX",
+        "BANKEX": "BANKEX",
+        "SNXT50": "BSESENSEXNEXT50",
+        "SENSEX50": "SENSEX50",
+        # Broad Market Indices
+        "BSE100": "BSE100",
+        "BSE200": "BSE200",
+        "BSE500": "BSE500",
+        # Sectoral Indices
+        "AUTO": "BSEAUTO",
+        "BSE HC": "BSEHEALTHCARE",
+        "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+        "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "BSEIPO": "BSEIPO",
+        "BSEPSU": "BSEPSU",
+        "ENERGY": "BSEENERGY",
+        "FIN": "BSEFINANCIALSERVICES",
+        "GREENX": "BSEGREENEX",
+        "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MIDCAP": "BSEMIDCAP",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "SMLCAP": "BSESMALLCAP",
+        "TELCOM": "BSETELECOM",
+        # Other BSE Indices
+        "BSEEVI": "BSEEVI",
+        "BSEPBI": "BSEPBI",
+        "MFG": "BSEMFG",
+    }
+    original_bse = df.loc[bse_idx_mask, "symbol"]
+    mapped_bse = original_bse.map(bse_index_map)
+    # For unmapped symbols, keep raw symbol with basic cleanup (uppercase, no spaces)
+    fallback_bse = original_bse.str.upper().str.replace(" ", "", regex=False)
+    df.loc[bse_idx_mask, "symbol"] = mapped_bse.fillna(fallback_bse)
+
+    return df
 
 
 def master_contract_download():
