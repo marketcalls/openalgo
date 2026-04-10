@@ -39,7 +39,21 @@ def map_order_data(order_data):
             # Update fields in place
             order["action"] = "BUY" if order_info.get("side") == "buy" else "SELL"
             order["exchange"] = order_info.get("exchange", "")
-            order["order_status"] = order_info.get("status", "").lower()
+            # Map Tradejini status to OpenAlgo status
+            raw_status = order_info.get("status", "").lower()
+            status_map = {
+                "completed": "complete",
+                "traded": "complete",
+                "filled": "complete",
+                "complete": "complete",
+                "open": "open",
+                "pending": "open",
+                "trigger pending": "trigger pending",
+                "rejected": "rejected",
+                "cancelled": "cancelled",
+                "canceled": "cancelled",
+            }
+            order["order_status"] = status_map.get(raw_status, raw_status)
             order["orderid"] = str(order_info.get("order_id", ""))
             order["price"] = float(order_info.get("limit_price", 0))
             order["pricetype"] = order_info.get("type", "").upper()

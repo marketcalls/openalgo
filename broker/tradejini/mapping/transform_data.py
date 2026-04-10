@@ -1,5 +1,5 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Angel Broking Parameters https://smartapi.angelbroking.com/docs/Orders
+# Mapping Tradejini API Parameters https://api.tradejini.com/v2
 
 from database.token_db import get_br_symbol
 
@@ -11,24 +11,29 @@ def transform_data(data, token):
     symbol = get_br_symbol(data["symbol"], data["exchange"])
 
     # Basic mapping
+    order_type = map_order_type(data["pricetype"])
+
     transformed = {
         "symId": f"{symbol}",
         "qty": str(data["quantity"]),
         "side": "buy" if data["action"] == "BUY" else "sell",
-        "type": map_order_type(data["pricetype"]),
+        "type": order_type,
         "product": map_product_type(data["product"]),
         "limitPrice": str(data.get("price", "0")),
         "trigPrice": str(data.get("trigger_price", "0")),
         "validity": map_validity(data.get("validity", "DAY")),
         "discQty": str(data.get("disclosed_quantity", "0")),
         "amo": data.get("amo", False),
-        "mktProt": str(data.get("market_protection", "0")),
         "remarks": data.get("remarks", ""),
     }
 
+    # Add market protection percentage for market and stopmarket orders
+    if order_type in ("market", "stopmarket"):
+        transformed["mktProt"] = "2"
+
     # Remove optional fields if not set
-    for key in ["limitPrice", "trigPrice", "discQty", "mktProt", "remarks"]:
-        if transformed[key] == "0" or transformed[key] == "":
+    for key in ["limitPrice", "trigPrice", "discQty", "remarks"]:
+        if transformed.get(key, "") in ("0", ""):
             del transformed[key]
 
     return transformed
