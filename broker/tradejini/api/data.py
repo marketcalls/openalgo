@@ -32,6 +32,12 @@ class TradejiniWebSocket:
         self.L1_dict = {}
         self.L5_dict = {}
 
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def connect(self, auth_token):
         """Connect to Tradejini WebSocket using official SDK"""
         try:
@@ -228,6 +234,19 @@ class BrokerData:
             "30m": "30m",  # 30 minutes
         }
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def connect_websocket(self):
         """Initialize WebSocket connection if not already connected"""
         try:
@@ -236,6 +255,13 @@ class BrokerData:
                 return True
 
             logger.info("Initializing new WebSocket connection...")
+
+            # Close existing WebSocket before creating a new one
+            if hasattr(self, "ws") and self.ws:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
 
             # Initialize new WebSocket instance
             self.ws = TradejiniWebSocket()
@@ -436,6 +462,12 @@ class BrokerData:
                 "prev_close": 0.0,
                 "volume": 0,
             }
+        finally:
+            # Always close WebSocket after quotes request to prevent FD leaks
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def get_multiquotes(self, symbols: list) -> list:
         """
@@ -476,6 +508,12 @@ class BrokerData:
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
+        finally:
+            # Always close WebSocket after multiquotes request to prevent FD leaks
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def _process_multiquotes_batch(self, symbols: list) -> list:
         """
@@ -671,6 +709,12 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_depth: {str(e)}", exc_info=True)
             return self._get_default_depth()
+        finally:
+            # Always close WebSocket after depth request to prevent FD leaks
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def _format_depth(self, depth_data: dict, symbol: str, exchange: str) -> dict:
         """Format depth data from Tradejini to OpenAlgo standard format"""
