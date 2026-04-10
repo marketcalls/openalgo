@@ -182,7 +182,9 @@ class TradejiniWebSocket:
                 return False
 
             # Format token as per Tradejini requirement
-            formatted_token = f"{token}_{exchange}"
+            # Strip _INDEX suffix: WebSocket expects NSE/BSE, not NSE_INDEX/BSE_INDEX
+            ws_exchange = exchange.replace("_INDEX", "")
+            formatted_token = f"{token}_{ws_exchange}"
 
             logger.info(f"Subscribing to L5 depth for {formatted_token}")
 
@@ -336,7 +338,9 @@ class BrokerData:
                 logger.debug("Cleared all cached quote data")
 
             # Subscribe to quotes - format as per Tradejini requirements
-            symbol_key = f"{token}_{exchange}"
+            # Strip _INDEX suffix: WebSocket expects NSE/BSE, not NSE_INDEX/BSE_INDEX
+            ws_exchange = exchange.replace("_INDEX", "")
+            symbol_key = f"{token}_{ws_exchange}"
             logger.debug(f"Subscribing to quotes for: {symbol_key}")
             subscription_success = self.ws.subscribe_quotes([symbol_key])
 
@@ -353,12 +357,12 @@ class BrokerData:
 
             # Possible symbol key formats the data might arrive with
             symbol_keys = [
-                symbol_key,  # token_exchange format
-                f"{token}_NSE",  # Most likely format
-                f"{token}_{exchange}",
+                symbol_key,  # token_ws_exchange format
+                f"{token}_{ws_exchange}",
+                f"{token}_NSE",
+                f"{token}_BSE",
                 str(token),
-                f"{exchange}_{token}",
-                f"NSE_{token}",
+                f"{ws_exchange}_{token}",
             ]
 
             logger.debug(f"Will look for data with these symbol keys: {symbol_keys}")
@@ -514,11 +518,13 @@ class BrokerData:
                 continue
 
             # Format as per Tradejini requirements: token_exchange
-            symbol_key = f"{token}_{exchange}"
+            # Strip _INDEX suffix: WebSocket expects NSE/BSE, not NSE_INDEX/BSE_INDEX
+            ws_exchange = exchange.replace("_INDEX", "")
+            symbol_key = f"{token}_{ws_exchange}"
             symbol_keys.append(symbol_key)
 
             # Store mapping for response processing
-            symbol_map[symbol_key] = {"symbol": symbol, "exchange": exchange, "token": token}
+            symbol_map[symbol_key] = {"symbol": symbol, "exchange": exchange, "ws_exchange": ws_exchange, "token": token}
 
         if not symbol_keys:
             logger.warning("No valid symbols to fetch quotes for")
@@ -551,12 +557,13 @@ class BrokerData:
         with self.ws.lock:
             for symbol_key, info in symbol_map.items():
                 # Try different key formats that Tradejini WebSocket might use
+                ws_exch = info.get("ws_exchange", info["exchange"].replace("_INDEX", ""))
                 possible_keys = [
-                    symbol_key,  # token_exchange (e.g., "1234_NSE")
-                    f"{info['exchange']}_{info['token']}",  # exchange_token (e.g., "NSE_1234")
-                    f"{info['token']}_NSE",  # token_NSE fallback
-                    f"{info['token']}_{info['exchange']}",  # token_exchange format
-                    f"NSE_{info['token']}",  # NSE_token format
+                    symbol_key,  # token_ws_exchange (e.g., "1234_NSE")
+                    f"{info['token']}_{ws_exch}",
+                    f"{ws_exch}_{info['token']}",
+                    f"{info['token']}_NSE",
+                    f"{info['token']}_BSE",
                     str(info["token"]),  # just token
                 ]
 
@@ -622,7 +629,9 @@ class BrokerData:
 
             # Subscribe to market depth
             logger.debug(f"Subscribing to depth for {symbol} (token: {token})")
-            success = self.ws.subscribe_depth(symbol, exchange, token)
+            # Strip _INDEX suffix for WebSocket subscription
+            ws_exchange = exchange.replace("_INDEX", "")
+            success = self.ws.subscribe_depth(symbol, ws_exchange, token)
 
             if not success:
                 raise ConnectionError("Failed to send depth subscription")
@@ -632,7 +641,7 @@ class BrokerData:
             # Wait for depth data
             max_retries = 20
             retry_count = 0
-            symbol_key = f"{token}_{exchange}"
+            symbol_key = f"{token}_{ws_exchange}"
 
             while retry_count < max_retries:
                 time.sleep(1.0)
