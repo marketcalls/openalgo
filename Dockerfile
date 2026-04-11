@@ -25,12 +25,17 @@ RUN cd frontend && npm run build
 # ------------------------------ Production Stage --------------------------- #
 FROM python:3.12-slim-bullseye AS production
 # 0 – set timezone to IST (Asia/Kolkata) & install runtime dependencies
+#     chromium + fonts-liberation are required by Kaleido 1.x (plotly static
+#     image export) which drives a real headless Chromium via choreographer.
+#     Without these, /chart in the Telegram bot silently fails inside Docker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     curl \
     libopenblas0 \
     libgomp1 \
-    libgfortran5 && \
+    libgfortran5 \
+    chromium \
+    fonts-liberation && \
     ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -68,7 +73,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
     OMP_NUM_THREADS=2 \
     MKL_NUM_THREADS=2 \
     NUMEXPR_NUM_THREADS=2 \
-    NUMBA_NUM_THREADS=2
+    NUMBA_NUM_THREADS=2 \
+    BROWSER_PATH=/usr/bin/chromium \
+    CHROME_BIN=/usr/bin/chromium
 # --------------------------------------------------------------------------- #
 USER appuser
 EXPOSE 5000

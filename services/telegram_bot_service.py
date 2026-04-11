@@ -109,6 +109,52 @@ class TelegramBotService:
             logger.exception(f"Error making SDK call: {e}")
             return None
 
+    def _render_plotly_png(self, fig) -> bytes:
+        """Render a Plotly figure to PNG bytes using Kaleido on a real OS thread.
+
+        Kaleido 1.x's fig.to_image() internally calls asyncio.run(), which
+        raises RuntimeError when invoked from a thread that already has a
+        running event loop — which is exactly our situation inside a PTB
+        command handler (self.bot_loop is a live asyncio loop on self.bot_thread).
+
+        Dispatching via asyncio's run_in_executor does NOT escape this under
+        gunicorn + eventlet: the default ThreadPoolExecutor spawns workers
+        through threading.Thread, which is monkey-patched by eventlet into
+        greenlets that still share the PTB loop's context. So Kaleido's
+        asyncio.run() still sees a running loop and still blows up.
+
+        The reliable escape hatch — the same one the bot itself uses to
+        isolate from eventlet — is original_threading.Thread, the real,
+        unpatched OS-level threading module. A brand-new OS thread has no
+        event loop of its own, so asyncio.run() inside Kaleido gets a clean
+        slate and can spawn Chromium (installed in the Docker image).
+
+        The caller blocks on t.join() for the duration of the render
+        (~1-3 s per chart). This briefly pauses the PTB event loop, which
+        is acceptable for personal / low-volume bot usage.
+        """
+        import queue as _queue
+
+        result_q: "_queue.Queue[tuple[str, object]]" = _queue.Queue()
+
+        def _worker() -> None:
+            try:
+                png = fig.to_image(format="png", engine="kaleido")
+                result_q.put(("ok", png))
+            except BaseException as exc:  # noqa: BLE001 - propagate across thread
+                result_q.put(("err", exc))
+
+        t = original_threading.Thread(
+            target=_worker, daemon=True, name="openalgo-kaleido-render"
+        )
+        t.start()
+        t.join()
+
+        status, payload = result_q.get_nowait()
+        if status == "err":
+            raise payload  # type: ignore[misc]
+        return payload  # type: ignore[return-value]
+
     async def _generate_intraday_chart(
         self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
     ) -> bytes | None:
@@ -271,8 +317,10 @@ class TelegramBotService:
             # Clean up axes
             fig.update_yaxes(title_text="")
 
-            # Convert to image bytes
-            img_bytes = fig.to_image(format="png", engine="kaleido")
+            # Convert to image bytes via a real OS thread — see
+            # self._render_plotly_png for why asyncio.run_in_executor is
+            # not usable here under gunicorn + eventlet + PTB.
+            img_bytes = self._render_plotly_png(fig)
             return img_bytes
 
         except Exception as e:
@@ -445,8 +493,10 @@ class TelegramBotService:
             # Clean up axes
             fig.update_yaxes(title_text="")
 
-            # Convert to image bytes
-            img_bytes = fig.to_image(format="png", engine="kaleido")
+            # Convert to image bytes via a real OS thread — see
+            # self._render_plotly_png for why asyncio.run_in_executor is
+            # not usable here under gunicorn + eventlet + PTB.
+            img_bytes = self._render_plotly_png(fig)
             return img_bytes
 
         except Exception as e:
