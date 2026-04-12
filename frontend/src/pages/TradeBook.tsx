@@ -247,6 +247,7 @@ export default function TradeBook() {
                 variant={hasActiveFilters ? 'default' : 'outline'}
                 size="sm"
                 className="relative"
+                aria-label="Open trade filters"
               >
                 <Settings2 className="h-4 w-4 mr-2" />
                 Filters
@@ -317,11 +318,12 @@ export default function TradeBook() {
             size="sm"
             onClick={() => fetchTrades(true)}
             disabled={isRefreshing}
+            aria-label="Refresh tradebook"
           >
             <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV}>
+          <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export tradebook to CSV">
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
@@ -364,6 +366,7 @@ export default function TradeBook() {
             size="sm"
             className="text-red-500 border-red-500/50 hover:bg-red-500/10"
             onClick={clearFilters}
+            aria-label="Clear active filters"
           >
             Clear All
           </Button>
