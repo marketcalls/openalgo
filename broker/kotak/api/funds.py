@@ -144,7 +144,6 @@ def get_margin_data(auth_token):
 
                 # Collect all symbols for batch LTP fetch
                 symbols_to_fetch = []
-                position_map = {}  # Map symbol to position data
 
                 for position in positions:
                     # Calculate net quantity
@@ -170,7 +169,6 @@ def get_margin_data(auth_token):
                                     "symbol": oa_symbol,
                                     "exchange": oa_exchange
                                 })
-                                position_map[f"{oa_symbol}_{oa_exchange}"] = position
                         except Exception as e:
                             logger.debug(f"Could not prepare symbol for LTP fetch: {e}")
 
@@ -226,13 +224,20 @@ def get_margin_data(auth_token):
                     net_qty = (fl_buy_qty - fl_sell_qty) + (cf_buy_qty - cf_sell_qty)
 
                     # Get amounts including carry-forward
+                    # Note: cfBuyAmt/cfSellAmt may not be present in all API responses
+                    # Fall back to fl amounts only if cf fields are missing/zero
                     fl_buy_amt = safe_float(position.get("buyAmt"))
                     fl_sell_amt = safe_float(position.get("sellAmt"))
                     cf_buy_amt = safe_float(position.get("cfBuyAmt"))
                     cf_sell_amt = safe_float(position.get("cfSellAmt"))
 
-                    total_buy_amt = fl_buy_amt + cf_buy_amt
-                    total_sell_amt = fl_sell_amt + cf_sell_amt
+                    # If carry-forward amounts are not available, use only fl amounts
+                    if cf_buy_amt == 0 and cf_sell_amt == 0:
+                        total_buy_amt = fl_buy_amt
+                        total_sell_amt = fl_sell_amt
+                    else:
+                        total_buy_amt = fl_buy_amt + cf_buy_amt
+                        total_sell_amt = fl_sell_amt + cf_sell_amt
                     total_buy_qty = fl_buy_qty + cf_buy_qty
                     total_sell_qty = fl_sell_qty + cf_sell_qty
 
@@ -250,25 +255,26 @@ def get_margin_data(auth_token):
                         # Open position - calculate both realized and unrealized P&L
                         # Calculate realized P&L for the closed portion
                         if total_sell_qty > 0 and total_buy_qty > 0:
+                            realized_pnl = 0.0
                             if net_qty > 0:
                                 # Net long position - some bought shares were sold
                                 # Realized P&L = sellAmt - (avg_buy_price × sell_qty)
-                                avg_buy_price = total_buy_amt / total_buy_qty if total_buy_qty > 0 else 0
-                                realized_pnl = total_sell_amt - (avg_buy_price * total_sell_qty)
+                                if total_buy_qty > 0:
+                                    avg_buy_price = total_buy_amt / total_buy_qty
+                                    realized_pnl = total_sell_amt - (avg_buy_price * total_sell_qty)
                             elif net_qty < 0:
                                 # Net short position - some sold shares were bought back
                                 # Realized P&L = (avg_sell_price × buy_qty) - buyAmt
-                                avg_sell_price = total_sell_amt / total_sell_qty if total_sell_qty > 0 else 0
-                                realized_pnl = (avg_sell_price * total_buy_qty) - total_buy_amt
-                            else:
-                                # Should not reach here (net_qty == 0 handled above)
-                                realized_pnl = 0.0
+                                if total_sell_qty > 0:
+                                    avg_sell_price = total_sell_amt / total_sell_qty
+                                    realized_pnl = (avg_sell_price * total_buy_qty) - total_buy_amt
 
-                            total_realised += realized_pnl
-                            logger.debug(
-                                f"Partial Realized P&L for {position.get('trdSym')}: "
-                                f"net_qty={net_qty}, realized={realized_pnl:.2f}"
-                            )
+                            if realized_pnl != 0.0:
+                                total_realised += realized_pnl
+                                logger.debug(
+                                    f"Partial Realized P&L for {position.get('trdSym')}: "
+                                    f"net_qty={net_qty}, realized={realized_pnl:.2f}"
+                                )
 
                         # Calculate unrealized PnL for open positions
                         # Include carry-forward in average price calculation
