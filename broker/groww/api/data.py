@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
@@ -73,7 +72,7 @@ def get_api_response(endpoint, auth_token, method="GET", params=None, data=None,
         elif method.upper() == "DELETE":
             response = client.delete(url, headers=headers, params=params)
         else:
-            logger.error(f"Unsupported HTTP method: {method}")
+            logger.exception(f"Unsupported HTTP method: {method}")
             return {"error": f"Unsupported HTTP method: {method}"}
 
         # Log request details if debug is enabled
@@ -923,7 +922,7 @@ class BrokerData:
             logger.error(f"Error getting historical data: {str(e)}")
             import traceback
 
-            traceback.print_exc()
+            logger.exception("An exception occurred")
             # Return empty DataFrame with expected columns on error
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
@@ -1764,7 +1763,6 @@ class BrokerData:
 
         except Exception as e:
             logger.error(f"Error getting market depth: {str(e)}")
-            traceback.print_exc()
             return {}
 
     def get_market_depth(self, symbol_list, timeout: int = 5) -> dict[str, Any]:
