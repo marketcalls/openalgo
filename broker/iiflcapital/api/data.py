@@ -4,7 +4,7 @@ from typing import Any
 import pandas as pd
 
 from broker.iiflcapital.baseurl import BASE_URL
-from database.token_db import get_token
+from database.token_db import get_brexchange, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -48,6 +48,13 @@ def _to_int(value: Any, default: int = 0) -> int:
 
 def _safe_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def _short_text(value: str, limit: int = 300) -> str:
+    text = " ".join((value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
 
 
 def _first(value: dict, keys: tuple[str, ...], default=None):
@@ -101,6 +108,9 @@ def _looks_like_market_row(value: Any) -> bool:
             "close",
             "tradedVolume",
             "volume",
+            "bestBidPrice",
+            "bestAskPrice",
+            "besAskPrice",
             "marketDepth",
             "depth",
             "instrumentId",
@@ -175,9 +185,9 @@ def _normalize_exchange(exchange: str) -> str:
         "CDS": "NSECURR",
         "BCD": "BSECURR",
         "MCX": "MCXCOMM",
-        "NSE_INDEX": "INDICES",
-        "BSE_INDEX": "INDICES",
-        "MCX_INDEX": "INDICES",
+        "NSE_INDEX": "NSEEQ",
+        "BSE_INDEX": "BSEEQ",
+        "MCX_INDEX": "MCXCOMM",
     }
     return mapping.get(exchange, exchange)
 
@@ -209,7 +219,7 @@ def _parse_quote_row(row: dict) -> dict:
         "ask": _to_float(
             _first(
                 row,
-                ("ask", "askPrice", "bestAsk", "bestAskPrice"),
+                ("ask", "askPrice", "bestAsk", "bestAskPrice", "besAskPrice"),
                 _first(ask_info, ("Price", "price"), _first(ask_level_1, ("price", "Price"), 0)),
             )
         ),
@@ -381,7 +391,11 @@ class BrokerData:
         try:
             data = response.json()
         except Exception as exc:
-            raise Exception(f"Invalid broker response: HTTP {response.status_code}") from exc
+            body = _short_text(response.text)
+            message = f"Invalid broker response: HTTP {response.status_code}"
+            if body:
+                message = f"{message}: {body}"
+            raise Exception(message) from exc
 
         if not _is_success(response.status_code, data):
             message = (
@@ -396,29 +410,12 @@ class BrokerData:
         return data
 
     def _fetch_marketquote_rows(self, instruments: list[dict]) -> list:
-        errors = []
-        payload_variants = [
-            instruments,
-            {"instruments": instruments},
-        ]
+        response = self._post("/marketdata/marketquotes", instruments)
+        rows = _extract_rows(response)
+        if rows:
+            return rows
 
-        for payload in payload_variants:
-            try:
-                response = self._post("/marketdata/marketquotes", payload)
-            except Exception as exc:
-                errors.append(str(exc))
-                continue
-
-            rows = _extract_rows(response)
-            if rows:
-                return rows
-
-            errors.append("No quote rows in broker response")
-
-        if errors:
-            raise Exception(errors[-1])
-
-        raise Exception("No quote data received from broker")
+        raise Exception("No quote rows in broker response")
 
     def _resolve_token(self, symbol: str, exchange: str) -> str:
         token = get_token(symbol, exchange)
@@ -427,8 +424,12 @@ class BrokerData:
         return str(token)
 
     def _instrument(self, symbol: str, exchange: str) -> dict:
+        broker_exchange = (get_brexchange(symbol, exchange) or "").upper()
+        if not broker_exchange or broker_exchange == "INDICES":
+            broker_exchange = _normalize_exchange(exchange)
+
         return {
-            "exchange": _normalize_exchange(exchange),
+            "exchange": broker_exchange,
             "instrumentId": self._resolve_token(symbol, exchange),
         }
 
@@ -453,7 +454,6 @@ class BrokerData:
     def get_multiquotes(self, symbols: list) -> list:
         instruments = []
         valid_symbols = []
-        identity_map: dict[str, dict] = {}
         skipped = []
 
         for item in symbols:
@@ -473,15 +473,13 @@ class BrokerData:
             try:
                 instrument = self._instrument(symbol, exchange)
                 instruments.append(instrument)
-                valid_symbols.append({"symbol": symbol, "exchange": exchange})
-                identity_map[f"{instrument['exchange']}:{instrument['instrumentId']}"] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                }
-                identity_map[f"{exchange.upper()}:{instrument['instrumentId']}"] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                }
+                valid_symbols.append(
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "instrument": instrument,
+                    }
+                )
             except Exception as exc:
                 skipped.append(
                     {
@@ -497,25 +495,43 @@ class BrokerData:
 
         rows = self._fetch_marketquote_rows(instruments)
 
-        results = []
-        for idx, row in enumerate(rows):
+        parsed_rows = []
+        rows_by_identity: dict[str, dict] = {}
+
+        for row in rows:
             row = _try_json(row)
             if isinstance(row, str):
                 continue
             row = _safe_dict(row)
+            parsed_rows.append(row)
 
             row_exchange = str(_first(row, ("exchange", "exchangeSegment"), "")).upper()
             row_token = str(_first(row, ("instrumentId", "token", "exchangeInstrumentID"), ""))
-            original = identity_map.get(f"{row_exchange}:{row_token}")
+            if row_exchange and row_token:
+                rows_by_identity[f"{row_exchange}:{row_token}"] = row
 
-            # Fallback to request order when identity is not present in response payload.
-            if not original and idx < len(valid_symbols):
-                original = {
-                    "symbol": valid_symbols[idx]["symbol"],
-                    "exchange": valid_symbols[idx]["exchange"],
-                }
+        use_identity_lookup = bool(rows_by_identity)
+        results = []
 
-            if not original:
+        for idx, original in enumerate(valid_symbols):
+            instrument = original["instrument"]
+            identity_key = f"{instrument['exchange']}:{instrument['instrumentId']}"
+            original_exchange_key = f"{original['exchange'].upper()}:{instrument['instrumentId']}"
+
+            if use_identity_lookup:
+                row = rows_by_identity.get(identity_key) or rows_by_identity.get(original_exchange_key)
+            else:
+                row = parsed_rows[idx] if idx < len(parsed_rows) else None
+
+            if not row:
+                results.append(
+                    {
+                        "symbol": original["symbol"],
+                        "exchange": original["exchange"],
+                        "data": None,
+                        "error": "No quote data available",
+                    }
+                )
                 continue
 
             row_error = _extract_row_error(row)
