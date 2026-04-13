@@ -3,11 +3,9 @@ Dhan WebSocket Adapter for OpenAlgo
 Manages both 5-level and 20-level depth connections
 """
 
-import asyncio
 import json
 import logging
 import os
-import platform
 import sys
 import threading
 import time
@@ -159,12 +157,14 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Disconnect from Dhan WebSocket endpoints with proper resource cleanup"""
         self.logger.debug("Starting Dhan adapter disconnect sequence...")
         self.running = False
+        self.connected = False
 
-        # Store references before clearing (prevents double cleanup attempts)
+        # Store references but clear them AFTER cleanup completes (not before).
+        # Clearing before cleanup creates a window under eventlet where another
+        # greenlet can see ws_client_5depth=None while the old connection is
+        # still being torn down, causing reused adapters to silently drop subscribes.
         ws_5depth = self.ws_client_5depth
         ws_20depth = self.ws_client_20depth
-        self.ws_client_5depth = None
-        self.ws_client_20depth = None
 
         try:
             # Disconnect 5-depth WebSocket
@@ -186,6 +186,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Stop fallback monitor thread
             self._stop_fallback_monitor_internal()
 
+            # Clear WebSocket references AFTER cleanup is done
+            self.ws_client_5depth = None
+            self.ws_client_20depth = None
+
             # Clear all state for clean reconnection
             with self.lock:
                 self.subscriptions_5depth.clear()
@@ -195,7 +199,6 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.depth_20_timeouts.clear()
                 self.depth_20_data_received.clear()
                 self.depth_20_fallbacks.clear()
-                self.connected = False
 
             self.logger.debug("Dhan adapter state cleared")
 
@@ -479,24 +482,49 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def unsubscribe_all(self) -> dict[str, Any]:
         """
-        Unsubscribe from all subscriptions and disconnect from WebSocket
+        Unsubscribe from all subscriptions without disconnecting.
+
+        Clears all subscription tracking and sends unsubscribe messages to Dhan,
+        but keeps the WebSocket connections alive so future subscribes work
+        without needing to reconnect.
 
         Returns:
             Dict: Response with status
         """
-        # Count subscriptions before disconnect clears them
         with self.lock:
             unsubscribed_count = len(self.subscriptions_5depth) + len(self.subscriptions_20depth)
 
-        # Centralized teardown - disconnect() handles all cleanup
-        self.disconnect()
+            # Collect instruments to unsubscribe from each connection
+            instruments_5depth = []
+            for sub in self.subscriptions_5depth.values():
+                instruments_5depth.append(sub["instrument"])
+
+            instruments_20depth = []
+            for sub in self.subscriptions_20depth.values():
+                instruments_20depth.append(sub["instrument"])
+
+            # Clear all subscription tracking
+            self.subscriptions_5depth.clear()
+            self.subscriptions_20depth.clear()
+            self.subscriptions.clear()
+            self.depth_20_accumulator.clear()
+            self.depth_20_timeouts.clear()
+            self.depth_20_data_received.clear()
+            self.depth_20_fallbacks.clear()
+
+        # Send unsubscribe messages (outside lock to avoid deadlock)
+        if instruments_5depth and self.ws_client_5depth:
+            self.ws_client_5depth.unsubscribe(instruments_5depth)
+
+        if instruments_20depth and self.ws_client_20depth:
+            self.ws_client_20depth.unsubscribe(instruments_20depth)
 
         self.logger.info(
-            f"Dhan adapter disconnected and cleaned up after unsubscribing {unsubscribed_count} instruments"
+            f"Dhan adapter unsubscribed from {unsubscribed_count} instruments (connections kept alive)"
         )
 
         return self._create_success_response(
-            f"Unsubscribed from {unsubscribed_count} instruments and disconnected",
+            f"Unsubscribed from {unsubscribed_count} instruments",
             unsubscribed_count=unsubscribed_count,
         )
 
@@ -784,8 +812,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _stop_fallback_monitor_internal(self):
         """Internal method to stop fallback monitor without affecting running flag"""
         if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
-            self.fallback_monitor_thread.join(timeout=2)
-            if self.fallback_monitor_thread.is_alive():
+            try:
+                self.fallback_monitor_thread.join(timeout=2)
+            except Exception:
+                # Catches eventlet.timeout.Timeout on Linux/Gunicorn
+                pass
+            if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
                 self.logger.debug("Fallback monitor thread timeout - will be orphaned (daemon)")
             else:
                 self.logger.debug("Fallback monitor thread stopped")

@@ -3,10 +3,8 @@ Dhan WebSocket Client Implementation
 Handles both 5-level and 20-level market depth connections
 """
 
-import asyncio
 import json
 import logging
-import platform
 import struct
 import threading
 import time
@@ -110,35 +108,9 @@ class DhanWebSocket:
             self.logger.warning("Already connected or connecting")
             return
 
-        # Handle asyncio event loop conflict on Linux/macOS
-        self._handle_asyncio_compatibility()
-
         self.running = True
         self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
         self.ws_thread.start()
-
-    def _handle_asyncio_compatibility(self):
-        """Handle asyncio event loop conflicts on Linux/macOS systems"""
-        try:
-            # Check if we're on a platform that might have asyncio conflicts
-            if platform.system() in ["Linux", "Darwin"]:  # Darwin is macOS
-                try:
-                    # Try to get the current event loop
-                    loop = asyncio.get_running_loop()
-                    if loop and not loop.is_closed():
-                        self.logger.info(
-                            "Detected existing asyncio event loop, using thread isolation for Dhan WebSocket"
-                        )
-                        # We'll run in a completely separate thread context
-                        # which is already what we're doing, so no additional action needed
-                except RuntimeError:
-                    # No running loop, which is fine
-                    pass
-            else:
-                self.logger.debug("Running on Windows, no asyncio compatibility adjustments needed")
-        except Exception as e:
-            self.logger.warning(f"Error checking asyncio compatibility: {e}")
-            # Continue anyway, the thread isolation should handle most cases
 
     def _run_websocket(self):
         """Run the WebSocket connection in a separate thread with exponential backoff"""
@@ -223,10 +195,16 @@ class DhanWebSocket:
             finally:
                 self.ws = None  # Always clear WebSocket reference
 
-        # Wait for WebSocket thread to finish
+        # Wait for WebSocket thread to finish.
+        # Under eventlet, thread.join(timeout) raises eventlet.timeout.Timeout
+        # instead of returning silently, so we must catch it.
         if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=2)
-            if self.ws_thread.is_alive():
+            try:
+                self.ws_thread.join(timeout=2)
+            except Exception:
+                # Catches eventlet.timeout.Timeout (and any other join errors)
+                pass
+            if self.ws_thread and self.ws_thread.is_alive():
                 self.logger.debug("WebSocket thread timeout - will be orphaned (daemon)")
             else:
                 self.logger.debug("WebSocket thread stopped")
