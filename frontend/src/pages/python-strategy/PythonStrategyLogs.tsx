@@ -1,4 +1,4 @@
-import { ArrowLeft, Clock, FileText, HardDrive, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
+import { ArrowLeft, Clock, Copy, Download, FileText, HardDrive, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
@@ -124,6 +124,29 @@ export default function PythonStrategyLogs() {
       // Re-enable auto-refresh after operation completes
       setAutoRefresh(true)
     }
+  }
+
+  const handleCopyLog = async () => {
+    if (!logContent?.content) return
+    try {
+      await navigator.clipboard.writeText(logContent.content)
+      showToast.success('Log content copied to clipboard', 'pythonStrategy')
+    } catch {
+      showToast.error('Failed to copy to clipboard', 'pythonStrategy')
+    }
+  }
+
+  const handleDownloadLog = () => {
+    if (!logContent?.content || !selectedLog) return
+    const blob = new Blob([logContent.content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = selectedLog
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   const formatLogName = (name: string) => {
@@ -255,9 +278,33 @@ export default function PythonStrategyLogs() {
                 <ScrollText className="h-4 w-4" />
                 Log Content
               </span>
-              {strategy.status === 'running' && (
-                <Badge className="bg-green-500 animate-pulse">Live</Badge>
-              )}
+              <span className="flex items-center gap-2">
+                {logContent && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCopyLog}
+                      title="Copy log content"
+                    >
+                      <Copy className="h-3.5 w-3.5 mr-1.5" />
+                      Copy
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDownloadLog}
+                      title="Download log file"
+                    >
+                      <Download className="h-3.5 w-3.5 mr-1.5" />
+                      Download
+                    </Button>
+                  </>
+                )}
+                {strategy.status === 'running' && (
+                  <Badge className="bg-green-500 animate-pulse">Live</Badge>
+                )}
+              </span>
             </CardTitle>
             {logContent && (
               <CardDescription>

@@ -1,0 +1,19 @@
+meta {
+  name: optiongreeks
+  type: http
+  seq: 28
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/optiongreeks
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbol": "BTC27MAR2685000CE",
+      "exchange": "CRYPTO"
+  }
+}

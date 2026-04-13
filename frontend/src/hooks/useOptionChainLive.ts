@@ -11,9 +11,13 @@ const NSE_INDEX_SYMBOLS = new Set([
 const BSE_INDEX_SYMBOLS = new Set(['SENSEX', 'BANKEX', 'SENSEX50'])
 
 function getUnderlyingExchange(symbol: string, optionExchange: string): string {
+  const normalizedExchange = optionExchange.toUpperCase()
   if (NSE_INDEX_SYMBOLS.has(symbol)) return 'NSE_INDEX'
   if (BSE_INDEX_SYMBOLS.has(symbol)) return 'BSE_INDEX'
-  return optionExchange === 'BFO' ? 'BSE' : 'NSE'
+  if (normalizedExchange === 'CRYPTO') return 'CRYPTO'
+  if (normalizedExchange === 'BFO') return 'BSE'
+  if (normalizedExchange === 'NFO') return 'NSE'
+  return normalizedExchange
 }
 
 // Round price to nearest tick size (e.g., 0.05 for options)
@@ -83,8 +87,13 @@ export function useOptionChainLive(
 
     // Add underlying symbol for real-time spot price
     // Use correct exchange based on whether it's an index or stock
+    // For CRYPTO: bare underlying (e.g. BTC) isn't tradeable — use perpetual (e.g. BTCUSDFUT)
     const underlyingExch = getUnderlyingExchange(underlying, optionExchange)
-    symbols.push({ symbol: underlying, exchange: underlyingExch })
+    if (underlyingExch === 'CRYPTO') {
+      symbols.push({ symbol: `${underlying}USDFUT`, exchange: underlyingExch })
+    } else {
+      symbols.push({ symbol: underlying, exchange: underlyingExch })
+    }
 
     // Add all option symbols
     if (polledData?.chain) {

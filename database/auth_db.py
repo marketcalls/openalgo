@@ -152,6 +152,18 @@ class Auth(Base):
     user_id = Column(String(255), nullable=True)  # Add user_id column
     is_revoked = Column(Boolean, default=False)
 
+    # Samco 2FA fields
+    secret_api_key = Column(Text, nullable=True)
+    primary_ip = Column(String(45), nullable=True)
+    secondary_ip = Column(String(45), nullable=True)
+    ip_updated_at = Column(DateTime, nullable=True)
+
+    # Generic auxiliary fields for any broker needing extra storage
+    aux_param1 = Column(Text, nullable=True)
+    aux_param2 = Column(Text, nullable=True)
+    aux_param3 = Column(Text, nullable=True)
+    aux_param4 = Column(Text, nullable=True)
+
     # Performance indexes for frequently queried columns
     __table_args__ = (
         Index("idx_auth_broker", "broker"),  # Speeds up get_broker_name() queries
@@ -176,7 +188,207 @@ class ApiKeys(Base):
     )
 
 
+class ActiveSession(Base):
+    """Tracks active login sessions across devices for a user."""
+    __tablename__ = "active_sessions"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(255), nullable=False, index=True)
+    session_id = Column(String(64), unique=True, nullable=False)  # Random token to identify session
+    device_info = Column(String(500), nullable=True)  # User-Agent string
+    ip_address = Column(String(45), nullable=True)
+    broker = Column(String(20), nullable=True)
+    login_time = Column(DateTime(timezone=True), default=func.now())
+    last_seen = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        Index("idx_active_sessions_username", "username"),
+    )
+
+
+class LoginAttempt(Base):
+    """Records all login attempts (successful and failed) for security auditing."""
+    __tablename__ = "login_attempts"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(255), nullable=False)
+    ip_address = Column(String(45), nullable=True)
+    device_info = Column(String(500), nullable=True)  # User-Agent
+    status = Column(String(20), nullable=False)  # 'success', 'failed', 'resumed'
+    login_type = Column(String(20), nullable=True)  # 'password', 'oauth', 'resume'
+    broker = Column(String(20), nullable=True)
+    failure_reason = Column(String(255), nullable=True)  # e.g. 'invalid_password', 'token_expired'
+    timestamp = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        Index("idx_login_attempts_username", "username"),
+        Index("idx_login_attempts_timestamp", "timestamp"),
+        Index("idx_login_attempts_status", "status"),
+    )
+
+
+def _now_ist():
+    """Get current time in IST."""
+    import pytz
+    return datetime.now(pytz.timezone("Asia/Kolkata"))
+
+
+def log_login_attempt(username, ip_address=None, device_info=None, status="failed",
+                      login_type="password", broker=None, failure_reason=None):
+    """Record a login attempt for audit purposes. All records are retained permanently."""
+    try:
+        attempt = LoginAttempt(
+            username=username,
+            ip_address=ip_address,
+            device_info=device_info[:500] if device_info else None,
+            status=status,
+            login_type=login_type,
+            broker=broker,
+            failure_reason=failure_reason,
+            timestamp=_now_ist(),
+        )
+        db_session.add(attempt)
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error logging login attempt: {e}")
+
+
+def get_login_attempts(limit=100, status_filter=None):
+    """Get recent login attempts, optionally filtered by status."""
+    try:
+        query = LoginAttempt.query.order_by(LoginAttempt.timestamp.desc())
+        if status_filter:
+            query = query.filter(LoginAttempt.status == status_filter)
+        attempts = query.limit(limit).all()
+        return [
+            {
+                "username": a.username,
+                "ip_address": a.ip_address,
+                "device_info": a.device_info,
+                "status": a.status,
+                "login_type": a.login_type,
+                "broker": a.broker,
+                "failure_reason": a.failure_reason,
+                "timestamp": a.timestamp.isoformat() if a.timestamp else None,
+            }
+            for a in attempts
+        ]
+    except Exception as e:
+        logger.error(f"Error getting login attempts: {e}")
+        return []
+
+
+def clear_login_attempts():
+    """Clear all login attempt records."""
+    try:
+        LoginAttempt.query.delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error clearing login attempts: {e}")
+
+
+MAX_SESSIONS_PER_USER = 5  # Safety cap to prevent unbounded growth
+
+
+def register_session(username, session_id, device_info=None, ip_address=None, broker=None):
+    """Register a new active session for a user.
+    Replaces any previous session from the same user+IP to prevent accumulation.
+    Enforces a maximum of MAX_SESSIONS_PER_USER sessions per user.
+    """
+    try:
+        # Remove stale sessions from the same device (same user + IP)
+        if ip_address:
+            ActiveSession.query.filter_by(username=username, ip_address=ip_address).delete()
+
+        # Enforce per-user session cap — remove oldest if at limit
+        current_count = ActiveSession.query.filter_by(username=username).count()
+        if current_count >= MAX_SESSIONS_PER_USER:
+            oldest = ActiveSession.query.filter_by(username=username).order_by(
+                ActiveSession.login_time.asc()
+            ).first()
+            if oldest:
+                db_session.delete(oldest)
+
+        now = _now_ist()
+        active = ActiveSession(
+            username=username,
+            session_id=session_id,
+            device_info=device_info,
+            ip_address=ip_address,
+            broker=broker,
+            login_time=now,
+            last_seen=now,
+        )
+        db_session.add(active)
+        db_session.commit()
+        return True
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error registering session: {e}")
+        return False
+
+
+def remove_session(session_id):
+    """Remove a session when user logs out."""
+    try:
+        ActiveSession.query.filter_by(session_id=session_id).delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error removing session: {e}")
+
+
+def get_active_sessions(username):
+    """Get all active sessions for a user."""
+    try:
+        sessions = ActiveSession.query.filter_by(username=username).order_by(
+            ActiveSession.last_seen.desc()
+        ).all()
+        return [
+            {
+                "session_id": s.session_id,
+                "device_info": s.device_info,
+                "ip_address": s.ip_address,
+                "broker": s.broker,
+                "login_time": s.login_time.isoformat() if s.login_time else None,
+                "last_seen": s.last_seen.isoformat() if s.last_seen else None,
+            }
+            for s in sessions
+        ]
+    except Exception as e:
+        logger.error(f"Error getting active sessions: {e}")
+        return []
+
+
+def update_session_last_seen(session_id):
+    """Update last_seen timestamp for a session."""
+    try:
+        active = ActiveSession.query.filter_by(session_id=session_id).first()
+        if active:
+            active.last_seen = _now_ist()
+            db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error updating session last_seen: {e}")
+
+
+def clear_user_sessions(username):
+    """Clear all sessions for a user (e.g., on token revocation at 3 AM)."""
+    try:
+        ActiveSession.query.filter_by(username=username).delete()
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error clearing user sessions: {e}")
+
+
 def init_db():
+    """Initialize the authentication database tables.
+
+    Creates the ``auth`` and ``api_keys`` tables if they do not
+    already exist, using the shared ``db_init_helper`` for
+    consistent startup logging.
+    """
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Auth DB", logger)
@@ -320,6 +532,15 @@ def get_auth_token_fresh(name):
 
 
 def get_auth_token_dbquery(name):
+    """Fetch the auth token record directly from the database.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:
@@ -340,7 +561,14 @@ def get_auth_token_dbquery(name):
 
 
 def get_feed_token(name):
-    """Get decrypted feed token"""
+    """Get the feed token for a user.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The feed token string, or ``None`` if unavailable.
+    """
     # Handle None or empty name gracefully
     if not name:
         logger.debug("get_feed_token called with empty/None name, returning None")
@@ -363,6 +591,15 @@ def get_feed_token(name):
 
 
 def get_feed_token_dbquery(name):
+    """Fetch the feed token record directly from the database.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:
@@ -467,11 +704,21 @@ def get_first_available_api_key():
     """
     Get the first available decrypted API key from the database.
     Used for background services that don't have session context.
+
+    Only returns keys for users who have an active (non-revoked) auth session
+    with a broker configured. This prevents returning orphaned API keys for
+    deleted users or users with revoked sessions.
     """
     try:
-        api_key_obj = ApiKeys.query.first()
-        if api_key_obj and api_key_obj.api_key_encrypted:
-            return decrypt_token(api_key_obj.api_key_encrypted)
+        # Join api_keys with auth to only return keys for users with active sessions
+        api_keys = ApiKeys.query.all()
+        for api_key_obj in api_keys:
+            if not api_key_obj.api_key_encrypted:
+                continue
+            # Check if this user has an active auth session with a broker
+            auth_obj = Auth.query.filter_by(name=api_key_obj.user_id).first()
+            if auth_obj and not auth_obj.is_revoked and auth_obj.broker:
+                return decrypt_token(api_key_obj.api_key_encrypted)
         return None
     except Exception as e:
         logger.exception(f"Error getting first available API key: {e}")
@@ -642,8 +889,12 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                 logger.debug(f"Auth token cached for user_id: {user_id}")
                 return result
             else:
-                logger.warning(f"No valid auth token or broker found for user_id '{user_id}'.")
-                return (None, None, None) if include_feed_token else (None, None)
+                # Cache the negative result to prevent repeated DB queries and log spam
+                # (e.g., orphaned users with revoked sessions polled by background services)
+                negative_result = (None, None, None) if include_feed_token else (None, None)
+                auth_cache[cache_key] = negative_result
+                logger.warning(f"No valid auth token or broker found for user_id '{user_id}'. Cached negative result.")
+                return negative_result
         except Exception as e:
             logger.exception(f"Error while querying the database for auth token and broker: {e}")
             return (None, None, None) if include_feed_token else (None, None)
@@ -704,3 +955,117 @@ def update_order_mode(user_id, mode):
         logger.exception(f"Error updating order mode: {e}")
         db_session.rollback()
         return False
+
+
+# ============================================================
+# Samco 2FA Helper Functions
+# Uses dedicated columns on the Auth table:
+#   secret_api_key, primary_ip, secondary_ip, ip_updated_at
+# ============================================================
+
+
+def _get_samco_auth(user_id):
+    """Get the Auth record for a Samco user by name."""
+    try:
+        return Auth.query.filter_by(broker="samco", name=user_id).first()
+    except Exception as e:
+        logger.error(f"Error getting samco auth for {user_id}: {e}")
+        return None
+
+
+def samco_save_secret_key(user_id, secret_api_key):
+    """Save or update the secret API key for a Samco user.
+    Creates a placeholder auth record if one doesn't exist yet (pre-login setup).
+    """
+    try:
+        record = _get_samco_auth(user_id)
+        if not record:
+            record = Auth(
+                name=user_id,
+                auth="pending",
+                broker="samco",
+                is_revoked=True,
+            )
+            db_session.add(record)
+            logger.info(f"Created placeholder auth record for samco user {user_id}")
+        record.secret_api_key = secret_api_key
+        db_session.commit()
+        return True
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error saving secret key for {user_id}: {e}")
+        return False
+
+
+def samco_get_ip_status(user_id):
+    """Get IP registration status and whether editing is allowed."""
+    from datetime import datetime, timedelta
+
+    record = _get_samco_auth(user_id)
+    if not record:
+        return {
+            "primary_ip": None,
+            "secondary_ip": None,
+            "editable": True,
+            "ip_updated_at": None,
+            "next_editable_date": None,
+        }
+
+    editable = True
+    next_editable_date = None
+
+    if record.ip_updated_at:
+        now = datetime.utcnow()
+        unlock_date = record.ip_updated_at + timedelta(days=7)
+        if now < unlock_date:
+            editable = False
+            next_editable_date = unlock_date.strftime("%Y-%m-%d")
+
+    return {
+        "primary_ip": record.primary_ip,
+        "secondary_ip": record.secondary_ip,
+        "editable": editable,
+        "ip_updated_at": record.ip_updated_at.isoformat() if record.ip_updated_at else None,
+        "next_editable_date": next_editable_date,
+    }
+
+
+def samco_save_ip_info(user_id, primary_ip, secondary_ip=None, ip_updated_at=None):
+    """Save IP registration info for a Samco user."""
+    from datetime import datetime
+
+    try:
+        record = _get_samco_auth(user_id)
+        if record:
+            record.primary_ip = primary_ip
+            record.secondary_ip = secondary_ip
+            record.ip_updated_at = ip_updated_at or datetime.utcnow()
+            db_session.commit()
+            return True
+        else:
+            logger.error(f"No auth record found for samco user {user_id}")
+            return False
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error saving IP info for {user_id}: {e}")
+        return False
+
+
+def samco_has_secret_key(user_id):
+    """Check if a Samco user has a secret API key stored."""
+    record = _get_samco_auth(user_id)
+    return record is not None and record.secret_api_key is not None
+
+
+def samco_get_secret_key(user_id):
+    """Get the stored secret API key for a Samco user."""
+    record = _get_samco_auth(user_id)
+    if record and record.secret_api_key:
+        return record.secret_api_key
+    return None
+
+
+def samco_has_registered_ip(user_id):
+    """Check if a Samco user has registered IPs."""
+    record = _get_samco_auth(user_id)
+    return record is not None and record.primary_ip is not None

@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
 from services.quotes_service import get_quotes
+from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -216,6 +217,22 @@ def construct_option_symbol(
     return option_symbol
 
 
+def construct_crypto_option_symbol(
+    base_symbol: str, expiry_date: str, strike: float, option_type: str
+) -> str:
+    """
+    Construct crypto option symbol in OpenAlgo canonical format.
+
+    Format is aligned with standard option symbols:
+    [Base Symbol][Expiry Date][Strike Price][Option Type]
+
+    Examples:
+        BTC28FEB2580000CE
+        ETH28FEB252500PE
+    """
+    return construct_option_symbol(base_symbol, expiry_date, strike, option_type)
+
+
 def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any] | None:
     """
     Find the option symbol in the database and return its details.
@@ -310,28 +327,44 @@ def get_available_strikes(
         # e.g., "28OCT25" -> "28-OCT-25"
         expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}"
 
-        # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
-        # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
-        expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
-        symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
-
-        # Query database for all strikes matching the criteria
-        # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
-        results = (
-            db_session.query(SymToken.strike)
-            .filter(
-                SymToken.symbol.like(symbol_pattern),
-                SymToken.expiry == expiry_formatted.upper(),
-                SymToken.instrumenttype == option_type.upper(),
-                SymToken.exchange == exchange.upper(),
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            # CRYPTO canonical format: BTC28FEB2580000CE (Indian F&O-style, no dashes)
+            # Prefix-match on base symbol; let expiry + instrumenttype + exchange narrow it.
+            underlying_pattern = f"{base_symbol.upper()}%"
+            results = (
+                db_session.query(SymToken.strike)
+                .filter(
+                    SymToken.symbol.like(underlying_pattern),
+                    SymToken.expiry == expiry_formatted.upper(),
+                    SymToken.instrumenttype == option_type.upper(),
+                    SymToken.exchange.in_(CRYPTO_EXCHANGES),
+                )
+                .distinct()
+                .order_by(SymToken.strike)
+                .all()
             )
-            .distinct()
-            .order_by(SymToken.strike)
-            .all()
-        )
+            strikes = [r.strike for r in results if r.strike is not None and r.strike > 0]
+        else:
+            # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
+            # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
+            expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
+            symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
 
-        # Extract strike values and filter out None
-        strikes = [result.strike for result in results if result.strike is not None]
+            # Query database for all strikes matching the criteria
+            # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
+            results = (
+                db_session.query(SymToken.strike)
+                .filter(
+                    SymToken.symbol.like(symbol_pattern),
+                    SymToken.expiry == expiry_formatted.upper(),
+                    SymToken.instrumenttype == option_type.upper(),
+                    SymToken.exchange == exchange.upper(),
+                )
+                .distinct()
+                .order_by(SymToken.strike)
+                .all()
+            )
+            strikes = [result.strike for result in results if result.strike is not None]
 
         # Store in cache for future requests
         _STRIKES_CACHE[cache_key] = strikes
@@ -486,6 +519,8 @@ def get_option_exchange(underlying_exchange: str) -> str:
         return "MCX"
     elif underlying_exchange == "CDS":
         return "CDS"
+    elif underlying_exchange in CRYPTO_EXCHANGES:
+        return underlying_exchange
     else:
         logger.warning(f"Unknown exchange mapping for: {underlying_exchange}, defaulting to NFO")
         return "NFO"
@@ -522,7 +557,8 @@ def get_option_symbol(
         base_symbol, embedded_expiry = parse_underlying_symbol(underlying)
 
         # Determine final expiry date
-        final_expiry = embedded_expiry or expiry_date
+        # Explicit expiry_date takes precedence (e.g., MCX option expiry differs from futures expiry)
+        final_expiry = expiry_date or embedded_expiry
         if not final_expiry:
             logger.error("No expiry date provided or found in underlying symbol")
             return (
@@ -555,10 +591,29 @@ def get_option_symbol(
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
 
         # Construct the symbol to fetch quotes for
-        # If underlying already has expiry embedded, use base symbol only
-        # Otherwise, use underlying as-is
-        if embedded_expiry:
-            quote_symbol = base_symbol
+        # For MCX/CDS: no spot symbol exists, so use the full futures symbol for LTP
+        # For NSE/BSE: use base symbol (spot/index symbol exists)
+        # For CRYPTO: use perpetual future (e.g. BTC → BTCUSDFUT)
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            from database.token_db_enhanced import fno_search_symbols
+            from utils.constants import INSTRUMENT_PERPFUT
+
+            _perp = fno_search_symbols(
+                query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            quote_symbol = _perp[0]["symbol"]
+            quote_exchange = exchange.upper()
+        elif embedded_expiry:
+            if exchange.upper() in ["MCX", "CDS"]:
+                quote_symbol = underlying.upper()
+            else:
+                quote_symbol = base_symbol
         else:
             quote_symbol = underlying
 

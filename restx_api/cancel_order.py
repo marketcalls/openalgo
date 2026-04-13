@@ -1,12 +1,12 @@
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
 
-from database.apilog_db import async_log_order, executor
 from database.settings_db import get_analyze_mode
+from events import OrderFailedEvent
+from utils.event_bus import bus
 from limiter import limiter
 from restx_api.schemas import CancelOrderSchema
 from services.cancel_order_service import cancel_order, emit_analyzer_error
@@ -38,7 +38,13 @@ class CancelOrder(Resource):
                 if get_analyze_mode():
                     return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
                 error_response = {"status": "error", "message": error_message}
-                executor.submit(async_log_order, "cancelorder", data, error_response)
+                bus.publish(OrderFailedEvent(
+                    mode="live",
+                    api_type="cancelorder",
+                    request_data=data,
+                    response_data=error_response,
+                    error_message=error_message,
+                ))
                 return make_response(jsonify(error_response), 400)
 
             # Extract API key and order ID
@@ -52,20 +58,31 @@ class CancelOrder(Resource):
 
         except KeyError as e:
             missing_field = str(e)
-            logger.error(f"KeyError: Missing field {missing_field}")
+            logger.exception(f"KeyError: Missing field {missing_field}")
             error_message = f"A required field is missing: {missing_field}"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
             error_response = {"status": "error", "message": error_message}
-            executor.submit(async_log_order, "cancelorder", data, error_response)
+            bus.publish(OrderFailedEvent(
+                mode="live",
+                api_type="cancelorder",
+                request_data=data,
+                response_data=error_response,
+                error_message=error_message,
+            ))
             return make_response(jsonify(error_response), 400)
 
         except Exception:
-            logger.error("An unexpected error occurred in CancelOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in CancelOrder endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)
             error_response = {"status": "error", "message": error_message}
-            executor.submit(async_log_order, "cancelorder", data, error_response)
+            bus.publish(OrderFailedEvent(
+                mode="live",
+                api_type="cancelorder",
+                request_data=data,
+                response_data=error_response,
+                error_message=error_message,
+            ))
             return make_response(jsonify(error_response), 500)

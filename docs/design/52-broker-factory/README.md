@@ -1,6 +1,6 @@
 # Broker Factory Implementation
 
-This document describes the broker factory design that enables OpenAlgo to work with any of the 24+ supported brokers while maintaining a single common interface for the WebSocket proxy system. OpenAlgo allows one user to connect to one broker at a time, and the broker factory ensures consistent implementation across all supported brokers.
+This document describes the broker factory design that enables OpenAlgo to work with any of the 29 supported brokers while maintaining a single common interface for the WebSocket proxy system. OpenAlgo allows one user to connect to one broker at a time, and the broker factory ensures consistent implementation across all supported brokers.
 
 ## Architecture Overview
 
@@ -247,7 +247,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client = DhanFeed(client_id, access_token)
 ```
 
-## Supported Brokers (24+)
+## Supported Brokers (29)
 
 | Broker | Max Symbols | Depth Levels | Notes |
 |--------|-------------|--------------|-------|
@@ -275,6 +275,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 | Wisdom | 1000 | 5 | Wisdom Capital |
 | Zebu | 1000 | 5 | Zebu API |
 | Mstock | 1000 | 5 | Mstock API |
+| Nubra | 1000 | 5 | gRPC-based streaming |
 
 ## Data Normalization
 

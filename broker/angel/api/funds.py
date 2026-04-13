@@ -31,7 +31,7 @@ def get_margin_data(auth_token):
     }
 
     response = client.get(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/user/v1/getRMS",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getRMS",
         headers=headers,
     )
 

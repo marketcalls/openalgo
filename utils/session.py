@@ -10,8 +10,24 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def is_session_expiry_disabled():
+    """Check if session expiry is disabled (e.g., for crypto brokers with 24/7 markets).
+
+    Note: Each OpenAlgo instance serves a single broker, so this env var is
+    instance-scoped — it only affects the broker configured for this instance,
+    not all brokers globally.  The install script sets it automatically when
+    a crypto broker (e.g. deltaexchange) is selected.
+    """
+    return os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true"
+
+
 def get_session_expiry_time():
     """Get session expiry time set to 3 AM IST next day"""
+    # Skip expiry for crypto brokers (24/7 markets)
+    if is_session_expiry_disabled():
+        logger.debug("Session expiry disabled (crypto broker / 24/7 market)")
+        return timedelta(days=365)
+
     now_utc = datetime.now(pytz.timezone("UTC"))
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
 
@@ -48,6 +64,11 @@ def is_session_valid():
     if "login_time" not in session:
         logger.debug("Session invalid: 'login_time' not in session")
         return False
+
+    # Skip expiry check for crypto brokers (24/7 markets)
+    if is_session_expiry_disabled():
+        logger.debug("Session expiry disabled (crypto broker / 24/7 market)")
+        return True
 
     now_utc = datetime.now(pytz.timezone("UTC"))
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
@@ -147,6 +168,14 @@ def revoke_user_tokens(revoke_db_tokens=True):
                     logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
                 else:
                     logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
+
+                # Clear all active sessions for this user (tokens are invalid now)
+                try:
+                    from database.auth_db import clear_user_sessions
+                    clear_user_sessions(username)
+                    logger.info(f"Auto-expiry: Cleared active sessions for user: {username}")
+                except Exception as session_error:
+                    logger.warning(f"Error clearing active sessions: {session_error}")
             else:
                 logger.info(
                     f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)"

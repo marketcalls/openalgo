@@ -34,6 +34,9 @@ async function fetchCSRFToken(): Promise<string> {
   return data.csrf_token
 }
 
+// Crypto exchanges operate 24/7 - no holidays or weekends
+const CRYPTO_EXCHANGES = new Set(['CRYPTO'])
+
 export function useMarketStatus() {
   const [state, setState] = useState<MarketStatusState>({
     timings: [],
@@ -83,15 +86,18 @@ export function useMarketStatus() {
   // Check if today is a holiday for a specific exchange
   const isHolidayForExchange = useCallback(
     (exchange: string): boolean => {
+      // Crypto exchanges have no holidays
+      if (CRYPTO_EXCHANGES.has(exchange)) return false
+
       const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
       const todayHoliday = state.holidays.find((h) => h.date === today)
 
       if (!todayHoliday) return false
 
       // Check if exchange is in closed_exchanges
-      if (todayHoliday.closed_exchanges.includes(exchange)) {
+      if (todayHoliday.closed_exchanges?.includes(exchange)) {
         // Check if there's a special session for this exchange
-        const specialSession = todayHoliday.open_exchanges.find((e) => e.exchange === exchange)
+        const specialSession = todayHoliday.open_exchanges?.find((e) => e.exchange === exchange)
         if (specialSession) {
           // There's a special session - check if we're within it
           const now = Date.now()
@@ -108,6 +114,9 @@ export function useMarketStatus() {
   // Check if market is currently open for a specific exchange
   const isMarketOpen = useCallback(
     (exchange: string): boolean => {
+      // Crypto exchanges are always open (24/7)
+      if (CRYPTO_EXCHANGES.has(exchange)) return true
+
       // First check if it's a holiday
       if (isHolidayForExchange(exchange)) {
         return false
@@ -129,6 +138,9 @@ export function useMarketStatus() {
   // Check if any market is open (useful for deciding whether to connect WebSocket)
   const isAnyMarketOpen = useCallback((): boolean => {
     return state.timings.some((timing) => {
+      // Crypto exchanges are always open (24/7)
+      if (CRYPTO_EXCHANGES.has(timing.exchange)) return true
+
       const now = Date.now()
       const isWithinHours = now >= timing.start_time && now <= timing.end_time
       return isWithinHours && !isHolidayForExchange(timing.exchange)
@@ -138,6 +150,9 @@ export function useMarketStatus() {
   // Get market status for display
   const getMarketStatus = useCallback(
     (exchange: string): 'open' | 'closed' | 'pre-market' | 'post-market' => {
+      // Crypto exchanges are always open (24/7)
+      if (CRYPTO_EXCHANGES.has(exchange)) return 'open'
+
       if (isHolidayForExchange(exchange)) {
         return 'closed'
       }

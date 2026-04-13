@@ -4,7 +4,7 @@
 
 ## Overview
 
-The WebSocket Proxy is a unified real-time market data streaming system that normalizes data from 24+ broker WebSocket APIs into a single interface.
+The WebSocket Proxy is a unified real-time market data streaming system that normalizes data from 29 broker WebSocket APIs into a single interface.
 
 ## Problem Statement
 

@@ -54,6 +54,10 @@ MIGRATIONS = [
     ("migrate_flow.py", "Flow Workflow Automation"),
     ("migrate_health_process_details.py", "Health Metrics Process Details"),
     ("migrate_master_contract_stats.py", "Master Contract Smart Download"),
+    ("migrate_contract_value.py", "Contract Value Column for Crypto"),
+    ("migrate_market_holidays.py", "2026 Market Holiday Calendar Update"),
+    ("migrate_leverage.py", "Leverage Configuration for Crypto"),
+    ("migrate_samco_auth.py", "Samco 2FA Authentication"),
 ]
 
 

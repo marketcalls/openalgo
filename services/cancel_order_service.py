@@ -3,16 +3,16 @@ import importlib
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order, executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
-from services.telegram_alert_service import telegram_alert_service
+from events import AnalyzerErrorEvent, OrderCancelledEvent, OrderCancelFailedEvent
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+API_TYPE = "cancelorder"
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -32,15 +32,13 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     analyzer_request = request_data.copy()
     if "apikey" in analyzer_request:
         del analyzer_request["apikey"]
-    analyzer_request["api_type"] = "cancelorder"
+    analyzer_request["api_type"] = API_TYPE
 
-    # Log to analyzer database
-    executor.submit(async_log_analyzer, analyzer_request, error_response, "cancelorder")
-
-    # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
-    )
+    bus.publish(AnalyzerErrorEvent(
+        mode="analyze", api_type=API_TYPE,
+        request_data=analyzer_request, response_data=error_response,
+        error_message=error_message,
+    ))
 
     return error_response
 
@@ -102,12 +100,35 @@ def cancel_order_with_auth(
 
         # Route to sandbox
         order_data = {"orderid": orderid}
-        return sandbox_cancel_order(order_data, api_key, original_data)
+        success, response, status_code = sandbox_cancel_order(order_data, api_key, original_data)
+
+        order_request_data["api_type"] = API_TYPE
+        if success:
+            bus.publish(OrderCancelledEvent(
+                mode="analyze", api_type=API_TYPE,
+                orderid=orderid, status=response.get("status", "success"),
+                request_data=order_request_data, response_data=response,
+                api_key=api_key,
+            ))
+        else:
+            bus.publish(OrderCancelFailedEvent(
+                mode="analyze", api_type=API_TYPE,
+                orderid=orderid, error_message=response.get("message", ""),
+                request_data=order_request_data, response_data=response,
+                api_key=api_key,
+            ))
+
+        return success, response, status_code
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
         error_response = {"status": "error", "message": "Broker-specific module not found"}
-        executor.submit(async_log_order, "cancelorder", original_data, error_response)
+        bus.publish(OrderCancelFailedEvent(
+            mode="live", api_type=API_TYPE,
+            orderid=orderid, error_message="Broker-specific module not found",
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, 404
 
     try:
@@ -120,26 +141,22 @@ def cancel_order_with_auth(
             "status": "error",
             "message": "Failed to cancel order due to internal error",
         }
-        executor.submit(async_log_order, "cancelorder", original_data, error_response)
+        bus.publish(OrderCancelFailedEvent(
+            mode="live", api_type=API_TYPE,
+            orderid=orderid, error_message="Failed to cancel order due to internal error",
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, 500
 
     if status_code == 200:
-        # Emit SocketIO event asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "cancel_order_event",
-            {"status": response_message.get("status"), "orderid": orderid, "mode": "live"},
-        )
         order_response_data = {"status": "success", "orderid": orderid}
-        executor.submit(async_log_order, "cancelorder", order_request_data, order_response_data)
-        # Send Telegram alert in background task (non-blocking)
-        socketio.start_background_task(
-            telegram_alert_service.send_order_alert,
-            "cancelorder",
-            {"orderid": orderid},
-            order_response_data,
-            original_data.get("apikey"),
-        )
+        bus.publish(OrderCancelledEvent(
+            mode="live", api_type=API_TYPE,
+            orderid=orderid, status=response_message.get("status", "success"),
+            request_data=order_request_data, response_data=order_response_data,
+            api_key=original_data.get("apikey", ""),
+        ))
         return True, order_response_data, 200
     else:
         message = (
@@ -148,7 +165,12 @@ def cancel_order_with_auth(
             else "Failed to cancel order"
         )
         error_response = {"status": "error", "message": message}
-        executor.submit(async_log_order, "cancelorder", original_data, error_response)
+        bus.publish(OrderCancelFailedEvent(
+            mode="live", api_type=API_TYPE,
+            orderid=orderid, error_message=message,
+            request_data=order_request_data, response_data=error_response,
+            api_key=original_data.get("apikey", ""),
+        ))
         return False, error_response, status_code
 
 
@@ -182,7 +204,12 @@ def cancel_order(
     if not orderid:
         error_message = "Order ID is missing"
         error_response = {"status": "error", "message": error_message}
-        executor.submit(async_log_order, "cancelorder", original_data, error_response)
+        bus.publish(OrderCancelFailedEvent(
+            mode="live", api_type=API_TYPE,
+            orderid="", error_message=error_message,
+            request_data={"orderid": orderid}, response_data=error_response,
+            api_key=api_key or "",
+        ))
         return False, error_response, 400
 
     # Case 1: API-based authentication
@@ -203,7 +230,12 @@ def cancel_order(
                         "message": "Cancel order operation is not allowed in Semi-Auto mode. Please switch to Auto mode to cancel orders.",
                     }
                     logger.warning(f"Cancel order blocked for user {user_id} (semi-auto mode)")
-                    executor.submit(async_log_order, "cancelorder", original_data, error_response)
+                    bus.publish(OrderCancelFailedEvent(
+                        mode="live", api_type=API_TYPE,
+                        orderid=orderid, error_message=error_response["message"],
+                        request_data={"orderid": orderid}, response_data=error_response,
+                        api_key=api_key,
+                    ))
                     return False, error_response, 403
 
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)

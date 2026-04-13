@@ -116,6 +116,83 @@ def download_csv_motilal_data(exchange_name):
         raise
 
 
+# NSE index special-case remapping (after uppercase + remove spaces)
+NSE_INDEX_REMAP = {
+    "NIFTY50": "NIFTY",
+    "NIFTYNEXT50": "NIFTYNXT50",
+    "NIFTYFINSERVICE": "FINNIFTY",
+    "NIFTYBANK": "BANKNIFTY",
+    "NIFTYMIDSELECT": "MIDCPNIFTY",
+    "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+}
+
+# BSE index name to OpenAlgo symbol mapping
+BSE_INDEX_MAP = {
+    "BSE SENSEX": "SENSEX",
+    "BSE BANKEX": "BANKEX",
+    "SNSX50": "SENSEX50",
+    "BSE 100": "BSE100",
+    "BSE 150 MIDCAP": "BSE150MIDCAPINDEX",
+    "BSE 200": "BSE200",
+    "BSE 250 LARGEMIDCAP": "BSE250LARGEMIDCAPINDEX",
+    "BSE 400 MIDSMALLCAP": "BSE400MIDSMALLCAPINDEX",
+    "BSE 500": "BSE500",
+    "BSE AUTO": "BSEAUTO",
+    "BSE CAPGOOD": "BSECAPITALGOODS",
+    "BSE CARBON": "BSECARBONEX",
+    "BSE CONSDUR": "BSECONSUMERDURABLES",
+    "BSE CPSE": "BSECPSE",
+    "BSE DOLLEX 100": "BSEDOLLEX100",
+    "BSE DOLLEX 200": "BSEDOLLEX200",
+    "BSE DOLLEX 30": "BSEDOLLEX30",
+    "BSE ENERGY": "BSEENERGY",
+    "BSE FMCG": "BSEFASTMOVINGCONSUMERGOODS",
+    "BSE FINANCIAL SERVICES": "BSEFINANCIALSERVICES",
+    "BSE GREENEX": "BSEGREENEX",
+    "BSE HEALTHCARE": "BSEHEALTHCARE",
+    "BSE INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+    "BSE INDUSTRIALS": "BSEINDUSTRIALS",
+    "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+    "BSE IPO": "BSEIPO",
+    "BSE LARGECAP": "BSELARGECAP",
+    "BSE METAL": "BSEMETAL",
+    "BSE MIDCAP": "BSEMIDCAP",
+    "BSE MIDCAP SELECT": "BSEMIDCAPSELECTINDEX",
+    "BSE OIL&GAS": "BSEOIL&GAS",
+    "BSE POWER": "BSEPOWER",
+    "BSE PSU": "BSEPSU",
+    "BSE REALTY": "BSEREALTY",
+    "SNXT50": "BSESENSEXNEXT50",
+    "BSE SMALLCAP": "BSESMALLCAP",
+    "BSE SMALLCAP SELECT": "BSESMALLCAPSELECTINDEX",
+    "BSE SME IPO": "BSESMEIPO",
+    "BSE TECK": "BSETECK",
+    "BSE TELECOM": "BSETELECOM",
+}
+
+
+def standardize_index_symbols(df):
+    """
+    Standardize NSE_INDEX and BSE_INDEX symbol names to OpenAlgo format.
+    NSE: uppercase + remove spaces + remap special cases.
+    BSE: explicit mapping (abbreviated codes can't be auto-derived).
+    """
+    # NSE_INDEX: uppercase and remove spaces handles most symbols
+    nse_idx_mask = df["exchange"] == "NSE_INDEX"
+    if nse_idx_mask.any():
+        df.loc[nse_idx_mask, "symbol"] = (
+            df.loc[nse_idx_mask, "symbol"].str.upper().str.replace(r"\s+", "", regex=True)
+        )
+        df.loc[nse_idx_mask, "symbol"] = df.loc[nse_idx_mask, "symbol"].replace(NSE_INDEX_REMAP)
+
+    # BSE_INDEX: explicit mapping
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    if bse_idx_mask.any():
+        df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].replace(BSE_INDEX_MAP)
+
+    return df
+
+
 def extract_expiry_from_scripname(scripname):
     """
     Extract expiry date from scripname and convert to DD-MMM-YY format.
@@ -221,38 +298,8 @@ def process_motilal_index_csv(df, exchange_name):
     df["lotsize"] = 1
     df["tick_size"] = 0.05
 
-    # Convert token to string
-    df["token"] = df["token"].astype(str)
-
-    # Standardize index names to match OpenAlgo format
-    df["symbol"] = df["symbol"].replace(
-        {
-            "Nifty 50": "NIFTY",
-            "NIFTY 50": "NIFTY",
-            "Nifty Next 50": "NIFTYNXT50",
-            "NIFTY NEXT 50": "NIFTYNXT50",
-            "Nifty Fin Service": "FINNIFTY",
-            "NIFTY FIN SERVICE": "FINNIFTY",
-            "Nifty Bank": "BANKNIFTY",
-            "NIFTY BANK": "BANKNIFTY",
-            "NIFTY MID SELECT": "MIDCPNIFTY",
-            "Nifty Midcap Select": "MIDCPNIFTY",
-            "India VIX": "INDIAVIX",
-            "INDIA VIX": "INDIAVIX",
-            "SENSEX": "SENSEX",
-            "BSE SENSEX": "SENSEX",
-            "SNSX50": "SENSEX50",
-            "BSE100": "BSE100",
-            "BSE 200": "BSE200",
-            "BSE 500": "BSE500",
-            "BSE AUTO": "BSEAUTO",
-            "BSE BANKEX": "BSEBANKEX",
-            "BSE CAPGOOD": "BSECAPGOOD",
-            "BSE CARBON": "BSECARBON",
-            "BSE CONSDUR": "BSECONSDUR",
-            "BSE CPSE": "BSECPSE",
-        }
-    )
+    # Standardize index symbols to OpenAlgo format
+    df = standardize_index_symbols(df)
 
     # Select only the columns needed for the database
     required_columns = [
@@ -446,24 +493,8 @@ def process_motilal_csv(df, exchange_name):
         df["symbol"].str.replace(" EQ", "", regex=False).str.strip()
     )
 
-    # Standardize index names
-    df["symbol"] = df["symbol"].replace(
-        {
-            "Nifty 50": "NIFTY",
-            "NIFTY 50": "NIFTY",
-            "Nifty Next 50": "NIFTYNXT50",
-            "NIFTY NEXT 50": "NIFTYNXT50",
-            "Nifty Fin Service": "FINNIFTY",
-            "NIFTY FIN SERVICE": "FINNIFTY",
-            "Nifty Bank": "BANKNIFTY",
-            "NIFTY BANK": "BANKNIFTY",
-            "NIFTY MID SELECT": "MIDCPNIFTY",
-            "India VIX": "INDIAVIX",
-            "INDIA VIX": "INDIAVIX",
-            "SENSEX": "SENSEX",
-            "SNSX50": "SENSEX50",
-        }
-    )
+    # Standardize index symbols to OpenAlgo format
+    df = standardize_index_symbols(df)
 
     # Select only the columns needed for the database
     required_columns = [

@@ -41,11 +41,10 @@ def broker_callback(broker, para=None):
     logger.debug(f"Session contents: {dict(session)}")
     logger.info(f"Session has user key: {'user' in session}")
 
-    # Special handling for Compositedge - it comes from external OAuth and might lose session
-    if broker == "compositedge" and "user" not in session:
-        # For Compositedge OAuth callback, we'll handle authentication differently
-        # The session will be established after successful auth token validation
-        logger.info("Compositedge callback without session - will establish session after auth")
+    # Special handling for brokers that come from external auth and might lose session
+    if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
+        # Session will be established after successful auth token validation
+        logger.info(f"{broker} callback without session - will establish session after auth")
     # Special handling for mstock POST - check session but provide better error instead of redirect
     elif broker == "mstock" and request.method == "POST" and "user" not in session:
         # Redirect to broker selection page with error message instead of login
@@ -67,8 +66,9 @@ def broker_callback(broker, para=None):
     if not auth_function:
         return jsonify(error="Broker authentication function not found."), 404
 
-    # Initialize feed_token to None by default
+    # Initialize optional outputs used by different broker auth flows
     feed_token = None
+    user_id = None
 
     if broker == "fivepaisa":
         if request.method == "GET":
@@ -135,51 +135,30 @@ def broker_callback(broker, para=None):
             )
 
     elif broker == "aliceblue":
-        if request.method == "GET":
-            # Redirect to React TOTP page
-            return redirect("/broker/aliceblue/totp")
+        # New OAuth redirect flow:
+        # 1. GET without authCode → redirect to AliceBlue login page with appcode
+        # 2. GET with authCode + userId (callback) → authenticate and get session
+        authCode = request.args.get("authCode")
+        userId = request.args.get("userId")
 
-        elif request.method == "POST":
-            logger.info("Aliceblue Login Flow initiated")
-            userid = request.form.get("userid")
-            # Step 1: Get encryption key
-            # Use the shared httpx client with connection pooling
-            from utils.httpx_client import get_httpx_client
-
-            client = get_httpx_client()
-
-            # AliceBlue API expects only userId in the encryption key request
-            # Do not include API key in this initial request
-            payload = {"userId": userid}
-            headers = {"Content-Type": "application/json"}
-            try:
-                # Get encryption key
-                url = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/customer/getAPIEncpkey"
-                response = client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                data_dict = response.json()
-                logger.debug(f"Aliceblue response data: {data_dict}")
-
-                # Check if we successfully got the encryption key
-                if data_dict.get("stat") == "Ok" and data_dict.get("encKey"):
-                    enc_key = data_dict["encKey"]
-                    # Step 2: Authenticate with encryption key
-                    auth_token, error_message = auth_function(userid, enc_key)
-
-                    if auth_token:
-                        return handle_auth_success(auth_token, session["user"], broker)
-                    else:
-                        return handle_auth_failure(error_message, forward_url="broker.html")
-                else:
-                    # Failed to get encryption key
-                    error_msg = data_dict.get("emsg", "Failed to get encryption key")
-                    return handle_auth_failure(
-                        f"Failed to get encryption key: {error_msg}", forward_url="broker.html"
-                    )
-            except Exception as e:
-                return jsonify(
-                    {"status": "error", "message": f"Authentication error: {str(e)}"}
-                ), 500
+        if authCode and userId:
+            # Callback from AliceBlue with authorization code
+            logger.info(f"AliceBlue OAuth callback received for user {userId}")
+            auth_token, client_id, error_message = auth_function(userId, authCode)
+            user_id = client_id or userId  # clientId from API response, fallback to OAuth userId
+            feed_token = None  # AliceBlue doesn't use a separate feed token
+            forward_url = "broker.html"
+        else:
+            # Initial visit — redirect to AliceBlue login page
+            logger.info("Redirecting to AliceBlue login page")
+            appcode = os.environ.get("BROKER_API_KEY")
+            if not appcode:
+                return handle_auth_failure(
+                    "BROKER_API_KEY (appCode) not configured in environment",
+                    forward_url="broker.html",
+                )
+            aliceblue_login_url = f"https://ant.aliceblueonline.com/?appcode={appcode}"
+            return redirect(aliceblue_login_url)
 
     elif broker == "fivepaisaxts":
         code = "fivepaisaxts"
@@ -314,6 +293,74 @@ def broker_callback(broker, para=None):
         auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "iiflcapital":
+        # IIFL Capital uses redirect login and callback params authCode + clientId
+        callback_args = request.values.to_dict(flat=True)
+        auth_code = (
+            callback_args.get("authCode")
+            or callback_args.get("authcode")
+            or callback_args.get("auth_code")
+            or callback_args.get("code")
+        )
+        client_id = (
+            callback_args.get("clientId")
+            or callback_args.get("clientid")
+            or callback_args.get("client_id")
+            or callback_args.get("clientCode")
+            or callback_args.get("clientcode")
+        )
+
+        # Some callback variants may not include clientId explicitly.
+        # Fall back to BROKER_API_KEY to avoid false failures.
+        if not client_id:
+            broker_api_key = (os.getenv("BROKER_API_KEY") or "").strip()
+            if ":::" in broker_api_key:
+                client_id = broker_api_key.split(":::", 1)[0].strip()
+            elif broker_api_key:
+                client_id = broker_api_key
+
+        if request.method == "GET":
+            # Initial hit from OpenAlgo broker page has no callback parameters.
+            if not callback_args:
+                referrer = (request.headers.get("Referer") or "").lower()
+                if "iiflcapital.com" in referrer:
+                    logger.warning(
+                        "IIFL Capital callback returned without auth params after broker login. "
+                        "This usually indicates redirect URL mismatch/whitelisting issue."
+                    )
+                    return handle_auth_failure(
+                        "IIFL Capital callback was received without auth parameters. "
+                        "Please verify the exact callback URL is whitelisted in IIFL "
+                        "and matches REDIRECT_URL (including protocol, host, port, and path).",
+                        forward_url="broker.html",
+                    )
+
+                from broker.iiflcapital.api.auth_api import get_login_url
+
+                login_url = get_login_url()
+                if not login_url:
+                    return handle_auth_failure(
+                        "IIFL Capital login URL could not be generated. "
+                        "Please verify BROKER_API_KEY and REDIRECT_URL.",
+                        forward_url="broker.html",
+                    )
+                return redirect(login_url)
+
+            # Callback reached OpenAlgo but required params were not provided.
+            if not auth_code or not client_id:
+                logger.warning(
+                    "IIFL Capital callback missing required params. "
+                    f"Received keys: {list(callback_args.keys())}"
+                )
+                return handle_auth_failure(
+                    "IIFL Capital callback did not include required auth parameters. "
+                    "Please verify callback URL registration and try again.",
+                    forward_url="broker.html",
+                )
+
+        auth_token, error_message = auth_function(auth_code, client_id)
+        forward_url = "broker.html"
+
     elif broker == "jainamxts":
         code = "jainamxts"
         logger.debug(f"JainamXTS broker - code: {code}")
@@ -434,6 +481,12 @@ def broker_callback(broker, para=None):
 
         forward_url = "broker.html"
 
+    elif broker == "deltaexchange":
+        code = "deltaexchange"
+        logger.debug(f"DeltaExchange broker - code: {code}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "dhan_sandbox":
         code = "dhan_sandbox"
         logger.debug(f"Dhan Sandbox broker - The code is {code}")
@@ -453,30 +506,50 @@ def broker_callback(broker, para=None):
         forward_url = "broker.html"
 
     elif broker == "zebu":
-        if request.method == "GET":
-            # Redirect to React TOTP page
-            return redirect("/broker/zebu/totp")
-
-        elif request.method == "POST":
-            userid = request.form.get("userid")
-            password = request.form.get("password")
-            totp_code = request.form.get("totp")
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
+        code = request.args.get("code")
+        if code:
+            logger.debug(f"Zebu broker - OAuth callback with code: {code}")
+            auth_token, error_message = auth_function(code)
             forward_url = "broker.html"
+        else:
+            # Initial visit — redirect to Zebu OAuth login page
+            logger.info("Redirecting to Zebu OAuth login page")
+            # BROKER_API_KEY format: userid:::client_id
+            full_api_key = os.getenv("BROKER_API_KEY")
+            if not full_api_key:
+                return handle_auth_failure(
+                    "BROKER_API_KEY not configured in environment",
+                    forward_url="broker.html",
+                )
+            client_id = full_api_key.split(":::")[1]  # OAuth client_id
+            zebu_login_url = f"https://go.mynt.in/OAuthlogin/authorize/oauth?client_id={client_id}"
+            return redirect(zebu_login_url)
 
     elif broker == "shoonya":
-        if request.method == "GET":
-            # Redirect to React TOTP page
-            return redirect("/broker/shoonya/totp")
-
-        elif request.method == "POST":
-            userid = request.form.get("userid")
-            password = request.form.get("password")
-            totp_code = request.form.get("totp")
-
-            auth_token, error_message = auth_function(userid, password, totp_code)
+        code = request.args.get("code")
+        if code:
+            logger.debug("Shoonya broker - OAuth callback received")
+            auth_token, error_message = auth_function(code)
             forward_url = "broker.html"
+        else:
+            # Initial visit — redirect to Shoonya OAuth login page
+            logger.info("Redirecting to Shoonya OAuth login page")
+            # BROKER_API_KEY format: userid:::client_id
+            full_api_key = os.getenv("BROKER_API_KEY")
+            if not full_api_key:
+                return handle_auth_failure(
+                    "BROKER_API_KEY not configured in environment",
+                    forward_url="broker.html",
+                )
+            parts = full_api_key.split(":::", 1)
+            if len(parts) != 2 or not parts[1]:
+                return handle_auth_failure(
+                    "BROKER_API_KEY must be in format userid:::client_id",
+                    forward_url="broker.html",
+                )
+            client_id = parts[1]  # OAuth client_id
+            shoonya_login_url = f"https://api.shoonya.com/OAuthlogin/authorize/oauth?client_id={client_id}"
+            return redirect(shoonya_login_url)
 
     elif broker == "firstock":
         if request.method == "GET":
@@ -507,13 +580,12 @@ def broker_callback(broker, para=None):
 
     elif broker == "samco":
         if request.method == "GET":
-            # Redirect to React TOTP page
-            return redirect("/broker/samco/totp")
+            # Redirect to Samco multi-step auth wizard
+            return redirect("/broker/samco/auth")
 
         elif request.method == "POST":
-            yob = request.form.get("yob")
-
-            auth_token, error_message = auth_function(yob)
+            # Daily login: generate access token + login using stored secret key
+            auth_token, error_message = auth_function()
             forward_url = "broker.html"
 
     elif broker == "motilal":
@@ -686,6 +758,69 @@ def broker_callback(broker, para=None):
 
                 forward_url = "broker.html"
 
+    elif broker == "rmoney":
+        try:
+            # Extract session data from XTS OAuth callback
+            session_data = None
+            if request.method == "POST":
+                raw_data = request.get_data().decode("utf-8")
+                if request.headers.get("Content-Type") == "application/x-www-form-urlencoded":
+                    if raw_data.startswith("session="):
+                        from urllib.parse import unquote
+
+                        session_data = unquote(raw_data[8:])
+                    else:
+                        session_data = raw_data
+                else:
+                    session_data = raw_data
+            else:
+                session_data = request.args.get("session")
+
+            if session_data:
+                # XTS OAuth returns the full login session with token directly
+                session_json = json.loads(session_data)
+                if isinstance(session_json, str):
+                    session_json = json.loads(session_json)
+
+                # The session already contains the final auth token and userID
+                auth_token = session_json.get("token")
+                user_id = session_json.get("userID")
+
+                if not auth_token:
+                    logger.error(f"RMoney callback - No token in session. Keys: {list(session_json.keys())}")
+                    return jsonify({"error": "No token found in session data"}), 400
+
+                logger.info(f"RMoney OAuth authentication successful for user: {user_id}")
+
+                # Get feed token for market data
+                from broker.rmoney.api.auth_api import get_feed_token
+
+                feed_token, feed_user_id, feed_error = get_feed_token()
+                if feed_error:
+                    logger.warning(f"RMoney feed token error: {feed_error}")
+                    feed_token = None
+                if not user_id:
+                    user_id = feed_user_id
+
+                error_message = None
+                forward_url = "broker.html"
+            else:
+                # No session data - initial request, redirect to RMoney OAuth login
+                from broker.rmoney.baseurl import INTERACTIVE_URL as RMONEY_INTERACTIVE_URL
+
+                BROKER_API_KEY_LOCAL = os.getenv("BROKER_API_KEY")
+                callback_url = url_for(
+                    "brlogin.broker_callback", broker="rmoney", _external=True
+                )
+                oauth_url = f"{RMONEY_INTERACTIVE_URL}/thirdparty?appKey={BROKER_API_KEY_LOCAL}&returnURL={callback_url}"
+                return redirect(oauth_url)
+
+        except json.JSONDecodeError as e:
+            return jsonify({"error": f"Invalid session data format: {str(e)}"}), 400
+        except Exception as e:
+            logger.exception(f"RMoney callback error: {e}")
+            return jsonify({"error": f"Error processing request: {str(e)}"}), 500
+
     else:
         code = request.args.get("code") or request.args.get("request_token")
         logger.debug(f"Generic broker - The code is {code}")
@@ -702,9 +837,9 @@ def broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan"]:
-            # For Compositedge, handle missing session user
-            if broker == "compositedge" and "user" not in session:
+        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney", "iiflcapital"]:
+            # For OAuth brokers, handle missing session user
+            if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
                 # Get the admin user from the database
                 from database.user_db import find_user_by_username
 
@@ -713,9 +848,9 @@ def broker_callback(broker, para=None):
                     # Use the admin user's username
                     username = admin_user.username
                     session["user"] = username
-                    logger.info(f"Compositedge callback: Set session user to {username}")
+                    logger.info(f"{broker} callback: Set session user to {username}")
                 else:
-                    logger.error("No admin user found in database for Compositedge callback")
+                    logger.error(f"No admin user found in database for {broker} callback")
                     return handle_auth_failure(
                         "No user account found. Please login first.", forward_url="broker.html"
                     )
@@ -806,3 +941,156 @@ def dhan_initiate_oauth():
 # def broker_loginflow(broker):
 #     # This function is no longer used for Kotak TOTP authentication
 #     pass
+
+
+# ============================================================
+# Samco 2FA Routes
+# ============================================================
+
+
+@brlogin_bp.route("/samco/generate-otp", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def samco_generate_otp():
+    """Generate OTP for Samco 2FA setup"""
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
+
+    from broker.samco.api.auth_api import generate_otp, get_client_id
+
+    uid = get_client_id()
+    if not uid:
+        return jsonify({"status": "error", "message": "BROKER_API_KEY not configured"}), 400
+
+    data, error = generate_otp(uid)
+    if error:
+        return jsonify({"status": "error", "message": error}), 400
+
+    return jsonify({"status": "success", "message": data.get("statusMessage", "OTP sent")})
+
+
+@brlogin_bp.route("/samco/generate-secret", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def samco_generate_secret():
+    """Generate Secret API Key using OTP"""
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
+
+    from broker.samco.api.auth_api import generate_secret_key, get_client_id
+
+    uid = get_client_id()
+    otp = request.json.get("otp") if request.is_json else request.form.get("otp")
+
+    if not otp:
+        return jsonify({"status": "error", "message": "OTP is required"}), 400
+
+    data, error = generate_secret_key(uid, otp)
+    if error:
+        return jsonify({"status": "error", "message": error}), 400
+
+    return jsonify({
+        "status": "success",
+        "message": data.get("statusMessage", "Secret key sent to your email"),
+    })
+
+
+@brlogin_bp.route("/samco/save-secret", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def samco_save_secret():
+    """Save the secret API key received via email"""
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
+
+    from broker.samco.api.auth_api import get_client_id
+    from database.auth_db import samco_save_secret_key as save_secret_key
+
+    uid = get_client_id()
+    secret_key = request.json.get("secretApiKey") if request.is_json else request.form.get("secretApiKey")
+
+    if not secret_key:
+        return jsonify({"status": "error", "message": "Secret API key is required"}), 400
+
+    if save_secret_key(uid, secret_key):
+        return jsonify({"status": "success", "message": "Secret API key saved successfully"})
+    else:
+        return jsonify({"status": "error", "message": "Failed to save secret API key"}), 500
+
+
+@brlogin_bp.route("/samco/ip-status", methods=["GET"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def samco_ip_status():
+    """Get IP registration status"""
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
+
+    from broker.samco.api.auth_api import get_client_id
+    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_secret_key as has_secret_key
+
+    uid = get_client_id()
+    ip_status = get_ip_status(uid)
+    ip_status["has_secret_key"] = has_secret_key(uid)
+    ip_status["status"] = "success"
+
+    return jsonify(ip_status)
+
+
+@brlogin_bp.route("/samco/update-ip", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def samco_update_ip():
+    """Register or update IP addresses"""
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
+
+    from broker.samco.api.auth_api import get_client_id, get_password, register_ip, update_ip
+    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_registered_ip as has_registered_ip, samco_save_ip_info as save_ip_info
+
+    uid = get_client_id()
+    password = get_password()
+
+    primary_ip = request.json.get("primaryIp") if request.is_json else request.form.get("primaryIp")
+    secondary_ip = request.json.get("secondaryIp") if request.is_json else request.form.get("secondaryIp")
+
+    if not primary_ip:
+        return jsonify({"status": "error", "message": "Primary IP is required"}), 400
+
+    # Check weekly lock — allow if secondary IP is not yet registered
+    status = get_ip_status(uid)
+    secondary_missing = status["primary_ip"] and not status["secondary_ip"]
+    if not status["editable"] and has_registered_ip(uid) and not secondary_missing:
+        return jsonify({
+            "status": "error",
+            "message": f"IP can only be updated once per calendar week. Next edit: {status['next_editable_date']}",
+        }), 400
+
+    # Use register for first time, update for subsequent
+    if has_registered_ip(uid):
+        data, error = update_ip(uid, password, primary_ip, secondary_ip)
+    else:
+        data, error = register_ip(uid, password, primary_ip, secondary_ip)
+
+    if error:
+        return jsonify({"status": "error", "message": error}), 400
+
+    # Parse ip_updated_at from response if available
+    ip_updated_at = None
+    if data and data.get("data") and data["data"].get("ip_updated_at"):
+        from datetime import datetime
+
+        try:
+            ip_updated_at = datetime.fromisoformat(
+                data["data"]["ip_updated_at"].replace("Z", "+00:00")
+            )
+        except (ValueError, TypeError):
+            pass
+
+    # Save to DB
+    save_ip_info(uid, primary_ip, secondary_ip, ip_updated_at)
+
+    return jsonify({
+        "status": "success",
+        "message": data.get("statusMessage", "IP updated successfully"),
+    })

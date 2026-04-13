@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 
 import httpx
 
@@ -17,7 +19,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
 
@@ -36,27 +38,46 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         "X-PrivateKey": api_key,
     }
 
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    url = f"https://apiconnect.angelone.in{endpoint}"
 
-    if method == "GET":
-        response = client.get(url, headers=headers)
-    elif method == "POST":
-        response = client.post(url, headers=headers, content=payload)
-    else:
-        response = client.request(method, url, headers=headers, content=payload)
+    for attempt in range(max_retries + 1):
+        try:
+            if method == "GET":
+                response = client.get(url, headers=headers)
+            elif method == "POST":
+                response = client.post(url, headers=headers, content=payload)
+            else:
+                response = client.request(method, url, headers=headers, content=payload)
+        except Exception as e:
+            logger.error(f"HTTP request failed for {endpoint}: {e}")
+            if attempt < max_retries:
+                time.sleep(1)
+                continue
+            return {"status": "error", "message": str(e)}
 
-    # Add status attribute for compatibility with the existing codebase
-    response.status = response.status_code
+        # Add status attribute for compatibility with the existing codebase
+        response.status = response.status_code
 
-    # Handle empty response
-    if not response.text:
-        return {}
+        # Handle empty response
+        if not response.text:
+            logger.error(f"Empty response from {endpoint} (HTTP {response.status_code})")
+            if attempt < max_retries:
+                time.sleep(1)
+                continue
+            return {"status": "error", "message": f"Empty response (HTTP {response.status_code})"}
 
-    try:
-        return json.loads(response.text)
-    except json.JSONDecodeError:
-        logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
-        return {}
+        try:
+            return json.loads(response.text)
+        except json.JSONDecodeError:
+            # Rate limit returns plain text like "Access denied because of exceeding access rate"
+            if "exceeding access rate" in response.text.lower() and attempt < max_retries:
+                logger.warning(f"Rate limited on {endpoint}, retrying in 1s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(1)
+                continue
+            logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
+            return {"status": "error", "message": f"Invalid JSON response (HTTP {response.status_code})"}
+
+    return {"status": "error", "message": "Max retries exceeded"}
 
 
 def get_order_book(auth):
@@ -75,10 +96,56 @@ def get_holdings(auth):
     return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding", auth)
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
+
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
-    positions_data = get_positions(auth)
+    positions_data = _get_cached_positions(auth)
 
     logger.debug(f"{positions_data}")
 
@@ -139,7 +206,7 @@ def place_order_api(data, auth):
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/placeOrder",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder",
         headers=headers,
         content=payload,
     )
@@ -168,79 +235,85 @@ def place_smartorder_api(data, auth):
     symbol = data.get("symbol")
     exchange = data.get("exchange")
     product = data.get("product")
-    position_size = int(data.get("position_size", "0"))
+    # Per-symbol lock: serialize smart orders per symbol
+    symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-    # Get current open position for the symbol
-    current_position = int(
-        get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
-    )
+    with symbol_lock:
+        position_size = int(data.get("position_size", "0"))
 
-    logger.info(f"position_size : {position_size}")
-    logger.info(f"Open Position : {current_position}")
+        # Get current open position for the symbol
+        current_position = int(
+            get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+        )
 
-    # Determine action based on position_size and current_position
-    action = None
-    quantity = 0
+        logger.info(f"position_size : {position_size}")
+        logger.info(f"Open Position : {current_position}")
 
-    # If both position_size and current_position are 0, do nothing
-    if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
-        action = data["action"]
-        quantity = data["quantity"]
-        # logger.info(f"action : {action}")
-        # logger.info(f"Quantity : {quantity}")
-        res, response, orderid = place_order_api(data, AUTH_TOKEN)
-        # logger.info(f"{res}")
-        # logger.info(f"{response}")
+        # Determine action based on position_size and current_position
+        action = None
+        quantity = 0
 
-        return res, response, orderid
+        # If both position_size and current_position are 0, do nothing
+        if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
+            action = data["action"]
+            quantity = data["quantity"]
+            # logger.info(f"action : {action}")
+            # logger.info(f"Quantity : {quantity}")
+            res, response, orderid = place_order_api(data, AUTH_TOKEN)
+            _invalidate_position_cache(AUTH_TOKEN)
+            # logger.info(f"{res}")
+            # logger.info(f"{response}")
 
-    elif position_size == current_position:
-        if int(data["quantity"]) == 0:
-            response = {
-                "status": "success",
-                "message": "No OpenPosition Found. Not placing Exit order.",
-            }
-        else:
-            response = {
-                "status": "success",
-                "message": "No action needed. Position size matches current position",
-            }
-        orderid = None
-        return res, response, orderid  # res remains None as no API call was mad
+            return res, response, orderid
 
-    if position_size == 0 and current_position > 0:
-        action = "SELL"
-        quantity = abs(current_position)
-    elif position_size == 0 and current_position < 0:
-        action = "BUY"
-        quantity = abs(current_position)
-    elif current_position == 0:
-        action = "BUY" if position_size > 0 else "SELL"
-        quantity = abs(position_size)
-    else:
-        if position_size > current_position:
-            action = "BUY"
-            quantity = position_size - current_position
-            # logger.info(f"smart buy quantity : {quantity}")
-        elif position_size < current_position:
+        elif position_size == current_position:
+            if int(data["quantity"]) == 0:
+                response = {
+                    "status": "success",
+                    "message": "No OpenPosition Found. Not placing Exit order.",
+                }
+            else:
+                response = {
+                    "status": "success",
+                    "message": "No action needed. Position size matches current position",
+                }
+            orderid = None
+            return res, response, orderid  # res remains None as no API call was mad
+
+        if position_size == 0 and current_position > 0:
             action = "SELL"
-            quantity = current_position - position_size
-            # logger.info(f"smart sell quantity : {quantity}")
+            quantity = abs(current_position)
+        elif position_size == 0 and current_position < 0:
+            action = "BUY"
+            quantity = abs(current_position)
+        elif current_position == 0:
+            action = "BUY" if position_size > 0 else "SELL"
+            quantity = abs(position_size)
+        else:
+            if position_size > current_position:
+                action = "BUY"
+                quantity = position_size - current_position
+                # logger.info(f"smart buy quantity : {quantity}")
+            elif position_size < current_position:
+                action = "SELL"
+                quantity = current_position - position_size
+                # logger.info(f"smart sell quantity : {quantity}")
 
-    if action:
-        # Prepare data for placing the order
-        order_data = data.copy()
-        order_data["action"] = action
-        order_data["quantity"] = str(quantity)
+        if action:
+            # Prepare data for placing the order
+            order_data = data.copy()
+            order_data["action"] = action
+            order_data["quantity"] = str(quantity)
 
-        # logger.info(f"{order_data}")
-        # Place the order
-        res, response, orderid = place_order_api(order_data, auth)
-        # logger.info(f"{res}")
-        logger.info(f"{response}")
-        logger.info(f"{orderid}")
+            # logger.info(f"{order_data}")
+            # Place the order
+            res, response, orderid = place_order_api(order_data, auth)
+            _invalidate_position_cache(AUTH_TOKEN)
+            # logger.info(f"{res}")
+            logger.info(f"{response}")
+            logger.info(f"{orderid}")
 
-        return res, response, orderid
+            return res, response, orderid
 
 
 def close_all_positions(current_api_key, auth):
@@ -325,7 +398,7 @@ def cancel_order(orderid, auth):
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/cancelOrder",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/cancelOrder",
         headers=headers,
         content=payload,
     )
@@ -377,7 +450,7 @@ def modify_order(data, auth):
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/modifyOrder",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/modifyOrder",
         headers=headers,
         content=payload,
     )

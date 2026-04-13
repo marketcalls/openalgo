@@ -27,22 +27,9 @@ from database.symbol import SymToken
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
 from utils.logging import get_logger
+from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
-
-
-def is_option(symbol, exchange):
-    """Check if symbol is an option based on exchange and symbol suffix"""
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
-        return symbol.endswith("CE") or symbol.endswith("PE")
-    return False
-
-
-def is_future(symbol, exchange):
-    """Check if symbol is a future based on exchange and symbol suffix"""
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
-        return symbol.endswith("FUT")
-    return False
 
 
 class OrderManager:
@@ -79,7 +66,7 @@ class OrderManager:
 
             # Extract order parameters
             symbol = order_data["symbol"]
-            exchange = order_data["exchange"]
+            exchange = order_data["exchange"].upper()
             action = order_data["action"].upper()
             quantity = int(order_data["quantity"])
             price = Decimal(str(order_data.get("price", 0))) if order_data.get("price") else None
@@ -106,7 +93,7 @@ class OrderManager:
                 )
 
             # Validate lot size for F&O
-            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]:
+            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]:
                 lot_size = symbol_obj.lotsize or 1
                 if quantity % lot_size != 0:
                     return (
@@ -572,26 +559,15 @@ class OrderManager:
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
-            # Notify WebSocket execution engine to index and subscribe this symbol
-            try:
-                from sandbox.websocket_execution_engine import (
-                    get_websocket_execution_engine,
-                    is_websocket_execution_engine_running,
-                )
-
-                if is_websocket_execution_engine_running():
-                    engine = get_websocket_execution_engine()
-                    engine.notify_order_placed(order)
-            except Exception as e:
-                logger.debug(f"WebSocket execution engine notification skipped: {e}")
-
             # Execute orders immediately when conditions are already met
             # MARKET: always immediate, LIMIT: if marketable, SL/SL-M: if trigger already met
+            # This must happen BEFORE notifying the WebSocket engine to prevent
+            # duplicate execution (WebSocket tick arriving before immediate execution completes)
             if price_type == "MARKET" or (cached_quote and price_type in ["LIMIT", "SL", "SL-M"]):
                 try:
                     from sandbox.execution_engine import ExecutionEngine
 
-                    engine = ExecutionEngine()
+                    exec_engine = ExecutionEngine()
 
                     # Use cached quote from earlier check (already fetched above)
                     if cached_quote:
@@ -602,7 +578,7 @@ class OrderManager:
                             # In real exchanges, a marketable limit order gets price improvement
                             # e.g., BUY LIMIT 1500, LTP 1417 → fills at 1417
                             if ltp > 0:
-                                engine._execute_order(order, ltp)
+                                exec_engine._execute_order(order, ltp)
                                 logger.info(
                                     f"Marketable limit order {orderid} executed at LTP {ltp} (limit was {price})"
                                 )
@@ -613,7 +589,7 @@ class OrderManager:
                         elif price_type in ["SL", "SL-M"]:
                             # SL/SL-M with trigger already met: execute at LTP
                             if ltp > 0:
-                                engine._execute_order(order, ltp)
+                                exec_engine._execute_order(order, ltp)
                                 logger.info(
                                     f"{price_type} order {orderid} executed at LTP {ltp} (trigger already met)"
                                 )
@@ -623,7 +599,7 @@ class OrderManager:
                                 )
                         else:
                             # MARKET order: process normally (fills at bid/ask or LTP)
-                            engine._process_order(order, cached_quote)
+                            exec_engine._process_order(order, cached_quote)
                             logger.info(
                                 f"Market order {orderid} executed immediately"
                             )
@@ -634,6 +610,23 @@ class OrderManager:
                 except Exception as e:
                     logger.exception(f"Error executing order immediately: {e}")
                     # Order remains in 'open' status if execution fails
+
+            # Only notify WebSocket execution engine for orders that are STILL open
+            # (not already executed immediately above). This prevents the WebSocket
+            # engine from re-executing an already completed order.
+            db_session.refresh(order)
+            if order.order_status == "open":
+                try:
+                    from sandbox.websocket_execution_engine import (
+                        get_websocket_execution_engine,
+                        is_websocket_execution_engine_running,
+                    )
+
+                    if is_websocket_execution_engine_running():
+                        ws_engine = get_websocket_execution_engine()
+                        ws_engine.notify_order_placed(order)
+                except Exception as e:
+                    logger.debug(f"WebSocket execution engine notification skipped: {e}")
 
             return True, {"status": "success", "orderid": orderid, "mode": "analyze"}, 200
 
@@ -684,7 +677,7 @@ class OrderManager:
                 new_quantity = int(new_data["quantity"])
                 # Validate lot size (from cache)
                 symbol_obj = get_symbol_info(order.symbol, order.exchange)
-                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]:
+                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]:
                     lot_size = symbol_obj.lotsize or 1
                     if new_quantity % lot_size != 0:
                         return (
@@ -1045,7 +1038,7 @@ class OrderManager:
                 )
 
         # Derivatives exchanges (F&O, Commodity, Currency): Only NRML and MIS allowed
-        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
+        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "CRYPTO"]:
             if product == "CNC":
                 return (
                     False,
@@ -1083,7 +1076,7 @@ class OrderManager:
                 return False, "Invalid trigger_price"
 
         # Validate exchange
-        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]
+        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]
         if order_data["exchange"].upper() not in valid_exchanges:
             return False, f"Invalid exchange. Must be one of {', '.join(valid_exchanges)}"
 

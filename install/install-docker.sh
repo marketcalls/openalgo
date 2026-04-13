@@ -42,15 +42,15 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
-    [[ $valid_brokers == *"$broker"* ]]
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
 # Function to check if broker is XTS based
 is_xts_broker() {
     local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
-    [[ $xts_brokers == *"$broker"* ]]
+    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
+    [[ ",$xts_brokers," == *",$broker,"* ]]
 }
 
 # Start installation
@@ -113,10 +113,10 @@ done
 # Get broker name
 while true; do
     log "\nValid brokers:" "$BLUE"
-    echo "fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge,"
-    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, ibulls, iifl,"
+    echo "fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, deltaexchange,"
+    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, ibulls, iifl, iiflcapital,"
     echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
-    echo "samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha,"
+    echo "rmoney, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha,"
     echo ""
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
@@ -283,14 +283,10 @@ if ! grep "CORS_ALLOWED_ORIGINS" .env | grep -q "https://$DOMAIN"; then
     fi
 fi
 
-# CSP: Add domain if not already present (preserves custom domains)
-if ! grep "CSP_CONNECT_SRC" .env | grep -q "https://$DOMAIN"; then
-    CURRENT_CSP=$(grep "CSP_CONNECT_SRC" .env | sed 's/.*= "\\(.*\\)"/\\1/')
-    if [ -n "$CURRENT_CSP" ] && ! echo "$CURRENT_CSP" | grep -q "https://$DOMAIN"; then
-        NEW_CSP="$CURRENT_CSP https://$DOMAIN wss://$DOMAIN"
-        $SUDO sed -i "s|CSP_CONNECT_SRC = \".*\"|CSP_CONNECT_SRC = \"$NEW_CSP\"|g" .env
-    fi
-fi
+# CSP: Set connect sources with domain (delete-and-append avoids sed regex issues with nested quotes)
+# See: https://github.com/marketcalls/openalgo/issues/938
+$SUDO sed -i '/^CSP_CONNECT_SRC/d' .env
+echo "CSP_CONNECT_SRC = \"'self' wss: ws: https://cdn.socket.io https://$DOMAIN wss://$DOMAIN\"" | $SUDO tee -a .env > /dev/null
 
 check_status "Environment configuration failed"
 

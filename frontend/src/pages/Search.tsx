@@ -30,6 +30,7 @@ interface SearchResult {
   brexchange: string
   token: string
   lotsize: number | null
+  contract_value: number | null
   freeze_qty: number | null
 }
 
@@ -259,7 +260,7 @@ export default function Search() {
                         <Badge variant="secondary">{row.brexchange}</Badge>
                       </TableCell>
                       <TableCell className="font-mono text-sm">{row.token}</TableCell>
-                      <TableCell>{row.lotsize ?? '-'}</TableCell>
+                      <TableCell>{row.contract_value != null && row.contract_value !== 1 ? row.contract_value : (row.lotsize ?? '-')}</TableCell>
                       <TableCell>{row.freeze_qty ?? '-'}</TableCell>
                     </TableRow>
                   ))

@@ -3,10 +3,8 @@ Dhan WebSocket Client Implementation
 Handles both 5-level and 20-level market depth connections
 """
 
-import asyncio
 import json
 import logging
-import platform
 import struct
 import threading
 import time
@@ -62,6 +60,7 @@ class DhanWebSocket:
         self.ws_thread = None
         self.running = False
         self.connected = False
+        self._was_connected = False  # tracks if connection was ever established
 
         # Callbacks
         self.on_open = None
@@ -109,35 +108,9 @@ class DhanWebSocket:
             self.logger.warning("Already connected or connecting")
             return
 
-        # Handle asyncio event loop conflict on Linux/macOS
-        self._handle_asyncio_compatibility()
-
         self.running = True
         self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
         self.ws_thread.start()
-
-    def _handle_asyncio_compatibility(self):
-        """Handle asyncio event loop conflicts on Linux/macOS systems"""
-        try:
-            # Check if we're on a platform that might have asyncio conflicts
-            if platform.system() in ["Linux", "Darwin"]:  # Darwin is macOS
-                try:
-                    # Try to get the current event loop
-                    loop = asyncio.get_running_loop()
-                    if loop and not loop.is_closed():
-                        self.logger.info(
-                            "Detected existing asyncio event loop, using thread isolation for Dhan WebSocket"
-                        )
-                        # We'll run in a completely separate thread context
-                        # which is already what we're doing, so no additional action needed
-                except RuntimeError:
-                    # No running loop, which is fine
-                    pass
-            else:
-                self.logger.debug("Running on Windows, no asyncio compatibility adjustments needed")
-        except Exception as e:
-            self.logger.warning(f"Error checking asyncio compatibility: {e}")
-            # Continue anyway, the thread isolation should handle most cases
 
     def _run_websocket(self):
         """Run the WebSocket connection in a separate thread with exponential backoff"""
@@ -174,6 +147,13 @@ class DhanWebSocket:
                 break
 
             if self.running:
+                # Reset counter if the connection was successfully established
+                # before it dropped. self.connected can't be used here because
+                # _on_close already set it to False before run_forever returned.
+                if self._was_connected:
+                    reconnect_attempt = 0
+                    self._was_connected = False
+
                 reconnect_attempt += 1
                 if reconnect_attempt >= max_reconnect_attempts:
                     self.logger.error(
@@ -188,10 +168,6 @@ class DhanWebSocket:
                     f"Reconnecting in {delay} seconds... (attempt {reconnect_attempt}/{max_reconnect_attempts})"
                 )
                 time.sleep(delay)
-
-                # Reset reconnect attempt counter on successful connection
-                if self.connected:
-                    reconnect_attempt = 0
 
     def disconnect(self):
         """Disconnect from WebSocket with proper resource cleanup"""
@@ -219,10 +195,16 @@ class DhanWebSocket:
             finally:
                 self.ws = None  # Always clear WebSocket reference
 
-        # Wait for WebSocket thread to finish
+        # Wait for WebSocket thread to finish.
+        # Under eventlet, thread.join(timeout) raises eventlet.timeout.Timeout
+        # instead of returning silently, so we must catch it.
         if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=2)
-            if self.ws_thread.is_alive():
+            try:
+                self.ws_thread.join(timeout=2)
+            except Exception:
+                # Catches eventlet.timeout.Timeout (and any other join errors)
+                pass
+            if self.ws_thread and self.ws_thread.is_alive():
                 self.logger.debug("WebSocket thread timeout - will be orphaned (daemon)")
             else:
                 self.logger.debug("WebSocket thread stopped")
@@ -310,6 +292,7 @@ class DhanWebSocket:
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
         self.connected = True
+        self._was_connected = True
         self.logger.debug("WebSocket connection established")
 
         if self.on_open:

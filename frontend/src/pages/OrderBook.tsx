@@ -45,28 +45,48 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { cn, sanitizeCSV } from '@/lib/utils'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 // Note: AlertDialog still used for Cancel All Orders
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    minimumFractionDigits: 2,
-  }).format(value)
-}
-
 function formatTime(timestamp: string): string {
-  try {
-    return new Date(timestamp).toLocaleTimeString('en-IN', {
+  if (!timestamp) return '-'
+
+  // Try native Date parsing first (handles ISO and standard formats)
+  let date = new Date(timestamp)
+
+  // If invalid, try "HH:MM:SS DD-MM-YYYY" (Flattrade/Shoonya/Zebu/Firstock norentm format)
+  if (Number.isNaN(date.getTime())) {
+    const norentm = timestamp.match(/^(\d{2}:\d{2}:\d{2})\s+(\d{2})-(\d{2})-(\d{4})$/)
+    if (norentm) {
+      date = new Date(`${norentm[4]}-${norentm[3]}-${norentm[2]}T${norentm[1]}`)
+    }
+  }
+
+  // If invalid, try "DD-MM-YYYY HH:MM:SS"
+  if (Number.isNaN(date.getTime())) {
+    const ddmmyyyy = timestamp.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}:\d{2}:\d{2})$/)
+    if (ddmmyyyy) {
+      date = new Date(`${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}T${ddmmyyyy[4]}`)
+    }
+  }
+
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleTimeString('en-IN', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
     })
-  } catch {
-    return timestamp
   }
+
+  // Last resort: extract HH:MM:SS if embedded in the string
+  const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
+  if (timeMatch) return timeMatch[1]
+
+  return timestamp
 }
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; label: string }> = {
@@ -77,7 +97,9 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
 }
 
 export default function OrderBook() {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
+  const { isCrypto } = useSupportedExchanges()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [orders, setOrders] = useState<Order[]>([])
   const [stats, setStats] = useState<OrderStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -256,40 +278,52 @@ export default function OrderBook() {
   }
 
   const exportToCSV = () => {
-    const headers = [
-      'Symbol',
-      'Exchange',
-      'Action',
-      'Qty',
-      'Price',
-      'Trigger',
-      'Type',
-      'Product',
-      'Order ID',
-      'Status',
-      'Time',
-    ]
-    const rows = orders.map((o) => [
-      sanitizeCSV(o.symbol),
-      sanitizeCSV(o.exchange),
-      sanitizeCSV(o.action),
-      sanitizeCSV(o.quantity),
-      sanitizeCSV(o.price),
-      sanitizeCSV(o.trigger_price),
-      sanitizeCSV(o.pricetype),
-      sanitizeCSV(o.product),
-      sanitizeCSV(o.orderid),
-      sanitizeCSV(o.order_status),
-      sanitizeCSV(o.timestamp),
-    ])
+    if (filteredOrders.length === 0) {
+      showToast.error('No data to export', 'system')
+      return
+    }
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
+    try {
+      const headers = [
+        'Symbol',
+        'Exchange',
+        'Action',
+        'Qty',
+        'Price',
+        'Trigger',
+        'Type',
+        ...(isCrypto ? [] : ['Product']),
+        'Order ID',
+        'Status',
+        'Time',
+      ]
+      const rows = filteredOrders.map((o) => [
+        sanitizeCSV(o.symbol),
+        sanitizeCSV(o.exchange),
+        sanitizeCSV(o.action),
+        sanitizeCSV(o.quantity),
+        sanitizeCSV(o.price),
+        sanitizeCSV(o.trigger_price),
+        sanitizeCSV(o.pricetype),
+        ...(isCrypto ? [] : [sanitizeCSV(o.product)]),
+        sanitizeCSV(o.orderid),
+        sanitizeCSV(o.order_status),
+        sanitizeCSV(o.timestamp),
+      ])
+
+      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
   }
 
   const openOrders = orders.filter((o) => o.order_status === 'open')
@@ -497,7 +531,7 @@ export default function OrderBook() {
                     <TableHead className="w-[100px] text-right">Price</TableHead>
                     <TableHead className="w-[100px] text-right">Trigger</TableHead>
                     <TableHead className="w-[80px]">Type</TableHead>
-                    <TableHead className="w-[70px]">Product</TableHead>
+                    {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
                     <TableHead className="w-[140px]">Order ID</TableHead>
                     <TableHead className="w-[100px]">Status</TableHead>
                     <TableHead className="w-[100px]">Time</TableHead>
@@ -535,9 +569,11 @@ export default function OrderBook() {
                         <TableCell>
                           <Badge variant="secondary">{order.pricetype}</Badge>
                         </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{order.product}</Badge>
-                        </TableCell>
+                        {!isCrypto && (
+                          <TableCell>
+                            <Badge variant="outline">{order.product}</Badge>
+                          </TableCell>
+                        )}
                         <TableCell className="font-mono text-xs">{order.orderid}</TableCell>
                         <TableCell>
                           <div className={cn('flex items-center gap-1', status.color)}>
@@ -555,6 +591,7 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
                               onClick={() => handleCancelOrder(order.orderid)}
+                              aria-label={`Cancel order ${order.orderid}`}
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -567,6 +604,7 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-blue-500 hover:text-blue-600"
                               onClick={() => openModifyDialog(order)}
+                              aria-label={`Modify order for ${order.symbol}`}
                             >
                               <Pencil className="h-4 w-4" />
                             </Button>
@@ -617,12 +655,14 @@ export default function OrderBook() {
                   {modifyForm.pricetype}
                 </Badge>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Product:</span>
-                <Badge variant="outline" className="text-xs">
-                  {modifyForm.product}
-                </Badge>
-              </div>
+              {!isCrypto && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Product:</span>
+                  <Badge variant="outline" className="text-xs">
+                    {modifyForm.product}
+                  </Badge>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Qty:</span>
                 <span className="font-mono text-sm font-medium">{modifyForm.quantity}</span>
@@ -734,3 +774,5 @@ export default function OrderBook() {
     </div>
   )
 }
+
+

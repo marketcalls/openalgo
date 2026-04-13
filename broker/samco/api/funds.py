@@ -33,23 +33,20 @@ def get_margin_data(auth_token):
         equity_limit = margin_data.get("equityLimit", {})
         commodity_limit = margin_data.get("commodityLimit", {})
 
-        # Calculate total available margin from equity and commodity
+        # Use equity segment as the primary margin source
+        # Samco reports the same fund pool under both equity and commodity segments
         equity_available = float(equity_limit.get("netAvailableMargin", 0) or 0)
-        commodity_available = float(commodity_limit.get("netAvailableMargin", 0) or 0)
-
         equity_used = float(equity_limit.get("marginUsed", 0) or 0)
-        commodity_used = float(commodity_limit.get("marginUsed", 0) or 0)
 
         # Map Samco fields to OpenAlgo standard format
         filtered_data = {
-            "availablecash": f"{equity_available + commodity_available:.2f}",
+            "availablecash": f"{equity_available:.2f}",
             "collateral": "{:.2f}".format(
                 float(equity_limit.get("collateralMarginAgainstShares", 0) or 0)
-                + float(commodity_limit.get("collateralMarginAgainstShares", 0) or 0)
             ),
             "m2mrealized": f"{0:.2f}",  # Not provided by Samco
             "m2munrealized": f"{0:.2f}",  # Not provided by Samco
-            "utiliseddebits": f"{equity_used + commodity_used:.2f}",
+            "utiliseddebits": f"{equity_used:.2f}",
         }
         return filtered_data
     else:

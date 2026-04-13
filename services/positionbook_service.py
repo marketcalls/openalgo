@@ -31,13 +31,20 @@ def format_position_data(position_data):
         "daybuyqty",
         "daysellqty",
     }
+    # Fields that must preserve full float precision (must NOT be rounded to 2dp).
+    # lot_size can be as small as 0.001 (BTCUSD.P) — rounding to 2dp gives 0.0.
+    passthrough_fields = {"lot_size"}
 
     if isinstance(position_data, list):
         return [
             {
-                key: int(value)
-                if (key.lower() in quantity_fields and isinstance(value, (int, float)))
-                else (format_decimal(value) if isinstance(value, (int, float)) else value)
+                key: value
+                if key.lower() in passthrough_fields
+                else (
+                    (int(value) if value == int(value) else value)
+                    if (key.lower() in quantity_fields and isinstance(value, (int, float)))
+                    else (format_decimal(value) if isinstance(value, (int, float)) else value)
+                )
                 for key, value in item.items()
             }
             for item in position_data

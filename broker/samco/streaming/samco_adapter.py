@@ -34,6 +34,9 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        self._reconnecting = False  # Guard against concurrent reconnect threads
+        self._broker_data = None  # Cached BrokerData for index listing lookups
+        self._index_listing_cache = {}  # {symbol_exchange: listing_id}
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -80,6 +83,23 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.running = True
 
+    def _get_index_listing_id(self, symbol: str, exchange: str) -> str:
+        """Get index listing ID with caching to avoid repeated API calls"""
+        cache_key = f"{symbol}_{exchange}"
+        if cache_key in self._index_listing_cache:
+            return self._index_listing_cache[cache_key]
+
+        # Get or create BrokerData instance
+        if not self._broker_data:
+            auth_token = get_auth_token(self.user_id)
+            if not auth_token:
+                raise ValueError(f"No auth token found for user {self.user_id}")
+            self._broker_data = BrokerData(auth_token)
+
+        listing_id = self._broker_data.get_index_listing_id(symbol, exchange)
+        self._index_listing_cache[cache_key] = listing_id
+        return listing_id
+
     def connect(self) -> None:
         """Establish connection to Samco WebSocket"""
         if not self.ws_client:
@@ -90,31 +110,47 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _connect_with_retry(self) -> None:
         """Connect to Samco WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                self.logger.info(
-                    f"Connecting to Samco WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
+        # Prevent multiple reconnect threads from running concurrently
+        with self.lock:
+            if self._reconnecting:
+                self.logger.debug("Reconnect already in progress, skipping")
+                return
+            self._reconnecting = True
 
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-                )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+        try:
+            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                try:
+                    self.logger.info(
+                        f"Connecting to Samco WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    self.ws_client.connect()
+                    self.reconnect_attempts = 0  # Reset attempts on successful connection
+                    break
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+                except Exception as e:
+                    self.reconnect_attempts += 1
+                    delay = min(
+                        self.reconnect_delay * (2**self.reconnect_attempts),
+                        self.max_reconnect_delay,
+                    )
+                    self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Max reconnection attempts reached. Giving up.")
+        finally:
+            with self.lock:
+                self._reconnecting = False
 
     def disconnect(self) -> None:
         """Disconnect from Samco WebSocket"""
         self.running = False
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
+
+        # Clear cached BrokerData and index listings (stale after disconnect)
+        self._broker_data = None
+        self._index_listing_cache = {}
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
@@ -146,19 +182,10 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "INVALID_DEPTH", f"Invalid depth level {depth_level}. Must be 5"
             )
 
-        # Handle index symbols - fetch listingId from API
+        # Handle index symbols - fetch listingId from API (cached)
         if exchange in ["NSE_INDEX", "BSE_INDEX"]:
             try:
-                # Get auth token for API call
-                auth_token = get_auth_token(self.user_id)
-                if not auth_token:
-                    return self._create_error_response(
-                        "AUTH_ERROR", f"No auth token found for user {self.user_id}"
-                    )
-
-                # Create BrokerData instance and fetch listingId
-                broker_data = BrokerData(auth_token)
-                listing_id = broker_data.get_index_listing_id(symbol, exchange)
+                listing_id = self._get_index_listing_id(symbol, exchange)
 
                 # For index, use listingId as token (e.g., '-23' for NIFTY)
                 token = listing_id
@@ -264,16 +291,10 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Response with status
         """
-        # Handle index symbols - need to use listingId for streaming
+        # Handle index symbols - use cached listingId for streaming
         if exchange in ["NSE_INDEX", "BSE_INDEX"]:
             try:
-                auth_token = get_auth_token(self.user_id)
-                if not auth_token:
-                    return self._create_error_response(
-                        "AUTH_ERROR", "Authentication token not found"
-                    )
-                broker_data = BrokerData(auth_token)
-                listing_id = broker_data.get_index_listing_id(symbol, exchange)
+                listing_id = self._get_index_listing_id(symbol, exchange)
                 token = listing_id  # e.g., '-21' for NIFTY
                 brexchange = "NSE" if exchange == "NSE_INDEX" else "BSE"
                 self.logger.info(

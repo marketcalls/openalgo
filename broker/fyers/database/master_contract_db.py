@@ -207,9 +207,11 @@ def download_csv_fyers_data(output_path: str) -> tuple[bool, list[str], str | No
 
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts
-    # Reorder and format the parts to match the desired output
-    # Assuming the format is consistent and always "Name DD Mon YY FUT"
-    return f"{parts[0]}{parts[3]}{parts[2].upper()}{parts[1]}{parts[4]}"
+    # Reorder and format the parts to match the OpenAlgo standard symbol format
+    # Input format: "Name DD Mon YY Strike" (e.g., "NIFTY 02 Mar 26 30600")
+    # Output format: Name + DD + MMM + YY + Strike (e.g., "NIFTY02MAR2630600")
+    # This matches the DDMMMYY convention used by all other brokers
+    return f"{parts[0]}{parts[1]}{parts[2].upper()}{parts[3]}{parts[4]}"
 
 
 def process_fyers_nse_csv(path):

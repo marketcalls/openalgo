@@ -216,8 +216,10 @@ def process_zerodha_csv(path):
     # Options Symbol Update 
 
     def format_strike(strike):
-        # Convert the string to a float, then to an integer, and finally back to a string.
-        return str(int(float(strike)))
+        # Convert to float, then to int only if it's a whole number (e.g., 190 -> "190")
+        # Preserve decimal strikes (e.g., 187.5 -> "187.5")
+        val = float(strike)
+        return str(int(val)) if val == int(val) else str(val)
 
 
     df.loc[(df['instrumenttype'] == 'CE'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + df['strike'].apply(format_strike) + df['instrumenttype']

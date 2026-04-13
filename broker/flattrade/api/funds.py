@@ -1,3 +1,5 @@
+# api/funds.py
+
 import json
 import os
 
@@ -49,7 +51,7 @@ def get_margin_data(auth_token):
     client = get_httpx_client()
 
     # Fetch margin data
-    margin_data = fetch_data("/PiConnectTP/Limits", payload, headers, client)
+    margin_data = fetch_data("/PiConnectAPI/Limits", payload, headers, client)
 
     # Check if the request was successful
     if margin_data.get("stat") != "Ok":
@@ -58,7 +60,7 @@ def get_margin_data(auth_token):
         return {}
 
     # Fetch position data
-    position_data = fetch_data("/PiConnectTP/PositionBook", payload, headers, client)
+    position_data = fetch_data("/PiConnectAPI/PositionBook", payload, headers, client)
 
     total_realised = 0
     total_unrealised = 0

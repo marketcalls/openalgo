@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import io
@@ -9,20 +11,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-import pandas as pd
-import plotly.graph_objects as go
-from openalgo import api as openalgo_api
-from plotly.subplots import make_subplots
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
-from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
 
 # Database imports
 from database.telegram_db import (
@@ -76,6 +64,8 @@ class TelegramBotService:
 
     def _get_sdk_client(self, telegram_id: int) -> openalgo_api | None:
         """Get or create OpenAlgo SDK client for a user"""
+        from openalgo import api as openalgo_api
+
         try:
             # Check if client already exists
             if telegram_id in self.sdk_clients:
@@ -124,6 +114,10 @@ class TelegramBotService:
         self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
     ) -> bytes | None:
         """Generate intraday chart with specified interval"""
+        import pandas as pd
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
         try:
             client = self._get_sdk_client(telegram_id)
             if not client:
@@ -229,6 +223,10 @@ class TelegramBotService:
         self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
     ) -> bytes | None:
         """Generate daily chart with specified days"""
+        import pandas as pd
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
         try:
             client = self._get_sdk_client(telegram_id)
             if not client:
@@ -378,6 +376,8 @@ class TelegramBotService:
 
     async def initialize_bot(self, token: str, webhook_url: str | None = None) -> tuple[bool, str]:
         """Initialize the Telegram bot with given token"""
+        from telegram.ext import Application
+
         try:
             self.bot_token = token
             self.webhook_url = webhook_url
@@ -408,6 +408,10 @@ class TelegramBotService:
 
     async def _start_bot(self):
         """Start the bot with proper handlers"""
+        import telegram.error
+        from telegram import Update
+        from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+
         try:
             # Create application
             self.application = Application.builder().token(self.bot_token).build()
@@ -513,6 +517,8 @@ class TelegramBotService:
     # Command Handlers
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
 
         # Check if user is already linked
@@ -539,6 +545,8 @@ class TelegramBotService:
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command"""
+        from telegram.constants import ParseMode
+
         help_text = """
 📚 *Available Commands:*
 
@@ -579,6 +587,8 @@ class TelegramBotService:
 
     async def cmd_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /link command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         chat_id = update.effective_chat.id
 
@@ -596,6 +606,8 @@ class TelegramBotService:
 
         # Validate API key by making a test call
         try:
+            from openalgo import api as openalgo_api
+
             # Create temporary SDK client for validation
             test_client = openalgo_api(api_key=api_key, host=host_url)
 
@@ -637,6 +649,8 @@ class TelegramBotService:
 
     async def cmd_unlink(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /unlink command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
 
         if delete_telegram_user(user.id):
@@ -657,6 +671,8 @@ class TelegramBotService:
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /status command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -696,6 +712,8 @@ class TelegramBotService:
 
     async def cmd_orderbook(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /orderbook command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -747,6 +765,8 @@ class TelegramBotService:
 
     async def cmd_tradebook(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /tradebook command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -797,6 +817,8 @@ class TelegramBotService:
 
     async def cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /positions command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -850,6 +872,8 @@ class TelegramBotService:
 
     async def cmd_holdings(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /holdings command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -917,6 +941,8 @@ class TelegramBotService:
 
     async def cmd_funds(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /funds command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -961,6 +987,8 @@ class TelegramBotService:
 
     async def cmd_pnl(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /pnl command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -1008,6 +1036,8 @@ class TelegramBotService:
 
     async def cmd_quote(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /quote command"""
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -1066,6 +1096,9 @@ class TelegramBotService:
 
     async def cmd_chart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /chart command with customizable parameters"""
+        from telegram import InputMediaPhoto
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -1161,6 +1194,9 @@ class TelegramBotService:
 
     async def cmd_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /menu command"""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        from telegram.constants import ParseMode
+
         user = update.effective_user
         telegram_user = get_telegram_user(user.id)
 
@@ -1198,6 +1234,9 @@ class TelegramBotService:
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline button callbacks"""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        from telegram.constants import ParseMode
+
         query = update.callback_query
         await query.answer()
 

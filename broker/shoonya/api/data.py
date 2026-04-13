@@ -13,8 +13,16 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
-# Toggle between async and threaded approach
-USE_ASYNC = True  # Set to True to use asyncio, False for ThreadPoolExecutor
+# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
+# asyncio.run() cannot be called under eventlet's monkey-patched event loop
+def _is_eventlet_patched():
+    try:
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched("socket")
+    except (ImportError, AttributeError):
+        return False
+
+USE_ASYNC = not _is_eventlet_patched()
 
 logger = get_logger(__name__)
 
@@ -24,34 +32,78 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     Common function to make API calls to Shoonya using httpx with connection pooling
     """
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
-    api_key = api_key[:-2]  # Shoonya specific requirement
+    # BROKER_API_KEY format: userid:::client_id
+    full_api_key = os.getenv("BROKER_API_KEY")
+    if not full_api_key:
+        raise RuntimeError("BROKER_API_KEY is not configured")
+    api_key = full_api_key.split(":::")[0]  # Trading user ID
 
     if payload is None:
-        data = {"uid": api_key, "actid": api_key}
+        data = {"uid": api_key}
     else:
         data = payload
         data["uid"] = api_key
 
-    payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
+    payload_str = "jData=" + json.dumps(data)
 
     # Get the shared httpx client
     client = get_httpx_client()
 
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
     url = f"https://api.shoonya.com{endpoint}"
 
     response = client.request(method, url, content=payload_str, headers=headers)
     data = response.text
 
-    # Print raw response for debugging
-    logger.debug(f"Raw Response: {data}")
+    # Log response status and raw data for debugging
+    logger.info(f"API Response [{endpoint}] status={response.status_code} body={data[:500]}")
 
     try:
         return json.loads(data)
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding JSON: {e}")
         logger.debug(f"Response data: {data}")
+        raise
+
+
+def get_chart_api_response(endpoint, auth, method="POST", payload=None):
+    """
+    Chart data endpoints (EODChartData, TPSeries) use the legacy NorenWClientTP path
+    with jKey authentication as they haven't migrated to NorenWClientAPI yet.
+    """
+    AUTH_TOKEN = auth
+    full_api_key = os.getenv("BROKER_API_KEY")
+    api_key = full_api_key.split(":::")[0]
+
+    if payload is None:
+        data = {"uid": api_key}
+    else:
+        data = payload
+        data["uid"] = api_key
+
+    payload_str = "jData=" + json.dumps(data)
+
+    client = get_httpx_client()
+
+    headers = {
+        "Content-Type": "text/plain",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+    }
+    url = f"https://api.shoonya.com{endpoint}"
+
+    response = client.request(method, url, content=payload_str, headers=headers)
+    data = response.text
+
+    logger.info(f"Chart API Response [{endpoint}] status={response.status_code} body={data[:500]}")
+
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding chart JSON: {e}")
+        logger.debug(f"Chart response data: {data}")
         raise
 
 
@@ -99,7 +151,7 @@ class BrokerData:
             payload = {"exch": exchange, "token": token}
 
             response = get_api_response(
-                "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
+                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
             )
 
             if response.get("stat") != "Ok":
@@ -116,6 +168,7 @@ class BrokerData:
                 "prev_close": float(response.get("c", 0)) if "c" in response else 0,
                 "volume": int(response.get("v", 0)),
                 "oi": int(response.get("oi", 0)),
+                "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
             }
 
         except Exception as e:
@@ -133,8 +186,8 @@ class BrokerData:
         """
         try:
             # Shoonya API uses NorenAPI (similar to Flattrade)
-            # Rate limits: ~40 requests/second (conservative estimate)
-            BATCH_SIZE = 40  # Process 40 symbols per batch
+            # Rate limits: ~20 requests/second (conservative estimate)
+            BATCH_SIZE = 20  # Process 40 symbols per batch
             RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
 
             if len(symbols) > BATCH_SIZE:
@@ -174,9 +227,12 @@ class BrokerData:
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
 
-            payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://api.shoonya.com/NorenWClientTP/GetQuotes"
+            payload_str = "jData=" + json.dumps(data)
+            headers = {
+                "Content-Type": "text/plain",
+                "Authorization": f"Bearer {self.auth_token}",
+            }
+            url = "https://api.shoonya.com/NorenWClientAPI/GetQuotes"
 
             # Use httpx.post for sync requests
             http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
@@ -223,9 +279,12 @@ class BrokerData:
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
 
-            payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            url = "https://api.shoonya.com/NorenWClientTP/GetQuotes"
+            payload_str = "jData=" + json.dumps(data)
+            headers = {
+                "Content-Type": "text/plain",
+                "Authorization": f"Bearer {self.auth_token}",
+            }
+            url = "https://api.shoonya.com/NorenWClientAPI/GetQuotes"
 
             http_response = await client.post(url, content=payload_str, headers=headers)
             response = http_response.json()
@@ -305,9 +364,9 @@ class BrokerData:
         skipped_symbols = []
         prepared_symbols = []
 
-        # Pre-fetch API key (Shoonya specific: remove last 2 chars)
-        api_key = os.getenv("BROKER_API_KEY")
-        api_key = api_key[:-2]
+        # Pre-fetch API key (userid part)
+        full_api_key = os.getenv("BROKER_API_KEY")
+        api_key = full_api_key.split(":::")[0]  # Trading user ID
 
         # Step 1: Pre-resolve all tokens sequentially (database access)
         for item in symbols:
@@ -358,7 +417,7 @@ class BrokerData:
         else:
             # ThreadPoolExecutor approach
             results = []
-            with ThreadPoolExecutor(max_workers=40) as executor:
+            with ThreadPoolExecutor(max_workers=20) as executor:
                 future_to_symbol = {
                     executor.submit(
                         self._fetch_single_quote_sync,
@@ -414,7 +473,7 @@ class BrokerData:
             payload = {"exch": exchange, "token": token}
 
             response = get_api_response(
-                "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
+                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
             )
 
             if response.get("stat") != "Ok":
@@ -525,7 +584,7 @@ class BrokerData:
                 logger.debug(f"EOD Payload: {payload}")  # Debug print
                 try:
                     response = get_api_response(
-                        "/NorenWClientTP/EODChartData", self.auth_token, payload=payload
+                        "/NorenWClientAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
                 except Exception as e:
@@ -534,7 +593,6 @@ class BrokerData:
             else:
                 # For intraday data, use TPSeries endpoint
                 payload = {
-                    "uid": os.getenv("BROKER_API_KEY")[:-2],  # Required by Shoonya
                     "exch": exchange,
                     "token": token,
                     "st": str(start_ts),
@@ -544,7 +602,7 @@ class BrokerData:
 
                 logger.debug(f"Intraday Payload: {payload}")  # Debug print
                 response = get_api_response(
-                    "/NorenWClientTP/TPSeries", self.auth_token, payload=payload
+                    "/NorenWClientAPI/TPSeries", self.auth_token, payload=payload
                 )
                 logger.debug(f"Intraday Response: {response}")  # Debug print
 
@@ -617,7 +675,7 @@ class BrokerData:
                             # Get today's data from quotes
                             payload = {"exch": exchange, "token": token}
                             quotes_response = get_api_response(
-                                "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
+                                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
                             )
                             logger.debug(f"Quotes Response: {quotes_response}")  # Debug print
 

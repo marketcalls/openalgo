@@ -49,7 +49,7 @@ class Config:
     MODE_DEPTH = 3
 
     # Message types (same as Noren/Flattrade)
-    MSG_AUTH = "ck"
+    MSG_AUTH = "ak"
     MSG_TOUCHLINE_FULL = "tf"
     MSG_TOUCHLINE_PARTIAL = "tk"
     MSG_DEPTH_FULL = "df"
@@ -327,6 +327,7 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = False
         self.lock = threading.Lock()
         self.reconnect_attempts = 0
+        self._reconnect_timer = None
 
     def _setup_normalizers(self):
         """Initialize data normalizers"""
@@ -344,23 +345,23 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = broker_name
 
         # Get Zebu credentials from environment
-        # For Zebu, BROKER_API_KEY should contain the vendor code (e.g., 'Z56004')
-        # This vendor code is used as both actid and uid in WebSocket authentication
+        # BROKER_API_KEY format: userid:::client_id (e.g., Z56004:::Z56004_U)
+        # userid is used as both actid and uid in WebSocket authentication
 
-        api_key = os.getenv("BROKER_API_KEY", "")
+        full_api_key = os.getenv("BROKER_API_KEY", "")
 
-        if api_key:
-            # Use the BROKER_API_KEY (vendor code) as the account ID
-            # For Zebu, the vendor code like 'Z56004' is used as actid and uid
-            self.actid = api_key
-            self.logger.info(f"Using Zebu vendor code from BROKER_API_KEY: {self.actid}")
+        if full_api_key and ":::" in full_api_key:
+            # Extract trading user ID (before :::)
+            self.actid = full_api_key.split(":::")[0]
+            self.logger.info(f"Using Zebu user ID from BROKER_API_KEY: {self.actid}")
+        elif full_api_key:
+            # Legacy format without ::: separator
+            self.actid = full_api_key
+            self.logger.warning(f"BROKER_API_KEY missing ':::' separator, using as-is: {self.actid}")
         else:
             # Fallback to user_id if no API key is set
             self.actid = user_id
             self.logger.warning(f"No BROKER_API_KEY found. Using user_id '{user_id}' as actid.")
-            self.logger.warning(
-                "Please set BROKER_API_KEY=Z56004 (or your vendor code) in .env file"
-            )
 
         # Get auth token from database
         self.susertoken = get_auth_token(user_id)
@@ -402,19 +403,74 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def disconnect(self) -> None:
         """Disconnect from Zebu WebSocket endpoint"""
-        self.running = False
+        # Capture ws_client ref and update state under lock,
+        # but call stop() outside the lock to avoid deadlock
+        # (stop() joins the WS thread whose callbacks acquire self.lock)
+        ws_ref = None
+        with self.lock:
+            self.running = False
+            self.connected = False
 
-        if self.ws_client:
-            self.ws_client.stop()
+            # Cancel any pending reconnection timer
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+                self._reconnect_timer = None
 
-        # Clean up market data cache
+            ws_ref = self.ws_client
+            self.ws_client = None
+
+        if ws_ref:
+            ws_ref.stop()
+
+        # Clean up market data cache and subscriptions
         self.market_cache.clear()
+        self.subscriptions.clear()
+        self.token_to_symbol.clear()
+        self.ws_subscription_refs.clear()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
 
-        self.connected = False
         self.logger.info("Disconnected from Zebu WebSocket")
+
+    def cleanup(self) -> None:
+        """Clean up all resources — safety net for missed disconnect calls"""
+        if getattr(self, "_cleaned_up", False):
+            return
+        self._cleaned_up = True
+
+        try:
+            self.running = False
+
+            with self.lock:
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
+
+            if self.ws_client:
+                try:
+                    self.ws_client.stop()
+                except Exception as e:
+                    self.logger.error(f"Error stopping WebSocket during cleanup: {e}")
+                finally:
+                    self.ws_client = None
+
+            self.market_cache.clear()
+            self.subscriptions.clear()
+            self.token_to_symbol.clear()
+            self.ws_subscription_refs.clear()
+            self.cleanup_zmq()
+            self.connected = False
+            self.logger.info("Zebu adapter cleanup complete")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup on garbage collection"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE, depth_level: int = 5
@@ -699,23 +755,49 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _schedule_reconnection(self) -> None:
         """Schedule reconnection with exponential backoff"""
-        if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
-            self.logger.error("Maximum reconnection attempts reached")
-            self.running = False
-            return
+        with self.lock:
+            if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
+                self.logger.error("Maximum reconnection attempts reached")
+                self.running = False
+                return
 
-        delay = min(
-            Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts), Config.MAX_RECONNECT_DELAY
-        )
+            delay = min(
+                Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts),
+                Config.MAX_RECONNECT_DELAY,
+            )
 
-        self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
-        threading.Timer(delay, self._attempt_reconnection).start()
+            self.logger.info(
+                f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})"
+            )
+
+            # Cancel existing timer if present
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+
+            self._reconnect_timer = threading.Timer(delay, self._attempt_reconnection)
+            self._reconnect_timer.daemon = True
+            self._reconnect_timer.start()
 
     def _attempt_reconnection(self) -> None:
         """Attempt to reconnect to WebSocket"""
+        with self.lock:
+            self._reconnect_timer = None
+
+            if not self.running:
+                self.logger.debug("Reconnection skipped - adapter no longer running")
+                return
+
         self.reconnect_attempts += 1
 
         try:
+            # Clean up old WebSocket client to prevent FD leaks
+            if self.ws_client:
+                self.logger.debug("Cleaning up old WebSocket client before reconnection")
+                try:
+                    self.ws_client.stop()
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
+
             # Recreate WebSocket client
             self.ws_client = ZebuWebSocket(
                 user_id=self.actid,  # Both user_id and actid should be the Zebu account ID

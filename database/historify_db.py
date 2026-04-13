@@ -12,7 +12,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import duckdb
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -71,6 +70,8 @@ def get_connection(max_retries: int = 3, retry_delay: float = 0.5):
 
     for attempt in range(max_retries):
         try:
+            import duckdb
+
             conn = duckdb.connect(db_path)
             break
         except Exception as e:
@@ -1515,7 +1516,7 @@ def vacuum_database():
 
 
 # Supported exchanges (these are static across brokers)
-SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX"]
+SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX", "CRYPTO"]
 
 
 def get_supported_intervals(api_key: str) -> list[str]:

@@ -50,7 +50,7 @@ class Config:
     MODE_DEPTH = 3
 
     # Message types
-    MSG_AUTH = "ck"
+    MSG_AUTH = "ak"
     MSG_TOUCHLINE_FULL = "tf"
     MSG_TOUCHLINE_PARTIAL = "tk"
     MSG_DEPTH_FULL = "df"
@@ -353,9 +353,9 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.actid = user_id
 
         # Get auth token from database
-        self.susertoken = get_auth_token(user_id)
+        self.accesstoken = get_auth_token(user_id)
 
-        if not self.actid or not self.susertoken:
+        if not self.actid or not self.accesstoken:
             self.logger.error(f"Missing Flattrade credentials for user {user_id}")
             raise ValueError(f"Missing Flattrade credentials for user {user_id}")
 
@@ -365,7 +365,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client = FlattradeWebSocket(
             user_id=self.actid,
             actid=self.actid,
-            susertoken=self.susertoken,
+            accesstoken=self.accesstoken,
             on_message=self._on_message,
             on_error=self._on_error,
             on_close=self._on_close,
@@ -759,7 +759,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.ws_client = FlattradeWebSocket(
                     user_id=self.actid,
                     actid=self.actid,
-                    susertoken=self.susertoken,
+                    accesstoken=self.accesstoken,
                     on_message=self._on_message,
                     on_error=self._on_error,
                     on_close=self._on_close,

@@ -1,14 +1,13 @@
 import copy
 import os
-import traceback
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
 
-from database.apilog_db import async_log_order
-from database.apilog_db import executor as log_executor
 from database.settings_db import get_analyze_mode
+from events import OrderFailedEvent
+from utils.event_bus import bus
 from limiter import limiter
 from restx_api.schemas import BasketOrderSchema
 from services.basket_order_service import emit_analyzer_error, place_basket_order
@@ -40,7 +39,13 @@ class BasketOrder(Resource):
                 if get_analyze_mode():
                     return make_response(jsonify(emit_analyzer_error(data, error_message)), 400)
                 error_response = {"status": "error", "message": error_message}
-                log_executor.submit(async_log_order, "basketorder", data, error_response)
+                bus.publish(OrderFailedEvent(
+                    mode="live",
+                    api_type="basketorder",
+                    request_data=data,
+                    response_data=error_response,
+                    error_message=error_message,
+                ))
                 return make_response(jsonify(error_response), 400)
 
             # Extract API key
@@ -54,11 +59,16 @@ class BasketOrder(Resource):
             return make_response(jsonify(response_data), status_code)
 
         except Exception:
-            logger.error("An unexpected error occurred in BasketOrder endpoint.")
-            traceback.print_exc()
+            logger.exception("An unexpected error occurred in BasketOrder endpoint.")
             error_message = "An unexpected error occurred"
             if get_analyze_mode():
                 return make_response(jsonify(emit_analyzer_error(data, error_message)), 500)
             error_response = {"status": "error", "message": error_message}
-            log_executor.submit(async_log_order, "basketorder", data, error_response)
+            bus.publish(OrderFailedEvent(
+                mode="live",
+                api_type="basketorder",
+                request_data=data,
+                response_data=error_response,
+                error_message=error_message,
+            ))
             return make_response(jsonify(error_response), 500)

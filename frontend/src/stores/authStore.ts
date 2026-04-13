@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useBrokerStore } from './brokerStore'
 
 interface User {
   username: string
@@ -48,6 +49,12 @@ export const useAuthStore = create<AuthStore>()(
       checkSession: () => {
         const { user } = get()
         if (!user || !user.loginTime) return false
+
+        // Skip session expiry for crypto brokers (24/7 markets)
+        const capabilities = useBrokerStore.getState().capabilities
+        if (capabilities?.broker_type === 'crypto') {
+          return true
+        }
 
         // Session expiry check (3 AM IST daily)
         const now = new Date()

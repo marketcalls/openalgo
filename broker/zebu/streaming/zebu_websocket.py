@@ -23,7 +23,7 @@ class ZebuWebSocket:
     # - Flattrade: wss://piconnect.flattrade.in/PiConnectWSTp/
     # - AliceBlue: wss://ws1.aliceblueonline.com/NorenWS/
     # - DefinEdge: wss://trade.definedgesecurities.com/NorenWSTRTP/
-    WS_URL = "wss://go.mynt.in/NorenWSTP/"  # Try NorenWSTP pattern
+    WS_URL = "wss://go.mynt.in/NorenWSAPI/"  # Zebu OAuth WebSocket endpoint
     CONNECTION_TIMEOUT = 15
     THREAD_JOIN_TIMEOUT = 5
 
@@ -32,18 +32,19 @@ class ZebuWebSocket:
     HEARTBEAT_TIMEOUT = 120
     PING_INTERVAL = 30
     PING_TIMEOUT = 10
+    HEARTBEAT_JOIN_TIMEOUT = 3
 
-    # Message types (same as Noren/Flattrade)
-    MSG_TYPE_CONNECT = "c"
+    # Message types (OAuth WebSocket API)
+    MSG_TYPE_CONNECT = "a"
     MSG_TYPE_HEARTBEAT = "h"
-    MSG_TYPE_AUTH_ACK = "ck"
+    MSG_TYPE_AUTH_ACK = "ak"
     MSG_TYPE_TOUCHLINE_SUB = "t"
     MSG_TYPE_TOUCHLINE_UNSUB = "u"
     MSG_TYPE_DEPTH_SUB = "d"
     MSG_TYPE_DEPTH_UNSUB = "ud"
 
     # Authentication response
-    AUTH_SUCCESS = "Ok"
+    AUTH_SUCCESS = "OK"
 
     def __init__(
         self,
@@ -177,13 +178,17 @@ class ZebuWebSocket:
                 self.ws.close()
             except Exception as e:
                 self.logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self.ws = None
 
     def _wait_for_thread_completion(self) -> None:
         """Wait for WebSocket thread to complete"""
-        if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
-            if self.ws_thread.is_alive():
+        ws_thread = self.ws_thread
+        if ws_thread and ws_thread.is_alive():
+            ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
+        self.ws_thread = None
 
     # WebSocket Event Handlers
     def _on_open(self, ws) -> None:
@@ -206,20 +211,18 @@ class ZebuWebSocket:
         """
         auth_msg = {
             "t": self.MSG_TYPE_CONNECT,
-            "actid*": self.actid,  # Required field with asterisk as per Zebu docs
             "uid": self.user_id,
             "actid": self.actid,
-            "source": "API",  # Source of login request
-            "susertoken": self.susertoken,
+            "source": "API",
+            "accesstoken": self.susertoken,
         }
-
-        # No vendor code needed in WebSocket auth for Zebu
 
         # Log the authentication message for debugging (mask the token)
         debug_msg = auth_msg.copy()
-        if debug_msg.get("susertoken"):
-            debug_msg["susertoken"] = (
-                debug_msg["susertoken"][:10] + "..." if len(debug_msg["susertoken"]) > 10 else "***"
+        token_val = debug_msg.get("accesstoken", "")
+        if token_val:
+            debug_msg["accesstoken"] = (
+                token_val[:10] + "..." if len(token_val) > 10 else "***"
             )
         self.logger.info(f"Sending auth message: {debug_msg}")
 
@@ -276,7 +279,7 @@ class ZebuWebSocket:
         Returns:
             bool: True (message handled)
         """
-        if data.get("s") == self.AUTH_SUCCESS:
+        if data.get("s", "").lower() == self.AUTH_SUCCESS.lower():
             self.logger.info("Authentication successful")
         else:
             self.logger.error(f"Authentication failed: {data}")
@@ -326,10 +329,14 @@ class ZebuWebSocket:
         self.logger.debug("Heartbeat thread started")
 
     def _stop_heartbeat(self) -> None:
-        """Stop heartbeat monitoring thread"""
-        # Thread will stop when self.running becomes False
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+        """Stop heartbeat monitoring thread and wait for it to terminate"""
+        hb_thread = self._heartbeat_thread
+        if hb_thread and hb_thread.is_alive():
             self.logger.debug("Waiting for heartbeat thread to stop")
+            hb_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
+            if hb_thread.is_alive():
+                self.logger.warning("Heartbeat thread did not terminate within timeout")
+        self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""

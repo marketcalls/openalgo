@@ -14,15 +14,12 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from database.analyzer_db import async_log_analyzer
-from database.apilog_db import async_log_order
-from database.apilog_db import executor as log_executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
+from events import AnalyzerErrorEvent, OptionsOrderCompletedEvent
 from services.option_symbol_service import get_option_symbol
 from services.place_order_service import place_order
-from services.telegram_alert_service import telegram_alert_service
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 # Initialize logger
@@ -308,52 +305,33 @@ def place_options_order(
             }
 
             # Add mode if in analyze mode
+            mode = "analyze" if get_analyze_mode() else "live"
             if get_analyze_mode():
                 response_data["mode"] = "analyze"
 
-            # Emit toast notification for split orders
-            mode = "analyze" if get_analyze_mode() else "live"
-            successful_orders = sum(1 for r in results if r.get("status") == "success")
-            socketio.start_background_task(
-                socketio.emit,
-                "order_event",
-                {
-                    "symbol": resolved_symbol,
-                    "action": options_data.get("action"),
-                    "orderid": f"{successful_orders}/{len(results)} orders",
-                    "exchange": resolved_exchange,
-                    "price_type": options_data.get("pricetype", "MARKET"),
-                    "product_type": options_data.get("product", "MIS"),
-                    "mode": mode,
-                    "batch_order": True,
-                    "is_last_order": True,
-                },
-            )
-
-            # Log the split order
+            # Prepare request data for logging (without apikey)
             request_log = original_data.copy()
             if "apikey" in request_log:
                 del request_log["apikey"]
+            request_log["api_type"] = "optionsorder"
 
-            if get_analyze_mode():
-                request_log["api_type"] = "optionsorder"
-                log_executor.submit(async_log_analyzer, request_log, response_data, "optionsorder")
-                socketio.start_background_task(
-                    socketio.emit,
-                    "analyzer_update",
-                    {"request": request_log, "response": response_data},
-                )
-            else:
-                log_executor.submit(async_log_order, "optionsorder", request_log, response_data)
-
-            # Send Telegram alert in background task (non-blocking)
-            socketio.start_background_task(
-                telegram_alert_service.send_order_alert,
-                "optionsorder",
-                options_data,
-                response_data,
-                api_key,
-            )
+            successful_orders = sum(1 for r in results if r.get("status") == "success")
+            bus.publish(OptionsOrderCompletedEvent(
+                mode=mode,
+                api_type="optionsorder",
+                strategy=options_data.get("strategy", ""),
+                symbol=resolved_symbol,
+                exchange=resolved_exchange,
+                action=options_data.get("action", ""),
+                pricetype=options_data.get("pricetype", "MARKET"),
+                product=options_data.get("product", "MIS"),
+                results=results,
+                successful=successful_orders,
+                total=len(results),
+                request_data=request_log,
+                response_data=response_data,
+                api_key=api_key or "",
+            ))
 
             logger.info(
                 f"Split options order completed: {successful_orders}/{len(results)} successful"
