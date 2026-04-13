@@ -812,8 +812,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _stop_fallback_monitor_internal(self):
         """Internal method to stop fallback monitor without affecting running flag"""
         if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
-            self.fallback_monitor_thread.join(timeout=2)
-            if self.fallback_monitor_thread.is_alive():
+            try:
+                self.fallback_monitor_thread.join(timeout=2)
+            except Exception:
+                # Catches eventlet.timeout.Timeout on Linux/Gunicorn
+                pass
+            if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
                 self.logger.debug("Fallback monitor thread timeout - will be orphaned (daemon)")
             else:
                 self.logger.debug("Fallback monitor thread stopped")

@@ -195,10 +195,16 @@ class DhanWebSocket:
             finally:
                 self.ws = None  # Always clear WebSocket reference
 
-        # Wait for WebSocket thread to finish
+        # Wait for WebSocket thread to finish.
+        # Under eventlet, thread.join(timeout) raises eventlet.timeout.Timeout
+        # instead of returning silently, so we must catch it.
         if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=2)
-            if self.ws_thread.is_alive():
+            try:
+                self.ws_thread.join(timeout=2)
+            except Exception:
+                # Catches eventlet.timeout.Timeout (and any other join errors)
+                pass
+            if self.ws_thread and self.ws_thread.is_alive():
                 self.logger.debug("WebSocket thread timeout - will be orphaned (daemon)")
             else:
                 self.logger.debug("WebSocket thread stopped")
