@@ -303,6 +303,13 @@ def _parse_depth_levels(levels: Any) -> list[dict]:
     return normalized
 
 
+def _top_five_depth_levels(levels: Any) -> list[dict]:
+    normalized = _parse_depth_levels(levels)[:5]
+    while len(normalized) < 5:
+        normalized.append({"price": 0.0, "quantity": 0, "orders": 0})
+    return normalized
+
+
 def _parse_history_rows(rows: list) -> pd.DataFrame:
     candles = []
 
@@ -557,7 +564,7 @@ class BrokerData:
         return skipped + results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
-        payload = {"instruments": [self._instrument(symbol, exchange)], "depthLevel": 5}
+        payload = self._instrument(symbol, exchange)
         response = self._post("/marketdata/marketdepth", payload)
 
         rows = _extract_rows(response)
@@ -571,16 +578,31 @@ class BrokerData:
         row = _safe_dict(row)
 
         depth = _safe_dict(_first(row, ("depth", "marketDepth", "Depth"), {}))
-        buy = _parse_depth_levels(_first(depth, ("buy", "bids", "Buy"), []))
-        sell = _parse_depth_levels(_first(depth, ("sell", "asks", "Sell"), []))
+        buy = _top_five_depth_levels(_first(depth, ("buy", "bids", "Buy"), []))
+        sell = _top_five_depth_levels(_first(depth, ("sell", "asks", "Sell"), []))
 
         ltp = _to_float(_first(row, ("ltp", "lastTradedPrice"), 0))
+        ltq = _to_int(_first(row, ("ltq", "lastTradedQuantity", "lastTradeQty"), 0))
         open_price = _to_float(_first(row, ("open", "openPrice"), 0))
         high_price = _to_float(_first(row, ("high", "highPrice"), 0))
         low_price = _to_float(_first(row, ("low", "lowPrice"), 0))
         prev_close = _to_float(_first(row, ("close", "previousClose"), 0))
         volume = _to_int(_first(row, ("volume", "tradedVolume"), 0))
         oi = _to_int(_first(row, ("oi", "openInterest"), 0))
+        total_buy_qty = _to_int(
+            _first(
+                row,
+                ("totalBidQuantity", "totalBuyQuantity", "totBuyQuan", "totalbuyqty"),
+                sum(level.get("quantity", 0) for level in buy),
+            )
+        )
+        total_sell_qty = _to_int(
+            _first(
+                row,
+                ("totalAskQuantity", "totalSellQuantity", "totSellQuan", "totalsellqty"),
+                sum(level.get("quantity", 0) for level in sell),
+            )
+        )
 
         return {
             "bids": buy,
@@ -593,10 +615,11 @@ class BrokerData:
             "high": high_price,
             "low": low_price,
             "prev_close": prev_close,
+            "ltq": ltq,
             "volume": volume,
             "oi": oi,
-            "totalbuyqty": sum(level.get("quantity", 0) for level in buy),
-            "totalsellqty": sum(level.get("quantity", 0) for level in sell),
+            "totalbuyqty": total_buy_qty,
+            "totalsellqty": total_sell_qty,
         }
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str):
