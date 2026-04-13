@@ -310,10 +310,50 @@ def _top_five_depth_levels(levels: Any) -> list[dict]:
     return normalized
 
 
+def _parse_candle_sequence(row: Any) -> dict | None:
+    if not isinstance(row, (list, tuple)) or len(row) < 6:
+        return None
+
+    timestamp = row[0]
+    if isinstance(timestamp, str) and not timestamp.isdigit():
+        parsed = pd.to_datetime(timestamp, errors="coerce")
+        timestamp = int(parsed.timestamp()) if not pd.isna(parsed) else 0
+    else:
+        timestamp = _to_int(timestamp)
+        if timestamp > 10**12:
+            timestamp = timestamp // 1000
+
+    return {
+        "timestamp": timestamp,
+        "open": _to_float(row[1]),
+        "high": _to_float(row[2]),
+        "low": _to_float(row[3]),
+        "close": _to_float(row[4]),
+        "volume": _to_int(row[5]),
+        "oi": _to_int(row[6]) if len(row) > 6 else 0,
+    }
+
+
 def _parse_history_rows(rows: list) -> pd.DataFrame:
     candles = []
 
     for row in rows:
+        row = _try_json(row)
+
+        if isinstance(row, dict):
+            nested_candles = _try_json(_first(row, ("candles", "Candles"), []))
+            if isinstance(nested_candles, list):
+                for candle_row in nested_candles:
+                    candle = _parse_candle_sequence(candle_row)
+                    if candle:
+                        candles.append(candle)
+                continue
+
+        candle = _parse_candle_sequence(row)
+        if candle:
+            candles.append(candle)
+            continue
+
         # Pipe-delimited fallback: timestamp|open|high|low|close|volume|oi
         if isinstance(row, str) and "|" in row:
             for candle_str in row.split(","):
@@ -369,21 +409,29 @@ def _parse_history_rows(rows: list) -> pd.DataFrame:
     return df[["timestamp", "open", "high", "low", "close", "volume", "oi"]]
 
 
+def _format_iifl_date(value: str) -> str:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return value
+    return parsed.strftime("%d-%b-%Y")
+
+
 class BrokerData:
     def __init__(self, auth_token, feed_token=None, user_id=None):
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
         self.timeframe_map = {
-            "1m": "ONE_MINUTE",
-            "2m": "TWO_MINUTE",
-            "3m": "THREE_MINUTE",
-            "5m": "FIVE_MINUTE",
-            "10m": "TEN_MINUTE",
-            "15m": "FIFTEEN_MINUTE",
-            "30m": "THIRTY_MINUTE",
-            "60m": "SIXTY_MINUTE",
-            "D": "ONE_DAY",
+            "1m": "1 minute",
+            "5m": "5 minutes",
+            "10m": "10 minutes",
+            "15m": "15 minutes",
+            "30m": "30 minutes",
+            "60m": "60 minutes",
+            "1h": "60 minutes",
+            "D": "1 day",
+            "W": "weekly",
+            "M": "monthly",
         }
 
     def _post(self, endpoint: str, payload: Any) -> Any:
@@ -627,14 +675,13 @@ class BrokerData:
         if not broker_interval:
             raise Exception(f"Unsupported timeframe: {interval}")
 
-        start_ts = f"{start_date} 00:00:00"
-        end_ts = f"{end_date} 23:59:59"
+        instrument = self._instrument(symbol, exchange)
         payload = {
-            "exchange": _normalize_exchange(exchange),
-            "instrumentId": self._resolve_token(symbol, exchange),
+            "exchange": instrument["exchange"],
+            "instrumentId": instrument["instrumentId"],
             "interval": broker_interval,
-            "fromDate": start_ts,
-            "toDate": end_ts,
+            "fromDate": _format_iifl_date(start_date),
+            "toDate": _format_iifl_date(end_date),
         }
 
         response = self._post("/marketdata/historicaldata", payload)
