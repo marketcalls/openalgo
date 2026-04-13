@@ -462,7 +462,7 @@ def start_strategy_process(strategy_id):
             strategy_env = os.environ.copy()
             strategy_env["STRATEGY_ID"] = strategy_id
             strategy_env["STRATEGY_NAME"] = config.get("name", strategy_id)
-            strategy_env["OPENALGO_HOST"] = "http://127.0.0.1:5000"
+            strategy_env.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
             try:
                 from database.auth_db import get_api_key_for_tradingview
                 user_id = config.get("user_id")
