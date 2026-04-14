@@ -107,11 +107,12 @@ npm run format
 
 ### Database Architecture
 
-OpenAlgo uses **5 separate databases** for isolation:
+OpenAlgo uses **6 separate databases** for isolation:
 
 - `db/openalgo.db` - Main database (users, orders, positions, settings)
 - `db/logs.db` - Traffic and API logs
 - `db/latency.db` - Latency monitoring data
+- `db/health.db` - Health monitoring data
 - `db/sandbox.db` - Analyzer/sandbox mode (isolated virtual trading)
 - `db/historify.duckdb` - Historical market data (DuckDB)
 
