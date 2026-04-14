@@ -83,7 +83,7 @@ pyarrow==23.0.1
 fastparquet==2025.12.0
 parso==0.8.6
 pexpect==4.9.0
-pillow==12.1.1
+pillow==12.2.0
 platformdirs==4.9.4
 plotly==6.6.0
 pluggy==1.6.0
@@ -100,7 +100,7 @@ Pygments==2.20.0
 PyJWT==2.12.1
 pyngrok==7.5.1
 pyotp==2.9.0
-pytest==9.0.2
+pytest==9.0.3
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
