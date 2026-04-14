@@ -1,6 +1,5 @@
 # Contributing to OpenAlgo
 
-
 ## Let's democratize algorithmic trading, together!
 
 We're thrilled that you're interested in contributing to OpenAlgo! This guide will help you get started, whether you're fixing a bug, adding a new broker, improving documentation, or building new features.
@@ -25,7 +24,7 @@ OpenAlgo is built **by traders, for traders**. We believe in democratizing algor
 6. [Contributing Guidelines](#contributing-guidelines)
 7. [Testing](#testing)
 8. [Adding a New Broker](#adding-a-new-broker)
-9. [UI Development](#ui-development)
+9. [Frontend Development](#frontend-development)
 10. [Documentation](#documentation)
 11. [Best Practices](#best-practices)
 12. [Getting Help](#getting-help)
@@ -34,34 +33,46 @@ OpenAlgo is built **by traders, for traders**. We believe in democratizing algor
 
 ## Technology Stack
 
-OpenAlgo is built using **Python Flask** for the backend and **TailwindCSS + DaisyUI** for the frontend.
+OpenAlgo uses a **Python Flask** backend with a **React 19** single-page application frontend.
 
 ### Backend Technologies
 
-- **Python 3.12+** - Core programming language (requires Python 3.10 or higher, 3.12+ recommended)
-- **Flask 3.0+** - Lightweight web framework
+- **Python 3.12+** - Core programming language
+- **uv** - Fast Python package manager (replaces pip/venv)
+- **Flask 3.1+** - Lightweight web framework
 - **Flask-RESTX** - RESTful API with auto-generated Swagger documentation
 - **SQLAlchemy 2.0+** - Database ORM for data persistence
-- **Flask-SocketIO 5.3+** - Real-time WebSocket connections for live updates
+- **Flask-SocketIO 5.6+** - Real-time WebSocket connections for live updates
 - **Flask-Login** - User session management and authentication
 - **Flask-WTF** - Form validation and CSRF protection
+- **Ruff** - Fast Python linter and formatter
 
 ### Frontend Technologies
 
-- **Jinja2** - Server-side templating engine
-- **TailwindCSS 4.1+** - Utility-first CSS framework
-- **DaisyUI 5.1+** - Beautiful component library for Tailwind
-- **PostCSS** - CSS processing and compilation
-- **Chart.js** - Data visualization and charting
+- **React 19** - Component-based UI library
+- **TypeScript 5.9+** - Type-safe JavaScript
+- **Vite 7+** - Fast build tool and dev server
+- **TailwindCSS 4** - Utility-first CSS framework
+- **shadcn/ui** (Radix UI) - Accessible component primitives
+- **TanStack Query 5** - Server state management
+- **Zustand 5** - Client state management
+- **React Router 7** - Client-side routing
+- **Plotly.js / Lightweight Charts** - Data visualization
+- **Socket.IO Client** - Real-time communication
+- **Biome.js** - Fast linter and formatter
+- **Vitest** - Unit testing framework
+- **Playwright** - End-to-end testing
 
 ### Trading & Data Libraries
 
-- **pandas 2.2+** - Data manipulation and analysis
-- **numpy 2.2+** - Numerical computing
+- **pandas 2.3+** - Data manipulation and analysis
+- **numpy 2.0+** - Numerical computing
+- **DuckDB** - Historical market data storage
 - **httpx** - Modern HTTP client with HTTP/2 support
 - **websockets 15.0+** - WebSocket client and server
-- **pyzmq 26.3+** - ZeroMQ for high-performance message queue
+- **pyzmq** - ZeroMQ for high-performance message queue
 - **APScheduler** - Background task scheduling
+- **scipy / py_vollib / numba** - Options analytics and Greeks
 
 ### Security & Performance
 
@@ -71,7 +82,7 @@ OpenAlgo is built using **Python Flask** for the backend and **TailwindCSS + Dai
 - **Flask-CORS** - CORS protection
 
 > [!IMPORTANT]
-> You will need **Node.js v16+** and **Python 3.12** or the latest Python version.
+> You will need **Python 3.12+**, **Node.js 20/22/24**, and the **uv** package manager.
 
 ---
 
@@ -81,14 +92,15 @@ OpenAlgo is built using **Python Flask** for the backend and **TailwindCSS + Dai
 
 Before you begin, make sure you have the following installed:
 
-- **Python 3.10 or higher** (3.12+ recommended) - [Download Python](https://www.python.org/downloads/)
-- **Node.js v16 or higher** - [Download Node.js](https://nodejs.org/)
+- **Python 3.12+** - [Download Python](https://www.python.org/downloads/)
+- **Node.js 20, 22, or 24** - [Download Node.js](https://nodejs.org/)
 - **Git** - [Download Git](https://git-scm.com/downloads)
 - **Code Editor** - VS Code recommended with extensions:
   - Python
   - Pylance
-  - Jupyter
-- **Basic Knowledge** of Flask and REST APIs
+  - Biome
+  - Tailwind CSS IntelliSense
+- **Basic Knowledge** of Flask and React
 
 ### Install Dependencies
 
@@ -97,115 +109,80 @@ Before you begin, make sure you have the following installed:
 git clone https://github.com/marketcalls/openalgo.git
 cd openalgo
 
-# Create and activate virtual environment
-# On Windows:
-python -m venv venv
-venv\Scripts\activate
+# Install uv package manager (if not already installed)
+pip install uv
 
-# On Linux/Mac:
-python -m venv venv
-source venv/bin/activate
+# Sync Python dependencies (uv handles virtualenv automatically)
+uv sync
 
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Install Node.js dependencies
+# Build React frontend (required before first run)
+cd frontend
 npm install
+npm run build
+cd ..
 ```
+
+> [!IMPORTANT]
+> **Always use `uv run` to run Python commands.** Never use global Python or manually manage virtual environments. The `uv` tool automatically creates and manages a `.venv` for the project.
 
 ### Configure Environment
 
 ```bash
 # Copy the sample environment file
-# On Windows:
-copy .sample.env .env
-
-# On Linux/Mac:
 cp .sample.env .env
 
-# Edit .env and update at minimum:
-# 1. Generate new APP_KEY and API_KEY_PEPPER
-# 2. Configure database URLs
-# 3. Set Flask host/port settings
+# Generate secure random keys for APP_KEY and API_KEY_PEPPER:
+uv run python -c "import secrets; print(secrets.token_hex(32))"
+
+# Edit .env and update:
+# 1. APP_KEY (paste generated key)
+# 2. API_KEY_PEPPER (paste another generated key)
+# 3. VALID_BROKERS (comma-separated list of brokers to enable)
+# 4. Broker API credentials
 ```
 
-**Important Security Note**: Generate secure random keys:
-```bash
-# Generate APP_KEY
-python -c "import secrets; print(secrets.token_hex(32))"
-
-# Generate API_KEY_PEPPER
-python -c "import secrets; print(secrets.token_hex(32))"
-```
+> [!NOTE]
+> **Static IP whitelisting:** Many Indian brokers require you to whitelist a static IP address when generating API keys and secrets. If you are developing locally, you may need to whitelist your public IP. For cloud/VPS deployments, use the server's static IP. Check your broker's API documentation for specific requirements.
 
 ---
 
 ## Local Development
 
-### Build Packages
-
-OpenAlgo requires CSS compilation before running. You have two options:
-
-#### Option 1: Manual Build
-
-```bash
-# Build CSS for production
-npm run build:css
-
-# Or watch for changes during development
-npm run watch:css
-```
-
-#### Option 2: Automated Development
-
-```bash
-# Runs CSS watch in development mode
-npm run dev
-```
-
 ### Run the Application
 
-#### Option 1: Flask Development Server
-
 ```bash
-# Activate virtual environment (if not already active)
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# Run the Flask application
-python app.py
+# Development mode (auto-reloads on backend code changes)
+uv run app.py
 
 # Application will be available at http://127.0.0.1:5000
 ```
 
-#### Option 2: Production with Gunicorn (Linux only)
-
-```bash
-# Install production requirements
-pip install -r requirements-nginx.txt
-
-# Run with Gunicorn
-gunicorn --worker-class eventlet -w 1 app:app
-
-# Note: Use -w 1 (one worker) for WebSocket compatibility
-```
-
 ### Development Workflow with Multiple Terminals
 
-For the best development experience, use two terminals:
+For the best development experience when working on the frontend, use two terminals:
 
-**Terminal 1 - CSS Watch Mode:**
+**Terminal 1 - React Dev Server (hot reload):**
 ```bash
+cd frontend
 npm run dev
-# Keep this running to auto-compile CSS on changes
+# Frontend dev server at http://localhost:5173 with hot module replacement
 ```
 
-**Terminal 2 - Flask Server:**
+**Terminal 2 - Flask Backend:**
 ```bash
-python app.py
-# Your application server
+uv run app.py
+# Backend API at http://127.0.0.1:5000
+```
+
+> **Note:** The React dev server proxies API requests to the Flask backend. For production testing, build the frontend with `npm run build` and access everything through Flask at port 5000.
+
+### Production Mode (Linux only)
+
+```bash
+# Run with Gunicorn
+uv run gunicorn --worker-class eventlet -w 1 app:app
+
+# IMPORTANT: Use -w 1 (one worker) for WebSocket compatibility
 ```
 
 ### First Time Setup
@@ -214,7 +191,14 @@ python app.py
 2. **Setup account**: Go to `http://127.0.0.1:5000/setup`
 3. **Create admin user**: Fill in the setup form
 4. **Login**: Use your credentials to access the dashboard
-5. **Configure broker**: Navigate to Settings → Broker Setup
+5. **Configure broker**: Navigate to Settings and set up your broker
+
+### Access Points
+
+- **Main app**: http://127.0.0.1:5000
+- **React frontend**: http://127.0.0.1:5000/react
+- **Swagger API docs**: http://127.0.0.1:5000/api/docs
+- **API Analyzer**: http://127.0.0.1:5000/analyzer
 
 ---
 
@@ -225,70 +209,50 @@ Understanding the codebase structure will help you contribute effectively:
 ```
 openalgo/
 ├── app.py                    # Main Flask application entry point
+├── pyproject.toml            # Python dependencies & tool config (uv/ruff/pytest)
+├── frontend/                 # React 19 SPA (TypeScript + Vite)
+│   ├── src/
+│   │   ├── components/       # React components (shadcn/ui based)
+│   │   ├── pages/            # Route-level page components
+│   │   ├── hooks/            # Custom React hooks
+│   │   ├── api/              # API client functions
+│   │   ├── stores/           # Zustand state stores
+│   │   ├── lib/              # Utility functions
+│   │   └── App.tsx           # Root component with routing
+│   ├── package.json          # Node.js dependencies
+│   ├── biome.json            # Biome linter/formatter config
+│   ├── tsconfig.json         # TypeScript configuration
+│   ├── vite.config.ts        # Vite build configuration
+│   └── dist/                 # Production build output (gitignored)
 ├── blueprints/               # Flask blueprints for web routes
-│   ├── auth.py              # Authentication routes (login, logout, setup)
-│   ├── dashboard.py         # Main dashboard views
-│   ├── settings.py          # Settings and configuration pages
+│   ├── auth.py               # Authentication routes
+│   ├── react_app.py          # Serves React SPA from frontend/dist/
 │   └── ...
-├── broker/                   # Broker-specific implementations
-│   ├── aliceblue/           # AliceBlue broker integration
-│   ├── angel/               # AngelOne broker integration
-│   ├── dhan/                # Dhan broker integration
-│   ├── zerodha/             # Zerodha broker integration
-│   └── .../                 # 20+ other brokers
-├── database/                 # Database models and utilities
-│   ├── auth_db.py           # User authentication models
-│   ├── apilog_db.py         # API logging models
-│   └── ...
-├── restx_api/                # REST API endpoints (Flask-RESTX)
-│   ├── account/             # Account and portfolio APIs
-│   ├── order/               # Order management APIs
-│   ├── data/                # Market data APIs
-│   └── ...
+├── broker/                   # Broker integrations (24+ brokers)
+│   ├── zerodha/              # Reference implementation
+│   ├── dhan/                 # Modern API design
+│   ├── angel/                # AngelOne integration
+│   └── .../                  # Each broker follows standardized structure
+├── restx_api/                # REST API endpoints (/api/v1/)
 ├── services/                 # Business logic layer
-│   ├── order_service.py     # Order processing logic
-│   ├── data_service.py      # Market data handling
-│   └── ...
-├── utils/                    # Utility functions and helpers
-│   ├── api_utils.py         # API helper functions
-│   ├── encryption.py        # Security and encryption
-│   └── ...
-├── templates/                # Jinja2 HTML templates
-│   ├── auth/                # Authentication pages
-│   ├── dashboard/           # Dashboard views
-│   └── layouts/             # Base layouts
-├── static/                   # Static assets
-│   ├── css/                 # Compiled CSS (don't edit directly!)
-│   ├── js/                  # JavaScript files
-│   └── images/              # Image assets
-├── src/                      # Source files for compilation
-│   └── css/
-│       └── styles.css       # Source CSS (edit this!)
+├── database/                 # SQLAlchemy models and database utilities
+├── utils/                    # Shared utilities and helpers
+├── websocket_proxy/          # Unified WebSocket server (port 8765)
+├── test/                     # Python test files
 ├── strategies/               # Trading strategy examples
-│   ├── data.ipynb           # Data analysis examples
-│   └── ...
-├── websocket_proxy/          # WebSocket server implementation
-│   ├── server.py            # Main WebSocket proxy server
-│   └── adapters/            # Broker-specific WebSocket adapters
-├── sandbox/                  # Sandbox/paper trading mode
-├── test/                     # Test files
-├── docs/                     # Documentation files
-├── mcp/                      # Model Context Protocol integration
-├── requirements.txt          # Python dependencies
-├── package.json              # Node.js dependencies
-├── tailwind.config.mjs       # Tailwind configuration
-└── .env                      # Environment configuration (create from .sample.env)
+├── db/                       # SQLite/DuckDB database files
+└── .env                      # Environment config (create from .sample.env)
 ```
 
 ### Key Directories
 
-- **`broker/`**: Each subdirectory contains a complete broker integration with authentication, order APIs, data APIs, and symbol mapping
+- **`frontend/`**: React 19 SPA with TypeScript, built with Vite and served by Flask via `blueprints/react_app.py`
+- **`broker/`**: Each subdirectory contains a complete broker integration with `api/`, `database/`, `mapping/`, `streaming/`, and `plugin.json`
 - **`restx_api/`**: RESTful API endpoints with automatic Swagger documentation at `/api/docs`
-- **`blueprints/`**: Web routes and views for the UI
-- **`templates/`**: HTML templates using Jinja2 and Tailwind/DaisyUI classes
-- **`websocket_proxy/`**: Real-time market data streaming infrastructure
+- **`blueprints/`**: Flask route handlers for UI pages and webhooks
 - **`services/`**: Business logic separated from route handlers
-- **`utils/`**: Shared utility functions used across the application
+- **`websocket_proxy/`**: Real-time market data streaming via unified WebSocket proxy
+- **`database/`**: 5 separate databases for isolation (main, logs, latency, sandbox, historify)
 
 ---
 
@@ -309,7 +273,26 @@ git remote add upstream https://github.com/marketcalls/openalgo.git
 git remote -v
 ```
 
-### 2. Create a Feature Branch
+> **Important: Disable GitHub Actions on Your Fork**
+>
+> After forking, go to your fork's **Settings → Actions → General** (`https://github.com/YOUR_USERNAME/openalgo/settings/actions`) and select **"Disable actions"** under Actions permissions. This prevents CI workflows (frontend builds, Docker pushes) from running on your fork unnecessarily — those workflows are only meant to run on the upstream repository.
+
+### 2. Frontend Build Assets (Auto-Built by CI)
+
+The `/frontend/dist` directory is **gitignored** and not tracked in the repository. CI automatically builds the frontend when changes are merged to main.
+
+**How it works:**
+- PRs are tested with a fresh frontend build (but not committed)
+- When merged to main, CI automatically:
+  1. Builds the frontend (`cd frontend && npm run build`)
+  2. Pushes Docker image to Docker Hub
+
+**For Contributors:**
+- Build locally for development: `cd frontend && npm install && npm run build`
+- Do NOT commit `frontend/dist/` — it is gitignored
+- Focus on source code changes — CI handles production builds
+
+### 3. Create a Feature Branch
 
 ```bash
 # Update your main branch
@@ -325,37 +308,49 @@ git pull upstream main
 git checkout -b feature/your-feature-name
 ```
 
-### 3. Make Your Changes
+### 4. Make Your Changes
 
 Follow these guidelines while developing:
 
-#### Code Style
+#### Python Code Style
 
-- **Python**: Follow PEP 8 style guide
-- **Formatting**: Use 4 spaces for indentation
-- **Line Length**: Maximum 100 characters recommended
-- **Imports**: Group by standard library, third-party, local
-- **Docstrings**: Use Google-style docstrings
+- Follow PEP 8 style guide
+- Use 4 spaces for indentation
+- Maximum 100 characters line length (configured in Ruff)
+- Imports: Standard library → Third-party → Local
+- Use Google-style docstrings
 
-Example:
-```python
-def calculate_margin(symbol, quantity, price, product_type):
-    """Calculate margin requirement for an order.
+Run the linter:
+```bash
+# Check Python code
+uv run ruff check .
 
-    Args:
-        symbol (str): Trading symbol (e.g., 'NSE:SBIN-EQ')
-        quantity (int): Number of shares
-        price (float): Order price
-        product_type (str): Product type ('CNC', 'MIS', 'NRML')
+# Auto-fix issues
+uv run ruff check --fix .
 
-    Returns:
-        dict: Margin details with required margin and available margin
+# Format code
+uv run ruff format .
+```
 
-    Raises:
-        ValueError: If invalid product type provided
-    """
-    # Implementation here
-    pass
+#### React/TypeScript Code Style
+
+- Follow Biome.js rules (configured in `frontend/biome.json`)
+- Use functional components with hooks
+- Component files use PascalCase: `MyComponent.tsx`
+- Use TanStack Query for server state, Zustand for client state
+
+Run the linter:
+```bash
+cd frontend
+
+# Lint code
+npm run lint
+
+# Format code
+npm run format
+
+# Lint + format in one command
+npm run check
 ```
 
 #### Commit Messages
@@ -378,43 +373,37 @@ git commit -m "docs: update WebSocket setup instructions"
 git commit -m "refactor: optimize order processing pipeline"
 ```
 
-### 4. Test Your Changes
+### 5. Test Your Changes
 
 ```bash
-# Run the application in development mode
-python app.py
+# Run Python tests
+uv run pytest test/ -v
 
-# Test specific features:
+# Run React tests
+cd frontend
+npm test
+
+# Run end-to-end tests
+npm run e2e
+
+# Manual testing:
 # 1. Web UI: http://127.0.0.1:5000
-# 2. API Docs: http://127.0.0.1:5000/api/docs
-# 3. API Analyzer: http://127.0.0.1:5000/analyzer
+# 2. React UI: http://127.0.0.1:5000/react
+# 3. API Docs: http://127.0.0.1:5000/api/docs
+# 4. API Analyzer: http://127.0.0.1:5000/analyzer
 ```
 
 #### Testing Checklist
 
-- [ ] Application starts without errors
+- [ ] Application starts without errors (`uv run app.py`)
 - [ ] All existing features still work
 - [ ] New feature works as expected
-- [ ] Error handling is proper
-- [ ] UI is responsive on mobile
-- [ ] Browser console has no errors
+- [ ] Python tests pass (`uv run pytest test/ -v`)
+- [ ] Frontend tests pass (`cd frontend && npm test`)
+- [ ] No TypeScript errors (`cd frontend && npm run build`)
+- [ ] No linting errors (Ruff for Python, Biome for frontend)
 - [ ] API endpoints return correct responses
 - [ ] WebSocket connections work (if applicable)
-
-### 5. CSS Compilation (for UI changes)
-
-If you modified any HTML templates or Tailwind classes:
-
-```bash
-# Development: Auto-compile on changes
-npm run dev
-
-# Production: Create minified build
-npm run build
-
-# Never edit static/css/main.css directly!
-# Only edit src/css/styles.css
-```
 
 ### 6. Push to Your Fork
 
@@ -441,71 +430,40 @@ git push origin feature/your-feature-name
    - **Testing**: Describe how you tested the changes
    - **Checklist**: Complete the PR checklist
 
-Example PR Description:
-```markdown
-## Description
-Adds integration for Groww broker with all standard APIs.
-
-## Related Issues
-Closes #456
-
-## Changes Made
-- Implemented Groww authentication API
-- Added order placement and management
-- Integrated market data APIs
-- Created symbol mapping utilities
-- Added Groww-specific WebSocket adapter
-
-## Testing
-- Tested on Python 3.12
-- Verified all API endpoints work correctly
-- Tested order flow from placement to execution
-- Validated WebSocket streaming
-
-## Screenshots
-[Attach screenshots if UI changes]
-
-## Checklist
-- [x] Code follows PEP 8 guidelines
-- [x] Added docstrings to all functions
-- [x] Tested locally and verified working
-- [x] Updated documentation
-- [x] No breaking changes to existing code
-```
-
-### 8. Automated Fork Sync (Maintainers)
-
-This repository includes GitHub Actions workflows to keep a fork aligned with upstream and prepare merge PRs.
-
-1. `Sync Upstream to Develop`
-    - Runs daily and on manual dispatch.
-    - Merges `upstream/main` into `develop`.
-    - Creates `develop` from `main` if it does not exist yet.
-    - Stops safely on merge conflicts (no force push).
-
-2. `Create or Update Develop to Main PR`
-    - Runs after a successful upstream sync and on manual dispatch.
-    - Creates a `develop` to `main` PR only when `develop` is ahead.
-    - Keeps one open PR only. After merge, a new PR is created on the next sync with new commits.
-
-Repository settings required:
-
-- `Settings` > `Actions` > `General` > `Workflow permissions` > `Read and write permissions`
-- Enable `Allow GitHub Actions to create and approve pull requests`
-
-Manual recovery option:
-
-```bash
-./scripts/update_from_upstream.sh --remote upstream --branch main --strategy merge
-```
-
 ---
 
 ## Contributing Guidelines
 
+### Contribution Policy: One Feature or One Fix at a Time
+
+OpenAlgo follows a strict **incremental contribution** standard. We require all contributions to be submitted as:
+
+- **One feature** per pull request, OR
+- **One fix** per pull request
+
+**Why this matters:**
+
+OpenAlgo supports **a growing list of brokers**, and every change must be validated across this broad surface area. Large integrations submitted in a single PR require extensive manual testing and verification that is not practical for the maintainers to review all at once.
+
+Additionally, many contributions today are developed with AI assistance, which can accelerate development substantially but also increases the need for careful human review, testing, and incremental verification before acceptance into a shared upstream project.
+
+**What this means in practice:**
+
+- Break large features into small, self-contained pull requests
+- Each PR should be independently reviewable and testable
+- Submit them sequentially — wait for one to be reviewed before sending the next
+- Large monolithic PRs or full-project integrations will not be accepted in their current form
+- **Exception — New broker integrations** may be submitted as a single PR since they are self-contained within their own `broker/` directory and don't modify core platform code
+
+**If you have a large integration or project built on OpenAlgo:**
+
+We appreciate and encourage projects built on top of OpenAlgo (it's why we're open-source!). However, we cannot merge large codebases as a single contribution. Instead, extract individual improvements, fixes, or self-contained features and submit them separately. This gives each contribution a much better chance of being reviewed and accepted.
+
+---
+
 ### What Can You Contribute?
 
-#### For First-Time Contributors 🌱
+#### For First-Time Contributors
 
 Great ways to get started:
 
@@ -513,7 +471,6 @@ Great ways to get started:
    - Fix typos in README or docs
    - Improve installation instructions
    - Add examples and tutorials
-   - Translate documentation to other languages
 
 2. **Bug Fixes**
    - Check [issues labeled "good first issue"](https://github.com/marketcalls/openalgo/labels/good%20first%20issue)
@@ -521,7 +478,7 @@ Great ways to get started:
    - Improve error messages
 
 3. **UI Improvements**
-   - Enhance styling with Tailwind/DaisyUI
+   - Enhance React components
    - Improve mobile responsiveness
    - Add loading states and animations
    - Fix layout issues
@@ -531,7 +488,7 @@ Great ways to get started:
    - Create tutorial notebooks
    - Document common use cases
 
-#### For Experienced Contributors 🚀
+#### For Experienced Contributors
 
 More advanced contributions:
 
@@ -545,94 +502,114 @@ More advanced contributions:
    - Enhance existing endpoints
    - Add new data sources
 
-3. **Performance Optimization**
+3. **React Frontend Features**
+   - Build new pages or components
+   - Add data visualizations with Plotly/Lightweight Charts
+   - Improve real-time updates via Socket.IO
+
+4. **Performance Optimization**
    - Optimize database queries
    - Improve caching strategies
    - Reduce API latency
-   - Profile and optimize bottlenecks
 
-4. **WebSocket Features**
+5. **WebSocket Features**
    - Add new streaming capabilities
    - Improve real-time performance
-   - Add broker adapters
+   - Add broker WebSocket adapters
 
-5. **Testing Infrastructure**
-   - Write unit tests
-   - Add integration tests
-   - Set up CI/CD pipelines
-   - Create test fixtures
+6. **Testing**
+   - Write Vitest unit tests for React components
+   - Write Playwright end-to-end tests
+   - Write pytest tests for backend services
+   - Improve test coverage
 
-6. **Security Enhancements**
+7. **Security Enhancements**
    - Audit security vulnerabilities
    - Improve authentication
    - Enhance encryption
-   - Add security features
 
 ---
 
 ## Testing
 
-### Manual Testing
-
-OpenAlgo primarily uses manual testing currently:
-
-1. **Application Testing**
-   ```bash
-   # Start the application
-   python app.py
-
-   # Test your changes through the UI
-   ```
-
-2. **API Testing**
-   - Use the built-in Swagger UI at `http://127.0.0.1:5000/api/docs`
-   - Test API endpoints with Postman or curl
-   - Verify request/response formats
-
-3. **Cross-Browser Testing**
-   - Test in Chrome, Firefox, Safari, Edge
-   - Verify mobile responsiveness
-   - Check for console errors
-
-4. **Error Handling**
-   - Test with invalid inputs
-   - Verify proper error messages
-   - Ensure graceful degradation
-
-### Automated Testing
-
-Some test files are available in the `/test` directory:
+### Python Backend Tests
 
 ```bash
-# Run specific test files
-python -m pytest test/test_broker.py
-python -m pytest test/test_cache_performance.py
+# Run all tests
+uv run pytest test/ -v
 
-# Run all tests (if pytest is configured)
-python -m pytest test/ -v
+# Run specific test file
+uv run pytest test/test_broker.py -v
+
+# Run single test function
+uv run pytest test/test_broker.py::test_function_name -v
+
+# Run tests with coverage
+uv run pytest test/ --cov
 ```
 
-### Writing Tests
+### React Frontend Tests
 
-When adding tests, follow this structure:
+```bash
+cd frontend
+
+# Run unit tests (watch mode)
+npm test
+
+# Run tests once
+npm run test:run
+
+# Run tests with coverage
+npm run test:coverage
+
+# Run accessibility tests
+npm run test:a11y
+
+# Run end-to-end tests (Playwright)
+npm run e2e
+
+# Run e2e tests with UI
+npm run e2e:ui
+```
+
+### Writing Python Tests
 
 ```python
 # test/test_feature.py
 import pytest
-from app import create_app
 
-@pytest.fixture
-def client():
-    app = create_app()
-    app.config['TESTING'] = True
-    with app.test_client() as client:
-        yield client
-
-def test_feature(client):
+def test_feature():
     """Test your feature here."""
-    response = client.get('/api/v1/endpoint')
-    assert response.status_code == 200
-    assert 'expected_key' in response.json
+    result = some_function()
+    assert result == expected_value
+```
+
+### Writing React Tests
+
+```typescript
+// frontend/src/components/__tests__/MyComponent.test.tsx
+import { render, screen } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { MyComponent } from '../MyComponent';
+
+describe('MyComponent', () => {
+  it('renders correctly', () => {
+    render(<MyComponent />);
+    expect(screen.getByText('Expected Text')).toBeInTheDocument();
+  });
+});
+```
+
+### Writing E2E Tests
+
+```typescript
+// frontend/e2e/my-feature.spec.ts
+import { test, expect } from '@playwright/test';
+
+test('feature works end to end', async ({ page }) => {
+  await page.goto('/react');
+  await expect(page.getByText('Dashboard')).toBeVisible();
+});
 ```
 
 ---
@@ -657,7 +634,7 @@ broker/your_broker_name/
 ├── mapping/
 │   ├── order_data.py         # Transform OpenAlgo format to broker format
 │   └── transform_data.py     # General data transformations
-├── websocket/
+├── streaming/
 │   └── broker_adapter.py     # WebSocket adapter for live data
 └── plugin.json               # Broker configuration metadata
 ```
@@ -669,10 +646,6 @@ broker/your_broker_name/
 ```python
 """Authentication module for BrokerName."""
 
-from flask import request, jsonify, session
-import http.client
-import json
-
 def authenticate_broker(data):
     """Authenticate user with broker.
 
@@ -682,7 +655,6 @@ def authenticate_broker(data):
     Returns:
         dict: Authentication response with status and token
     """
-    # Implementation here
     pass
 
 def get_auth_token():
@@ -691,7 +663,6 @@ def get_auth_token():
     Returns:
         str: Active auth token or None
     """
-    # Implementation here
     pass
 ```
 
@@ -701,14 +672,7 @@ def get_auth_token():
 """Order management module for BrokerName."""
 
 def place_order_api(data):
-    """Place a new order with the broker.
-
-    Args:
-        data (dict): Order details (symbol, quantity, price, etc.)
-
-    Returns:
-        dict: Order response with order_id and status
-    """
+    """Place a new order with the broker."""
     pass
 
 def modify_order_api(data):
@@ -777,157 +741,131 @@ def get_historical_data(symbol, interval, start_date, end_date):
 ### 3. Testing Your Broker Integration
 
 1. Add broker to `VALID_BROKERS` in `.env`
-2. Configure broker credentials
+2. Configure broker credentials in `.env`
 3. Test authentication flow
-4. Test each API endpoint via Swagger UI
+4. Test each API endpoint via Swagger UI at `/api/docs`
 5. Test WebSocket streaming (if supported)
 6. Validate error handling
 
-### 4. Documentation
+### 4. Reference Implementations
 
-Create a setup guide in `/docs/broker_brokername.md`:
-
-```markdown
-# Broker Name Integration Guide
-
-## Prerequisites
-- Active trading account with Broker Name
-- API credentials (API Key, Secret)
-
-## Setup Steps
-1. Login to Broker Name dashboard
-2. Generate API credentials
-3. Configure in OpenAlgo settings
-
-## Features Supported
-- [x] Order placement
-- [x] Market data
-- [x] WebSocket streaming
-- [ ] Basket orders (planned)
-
-## Known Limitations
-- Maximum 100 orders per minute
-- Historical data limited to 1 year
-```
-
-### 5. Reference Implementation
-
-Study existing broker implementations as reference:
+Study existing broker implementations:
 - `/broker/zerodha/` - Most complete implementation
 - `/broker/dhan/` - Modern API design
 - `/broker/angel/` - WebSocket streaming
 
 ---
 
-## UI Development
+## Frontend Development
 
-### Working with Tailwind & DaisyUI
+### React + shadcn/ui Architecture
 
-#### CSS Workflow
+The frontend is a React 19 SPA located in `/frontend/`. It is built with Vite and served by Flask in production via `blueprints/react_app.py`.
 
-1. **NEVER edit** `/static/css/main.css` directly (it's auto-generated!)
+#### Development Server
 
-2. **Edit source files**:
-   - Custom CSS: `/src/css/styles.css`
-   - Tailwind classes: Directly in HTML templates (`/templates/`)
+```bash
+cd frontend
 
-3. **Compile CSS**:
-   ```bash
-   # Development mode with auto-watch
-   npm run dev
+# Start Vite dev server with hot reload
+npm run dev
+# Available at http://localhost:5173
 
-   # Production build (minified)
-   npm run build
-   ```
-
-4. **Before committing**: Always run production build
-   ```bash
-   npm run build
-   git add static/css/main.css
-   ```
-
-#### Using DaisyUI Components
-
-OpenAlgo uses [DaisyUI](https://daisyui.com/components/) component library:
-
-```html
-<!-- Button component -->
-<button class="btn btn-primary">Place Order</button>
-
-<!-- Card component -->
-<div class="card bg-base-100 shadow-xl">
-  <div class="card-body">
-    <h2 class="card-title">Portfolio Value</h2>
-    <p>₹1,25,000</p>
-  </div>
-</div>
-
-<!-- Alert component -->
-<div class="alert alert-success">
-  <span>Order placed successfully!</span>
-</div>
+# Build for production
+npm run build
+# Output goes to frontend/dist/
 ```
 
-#### Theme System
+#### Component Library
 
-OpenAlgo uses three themes:
+OpenAlgo uses [shadcn/ui](https://ui.shadcn.com/) built on Radix UI primitives with Tailwind CSS:
 
-1. **Light** - Default theme
-2. **Dark** - Dark mode
-3. **Garden** - Analyzer/testing mode
+```tsx
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-Use theme-aware classes:
-```html
-<!-- Use semantic colors, not hardcoded -->
-<div class="bg-base-100 text-base-content">
-  <!-- Automatically adapts to theme -->
-</div>
-
-<!-- Don't use hardcoded colors -->
-<div class="bg-white text-black">
-  <!-- Wrong: Won't adapt to dark theme -->
-</div>
+function PortfolioCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Portfolio Value</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-2xl font-bold">₹1,25,000</p>
+      </CardContent>
+    </Card>
+  );
+}
 ```
 
-#### Responsive Design
+#### Server State with TanStack Query
 
-Always use responsive Tailwind classes:
-```html
-<!-- Mobile-first responsive grid -->
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+```tsx
+import { useQuery } from '@tanstack/react-query';
+
+function Positions() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['positions'],
+    queryFn: () => api.getPositions(),
+  });
+
+  if (isLoading) return <div>Loading...</div>;
+  // render positions...
+}
+```
+
+#### Client State with Zustand
+
+```tsx
+import { create } from 'zustand';
+
+interface AppState {
+  selectedBroker: string;
+  setSelectedBroker: (broker: string) => void;
+}
+
+const useAppStore = create<AppState>((set) => ({
+  selectedBroker: '',
+  setSelectedBroker: (broker) => set({ selectedBroker: broker }),
+}));
+```
+
+#### Styling with Tailwind CSS 4
+
+Use Tailwind utility classes directly. Always use responsive and theme-aware patterns:
+
+```tsx
+{/* Responsive grid */}
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
   <div>Column 1</div>
   <div>Column 2</div>
   <div>Column 3</div>
 </div>
 
-<!-- Responsive text sizes -->
-<h1 class="text-2xl md:text-3xl lg:text-4xl">Heading</h1>
+{/* Use CSS variables for theme colors — adapts to light/dark mode */}
+<div className="bg-background text-foreground">
+  Automatically adapts to theme
+</div>
 ```
 
-#### Tailwind Configuration
+#### Linting and Formatting
 
-The Tailwind config is in `tailwind.config.mjs`:
+```bash
+cd frontend
 
-```javascript
-export default {
-  content: [
-    './templates/**/*.html',
-    './static/js/**/*.js',
-  ],
-  plugins: [
-    require('daisyui'),
-  ],
-  daisyui: {
-    themes: ["light", "dark", "garden"],
-  },
-}
+# Lint
+npm run lint
+
+# Format
+npm run format
+
+# Both (with auto-fix)
+npm run check
 ```
 
 ---
 
 ## Documentation
-
-Good documentation is crucial for open-source projects.
 
 ### Code Documentation
 
@@ -947,32 +885,22 @@ Good documentation is crucial for open-source projects.
 
        Raises:
            ValueError: If invalid order_type provided
-           ConnectionError: If broker API unreachable
        """
        pass
    ```
 
-2. **Inline Comments** - Explain complex logic:
-   ```python
-   # Calculate margin multiplier based on product type
-   # MIS (intraday) requires 20% margin, CNC requires 100%
-   margin_multiplier = 0.2 if product_type == 'MIS' else 1.0
+2. **TypeScript** - Use JSDoc where types alone aren't sufficient:
+   ```typescript
+   /**
+    * Fetches positions for the current user.
+    * Requires active broker authentication.
+    */
+   async function getPositions(): Promise<Position[]> {
+     // ...
+   }
    ```
 
-3. **Type Hints** - Use for better IDE support:
-   ```python
-   from typing import Dict, List, Optional
-
-   def get_positions(user_id: int) -> List[Dict[str, any]]:
-       """Get user positions."""
-       pass
-   ```
-
-### User Documentation
-
-1. **README Updates** - For new features, update main README.md
-
-2. **API Documentation** - Use Flask-RESTX decorators:
+3. **API Documentation** - Use Flask-RESTX decorators:
    ```python
    @api.route('/placeorder')
    class PlaceOrder(Resource):
@@ -984,11 +912,6 @@ Good documentation is crucial for open-source projects.
            pass
    ```
 
-3. **Feature Guides** - Create detailed guides in `/docs`:
-   - `/docs/websocket_usage.md`
-   - `/docs/broker_integration_guide.md`
-   - `/docs/security_best_practices.md`
-
 ---
 
 ## Best Practices
@@ -996,7 +919,7 @@ Good documentation is crucial for open-source projects.
 ### Security
 
 1. **Never commit sensitive data**
-   ```bash
+   ```python
    # Bad - Never do this!
    API_KEY = 'abc123xyz'
 
@@ -1005,32 +928,30 @@ Good documentation is crucial for open-source projects.
    API_KEY = os.getenv('BROKER_API_KEY')
    ```
 
-2. **Validate all inputs**
+2. **Validate all inputs at system boundaries**
    ```python
    def place_order(data):
-       # Validate quantity is positive
        if data.get('quantity', 0) <= 0:
            raise ValueError('Quantity must be positive')
 
-       # Validate order type
        valid_types = ['MARKET', 'LIMIT', 'SL', 'SLM']
        if data.get('order_type') not in valid_types:
            raise ValueError('Invalid order type')
    ```
 
-3. **Use parameterized queries**
+3. **Use parameterized queries (SQLAlchemy ORM)**
    ```python
    # Bad - SQL injection vulnerability!
    query = f"SELECT * FROM orders WHERE user_id = {user_id}"
 
-   # Good - Parameterized with SQLAlchemy
+   # Good - SQLAlchemy ORM
    orders = Order.query.filter_by(user_id=user_id).all()
    ```
 
 4. **Follow OWASP guidelines**
    - Enable CSRF protection (already configured)
    - Use HTTPS in production
-   - Implement rate limiting (already configured)
+   - Rate limiting is configured per endpoint
    - Sanitize user inputs
 
 ### Performance
@@ -1050,20 +971,17 @@ Good documentation is crucial for open-source projects.
    ```python
    from cachetools import TTLCache
 
-   # Cache symbol data for 5 minutes
    symbol_cache = TTLCache(maxsize=1000, ttl=300)
 
    def get_symbol_info(symbol):
        if symbol in symbol_cache:
            return symbol_cache[symbol]
-
-       # Fetch from database
        info = fetch_symbol_from_db(symbol)
        symbol_cache[symbol] = info
        return info
    ```
 
-3. **Minimize API calls**
+3. **Minimize API calls — use batch endpoints**
    ```python
    # Bad - Multiple API calls
    for symbol in symbols:
@@ -1077,50 +995,24 @@ Good documentation is crucial for open-source projects.
 
 1. **Write self-documenting code**
    ```python
-   # Bad - Unclear variable names
+   # Bad
    def calc(s, q, p):
        return s * q * p * 0.1
 
-   # Good - Clear and descriptive
+   # Good
    def calculate_order_value(symbol_price, quantity, price, multiplier):
-       """Calculate total order value with multiplier."""
        return symbol_price * quantity * price * multiplier
    ```
 
 2. **Keep functions small and focused**
-   ```python
-   # Bad - Function does too many things
-   def process_order(order_data):
-       validate_data(order_data)
-       calculate_margin(order_data)
-       check_balance(order_data)
-       place_with_broker(order_data)
-       log_order(order_data)
-       send_notification(order_data)
 
-   # Good - Single responsibility
-   def process_order(order_data):
-       """Process and place order."""
-       validated_data = validate_order(order_data)
-       if has_sufficient_margin(validated_data):
-           return place_order_with_broker(validated_data)
-       raise InsufficientMarginError()
-   ```
-
-3. **Handle errors gracefully**
+3. **Return consistent JSON responses from API endpoints**
    ```python
-   try:
-       response = broker_api.place_order(order_data)
-       return {'status': 'success', 'data': response}
-   except ConnectionError as e:
-       logger.error(f"Broker API connection failed: {e}")
-       return {'status': 'error', 'message': 'Unable to connect to broker'}
-   except ValueError as e:
-       logger.warning(f"Invalid order data: {e}")
-       return {'status': 'error', 'message': str(e)}
-   except Exception as e:
-       logger.exception(f"Unexpected error: {e}")
-       return {'status': 'error', 'message': 'An unexpected error occurred'}
+   return {
+       'status': 'success' | 'error',
+       'message': 'Human-readable message',
+       'data': {...}  # Optional payload
+   }
    ```
 
 ---
@@ -1129,31 +1021,31 @@ Good documentation is crucial for open-source projects.
 
 ### Common Issues
 
-#### CSS Not Updating
+#### Frontend Build Errors
 
 ```bash
-# Clear browser cache
-# Then rebuild CSS:
+# Ensure correct Node.js version (20, 22, or 24)
+node --version
+
+# Clean install
+cd frontend
+rm -rf node_modules
+npm install
 npm run build
 
-# If still not working, check:
-# 1. Is npm installed? (node --version)
-# 2. Are node_modules present? (npm install)
-# 3. Check for build errors in terminal
+# Check for TypeScript errors
+npx tsc --noEmit
 ```
 
-#### Python Dependencies
+#### Python Dependency Issues
 
 ```bash
-# Create fresh virtual environment
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
+# Sync dependencies with uv
+uv sync
 
-# Upgrade pip
-pip install --upgrade pip
-
-# Reinstall dependencies
-pip install -r requirements.txt
+# If issues persist, recreate the environment
+rm -rf .venv
+uv sync
 ```
 
 #### WebSocket Connection Issues
@@ -1164,17 +1056,17 @@ WEBSOCKET_HOST='127.0.0.1'
 WEBSOCKET_PORT='8765'
 
 # Ensure only one worker with Gunicorn:
-gunicorn --worker-class eventlet -w 1 app:app
+uv run gunicorn --worker-class eventlet -w 1 app:app
 
-# Check firewall settings
+# Check firewall settings for port 8765
 ```
 
 #### Database Locked Errors
 
 ```bash
-# SQLite database locked - close all connections
-# Restart the application
-python app.py
+# SQLite doesn't handle high concurrency well
+# Close all connections and restart the app
+uv run app.py
 ```
 
 ---
@@ -1190,10 +1082,10 @@ python app.py
 
 ### Before Asking for Help
 
-1. **Search existing issues** - Your question might already be answered
-2. **Check documentation** - Review docs at docs.openalgo.in
-3. **Review error logs** - Include error messages when asking for help
-4. **Provide context** - Share your environment (OS, Python version, broker)
+1. **Search existing issues** — your question might already be answered
+2. **Check documentation** — review docs at docs.openalgo.in
+3. **Review error logs** — include error messages when asking for help
+4. **Provide context** — share your environment (OS, Python version, Node version, broker)
 
 ### Asking Good Questions
 
@@ -1206,30 +1098,9 @@ When asking for help, include:
 5. **Environment details**:
    - OS and version
    - Python version (`python --version`)
+   - Node.js version (`node --version`)
    - OpenAlgo version
    - Broker being used
-
-Example:
-```
-**Problem**: WebSocket connection fails when using Zerodha broker
-
-**Steps to reproduce**:
-1. Start OpenAlgo with `python app.py`
-2. Login with Zerodha credentials
-3. Navigate to Market Watch
-4. WebSocket connection shows "Disconnected"
-
-**Expected**: WebSocket should connect and stream live data
-
-**Actual**: Connection fails with error "Connection refused"
-
-**Environment**:
-- OS: Windows 11
-- Python: 3.12.1
-- OpenAlgo: Latest main branch
-- Broker: Zerodha
-- Error log: [attach error log]
-```
 
 ---
 
@@ -1238,8 +1109,8 @@ Example:
 After submitting your pull request:
 
 1. **Automated Checks**
-   - Ensure all checks pass
-   - Fix any failing checks before requesting review
+   - CI will build the frontend and run linting
+   - Ensure all checks pass before requesting review
 
 2. **Review Feedback**
    - Address reviewer comments promptly
@@ -1249,11 +1120,10 @@ After submitting your pull request:
 3. **Updates**
    - Push additional commits to your branch
    - No need to create a new PR
-   - Use `git push origin feature/your-feature-name`
 
 4. **Approval & Merge**
    - Once approved, maintainers will merge
-   - Your contribution will be in the next release!
+   - CI will automatically build the frontend for production
 
 5. **Be Patient**
    - Reviews may take a few days
@@ -1264,18 +1134,13 @@ After submitting your pull request:
 
 ## Recognition & Community
 
-### Contributors
-
 We value all contributions! Contributors will be:
 
 - **Listed in contributors section** on GitHub
 - **Mentioned in release notes** for significant contributions
 - **Part of the OpenAlgo community** on Discord
-- **Eligible for contributor benefits** (coming soon)
 
 ### Community Guidelines
-
-Be respectful and follow these principles:
 
 1. **Be Respectful** - Treat everyone with respect
 2. **Be Constructive** - Provide helpful feedback
@@ -1305,12 +1170,12 @@ By contributing to OpenAlgo, you agree that your contributions will be licensed 
 
 ---
 
-## Thank You! 
+## Thank You!
 
 Thank you for contributing to OpenAlgo! Your efforts help democratize algorithmic trading and empower traders worldwide. Every line of code, documentation improvement, and bug report makes a difference.
 
-**Happy coding, and welcome to the OpenAlgo community!** 
+**Happy coding, and welcome to the OpenAlgo community!**
 
 ---
 
-*Built by traders, for traders - making algo trading accessible to everyone.*
+*Built by traders, for traders — making algo trading accessible to everyone.*

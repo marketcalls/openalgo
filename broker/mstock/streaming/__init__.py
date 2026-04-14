@@ -6,10 +6,6 @@ following the OpenAlgo adapter pattern.
 """
 
 from .mstock_adapter import MstockWebSocketAdapter
-from .mstock_mapping import MstockExchangeMapper, MstockCapabilityRegistry
+from .mstock_mapping import MstockCapabilityRegistry, MstockExchangeMapper
 
-__all__ = [
-    'MstockWebSocketAdapter',
-    'MstockExchangeMapper',
-    'MstockCapabilityRegistry'
-]
+__all__ = ["MstockWebSocketAdapter", "MstockExchangeMapper", "MstockCapabilityRegistry"]

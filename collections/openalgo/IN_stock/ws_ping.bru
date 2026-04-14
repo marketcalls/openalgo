@@ -1,0 +1,28 @@
+meta {
+  name: Ping (Latency Test)
+  type: websocket
+  seq: 13
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Test connection latency with ping/pong
+}
+
+message:json {
+  {
+    "action": "ping",
+    "timestamp": 1737345600000
+  }
+}
+
+docs {
+  Send a ping to measure round-trip latency.
+  Include a timestamp to calculate latency on response.
+
+  Server responds with:
+  {"type": "pong", "timestamp": 1737345600000, "server_time": 1737345600015}
+
+  The server also sends automatic ping messages every 30 seconds.
+  Clients must respond with pong or face disconnection.
+}

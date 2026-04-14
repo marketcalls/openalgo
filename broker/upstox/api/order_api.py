@@ -1,16 +1,25 @@
 import json
 import os
+
 import httpx
-from utils.httpx_client import get_httpx_client
+import threading
+import time
+
+from broker.upstox.mapping.transform_data import (
+    map_product_type,
+    reverse_map_product_type,
+    transform_data,
+    transform_modify_order_data,
+)
 from database.auth_db import get_auth_token
-from database.token_db import get_token, get_br_symbol, get_symbol
-from broker.upstox.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from database.token_db import get_br_symbol, get_symbol, get_token
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
+def get_api_response(endpoint, auth, method="GET", payload=""):
     """
     A wrapper to send requests to the Upstox API and handle responses.
     Args:
@@ -23,16 +32,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     """
     logger.debug(f"Requesting {method} on endpoint: {endpoint}")
     try:
-        api_key = os.getenv('BROKER_API_KEY')
+        api_key = os.getenv("BROKER_API_KEY")
         if not api_key:
             logger.error("BROKER_API_KEY environment variable not set.")
-            return {'status': 'error', 'message': 'BROKER_API_KEY not set'}
+            return {"status": "error", "message": "BROKER_API_KEY not set"}
 
         client = get_httpx_client()
         headers = {
-            'Authorization': f'Bearer {auth}',
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
+            "Authorization": f"Bearer {auth}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
         }
         url = f"https://api.upstox.com{endpoint}"
 
@@ -46,7 +55,7 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
             response = client.delete(url, headers=headers)
         else:
             logger.error(f"Unsupported HTTP method: {method}")
-            return {'status': 'error', 'message': f'Unsupported HTTP method: {method}'}
+            return {"status": "error", "message": f"Unsupported HTTP method: {method}"}
 
         response.raise_for_status()
         response_data = response.json()
@@ -59,10 +68,10 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         try:
             return e.response.json()
         except json.JSONDecodeError:
-            return {'status': 'error', 'message': f'HTTP error: {error_response}'}
+            return {"status": "error", "message": f"HTTP error: {error_response}"}
     except Exception as e:
         logger.exception(f"Unexpected error on {endpoint}")
-        return {'status': 'error', 'message': str(e)}
+        return {"status": "error", "message": str(e)}
 
 
 def get_order_book(auth):
@@ -85,6 +94,52 @@ def get_holdings(auth):
     return get_api_response("/v2/portfolio/long-term-holdings", auth)
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
+
 def get_open_position(tradingsymbol, exchange, product, auth):
     """
     Gets the net quantity of an open position for a given symbol.
@@ -92,22 +147,30 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     logger.debug(f"Getting open position for {tradingsymbol} on {exchange} with product {product}")
     try:
         br_symbol = get_br_symbol(tradingsymbol, exchange)
-        positions_data = get_positions(auth)
-        net_qty = '0'
+        positions_data = _get_cached_positions(auth)
+        net_qty = "0"
 
-        if positions_data and positions_data.get('status') == 'success' and positions_data.get('data'):
-            for position in positions_data['data']:
-                if position.get('tradingsymbol') == br_symbol and position.get('exchange') == exchange and position.get('product') == product:
-                    net_qty = position.get('quantity', '0')
+        if (
+            positions_data
+            and positions_data.get("status") == "success"
+            and positions_data.get("data")
+        ):
+            for position in positions_data["data"]:
+                if (
+                    position.get("tradingsymbol") == br_symbol
+                    and position.get("exchange") == exchange
+                    and position.get("product") == product
+                ):
+                    net_qty = position.get("quantity", "0")
                     logger.debug(f"Found open position for {tradingsymbol}: {net_qty}")
                     break
-        elif positions_data.get('status') == 'error':
+        elif positions_data.get("status") == "error":
             logger.error(f"Failed to get positions: {positions_data.get('message')}")
 
         return net_qty
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error getting open position for {tradingsymbol}")
-        return '0'
+        return "0"
 
 
 def place_order_api(data, auth):
@@ -117,37 +180,45 @@ def place_order_api(data, auth):
     """
     logger.info(f"Placing order with data: {data}")
     try:
-        api_key = os.getenv('BROKER_API_KEY')
+        api_key = os.getenv("BROKER_API_KEY")
         if not api_key:
             logger.error("BROKER_API_KEY not set. Cannot place order.")
             return None, {"status": "error", "message": "BROKER_API_KEY not set"}, None
 
-        token = get_token(data['symbol'], data['exchange'])
+        token = get_token(data["symbol"], data["exchange"])
         if not token:
             logger.error(f"Instrument token not found for {data['symbol']}. Cannot place order.")
             return None, {"status": "error", "message": "Instrument token not found"}, None
 
         newdata = transform_data(data, token)
-        payload = json.dumps({
-            "quantity": newdata['quantity'],
-            "product": newdata.get('product', 'I'),
-            "validity": newdata.get('validity', 'DAY'),
-            "price": newdata.get('price', '0'),
-            "tag": newdata.get('tag', 'string'),
-            "instrument_token": newdata['instrument_token'],
-            "order_type": newdata.get('order_type', 'MARKET'),
-            "transaction_type": newdata['transaction_type'],
-            "disclosed_quantity": newdata.get('disclosed_quantity', '0'),
-            "trigger_price": newdata.get('trigger_price', '0'),
-            "is_amo": newdata.get('is_amo', False)
-        })
+        payload = json.dumps(
+            {
+                "quantity": newdata["quantity"],
+                "product": newdata.get("product", "I"),
+                "validity": newdata.get("validity", "DAY"),
+                "price": newdata.get("price", "0"),
+                "tag": newdata.get("tag", "string"),
+                "instrument_token": newdata["instrument_token"],
+                "order_type": newdata.get("order_type", "MARKET"),
+                "transaction_type": newdata["transaction_type"],
+                "disclosed_quantity": newdata.get("disclosed_quantity", "0"),
+                "trigger_price": newdata.get("trigger_price", "0"),
+                "is_amo": newdata.get("is_amo", False),
+            }
+        )
         logger.debug(f"Placing order with payload: {payload}")
 
         client = get_httpx_client()
-        headers = {'Authorization': f'Bearer {auth}', 'Content-Type': 'application/json', 'Accept': 'application/json'}
-        response = client.post("https://api.upstox.com/v2/order/place", headers=headers, content=payload)
+        headers = {
+            "Authorization": f"Bearer {auth}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        response = client.post(
+            "https://api.upstox.com/v2/order/place", headers=headers, content=payload
+        )
         response.raise_for_status()
-        
+
         # Add status attribute to make response compatible with place_order_service.py
         # as the rest of the codebase expects .status instead of .status_code
         response.status = response.status_code
@@ -155,12 +226,12 @@ def place_order_api(data, auth):
         response_data = response.json()
         logger.debug(f"Place order API response: {response_data}")
 
-        if response_data.get('status') == 'success':
-            order_id = response_data.get('data', {}).get('order_id')
+        if response_data.get("status") == "success":
+            order_id = response_data.get("data", {}).get("order_id")
             logger.info(f"Successfully placed order. Order ID: {order_id}")
             return response, response_data, order_id
         else:
-            error_msg = response_data.get('message', 'Failed to place order.')
+            error_msg = response_data.get("message", "Failed to place order.")
             logger.error(f"Failed to place order: {error_msg} | Response: {response_data}")
             return response, response_data, None
 
@@ -181,35 +252,43 @@ def place_smartorder_api(data, auth):
         symbol = data.get("symbol")
         exchange = data.get("exchange")
         product = data.get("product")
-        position_size = int(data.get("position_size", "0"))
+        # Per-symbol lock: serialize smart orders per symbol
+        symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
-        logger.debug(f"Desired position size: {position_size}, Current position: {current_position}")
+        with symbol_lock:
+            position_size = int(data.get("position_size", "0"))
 
-        if position_size == 0 and current_position == 0 and int(data.get('quantity', 0)) != 0:
-            logger.info("No existing position and quantity is specified. Placing a new order.")
-            return place_order_api(data, auth)
+            current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
+            logger.debug(
+                f"Desired position size: {position_size}, Current position: {current_position}"
+            )
 
-        if position_size == current_position:
-            msg = "No action needed. Position size matches current position."
-            if int(data.get('quantity', 0)) == 0:
-                msg = "No open position found. Not placing exit order."
-            logger.info(msg)
-            return None, {"status": "success", "message": msg}, None
+            if position_size == 0 and current_position == 0 and int(data.get("quantity", 0)) != 0:
+                logger.info("No existing position and quantity is specified. Placing a new order.")
+                return place_order_api(data, auth)
 
-        action, quantity = None, 0
-        if position_size > current_position:
-            action, quantity = "BUY", position_size - current_position
-        else:
-            action, quantity = "SELL", current_position - position_size
+            if position_size == current_position:
+                msg = "No action needed. Position size matches current position."
+                if int(data.get("quantity", 0)) == 0:
+                    msg = "No open position found. Not placing exit order."
+                logger.info(msg)
+                return None, {"status": "success", "message": msg}, None
 
-        logger.info(f"Determined action: {action}, Quantity: {quantity}")
+            action, quantity = None, 0
+            if position_size > current_position:
+                action, quantity = "BUY", position_size - current_position
+            else:
+                action, quantity = "SELL", current_position - position_size
 
-        order_data = data.copy()
-        order_data["action"] = action
-        order_data["quantity"] = str(quantity)
+            logger.info(f"Determined action: {action}, Quantity: {quantity}")
 
-        return place_order_api(order_data, auth)
+            order_data = data.copy()
+            order_data["action"] = action
+            order_data["quantity"] = str(quantity)
+
+            res, response, orderid = place_order_api(order_data, auth)
+            _invalidate_position_cache(auth)
+            return res, response, orderid
 
     except Exception as e:
         logger.exception("Unexpected error in place_smartorder_api")
@@ -223,20 +302,22 @@ def close_all_positions(current_api_key, auth):
     logger.info("Attempting to close all open positions.")
     try:
         positions_response = get_positions(auth)
-        if positions_response.get('status') != 'success' or not positions_response.get('data'):
+        if positions_response.get("status") != "success" or not positions_response.get("data"):
             logger.info("No open positions found to close.")
             return {"message": "No Open Positions Found"}, 200
 
-        for position in positions_response['data']:
-            if int(position.get('quantity', 0)) == 0:
+        for position in positions_response["data"]:
+            if int(position.get("quantity", 0)) == 0:
                 continue
 
-            action = 'SELL' if int(position['quantity']) > 0 else 'BUY'
-            quantity = abs(int(position['quantity']))
-            symbol = get_symbol(position['instrument_token'], position['exchange'])
+            action = "SELL" if int(position["quantity"]) > 0 else "BUY"
+            quantity = abs(int(position["quantity"]))
+            symbol = get_symbol(position["instrument_token"], position["exchange"])
 
             if not symbol:
-                logger.warning(f"Could not find symbol for instrument token {position['instrument_token']}. Skipping position.")
+                logger.warning(
+                    f"Could not find symbol for instrument token {position['instrument_token']}. Skipping position."
+                )
                 continue
 
             place_order_payload = {
@@ -244,19 +325,19 @@ def close_all_positions(current_api_key, auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": position["exchange"],
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['exchange'], position['product']),
-                "quantity": str(quantity)
+                "product": reverse_map_product_type(position["exchange"], position["product"]),
+                "quantity": str(quantity),
             }
             logger.debug(f"Closing position with payload: {place_order_payload}")
             _, api_response, _ = place_order_api(place_order_payload, auth)
             logger.info(f"Close position response for {symbol}: {api_response}")
 
         logger.info("Successfully initiated closing of all open positions.")
-        return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
+        return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
-    except Exception as e:
+    except Exception:
         logger.exception("An error occurred while closing all positions.")
         return {"status": "error", "message": "Failed to close all positions"}, 500
 
@@ -267,15 +348,19 @@ def cancel_order(orderid, auth):
     """
     logger.info(f"Attempting to cancel order ID: {orderid}")
     try:
-        response_data = get_api_response(f"/v2/order/cancel?order_id={orderid}", auth, method="DELETE")
+        response_data = get_api_response(
+            f"/v2/order/cancel?order_id={orderid}", auth, method="DELETE"
+        )
 
         if response_data.get("status") == "success":
-            canceled_id = response_data.get('data', {}).get('order_id')
+            canceled_id = response_data.get("data", {}).get("order_id")
             logger.info(f"Successfully canceled order ID: {canceled_id}")
             return {"status": "success", "orderid": canceled_id}, 200
         else:
             error_msg = response_data.get("message", "Failed to cancel order")
-            logger.error(f"Failed to cancel order {orderid}: {error_msg} | Response: {response_data}")
+            logger.error(
+                f"Failed to cancel order {orderid}: {error_msg} | Response: {response_data}"
+            )
             return {"status": "error", "message": error_msg}, 400
 
     except Exception as e:
@@ -296,7 +381,7 @@ def modify_order(data, auth):
         response_data = get_api_response("/v2/order/modify", auth, method="PUT", payload=payload)
 
         if response_data.get("status") == "success":
-            modified_id = response_data.get('data', {}).get('order_id')
+            modified_id = response_data.get("data", {}).get("order_id")
             logger.info(f"Successfully modified order. New Order ID: {modified_id}")
             return {"status": "success", "orderid": modified_id}, 200
         else:
@@ -316,34 +401,40 @@ def cancel_all_orders_api(data, auth):
     logger.info("Attempting to cancel all open orders.")
     try:
         order_book_response = get_order_book(auth)
-        if order_book_response.get('status') != 'success':
-            logger.error(f"Failed to retrieve order book to cancel orders: {order_book_response.get('message')}")
+        if order_book_response.get("status") != "success":
+            logger.error(
+                f"Failed to retrieve order book to cancel orders: {order_book_response.get('message')}"
+            )
             return [], []
 
         orders_to_cancel = [
-            order for order in order_book_response.get('data', [])
-            if order.get('status') in ['open', 'trigger pending']
+            order
+            for order in order_book_response.get("data", [])
+            if order.get("status") in ["open", "trigger pending"]
         ]
 
         if not orders_to_cancel:
             logger.info("No open orders to cancel.")
             return [], []
 
-        logger.debug(f"Found {len(orders_to_cancel)} orders to cancel: {[o['order_id'] for o in orders_to_cancel]}")
+        logger.debug(
+            f"Found {len(orders_to_cancel)} orders to cancel: {[o['order_id'] for o in orders_to_cancel]}"
+        )
         canceled_orders, failed_cancellations = [], []
 
         for order in orders_to_cancel:
-            orderid = order['order_id']
+            orderid = order["order_id"]
             cancel_response, status_code = cancel_order(orderid, auth)
             if status_code == 200:
                 canceled_orders.append(orderid)
             else:
                 failed_cancellations.append(orderid)
-        
-        logger.info(f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders.")
+
+        logger.info(
+            f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders."
+        )
         return canceled_orders, failed_cancellations
 
-    except Exception as e:
+    except Exception:
         logger.exception("An error occurred while canceling all orders.")
         return [], []
-

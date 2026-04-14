@@ -1,12 +1,14 @@
 # blueprints/logging.py
 
 from flask import Blueprint, render_template
-from utils.session import check_session_validity
+
 from limiter import limiter
+from utils.session import check_session_validity
 
-logging_bp = Blueprint('logging_bp', __name__, url_prefix='/logging')
+logging_bp = Blueprint("logging_bp", __name__, url_prefix="/logging")
 
-@logging_bp.route('/')
+
+@logging_bp.route("/")
 @check_session_validity
 @limiter.limit("60/minute")
 def logging_dashboard():
@@ -19,4 +21,4 @@ def logging_dashboard():
     - Latency Monitor
     - Security Logs
     """
-    return render_template('logging.html')
+    return render_template("logging.html")

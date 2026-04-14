@@ -1,28 +1,29 @@
 import logging
 
+
 class PaytmExchangeMapper:
     """Maps OpenAlgo exchange codes to Paytm-specific exchange types"""
 
     # Exchange type mapping for Paytm broker
     # Based on Paytm API documentation
     EXCHANGE_TYPES = {
-        'NSE': 'NSE',    # NSE Cash Market
-        'NFO': 'NFO',    # NSE Futures & Options
-        'BSE': 'BSE',    # BSE Cash Market
-        'BFO': 'BFO',    # BSE F&O (not explicitly mentioned but following pattern)
-        'MCX': 'MCX',    # MCX (not explicitly mentioned in docs)
-        'CDS': 'CDS',    # Currency derivatives (not explicitly mentioned)
-        'NSE_INDEX': 'NSE',  # NSE Index
-        'BSE_INDEX': 'BSE'   # BSE Index
+        "NSE": "NSE",  # NSE Cash Market
+        "NFO": "NFO",  # NSE Futures & Options
+        "BSE": "BSE",  # BSE Cash Market
+        "BFO": "BFO",  # BSE F&O (not explicitly mentioned but following pattern)
+        "MCX": "MCX",  # MCX (not explicitly mentioned in docs)
+        "CDS": "CDS",  # Currency derivatives (not explicitly mentioned)
+        "NSE_INDEX": "NSE",  # NSE Index
+        "BSE_INDEX": "BSE",  # BSE Index
     }
 
     # ScripType mapping for Paytm
     SCRIP_TYPES = {
-        'INDEX': 'INDEX',
-        'EQUITY': 'EQUITY',
-        'ETF': 'ETF',
-        'FUTURE': 'FUTURE',
-        'OPTION': 'OPTION'
+        "INDEX": "INDEX",
+        "EQUITY": "EQUITY",
+        "ETF": "ETF",
+        "FUTURE": "FUTURE",
+        "OPTION": "OPTION",
     }
 
     @staticmethod
@@ -36,7 +37,9 @@ class PaytmExchangeMapper:
         Returns:
             str: Paytm-specific exchange type
         """
-        return PaytmExchangeMapper.EXCHANGE_TYPES.get(exchange, 'NSE')  # Default to NSE if not found
+        return PaytmExchangeMapper.EXCHANGE_TYPES.get(
+            exchange, "NSE"
+        )  # Default to NSE if not found
 
     @staticmethod
     def get_scrip_type(instrument_type):
@@ -51,15 +54,15 @@ class PaytmExchangeMapper:
         """
         # Map common instrument types to Paytm scrip types
         type_mapping = {
-            'EQ': 'EQUITY',
-            'INDEX': 'INDEX',
-            'ETF': 'ETF',
-            'FUTIDX': 'FUTURE',
-            'FUTSTK': 'FUTURE',
-            'OPTIDX': 'OPTION',
-            'OPTSTK': 'OPTION',
+            "EQ": "EQUITY",
+            "INDEX": "INDEX",
+            "ETF": "ETF",
+            "FUTIDX": "FUTURE",
+            "FUTSTK": "FUTURE",
+            "OPTIDX": "OPTION",
+            "OPTSTK": "OPTION",
         }
-        return type_mapping.get(instrument_type, 'EQUITY')
+        return type_mapping.get(instrument_type, "EQUITY")
 
 
 class PaytmCapabilityRegistry:
@@ -69,19 +72,19 @@ class PaytmCapabilityRegistry:
     """
 
     # Paytm broker capabilities based on API documentation
-    exchanges = ['NSE', 'BSE', 'NFO', 'BFO']
+    exchanges = ["NSE", "BSE", "NFO", "BFO"]
 
     # Paytm supports 3 modes: LTP, QUOTE, FULL
     subscription_modes = [1, 2, 3]  # 1: LTP, 2: QUOTE, 3: FULL
 
     # Paytm provides 5 levels of market depth in FULL mode
     depth_support = {
-        'NSE': [5],   # NSE supports 5 levels
-        'BSE': [5],   # BSE supports 5 levels
-        'NFO': [5],   # NFO supports 5 levels
-        'BFO': [5],   # BFO supports 5 levels
-        'MCX': [5],   # MCX supports 5 levels
-        'CDS': [5]    # CDS supports 5 levels
+        "NSE": [5],  # NSE supports 5 levels
+        "BSE": [5],  # BSE supports 5 levels
+        "NFO": [5],  # NFO supports 5 levels
+        "BFO": [5],  # BFO supports 5 levels
+        "MCX": [5],  # MCX supports 5 levels
+        "CDS": [5],  # CDS supports 5 levels
     }
 
     @classmethod

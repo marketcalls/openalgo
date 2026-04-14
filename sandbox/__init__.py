@@ -18,4 +18,4 @@ Key Features:
 - Self-hosted, transparent, open-source testing environment
 """
 
-__version__ = '1.0.0'
+__version__ = "1.0.0"

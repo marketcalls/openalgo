@@ -1,0 +1,18 @@
+meta {
+  name: CancelAllOrder
+  type: http
+  seq: 5
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/cancelallorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Strategy"
+  }
+}

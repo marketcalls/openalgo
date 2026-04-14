@@ -1,7 +1,8 @@
-from openalgo import api
-from apscheduler.schedulers.background import BackgroundScheduler
-import pytz
 import time
+
+import pytz
+from apscheduler.schedulers.background import BackgroundScheduler
+from openalgo import api
 
 print("🔁 OpenAlgo Python Bot is running.")
 
@@ -10,7 +11,7 @@ print("🔁 OpenAlgo Python Bot is running.")
 # =====================================
 client = api(
     api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
-    host="http://127.0.0.1:5000"
+    host="http://127.0.0.1:5000",
 )
 
 NIFTY_LOT = 75
@@ -29,14 +30,14 @@ def place_stoploss_order(symbol, sl_trigger, quantity):
     response = client.placeorder(
         strategy="NIFTY_09DEC25_STOPLOSS",
         symbol=symbol,
-        action="BUY",                      # BUY to exit short position
+        action="BUY",  # BUY to exit short position
         exchange="NFO",
-        price_type="SL",                   # STOPLOSS-LIMIT order
+        price_type="SL",  # STOPLOSS-LIMIT order
         product="NRML",
         quantity=str(quantity),
         price=str(sl_price),
         trigger_price=str(sl_trigger),
-        disclosed_quantity="0"
+        disclosed_quantity="0",
     )
 
     print("SL ORDER RESPONSE:", response)
@@ -47,7 +48,6 @@ def place_stoploss_order(symbol, sl_trigger, quantity):
 # MAIN STRATEGY: ENTRY + STOPLOSS
 # =====================================
 def place_nifty_straddle_with_sl():
-
     print("\n🔥 Scheduled Trigger — Placing NIFTY Straddle...")
 
     # STEP 1 — Fetch NIFTY quote
@@ -70,7 +70,7 @@ def place_nifty_straddle_with_sl():
                 "expiry_date": "09DEC25",
                 "product": "NRML",
                 "pricetype": "MARKET",
-                "splitsize": 0
+                "splitsize": 0,
             },
             {
                 "offset": "ATM",
@@ -80,9 +80,9 @@ def place_nifty_straddle_with_sl():
                 "expiry_date": "09DEC25",
                 "product": "NRML",
                 "pricetype": "MARKET",
-                "splitsize": 0
-            }
-        ]
+                "splitsize": 0,
+            },
+        ],
     )
 
     print("ENTRY ORDER RESPONSE:", entry)
@@ -117,17 +117,9 @@ def place_nifty_straddle_with_sl():
     print(f"PE SL Trigger = {pe_sl_trigger}")
 
     # STEP 6 — Place SL Orders using only placeorder
-    place_stoploss_order(
-        symbol=ce_symbol,
-        sl_trigger=ce_sl_trigger,
-        quantity=qty
-    )
+    place_stoploss_order(symbol=ce_symbol, sl_trigger=ce_sl_trigger, quantity=qty)
 
-    place_stoploss_order(
-        symbol=pe_symbol,
-        sl_trigger=pe_sl_trigger,
-        quantity=qty
-    )
+    place_stoploss_order(symbol=pe_symbol, sl_trigger=pe_sl_trigger, quantity=qty)
 
     print("\n🎯 All Stoploss Orders Placed Successfully.")
 
@@ -145,7 +137,7 @@ def schedule_straddle():
         day_of_week="mon-sun",
         hour=20,
         minute=49,
-        id="nifty_straddle_0920"
+        id="nifty_straddle_0920",
     )
 
     scheduler.start()

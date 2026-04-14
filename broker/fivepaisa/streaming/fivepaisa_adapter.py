@@ -1,24 +1,24 @@
-import threading
 import json
 import logging
-import time
 import os
 import re
+import sys
+import threading
+import time
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from broker.fivepaisa.streaming.fivepaisa_websocket import FivePaisaWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 
-import sys
-
 # Add parent directory to path to allow imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
-from .fivepaisa_mapping import FivePaisaExchangeMapper, FivePaisaCapabilityRegistry
+
+from .fivepaisa_mapping import FivePaisaCapabilityRegistry, FivePaisaExchangeMapper
 
 
 class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -38,7 +38,9 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.last_snapshot = {}  # Store last known values for each token
 
-    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
+    def initialize(
+        self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
+    ) -> None:
         """
         Initialize connection with 5Paisa WebSocket API
 
@@ -64,16 +66,18 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Get client_id from BROKER_API_KEY environment variable
             # Format: api_key:::user_id:::client_id
-            broker_api_key = os.getenv('BROKER_API_KEY')
+            broker_api_key = os.getenv("BROKER_API_KEY")
             if broker_api_key:
                 try:
-                    parts = broker_api_key.split(':::')
+                    parts = broker_api_key.split(":::")
                     if len(parts) >= 3:
                         client_code = parts[2]  # client_id is the third part
                         self.logger.debug(f"Using client_code from BROKER_API_KEY: {client_code}")
                     else:
                         client_code = user_id
-                        self.logger.warning(f"BROKER_API_KEY format incorrect, using user_id as client_code")
+                        self.logger.warning(
+                            "BROKER_API_KEY format incorrect, using user_id as client_code"
+                        )
                 except Exception as e:
                     self.logger.error(f"Error parsing BROKER_API_KEY: {e}")
                     client_code = user_id
@@ -82,18 +86,15 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning("BROKER_API_KEY not found, using user_id as client_code")
         else:
             # Use provided tokens
-            access_token = auth_data.get('access_token')
-            client_code = auth_data.get('client_code', user_id)
+            access_token = auth_data.get("access_token")
+            client_code = auth_data.get("client_code", user_id)
 
             if not access_token:
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
         # Create FivePaisaWebSocket instance
-        self.ws_client = FivePaisaWebSocket(
-            access_token=access_token,
-            client_code=client_code
-        )
+        self.ws_client = FivePaisaWebSocket(access_token=access_token, client_code=client_code)
 
         # Set callbacks
         self.ws_client.on_open = self._on_open
@@ -116,14 +117,18 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Connect to 5Paisa WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
-                self.logger.info(f"Connecting to 5Paisa WebSocket (attempt {self.reconnect_attempts + 1})")
+                self.logger.info(
+                    f"Connecting to 5Paisa WebSocket (attempt {self.reconnect_attempts + 1})"
+                )
                 self.ws_client.connect()
                 self.reconnect_attempts = 0  # Reset attempts on successful connection
                 break
 
             except Exception as e:
                 self.reconnect_attempts += 1
-                delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
+                delay = min(
+                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+                )
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
                 time.sleep(delay)
 
@@ -133,13 +138,15 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from 5Paisa WebSocket"""
         self.running = False
-        if hasattr(self, 'ws_client') and self.ws_client:
+        if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
 
-    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
+    def subscribe(
+        self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
+    ) -> dict[str, Any]:
         """
         Subscribe to market data with 5Paisa-specific implementation
 
@@ -154,33 +161,32 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         # Validate the mode
         if mode not in [1, 2, 3]:
-            return self._create_error_response("INVALID_MODE",
-                                              f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
+            return self._create_error_response(
+                "INVALID_MODE", f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)"
+            )
 
         # If depth mode, check if supported depth level
         if mode == 3 and depth_level not in [5]:
-            return self._create_error_response("INVALID_DEPTH",
-                                              f"Invalid depth level {depth_level}. 5Paisa only supports 5 levels")
+            return self._create_error_response(
+                "INVALID_DEPTH", f"Invalid depth level {depth_level}. 5Paisa only supports 5 levels"
+            )
 
         # Map symbol to token using symbol mapper
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND",
-                                              f"Symbol {symbol} not found for exchange {exchange}")
+            return self._create_error_response(
+                "SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}"
+            )
 
-        token = token_info['token']
-        brexchange = token_info['brexchange']
+        token = token_info["token"]
+        brexchange = token_info["brexchange"]
 
         # Get 5Paisa-specific exchange code and type
         exch_code = FivePaisaExchangeMapper.get_exchange_code(brexchange)
         exch_type = FivePaisaExchangeMapper.get_exchange_type(brexchange)
 
         # Create scrip data for 5Paisa API
-        scrip_data = [{
-            "Exch": exch_code,
-            "ExchType": exch_type,
-            "ScripCode": int(token)
-        }]
+        scrip_data = [{"Exch": exch_code, "ExchType": exch_type, "ScripCode": int(token)}]
 
         # Get the appropriate method for the mode
         method = FivePaisaCapabilityRegistry.get_method_for_mode(mode)
@@ -193,20 +199,22 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Store subscription for reconnection
         with self.lock:
             self.subscriptions[correlation_id] = {
-                'symbol': symbol,
-                'exchange': exchange,
-                'brexchange': brexchange,
-                'token': token,
-                'mode': mode,
-                'depth_level': depth_level,
-                'method': method,
-                'scrip_data': scrip_data
+                "symbol": symbol,
+                "exchange": exchange,
+                "brexchange": brexchange,
+                "token": token,
+                "mode": mode,
+                "depth_level": depth_level,
+                "method": method,
+                "scrip_data": scrip_data,
             }
 
         # Subscribe if connected
         if self.connected and self.ws_client:
             try:
-                self.logger.info(f"Subscribing to {symbol} ({exchange}/{brexchange}) - Token: {token}, Method: {method}, Exch: {exch_code}, Type: {exch_type}")
+                self.logger.info(
+                    f"Subscribing to {symbol} ({exchange}/{brexchange}) - Token: {token}, Method: {method}, Exch: {exch_code}, Type: {exch_type}"
+                )
                 self.ws_client.subscribe(method, scrip_data)
                 self.logger.info(f"Successfully sent subscription request for {symbol}.{exchange}")
             except Exception as e:
@@ -215,14 +223,14 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Return success
         return self._create_success_response(
-            'Subscription requested',
+            "Subscription requested",
             symbol=symbol,
             exchange=exchange,
             mode=mode,
-            depth_level=depth_level
+            depth_level=depth_level,
         )
 
-    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """
         Unsubscribe from market data
 
@@ -237,22 +245,19 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Map symbol to token
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND",
-                                              f"Symbol {symbol} not found for exchange {exchange}")
+            return self._create_error_response(
+                "SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}"
+            )
 
-        token = token_info['token']
-        brexchange = token_info['brexchange']
+        token = token_info["token"]
+        brexchange = token_info["brexchange"]
 
         # Get 5Paisa-specific exchange code and type
         exch_code = FivePaisaExchangeMapper.get_exchange_code(brexchange)
         exch_type = FivePaisaExchangeMapper.get_exchange_type(brexchange)
 
         # Create scrip data
-        scrip_data = [{
-            "Exch": exch_code,
-            "ExchType": exch_type,
-            "ScripCode": int(token)
-        }]
+        scrip_data = [{"Exch": exch_code, "ExchType": exch_type, "ScripCode": int(token)}]
 
         # Get the appropriate method for the mode
         method = FivePaisaCapabilityRegistry.get_method_for_mode(mode)
@@ -274,10 +279,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
 
         return self._create_success_response(
-            f"Unsubscribed from {symbol}.{exchange}",
-            symbol=symbol,
-            exchange=exchange,
-            mode=mode
+            f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
         )
 
     def _on_open(self, wsapp) -> None:
@@ -292,7 +294,9 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.ws_client.subscribe(sub["method"], sub["scrip_data"])
                     self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
                 except Exception as e:
-                    self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
+                    self.logger.error(
+                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
+                    )
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
@@ -311,20 +315,20 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback for text messages from the WebSocket"""
         self.logger.debug(f"Received message: {message}")
 
-    def _on_data(self, wsapp, message: Dict) -> None:
+    def _on_data(self, wsapp, message: dict) -> None:
         """Callback for market data from the WebSocket"""
         try:
             self.logger.debug(f"RAW 5PAISA DATA: {message}")
 
             # Extract token from message
-            token = str(message.get('Token'))
+            token = str(message.get("Token"))
 
             # Find ALL subscriptions that match this token
             # Fivepaisa sends one message that should update all modes subscribed to that token
             matching_subscriptions = []
             with self.lock:
                 for sub in self.subscriptions.values():
-                    if str(sub['token']) == token:
+                    if str(sub["token"]) == token:
                         matching_subscriptions.append(sub)
 
             if not matching_subscriptions:
@@ -334,11 +338,11 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Publish data to ALL matching subscriptions
             for subscription in matching_subscriptions:
                 # Create topic for ZeroMQ
-                symbol = subscription['symbol']
-                exchange = subscription['exchange']
-                mode = subscription['mode']
+                symbol = subscription["symbol"]
+                exchange = subscription["exchange"]
+                mode = subscription["mode"]
 
-                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+                mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}[mode]
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
                 # Apply snapshot logic - merge current message with last known values
@@ -349,15 +353,19 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 market_data = self._normalize_market_data(message_with_snapshot, mode)
 
                 # Add metadata
-                market_data.update({
-                    'symbol': symbol,
-                    'exchange': exchange,
-                    'mode': mode,
-                    'timestamp': int(time.time() * 1000)  # Current timestamp in ms
-                })
+                market_data.update(
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "mode": mode,
+                        "timestamp": int(time.time() * 1000),  # Current timestamp in ms
+                    }
+                )
 
                 # Log the market data we're sending
-                self.logger.debug(f"Publishing to topic '{topic}': symbol={symbol}, exchange={exchange}, mode={mode}, ltp={market_data.get('ltp', 'N/A')}")
+                self.logger.debug(
+                    f"Publishing to topic '{topic}': symbol={symbol}, exchange={exchange}, mode={mode}, ltp={market_data.get('ltp', 'N/A')}"
+                )
                 self.logger.debug(f"Full market data: {market_data}")
 
                 # Publish to ZeroMQ
@@ -366,7 +374,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
 
-    def _apply_snapshot(self, message: Dict, token_key: str) -> Dict[str, Any]:
+    def _apply_snapshot(self, message: dict, token_key: str) -> dict[str, Any]:
         """
         Apply snapshot logic - merge current message with last known values.
         If current value is 0, use the last known non-zero value.
@@ -380,8 +388,14 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         # Fields that should use snapshot logic (hold last value if current is 0)
         snapshot_fields = [
-            'LastRate', 'OpenRate', 'High', 'Low', 'PClose',
-            'BidRate', 'OffRate', 'AvgRate'
+            "LastRate",
+            "OpenRate",
+            "High",
+            "Low",
+            "PClose",
+            "BidRate",
+            "OffRate",
+            "AvgRate",
         ]
 
         # Get last snapshot for this token
@@ -407,7 +421,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         return merged_message
 
-    def _normalize_market_data(self, message: Dict, mode: int) -> Dict[str, Any]:
+    def _normalize_market_data(self, message: dict, mode: int) -> dict[str, Any]:
         """
         Normalize broker-specific data format to a common format
 
@@ -420,44 +434,44 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         if mode == 1:  # LTP mode
             return {
-                'ltp': message.get('LastRate', 0),
-                'ltt': self._parse_fivepaisa_time(message.get('TickDt', ''))
+                "ltp": message.get("LastRate", 0),
+                "ltt": self._parse_fivepaisa_time(message.get("TickDt", "")),
             }
         elif mode == 2:  # Quote mode
             return {
-                'ltp': message.get('LastRate', 0),
-                'ltt': self._parse_fivepaisa_time(message.get('TickDt', '')),
-                'volume': message.get('TotalQty', 0),
-                'open': message.get('OpenRate', 0),
-                'high': message.get('High', 0),
-                'low': message.get('Low', 0),
-                'close': message.get('PClose', 0),
-                'last_trade_quantity': message.get('LastQty', 0),
-                'average_price': message.get('AvgRate', 0),
-                'total_buy_quantity': message.get('TBidQ', 0),
-                'total_sell_quantity': message.get('TOffQ', 0),
-                'bid_price': message.get('BidRate', 0),
-                'bid_quantity': message.get('BidQty', 0),
-                'ask_price': message.get('OffRate', 0),
-                'ask_quantity': message.get('OffQty', 0)
+                "ltp": message.get("LastRate", 0),
+                "ltt": self._parse_fivepaisa_time(message.get("TickDt", "")),
+                "volume": message.get("TotalQty", 0),
+                "open": message.get("OpenRate", 0),
+                "high": message.get("High", 0),
+                "low": message.get("Low", 0),
+                "close": message.get("PClose", 0),
+                "last_trade_quantity": message.get("LastQty", 0),
+                "average_price": message.get("AvgRate", 0),
+                "total_buy_quantity": message.get("TBidQ", 0),
+                "total_sell_quantity": message.get("TOffQ", 0),
+                "bid_price": message.get("BidRate", 0),
+                "bid_quantity": message.get("BidQty", 0),
+                "ask_price": message.get("OffRate", 0),
+                "ask_quantity": message.get("OffQty", 0),
             }
         elif mode == 3:  # Depth mode (MarketDepthService)
             result = {
-                'ltp': message.get('LastRate', 0),
-                'total_buy_quantity': message.get('TBidQ', 0),
-                'total_sell_quantity': message.get('TOffQ', 0),
-                'timestamp': message.get('Time', '')
+                "ltp": message.get("LastRate", 0),
+                "total_buy_quantity": message.get("TBidQ", 0),
+                "total_sell_quantity": message.get("TOffQ", 0),
+                "timestamp": message.get("Time", ""),
             }
 
             # Add depth data if available
-            if 'Details' in message:
-                result['depth'] = self._extract_depth_data(message['Details'])
+            if "Details" in message:
+                result["depth"] = self._extract_depth_data(message["Details"])
 
             return result
         else:
             return {}
 
-    def _extract_depth_data(self, details: List[Dict]) -> Dict[str, List[Dict[str, Any]]]:
+    def _extract_depth_data(self, details: list[dict]) -> dict[str, list[dict[str, Any]]]:
         """
         Extract depth data from 5Paisa's message format
 
@@ -471,11 +485,11 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         sell_depth = []
 
         for detail in details:
-            flag = detail.get('BbBuySellFlag', 0)
+            flag = detail.get("BbBuySellFlag", 0)
             depth_item = {
-                'price': detail.get('Price', 0),
-                'quantity': detail.get('Quantity', 0),
-                'orders': detail.get('NumberOfOrders', 0)
+                "price": detail.get("Price", 0),
+                "quantity": detail.get("Quantity", 0),
+                "orders": detail.get("NumberOfOrders", 0),
             }
 
             # BbBuySellFlag: 66 (ASCII 'B') = Buy, 83 (ASCII 'S') = Sell
@@ -485,8 +499,8 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 sell_depth.append(depth_item)
 
         return {
-            'buy': buy_depth[:5],  # Limit to 5 levels
-            'sell': sell_depth[:5]  # Limit to 5 levels
+            "buy": buy_depth[:5],  # Limit to 5 levels
+            "sell": sell_depth[:5],  # Limit to 5 levels
         }
 
     def _parse_fivepaisa_time(self, time_str: str) -> int:
@@ -504,7 +518,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         try:
             # Extract timestamp from /Date(timestamp)/ format
-            match = re.search(r'/Date\((\d+)', time_str)
+            match = re.search(r"/Date\((\d+)", time_str)
             if match:
                 return int(match.group(1))
             return 0

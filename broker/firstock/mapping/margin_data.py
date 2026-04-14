@@ -5,6 +5,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 def transform_margin_position(position, user_id):
     """
     Transform a single OpenAlgo margin position to broker format.
@@ -21,6 +22,7 @@ def transform_margin_position(position, user_id):
     """
     raise NotImplementedError("Firstock does not support position-specific margin calculator API")
 
+
 def parse_margin_response(response_data):
     """
     Parse broker margin calculator response to OpenAlgo standard format.
@@ -35,6 +37,7 @@ def parse_margin_response(response_data):
         NotImplementedError: Firstock does not support position-specific margin calculator API
     """
     raise NotImplementedError("Firstock does not support position-specific margin calculator API")
+
 
 def parse_batch_margin_response(responses):
     """

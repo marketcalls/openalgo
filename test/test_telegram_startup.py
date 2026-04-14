@@ -1,40 +1,41 @@
+import asyncio
 import os
 import sys
 import time
-import asyncio
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add project root to path to allow top-level imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Set a dummy env var for db before other imports
-os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
-os.environ['APP_KEY'] = 'test-key'
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["APP_KEY"] = "test-key"
 
 # Monkey patch for eventlet simulation
 import eventlet
+
 eventlet.monkey_patch()
 
 # Now import the service, it will see the patched environment
 from services.telegram_bot_service import TelegramBotService
 
-class TestTelegramBotStartup(unittest.TestCase):
 
+class TestTelegramBotStartup(unittest.TestCase):
     def setUp(self):
         """Set up mocks for database and external API calls."""
         # Reset the service instance to ensure clean state for each test
         self.service = TelegramBotService()
 
         # Mock database functions
-        self.get_bot_config_patch = patch('services.telegram_bot_service.get_bot_config')
-        self.update_bot_config_patch = patch('services.telegram_bot_service.update_bot_config')
+        self.get_bot_config_patch = patch("services.telegram_bot_service.get_bot_config")
+        self.update_bot_config_patch = patch("services.telegram_bot_service.update_bot_config")
 
         self.mock_get_bot_config = self.get_bot_config_patch.start()
         self.mock_update_bot_config = self.update_bot_config_patch.start()
 
         # Mock the telegram Application and its methods
-        self.app_builder_patch = patch('telegram.ext.Application.builder')
+        self.app_builder_patch = patch("telegram.ext.Application.builder")
         self.mock_app_builder = self.app_builder_patch.start()
 
         mock_app = MagicMock()
@@ -58,12 +59,17 @@ class TestTelegramBotStartup(unittest.TestCase):
         mock_updater.stop = AsyncMock(return_value=None)
 
         # Mock the synchronous request for token validation
-        self.requests_get_patch = patch('requests.get')
+        self.requests_get_patch = patch("requests.get")
         self.mock_requests_get = self.requests_get_patch.start()
         self.mock_requests_get.return_value.status_code = 200
         self.mock_requests_get.return_value.json.return_value = {
-            'ok': True,
-            'result': {'id': 12345, 'is_bot': True, 'first_name': 'Test Bot', 'username': 'TestBot'}
+            "ok": True,
+            "result": {
+                "id": 12345,
+                "is_bot": True,
+                "first_name": "Test Bot",
+                "username": "TestBot",
+            },
         }
 
     def tearDown(self):
@@ -80,10 +86,10 @@ class TestTelegramBotStartup(unittest.TestCase):
         Verify that the bot starts and stops without event loop errors
         in a simulated eventlet environment.
         """
-        self.mock_get_bot_config.return_value = {'bot_token': 'dummy_token', 'is_active': True}
+        self.mock_get_bot_config.return_value = {"bot_token": "dummy_token", "is_active": True}
 
         # 1. Initialize the bot
-        success, msg = self.service.initialize_bot_sync(token='dummy_token')
+        success, msg = self.service.initialize_bot_sync(token="dummy_token")
         self.assertTrue(success, f"Bot initialization failed: {msg}")
 
         # 2. Start the bot
@@ -101,5 +107,6 @@ class TestTelegramBotStartup(unittest.TestCase):
             self.service.bot_thread.join(timeout=2)
             self.assertFalse(self.service.bot_thread.is_alive(), "Bot thread did not terminate")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

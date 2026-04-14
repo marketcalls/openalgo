@@ -10,19 +10,17 @@
 # OpenAlgo GitHub: https://github.com/marketcalls/openalgo
 # ---------------------------------------------------
 
-from openalgo import api
-import pandas as pd
-import numpy as np
-import plotly.express as px
 from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+from openalgo import api
 
 # ---------------------------------------------------
 # Initialize OpenAlgo Client
 # ---------------------------------------------------
-client = api(
-    api_key="your_api_key_here",
-    host="http://127.0.0.1:5000"
-)
+client = api(api_key="your_api_key_here", host="http://127.0.0.1:5000")
 
 print("🔁 OpenAlgo Python Bot is running.")
 
@@ -30,17 +28,60 @@ print("🔁 OpenAlgo Python Bot is running.")
 # NIFTY 50 SYMBOLS
 # ---------------------------------------------------
 symbols = [
-    "INDIGO", "TRENT", "HINDUNILVR", "HCLTECH", "WIPRO", "INFY", "TATACONSUM",
-    "TATASTEEL", "ITC", "ASIANPAINT", "SBILIFE", "LT", "SHRIRAMFIN", "BEL", "SBIN",
-    "COALINDIA", "KOTAKBANK", "TCS", "SUNPHARMA", "MAXHEALTH", "NESTLEIND",
-    "RELIANCE", "ETERNAL", "APOLLOHOSP", "ICICIBANK", "GRASIM", "ULTRACEMCO",
-    "ADANIENT", "AXISBANK", "DRREDDY", "TECHM", "TMPV", "JIOFIN", "NTPC",
-    "BAJFINANCE", "BHARTIARTL", "POWERGRID", "HINDALCO", "HDFCBANK", "TITAN",
-    "HDFCLIFE", "MARUTI", "BAJAJFINSV", "ADANIPORTS", "CIPLA", "JSWSTEEL",
-    "BAJAJ-AUTO", "ONGC", "EICHERMOT", "M&M"
+    "INDIGO",
+    "TRENT",
+    "HINDUNILVR",
+    "HCLTECH",
+    "WIPRO",
+    "INFY",
+    "TATACONSUM",
+    "TATASTEEL",
+    "ITC",
+    "ASIANPAINT",
+    "SBILIFE",
+    "LT",
+    "SHRIRAMFIN",
+    "BEL",
+    "SBIN",
+    "COALINDIA",
+    "KOTAKBANK",
+    "TCS",
+    "SUNPHARMA",
+    "MAXHEALTH",
+    "NESTLEIND",
+    "RELIANCE",
+    "ETERNAL",
+    "APOLLOHOSP",
+    "ICICIBANK",
+    "GRASIM",
+    "ULTRACEMCO",
+    "ADANIENT",
+    "AXISBANK",
+    "DRREDDY",
+    "TECHM",
+    "TMPV",
+    "JIOFIN",
+    "NTPC",
+    "BAJFINANCE",
+    "BHARTIARTL",
+    "POWERGRID",
+    "HINDALCO",
+    "HDFCBANK",
+    "TITAN",
+    "HDFCLIFE",
+    "MARUTI",
+    "BAJAJFINSV",
+    "ADANIPORTS",
+    "CIPLA",
+    "JSWSTEEL",
+    "BAJAJ-AUTO",
+    "ONGC",
+    "EICHERMOT",
+    "M&M",
 ]
 
 TRADING_DAYS_PER_YEAR = 252
+
 
 # ---------------------------------------------------
 # CAGR Calculation (matching TradingView logic)
@@ -73,7 +114,7 @@ for symbol in symbols:
             exchange="NSE",
             interval="D",
             start_date=start_date.strftime("%Y-%m-%d"),
-            end_date=end_date.strftime("%Y-%m-%d")
+            end_date=end_date.strftime("%Y-%m-%d"),
         )
 
         if not isinstance(df, pd.DataFrame) or df.empty:
@@ -110,7 +151,9 @@ for symbol in symbols:
         abs_1y_str = f"{abs_1y:7.2f}%" if not pd.isna(abs_1y) else "N/A"
         cagr_3y_str = f"{cagr_3y:7.2f}%" if not pd.isna(cagr_3y) else "N/A"
         cagr_5y_str = f"{cagr_5y:7.2f}%" if not pd.isna(cagr_5y) else "N/A"
-        print(f"{symbol:12s} | 1Y: {abs_1y_str:>8s} | 3Y: {cagr_3y_str:>8s} | 5Y: {cagr_5y_str:>8s}")
+        print(
+            f"{symbol:12s} | 1Y: {abs_1y_str:>8s} | 3Y: {cagr_3y_str:>8s} | 5Y: {cagr_5y_str:>8s}"
+        )
 
         results.append([symbol, abs_1y, cagr_3y, cagr_5y])
 
@@ -131,7 +174,9 @@ def create_heatmap(df, period, label):
     df_period = df[["Symbol", period]].copy()
 
     # Sort by value, putting NaN at the bottom
-    df_period = df_period.sort_values(period, ascending=False, na_position='last').reset_index(drop=True)
+    df_period = df_period.sort_values(period, ascending=False, na_position="last").reset_index(
+        drop=True
+    )
 
     if df_period.empty:
         print(f"⚠️ No data for {label}")
@@ -143,23 +188,19 @@ def create_heatmap(df, period, label):
 
     # Create display text: "SYMBOL\nValue%" or "SYMBOL\nN/A"
     df_period["display_text"] = df_period.apply(
-        lambda row: f"{row['Symbol']}<br>{row[period]:.2f}%" if pd.notna(row[period]) else f"{row['Symbol']}<br>N/A",
-        axis=1
+        lambda row: f"{row['Symbol']}<br>{row[period]:.2f}%"
+        if pd.notna(row[period])
+        else f"{row['Symbol']}<br>N/A",
+        axis=1,
     )
 
     pivot_values = df_period.pivot(index="row", columns="col", values=period)
     pivot_labels = df_period.pivot(index="row", columns="col", values="display_text")
 
-    fig = px.imshow(
-        pivot_values,
-        color_continuous_scale="RdYlGn",
-        aspect="auto"
-    )
+    fig = px.imshow(pivot_values, color_continuous_scale="RdYlGn", aspect="auto")
 
     fig.update_traces(
-        text=pivot_labels.values,
-        texttemplate="%{text}",
-        hovertemplate="%{text}<extra></extra>"
+        text=pivot_labels.values, texttemplate="%{text}", hovertemplate="%{text}<extra></extra>"
     )
 
     fig.update_layout(
@@ -168,7 +209,7 @@ def create_heatmap(df, period, label):
         yaxis=dict(showticklabels=False, autorange="reversed", title=""),
         template="plotly_dark",
         height=600,
-        width=1200
+        width=1200,
     )
 
     filename = f"nifty50_{period.lower()}_heatmap.png"

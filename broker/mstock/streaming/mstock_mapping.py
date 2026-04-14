@@ -1,19 +1,20 @@
 import logging
 
+
 class MstockExchangeMapper:
     """Maps OpenAlgo exchange codes to mstock-specific exchange types"""
 
     # Exchange type mapping for mstock broker WebSocket
     # 1=NSECM, 2=NSEFO, 3=BSECM, 4=BSEFO, 13=NSECD
     EXCHANGE_TYPES = {
-        'NSE': 1,  # NSE Cash Market
-        'NFO': 2,  # NSE Futures & Options
-        'BSE': 3,  # BSE Cash Market
-        'BFO': 4,  # BSE F&O
-        'CDS': 13,  # Currency derivatives
-        'MCX': 5,  # MCX (assuming)
-        'NSE_INDEX': 1,  # NSE Index
-        'BSE_INDEX': 3  # BSE Index
+        "NSE": 1,  # NSE Cash Market
+        "NFO": 2,  # NSE Futures & Options
+        "BSE": 3,  # BSE Cash Market
+        "BFO": 4,  # BSE F&O
+        "CDS": 13,  # Currency derivatives
+        "MCX": 5,  # MCX (assuming)
+        "NSE_INDEX": 1,  # NSE Index
+        "BSE_INDEX": 3,  # BSE Index
     }
 
     @staticmethod
@@ -37,7 +38,7 @@ class MstockCapabilityRegistry:
     """
 
     # mstock broker capabilities
-    exchanges = ['NSE', 'BSE', 'BFO', 'NFO', 'MCX', 'CDS']
+    exchanges = ["NSE", "BSE", "BFO", "NFO", "MCX", "CDS"]
 
     # Available subscription modes for mstock
     # 1: LTP only
@@ -47,12 +48,12 @@ class MstockCapabilityRegistry:
 
     # Market depth support - mstock provides 5 levels for all exchanges
     depth_support = {
-        'NSE': [5],   # NSE supports 5 levels
-        'BSE': [5],   # BSE supports 5 levels
-        'BFO': [5],   # BFO supports 5 levels
-        'NFO': [5],   # NFO supports 5 levels
-        'MCX': [5],   # MCX supports 5 levels
-        'CDS': [5]    # CDS supports 5 levels
+        "NSE": [5],  # NSE supports 5 levels
+        "BSE": [5],  # BSE supports 5 levels
+        "BFO": [5],  # BFO supports 5 levels
+        "NFO": [5],  # NFO supports 5 levels
+        "MCX": [5],  # MCX supports 5 levels
+        "CDS": [5],  # CDS supports 5 levels
     }
 
     @classmethod

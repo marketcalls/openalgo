@@ -48,7 +48,7 @@ BROKER_API_SECRET_MARKET = '${BROKER_API_SECRET_MARKET:-}'
 REDIRECT_URL = '${REDIRECT_URL}'
 
 # Valid Brokers Configuration
-VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,definedge,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha}'
+VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha}'
 
 # Security Configuration
 APP_KEY = '${APP_KEY}'
@@ -96,12 +96,11 @@ LOGIN_RATE_LIMIT_HOUR = '${LOGIN_RATE_LIMIT_HOUR:-25 per hour}'
 RESET_RATE_LIMIT = '${RESET_RATE_LIMIT:-15 per hour}'
 API_RATE_LIMIT = '${API_RATE_LIMIT:-50 per second}'
 ORDER_RATE_LIMIT = '${ORDER_RATE_LIMIT:-10 per second}'
-SMART_ORDER_RATE_LIMIT = '${SMART_ORDER_RATE_LIMIT:-2 per second}'
+SMART_ORDER_RATE_LIMIT = '${SMART_ORDER_RATE_LIMIT:-10 per second}'
 WEBHOOK_RATE_LIMIT = '${WEBHOOK_RATE_LIMIT:-100 per minute}'
 STRATEGY_RATE_LIMIT = '${STRATEGY_RATE_LIMIT:-200 per minute}'
 
 # API Configuration
-SMART_ORDER_DELAY = '${SMART_ORDER_DELAY:-0.5}'
 SESSION_EXPIRY_TIME = '${SESSION_EXPIRY_TIME:-03:00}'
 
 # CORS Configuration
@@ -191,6 +190,17 @@ export PYTHONDONTWRITEBYTECODE=1
 cd /app
 
 # ============================================
+# DATABASE MIGRATIONS
+# ============================================
+# Run migrations automatically on startup (idempotent - safe to run multiple times)
+if [ -f "/app/upgrade/migrate_all.py" ]; then
+    echo "[OpenAlgo] Running database migrations..."
+    /app/.venv/bin/python /app/upgrade/migrate_all.py || echo "[OpenAlgo] Migration completed (some may have been skipped)"
+else
+    echo "[OpenAlgo] No migrations found, skipping..."
+fi
+
+# ============================================
 # WEBSOCKET PROXY SERVER
 # ============================================
 echo "[OpenAlgo] Starting WebSocket proxy server on port 8765..."
@@ -219,11 +229,17 @@ trap cleanup SIGTERM SIGINT
 APP_PORT="${PORT:-5000}"
 
 echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
+
+# Create gunicorn worker temp directory (must be inside container, not mounted volume)
+mkdir -p /tmp/gunicorn_workers
+
 exec /app/.venv/bin/gunicorn \
     --worker-class eventlet \
     --workers 1 \
     --bind 0.0.0.0:${APP_PORT} \
-    --timeout 120 \
+    --timeout 300 \
     --graceful-timeout 30 \
+    --worker-tmp-dir /tmp/gunicorn_workers \
+    --no-control-socket \
     --log-level warning \
     app:app

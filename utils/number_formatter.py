@@ -4,6 +4,7 @@ Number formatting utilities for Indian numbering system
 Formats large numbers in Crores (Cr) and Lakhs (L)
 """
 
+
 def format_indian_number(value):
     """
     Format number in Indian format with Cr/L suffixes

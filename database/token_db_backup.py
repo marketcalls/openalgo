@@ -1,12 +1,14 @@
 # Original token_db.py - Backup copy
-from database.symbol import SymToken  # Import here to avoid circular imports
 from cachetools import TTLCache
+
+from database.symbol import SymToken  # Import here to avoid circular imports
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Define a cache for the tokens, symbols with a max size and a 3600-second TTL
 token_cache = TTLCache(maxsize=1024, ttl=3600)
+
 
 def get_token(symbol, exchange):
     """
@@ -24,11 +26,12 @@ def get_token(symbol, exchange):
             token_cache[cache_key] = token
         return token
 
+
 def get_token_dbquery(symbol, exchange):
     """
     Queries the database for a token by symbol and exchange.
     """
-    
+
     try:
         sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
         if sym_token:
@@ -36,9 +39,8 @@ def get_token_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
-    
 
 
 def get_symbol(token, exchange):
@@ -57,6 +59,7 @@ def get_symbol(token, exchange):
             token_cache[cache_key] = symbol
         return symbol
 
+
 def get_symbol_dbquery(token, exchange):
     """
     Queries the database for a symbol by token and exchange.
@@ -68,7 +71,7 @@ def get_symbol_dbquery(token, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -88,6 +91,7 @@ def get_oa_symbol(symbol, exchange):
             token_cache[cache_key] = oasymbol
         return oasymbol
 
+
 def get_oa_symbol_dbquery(symbol, exchange):
     """
     Queries the database for a symbol by token and exchange.
@@ -99,8 +103,9 @@ def get_oa_symbol_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
+
 
 def get_symbol_count():
     """
@@ -110,7 +115,7 @@ def get_symbol_count():
         count = SymToken.query.count()
         return count
     except Exception as e:
-        logger.error(f"Error while counting symbols: {e}")
+        logger.exception(f"Error while counting symbols: {e}")
         return 0
 
 
@@ -130,6 +135,7 @@ def get_br_symbol(symbol, exchange):
             token_cache[cache_key] = brsymbol
         return brsymbol
 
+
 def get_br_symbol_dbquery(symbol, exchange):
     """
     Queries the database for a symbol by token and exchange.
@@ -141,8 +147,9 @@ def get_br_symbol_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
+
 
 def get_brexchange(symbol, exchange):
     """
@@ -160,6 +167,7 @@ def get_brexchange(symbol, exchange):
             token_cache[cache_key] = brexchange
         return brexchange
 
+
 def get_brexchange_dbquery(symbol, exchange):
     """
     Queries the database for a broker exchange by symbol and exchange.
@@ -171,5 +179,5 @@ def get_brexchange_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None

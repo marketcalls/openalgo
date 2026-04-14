@@ -1,0 +1,41 @@
+name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly Monday 2 AM UTC
+  workflow_dispatch:
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --dev
+
+      - name: Bandit SARIF report
+        run: |
+          uv run bandit -r . -x .venv,test,frontend,node_modules -f sarif -o bandit.sarif || true
+
+      - name: Upload Bandit results
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+      - name: pip-audit check
+        run: uv run pip-audit --format=json --output=pip-audit.json || true
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v6
+        with:
+          name: security-reports
+          path: |
+            bandit.sarif
+            pip-audit.json
+          retention-days: 30

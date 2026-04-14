@@ -1,32 +1,33 @@
 import logging
 
+
 class FivePaisaExchangeMapper:
     """Maps OpenAlgo exchange codes to 5Paisa-specific exchange codes"""
 
     # Exchange mapping for 5Paisa broker
     # N = NSE, B = BSE, M = MCX
     EXCHANGE_MAP = {
-        'NSE': 'N',
-        'BSE': 'B',
-        'MCX': 'M',
-        'NFO': 'N',  # NFO uses NSE exchange code
-        'BFO': 'B',  # BFO uses BSE exchange code
-        'CDS': 'N',  # Currency uses NSE
-        'NSE_INDEX': 'N',  # NSE indices use NSE exchange code
-        'BSE_INDEX': 'B',  # BSE indices use BSE exchange code
+        "NSE": "N",
+        "BSE": "B",
+        "MCX": "M",
+        "NFO": "N",  # NFO uses NSE exchange code
+        "BFO": "B",  # BFO uses BSE exchange code
+        "CDS": "N",  # Currency uses NSE
+        "NSE_INDEX": "N",  # NSE indices use NSE exchange code
+        "BSE_INDEX": "B",  # BSE indices use BSE exchange code
     }
 
     # Exchange Type mapping for 5Paisa
     # C = Cash, D = Derivatives, U = Currency
     EXCHANGE_TYPE_MAP = {
-        'NSE': 'C',     # NSE Cash
-        'BSE': 'C',     # BSE Cash
-        'NFO': 'D',     # NSE F&O
-        'BFO': 'D',     # BSE F&O
-        'MCX': 'D',     # MCX Commodities
-        'CDS': 'U',     # Currency Derivatives
-        'NSE_INDEX': 'C',  # NSE indices use Cash type
-        'BSE_INDEX': 'C',  # BSE indices use Cash type
+        "NSE": "C",  # NSE Cash
+        "BSE": "C",  # BSE Cash
+        "NFO": "D",  # NSE F&O
+        "BFO": "D",  # BSE F&O
+        "MCX": "D",  # MCX Commodities
+        "CDS": "U",  # Currency Derivatives
+        "NSE_INDEX": "C",  # NSE indices use Cash type
+        "BSE_INDEX": "C",  # BSE indices use Cash type
     }
 
     @staticmethod
@@ -40,7 +41,7 @@ class FivePaisaExchangeMapper:
         Returns:
             str: 5Paisa exchange code ('N', 'B', 'M')
         """
-        return FivePaisaExchangeMapper.EXCHANGE_MAP.get(exchange.upper(), 'N')
+        return FivePaisaExchangeMapper.EXCHANGE_MAP.get(exchange.upper(), "N")
 
     @staticmethod
     def get_exchange_type(exchange: str) -> str:
@@ -53,7 +54,7 @@ class FivePaisaExchangeMapper:
         Returns:
             str: 5Paisa exchange type ('C', 'D', 'U')
         """
-        return FivePaisaExchangeMapper.EXCHANGE_TYPE_MAP.get(exchange.upper(), 'C')
+        return FivePaisaExchangeMapper.EXCHANGE_TYPE_MAP.get(exchange.upper(), "C")
 
 
 class FivePaisaCapabilityRegistry:
@@ -63,7 +64,7 @@ class FivePaisaCapabilityRegistry:
     """
 
     # 5Paisa broker capabilities
-    exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS']
+    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"]
 
     # Subscription modes:
     # 1: LTP (MarketFeedV3 with basic data)
@@ -73,20 +74,13 @@ class FivePaisaCapabilityRegistry:
 
     # Market depth support
     # 5Paisa supports only 5 levels of market depth for all exchanges
-    depth_support = {
-        'NSE': [5],
-        'BSE': [5],
-        'NFO': [5],
-        'BFO': [5],
-        'MCX': [5],
-        'CDS': [5]
-    }
+    depth_support = {"NSE": [5], "BSE": [5], "NFO": [5], "BFO": [5], "MCX": [5], "CDS": [5]}
 
     # Method mapping for different data types
     METHOD_MAP = {
-        'market_feed': 'MarketFeedV3',
-        'market_depth': 'MarketDepthService',
-        'oi': 'GetScripInfoForFuture'
+        "market_feed": "MarketFeedV3",
+        "market_depth": "MarketDepthService",
+        "oi": "GetScripInfoForFuture",
     }
 
     @classmethod
@@ -144,11 +138,11 @@ class FivePaisaCapabilityRegistry:
             str: Method name (MarketFeedV3, MarketDepthService)
         """
         if mode in [1, 2]:
-            return cls.METHOD_MAP['market_feed']
+            return cls.METHOD_MAP["market_feed"]
         elif mode == 3:
-            return cls.METHOD_MAP['market_depth']
+            return cls.METHOD_MAP["market_depth"]
         else:
-            return cls.METHOD_MAP['market_feed']
+            return cls.METHOD_MAP["market_feed"]
 
     @classmethod
     def supports_oi(cls, exchange: str) -> bool:
@@ -161,4 +155,4 @@ class FivePaisaCapabilityRegistry:
         Returns:
             bool: True if OI is supported (for derivatives exchanges)
         """
-        return exchange.upper() in ['NFO', 'BFO', 'MCX']
+        return exchange.upper() in ["NFO", "BFO", "MCX"]

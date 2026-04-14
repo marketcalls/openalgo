@@ -11,6 +11,7 @@ Features:
 import os
 from datetime import datetime, timedelta
 from decimal import Decimal
+
 import pytz
 
 from utils.logging import get_logger
@@ -18,7 +19,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 # IST timezone
-IST = pytz.timezone('Asia/Kolkata')
+IST = pytz.timezone("Asia/Kolkata")
 
 
 def get_last_session_boundary():
@@ -26,8 +27,8 @@ def get_last_session_boundary():
     Get the most recent session boundary time (SESSION_EXPIRY_TIME)
     Returns datetime in IST
     """
-    session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
-    reset_hour, reset_minute = map(int, session_expiry_str.split(':'))
+    session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+    reset_hour, reset_minute = map(int, session_expiry_str.split(":"))
 
     now = datetime.now(IST)
     today_boundary = now.replace(hour=reset_hour, minute=reset_minute, second=0, microsecond=0)
@@ -48,7 +49,7 @@ def catch_up_mis_squareoff():
     be added to today_realized_pnl - only to accumulated/all-time realized_pnl
     """
     try:
-        from database.sandbox_db import SandboxPositions, SandboxFunds, db_session
+        from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
         from sandbox.fund_manager import FundManager
 
         # Get today's date at midnight IST
@@ -57,16 +58,19 @@ def catch_up_mis_squareoff():
         today_start = IST.localize(today_start)
 
         # Find MIS positions from previous days (created before today)
-        stale_mis_positions = SandboxPositions.query.filter_by(product='MIS').filter(
-            SandboxPositions.quantity != 0,
-            SandboxPositions.created_at < today_start
-        ).all()
+        stale_mis_positions = (
+            SandboxPositions.query.filter_by(product="MIS")
+            .filter(SandboxPositions.quantity != 0, SandboxPositions.created_at < today_start)
+            .all()
+        )
 
         if not stale_mis_positions:
             logger.debug("Catch-up: No stale MIS positions found")
             return
 
-        logger.info(f"Catch-up: Found {len(stale_mis_positions)} stale MIS positions from previous days")
+        logger.info(
+            f"Catch-up: Found {len(stale_mis_positions)} stale MIS positions from previous days"
+        )
 
         # Process each stale MIS position manually (not through normal close flow)
         # This ensures we don't add to today_realized_pnl
@@ -84,11 +88,14 @@ def catch_up_mis_squareoff():
                 else:
                     settlement_price = avg_price
 
-                # Calculate realized P&L
+                # Calculate realized P&L (apply contract_value for crypto, e.g. 0.01 for ETHUSD.P)
+                from database.token_db import get_symbol_info as _get_sym_info
+                _sym_cv = _get_sym_info(symbol, position.exchange)
+                _cv = Decimal(str(_sym_cv.contract_value)) if _sym_cv and _sym_cv.contract_value else Decimal("1.0")
                 if quantity > 0:
-                    realized_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+                    realized_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * _cv
                 else:
-                    realized_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+                    realized_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity))) * _cv
 
                 logger.info(
                     f"Catch-up settling stale MIS: {symbol} for {user_id}, "
@@ -103,32 +110,34 @@ def catch_up_mis_squareoff():
                     funds.used_margin -= margin_blocked
 
                     # Add to all-time realized P&L only (NOT today_realized_pnl)
-                    funds.realized_pnl = (funds.realized_pnl or Decimal('0.00')) + realized_pnl
-                    funds.total_pnl = funds.realized_pnl + (funds.unrealized_pnl or Decimal('0.00'))
+                    funds.realized_pnl = (funds.realized_pnl or Decimal("0.00")) + realized_pnl
+                    funds.total_pnl = funds.realized_pnl + (funds.unrealized_pnl or Decimal("0.00"))
 
                     # Ensure used_margin doesn't go negative
                     if funds.used_margin < 0:
-                        funds.used_margin = Decimal('0.00')
+                        funds.used_margin = Decimal("0.00")
 
                 # Update position to closed state
                 position.quantity = 0
-                position.margin_blocked = Decimal('0.00')
+                position.margin_blocked = Decimal("0.00")
                 position.pnl = realized_pnl
-                position.accumulated_realized_pnl = (position.accumulated_realized_pnl or Decimal('0.00')) + realized_pnl
+                position.accumulated_realized_pnl = (
+                    position.accumulated_realized_pnl or Decimal("0.00")
+                ) + realized_pnl
                 # DO NOT update today_realized_pnl since this is from a previous day
-                position.today_realized_pnl = Decimal('0.00')
+                position.today_realized_pnl = Decimal("0.00")
 
                 db_session.commit()
                 logger.info(f"Catch-up: Settled stale MIS position {symbol} for {user_id}")
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error settling stale MIS position {position.symbol}: {e}")
+                logger.exception(f"Error settling stale MIS position {position.symbol}: {e}")
 
         logger.info("Catch-up: Stale MIS positions settled")
 
     except Exception as e:
-        logger.error(f"Error in catch-up MIS square-off: {e}")
+        logger.exception(f"Error in catch-up MIS square-off: {e}")
 
 
 def catch_up_t1_settlement():
@@ -137,17 +146,19 @@ def catch_up_t1_settlement():
     Called after master contract download completes
     """
     try:
-        from sandbox.holdings_manager import process_all_t1_settlements
         from database.sandbox_db import SandboxPositions
+        from sandbox.holdings_manager import process_all_t1_settlements
 
         # Check if there are any CNC positions that need settlement
         ist = IST
         today = datetime.now(ist).date()
         settlement_cutoff = datetime.combine(today, datetime.min.time())
 
-        pending_positions = SandboxPositions.query.filter_by(product='CNC').filter(
-            SandboxPositions.created_at < settlement_cutoff
-        ).count()
+        pending_positions = (
+            SandboxPositions.query.filter_by(product="CNC")
+            .filter(SandboxPositions.created_at < settlement_cutoff)
+            .count()
+        )
 
         if pending_positions > 0:
             logger.info(f"Catch-up: Found {pending_positions} CNC positions pending T+1 settlement")
@@ -157,7 +168,7 @@ def catch_up_t1_settlement():
             logger.debug("Catch-up: No CNC positions pending T+1 settlement")
 
     except Exception as e:
-        logger.error(f"Error in catch-up T+1 settlement: {e}")
+        logger.exception(f"Error in catch-up T+1 settlement: {e}")
 
 
 def catch_up_daily_pnl_reset():
@@ -174,27 +185,29 @@ def catch_up_daily_pnl_reset():
         # that were last updated before the session boundary
         positions_needing_reset = SandboxPositions.query.filter(
             SandboxPositions.today_realized_pnl != None,
-            SandboxPositions.today_realized_pnl != Decimal('0.00'),
-            SandboxPositions.updated_at < last_session_boundary
+            SandboxPositions.today_realized_pnl != Decimal("0.00"),
+            SandboxPositions.updated_at < last_session_boundary,
         ).count()
 
         funds_needing_reset = SandboxFunds.query.filter(
             SandboxFunds.today_realized_pnl != None,
-            SandboxFunds.today_realized_pnl != Decimal('0.00'),
-            SandboxFunds.updated_at < last_session_boundary
+            SandboxFunds.today_realized_pnl != Decimal("0.00"),
+            SandboxFunds.updated_at < last_session_boundary,
         ).count()
 
         if positions_needing_reset > 0 or funds_needing_reset > 0:
-            logger.info(f"Catch-up: Found {positions_needing_reset} positions, {funds_needing_reset} funds needing PnL reset")
+            logger.info(
+                f"Catch-up: Found {positions_needing_reset} positions, {funds_needing_reset} funds needing PnL reset"
+            )
 
             # Reset all today_realized_pnl that are from before session boundary
             SandboxPositions.query.filter(
                 SandboxPositions.updated_at < last_session_boundary
-            ).update({'today_realized_pnl': Decimal('0.00')})
+            ).update({"today_realized_pnl": Decimal("0.00")})
 
-            SandboxFunds.query.filter(
-                SandboxFunds.updated_at < last_session_boundary
-            ).update({'today_realized_pnl': Decimal('0.00')})
+            SandboxFunds.query.filter(SandboxFunds.updated_at < last_session_boundary).update(
+                {"today_realized_pnl": Decimal("0.00")}
+            )
 
             db_session.commit()
             logger.info("Catch-up: Daily PnL reset completed")
@@ -202,7 +215,7 @@ def catch_up_daily_pnl_reset():
             logger.debug("Catch-up: No stale today_realized_pnl found")
 
     except Exception as e:
-        logger.error(f"Error in catch-up daily PnL reset: {e}")
+        logger.exception(f"Error in catch-up daily PnL reset: {e}")
 
 
 def catch_up_daily_pnl_snapshot():
@@ -211,11 +224,15 @@ def catch_up_daily_pnl_snapshot():
     If the app was down at 23:59 IST, the snapshot wouldn't have been captured
     """
     try:
-        from database.sandbox_db import (
-            SandboxFunds, SandboxPositions, SandboxHoldings,
-            SandboxDailyPnL, db_session
-        )
         from datetime import date, timedelta
+
+        from database.sandbox_db import (
+            SandboxDailyPnL,
+            SandboxFunds,
+            SandboxHoldings,
+            SandboxPositions,
+            db_session,
+        )
 
         today = date.today()
         yesterday = today - timedelta(days=1)
@@ -228,8 +245,7 @@ def catch_up_daily_pnl_snapshot():
 
             # Check if yesterday's snapshot exists
             existing_snapshot = SandboxDailyPnL.query.filter_by(
-                user_id=user_id,
-                date=yesterday
+                user_id=user_id, date=yesterday
             ).first()
 
             if existing_snapshot:
@@ -248,8 +264,8 @@ def catch_up_daily_pnl_snapshot():
 
             # For unrealized, we can't know yesterday's values accurately
             # So we'll set them to 0 (positions may have changed)
-            positions_unrealized = Decimal('0.00')
-            holdings_unrealized = Decimal('0.00')
+            positions_unrealized = Decimal("0.00")
+            holdings_unrealized = Decimal("0.00")
 
             # Only create snapshot if there was some activity
             if yesterday_realized != 0 or all_time_realized != 0:
@@ -262,16 +278,18 @@ def catch_up_daily_pnl_snapshot():
                     total_mtm=yesterday_realized,  # Only realized since we don't know unrealized
                     available_balance=funds.available_balance,
                     used_margin=funds.used_margin,
-                    portfolio_value=funds.available_balance + funds.used_margin
+                    portfolio_value=funds.available_balance + funds.used_margin,
                 )
                 db_session.add(snapshot)
-                logger.info(f"Catch-up: Created yesterday's P&L snapshot for user {user_id}, realized={yesterday_realized}")
+                logger.info(
+                    f"Catch-up: Created yesterday's P&L snapshot for user {user_id}, realized={yesterday_realized}"
+                )
 
         db_session.commit()
         logger.info("Catch-up: Daily P&L snapshot backfill completed")
 
     except Exception as e:
-        logger.error(f"Error in catch-up daily P&L snapshot: {e}")
+        logger.exception(f"Error in catch-up daily P&L snapshot: {e}")
 
 
 def run_catch_up_tasks():
@@ -300,4 +318,4 @@ def run_catch_up_tasks():
         logger.info("Catch-up tasks completed")
 
     except Exception as e:
-        logger.error(f"Error running catch-up tasks: {e}")
+        logger.exception(f"Error running catch-up tasks: {e}")

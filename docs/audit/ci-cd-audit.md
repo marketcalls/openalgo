@@ -1,0 +1,351 @@
+# CI/CD & Security Audit Report
+
+**Date:** 2026-01-25
+**Auditor:** Claude Code
+**Scope:** CI/CD pipeline, Python backend, React frontend
+
+## Executive Summary
+
+| Category | Critical | High | Medium | Low |
+|----------|----------|------|--------|-----|
+| Security (Bandit) | 0 | 0 | 22 | 28 |
+| Undefined Names (Ruff) | 0 | 119 | 0 | 0 |
+| Frontend (Biome) | 0 | 0 | 0 | 57 |
+| CI/CD Config | 0 | 0 | 1 | 2 |
+
+**Overall Risk:** Medium - No critical vulnerabilities, but several medium-severity issues require attention.
+
+---
+
+## 1. CI/CD Configuration Audit
+
+### 1.1 Workflow Structure
+
+**File:** `.github/workflows/ci.yml`
+
+| Job | Purpose | Status |
+|-----|---------|--------|
+| backend-lint | Ruff linting | OK |
+| backend-test | Pytest (CI-safe subset) | OK |
+| frontend-lint | Biome linting | OK |
+| frontend-build | Vite + TypeScript | OK |
+| frontend-test | Vitest unit tests | OK |
+| frontend-e2e | Playwright (Chromium) | OK |
+| security-scan | Bandit + pip-audit | OK |
+| root-css-build | Tailwind CSS | OK |
+| commit-dist | Auto-commit dist/ | OK |
+| docker-build | Docker + Trivy | Issue Found |
+
+### 1.2 Issues Found
+
+#### Issue 1: Trivy Image Reference on PRs (Medium)
+
+**Location:** `.github/workflows/ci.yml:224`
+
+```yaml
+- name: Trivy vulnerability scan
+  uses: aquasecurity/trivy-action@master
+  with:
+    image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/openalgo:latest
+```
+
+**Problem:** `DOCKERHUB_USERNAME` may be empty on PRs from forks, causing scan to fail silently.
+
+**Recommendation:**
+```yaml
+- name: Trivy vulnerability scan
+  uses: aquasecurity/trivy-action@master
+  with:
+    image-ref: openalgo:ci
+  if: github.event_name == 'pull_request'
+```
+
+#### Issue 2: No Branch Protection (Low)
+
+**Problem:** No branch protection rules configured for `main` branch.
+
+**Recommendation:** Enable via GitHub Settings:
+- Require pull request reviews
+- Require status checks to pass
+- Require branches to be up to date
+
+#### Issue 3: Missing CODEOWNERS (Low)
+
+**Problem:** No `CODEOWNERS` file for mandatory code review assignment.
+
+**Recommendation:** Create `.github/CODEOWNERS`:
+```
+* @marketcalls
+/broker/ @marketcalls
+/frontend/ @marketcalls
+```
+
+---
+
+## 2. Security Vulnerabilities (Bandit)
+
+### 2.1 Summary
+
+```
+Total lines scanned: 39,870
+High severity: 0
+Medium severity: 22
+Low severity: 28
+```
+
+### 2.2 Medium Severity Issues
+
+#### B108: Hardcoded Temp Directory
+
+**Location:** `blueprints/admin.py:277`
+
+```python
+temp_path = "/tmp/qtyfreeze_upload.csv"
+file.save(temp_path)
+```
+
+**Risk:** On shared systems, `/tmp` is world-writable. Attackers could:
+- Race condition to replace file before it's read
+- Symlink attacks to overwrite sensitive files
+
+**Fix:**
+```python
+import tempfile
+import os
+
+with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv', delete=False) as f:
+    temp_path = f.name
+    file.save(temp_path)
+try:
+    # Process file
+    pass
+finally:
+    os.unlink(temp_path)
+```
+
+#### B113: Requests Without Timeout
+
+**Locations:**
+- `blueprints/chartink.py:92, 128`
+- `blueprints/strategy.py:112, 148`
+
+```python
+response = requests.post(f"{BASE_URL}/api/v1/placesmartorder", json=payload)
+```
+
+**Risk:** No timeout means requests can hang indefinitely, causing:
+- Thread exhaustion
+- Denial of service
+- Resource leaks
+
+**Fix:**
+```python
+response = requests.post(
+    f"{BASE_URL}/api/v1/placesmartorder",
+    json=payload,
+    timeout=30  # 30 seconds
+)
+```
+
+#### B103: Permissive File Permissions
+
+**Locations:**
+- `blueprints/python_strategy.py:399, 420, 1445`
+
+```python
+os.chmod(file_path, 0o755)
+```
+
+**Risk:** `0o755` allows world-execute permission. For data files, this is overly permissive.
+
+**Fix:**
+```python
+# For data files (read/write only)
+os.chmod(file_path, 0o644)
+
+# For directories
+os.chmod(dir_path, 0o755)
+
+# For executable scripts only
+os.chmod(script_path, 0o755)
+```
+
+#### B608: SQL Injection Risk
+
+**Locations:**
+- `database/historify_db.py:909, 1039, 1266, 2206, 2216, 2233`
+
+```python
+query = f"""
+    SELECT ... FROM market_data
+    WHERE {where_clause}
+"""
+```
+
+**Risk:** String interpolation in SQL queries can lead to SQL injection if `where_clause` contains user input.
+
+**Analysis:** In this codebase, the `where_clause` is constructed from validated parameters, but the pattern is flagged as risky.
+
+**Fix:** Use parameterized queries consistently:
+```python
+# Instead of string formatting
+query = "SELECT * FROM table WHERE column = ?"
+params = [user_value]
+cursor.execute(query, params)
+```
+
+---
+
+## 3. Potential Bugs (Undefined Names)
+
+### 3.1 Summary
+
+**119 undefined name references** detected by Ruff (F821).
+
+### 3.2 Categories
+
+#### Category 1: Protobuf Generated Code (~60 issues)
+
+**Files:** `broker/*/streaming/*_pb2.py`
+
+```python
+_TYPE, _MARKETINFO, _FEEDRESPONSE, _LTPC, _QUOTE, etc.
+```
+
+**Status:** False positives - these are generated by protoc and work at runtime.
+
+**Action:** Add to Ruff ignore list or use `# noqa: F821` comments.
+
+#### Category 2: Missing Imports (~30 issues)
+
+| File | Missing Import |
+|------|----------------|
+| `websocket_proxy/server.py:443` | `db` (database session) |
+| `broker/groww/streaming/groww_nats.py` | `asyncio` |
+| `services/telegram_bot_service.py` | Various |
+
+**Action:** Add missing imports or fix variable scope.
+
+#### Category 3: Variable Scope Issues (~29 issues)
+
+| File | Variable |
+|------|----------|
+| `broker/*/database/master_contract_db.py` | `all_instruments` |
+| `broker/*/streaming/*.py` | `symbol_list`, `normalized_symbols` |
+
+**Action:** Review logic and ensure variables are defined before use.
+
+---
+
+## 4. Frontend Warnings (Biome)
+
+### 4.1 Summary
+
+```
+Files checked: 214
+Warnings: 57
+Infos: 8
+```
+
+### 4.2 useExhaustiveDependencies (57 warnings)
+
+**Pattern:**
+```typescript
+useEffect(() => {
+  fetchData()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [])
+```
+
+**Analysis:** These are intentional mount-only effects. The `eslint-disable` comments indicate the team is aware and has made a deliberate choice.
+
+**Status:** Acceptable - these are common patterns for:
+- Initial data fetching
+- One-time setup effects
+- Effects that should not re-run on dependency changes
+
+**Recommendation:** Consider using `useCallback` with stable references:
+```typescript
+const fetchData = useCallback(async () => {
+  // fetch logic
+}, []) // Empty deps = stable reference
+
+useEffect(() => {
+  fetchData()
+}, [fetchData]) // Now exhaustive
+```
+
+---
+
+## 5. Recommendations
+
+### 5.1 High Priority
+
+| # | Issue | Action | Effort |
+|---|-------|--------|--------|
+| 1 | Requests without timeout | Add `timeout=30` to all requests calls | Low |
+| 2 | Hardcoded /tmp | Use `tempfile` module | Low |
+| 3 | SQL string formatting | Review and parameterize where needed | Medium |
+
+### 5.2 Medium Priority
+
+| # | Issue | Action | Effort |
+|---|-------|--------|--------|
+| 4 | Missing imports | Fix undefined names in broker modules | Medium |
+| 5 | File permissions | Use 0o644 for non-executable files | Low |
+| 6 | Trivy PR scan | Fix image reference for PRs | Low |
+
+### 5.3 Low Priority
+
+| # | Issue | Action | Effort |
+|---|-------|--------|--------|
+| 7 | Branch protection | Enable via GitHub settings | Low |
+| 8 | CODEOWNERS | Create file for review assignment | Low |
+| 9 | Ruff ignore list | Add protobuf files to exclude | Low |
+
+---
+
+## 6. CI/CD Best Practices Checklist
+
+| Practice | Status |
+|----------|--------|
+| Parallel job execution | Yes |
+| Dependency caching | Yes |
+| Concurrency control | Yes |
+| Artifact retention | Yes (7 days) |
+| Security scanning | Yes (Bandit, pip-audit, Trivy) |
+| Auto-commit prevention | Yes ([skip ci]) |
+| Secrets management | Yes (GitHub Secrets) |
+| Docker layer caching | Yes (GHA cache) |
+| Branch-specific behavior | Yes (main only for push) |
+| PR validation | Yes |
+
+---
+
+## 7. Files Requiring Attention
+
+### Immediate Review
+
+1. `blueprints/admin.py` - Temp file handling
+2. `blueprints/chartink.py` - Request timeouts
+3. `blueprints/strategy.py` - Request timeouts
+4. `blueprints/python_strategy.py` - File permissions
+5. `database/historify_db.py` - SQL query construction
+6. `websocket_proxy/server.py` - Missing `db` import
+
+### Code Quality Review
+
+1. `broker/*/streaming/*.py` - Undefined variables
+2. `broker/*/database/master_contract_db.py` - Variable scope
+
+---
+
+## 8. Conclusion
+
+The CI/CD pipeline is well-structured and follows industry best practices. The main areas for improvement are:
+
+1. **Security hardening** - Add timeouts, fix temp file handling
+2. **Code quality** - Resolve undefined name errors in broker modules
+3. **CI/CD refinement** - Fix Trivy scan for PRs, add branch protection
+
+No critical or high-severity security vulnerabilities were found. The medium-severity issues are manageable and should be addressed in the next development cycle.

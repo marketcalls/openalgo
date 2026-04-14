@@ -8,14 +8,15 @@ Run with: python test/test_clear_action_center.py
 """
 
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from database.action_center_db import PendingOrder, db_session
 from sqlalchemy import func
+
+from database.action_center_db import PendingOrder, db_session
 
 
 def log(message, level="INFO"):
@@ -30,23 +31,29 @@ def get_statistics():
         total_count = db_session.query(func.count(PendingOrder.id)).scalar()
 
         # Count by status
-        pending_count = db_session.query(func.count(PendingOrder.id)).filter(
-            PendingOrder.status == 'pending'
-        ).scalar()
+        pending_count = (
+            db_session.query(func.count(PendingOrder.id))
+            .filter(PendingOrder.status == "pending")
+            .scalar()
+        )
 
-        approved_count = db_session.query(func.count(PendingOrder.id)).filter(
-            PendingOrder.status == 'approved'
-        ).scalar()
+        approved_count = (
+            db_session.query(func.count(PendingOrder.id))
+            .filter(PendingOrder.status == "approved")
+            .scalar()
+        )
 
-        rejected_count = db_session.query(func.count(PendingOrder.id)).filter(
-            PendingOrder.status == 'rejected'
-        ).scalar()
+        rejected_count = (
+            db_session.query(func.count(PendingOrder.id))
+            .filter(PendingOrder.status == "rejected")
+            .scalar()
+        )
 
         return {
-            'total': total_count,
-            'pending': pending_count,
-            'approved': approved_count,
-            'rejected': rejected_count
+            "total": total_count,
+            "pending": pending_count,
+            "approved": approved_count,
+            "rejected": rejected_count,
         }
     except Exception as e:
         log(f"Error getting statistics: {e}", "ERROR")
@@ -72,7 +79,7 @@ def clear_action_center():
         log(f"  - Rejected: {stats['rejected']}")
         log("")
 
-    if not stats or stats['total'] == 0:
+    if not stats or stats["total"] == 0:
         log("Action Center is already empty. Nothing to clear.", "INFO")
         log("=" * 80)
         return
@@ -84,7 +91,7 @@ def clear_action_center():
 
     confirmation = input("Type 'YES' to confirm deletion: ")
 
-    if confirmation != 'YES':
+    if confirmation != "YES":
         log("Deletion cancelled by user.", "INFO")
         log("=" * 80)
         return
@@ -128,9 +135,11 @@ def clear_by_status(status):
     log("")
 
     try:
-        count = db_session.query(func.count(PendingOrder.id)).filter(
-            PendingOrder.status == status
-        ).scalar()
+        count = (
+            db_session.query(func.count(PendingOrder.id))
+            .filter(PendingOrder.status == status)
+            .scalar()
+        )
 
         if count == 0:
             log(f"No {status} orders found to delete.", "INFO")
@@ -141,16 +150,16 @@ def clear_by_status(status):
 
         confirmation = input(f"Type 'YES' to delete {count} {status} orders: ")
 
-        if confirmation != 'YES':
+        if confirmation != "YES":
             log("Deletion cancelled by user.", "INFO")
             return
 
         log("")
         log("Deleting...")
 
-        deleted_count = db_session.query(PendingOrder).filter(
-            PendingOrder.status == status
-        ).delete()
+        deleted_count = (
+            db_session.query(PendingOrder).filter(PendingOrder.status == status).delete()
+        )
         db_session.commit()
 
         log(f"Successfully deleted {deleted_count} {status} orders", "SUCCESS")
@@ -182,15 +191,15 @@ def show_menu():
 
         choice = input("Select option (1-6): ").strip()
 
-        if choice == '1':
+        if choice == "1":
             clear_action_center()
-        elif choice == '2':
-            clear_by_status('pending')
-        elif choice == '3':
-            clear_by_status('approved')
-        elif choice == '4':
-            clear_by_status('rejected')
-        elif choice == '5':
+        elif choice == "2":
+            clear_by_status("pending")
+        elif choice == "3":
+            clear_by_status("approved")
+        elif choice == "4":
+            clear_by_status("rejected")
+        elif choice == "5":
             stats = get_statistics()
             if stats:
                 log("")
@@ -199,7 +208,7 @@ def show_menu():
                 log(f"  - Pending: {stats['pending']}")
                 log(f"  - Approved: {stats['approved']}")
                 log(f"  - Rejected: {stats['rejected']}")
-        elif choice == '6':
+        elif choice == "6":
             log("")
             log("Exiting...")
             break
@@ -211,37 +220,41 @@ if __name__ == "__main__":
     try:
         # Check if running with command-line arguments
         if len(sys.argv) > 1:
-            if sys.argv[1] == '--all':
+            if sys.argv[1] == "--all":
                 # Non-interactive mode: clear everything
                 stats = get_statistics()
-                if stats and stats['total'] > 0:
+                if stats and stats["total"] > 0:
                     deleted_count = db_session.query(PendingOrder).delete()
                     db_session.commit()
                     log(f"Deleted {deleted_count} orders from Action Center", "SUCCESS")
                 else:
                     log("Action Center is already empty", "INFO")
-            elif sys.argv[1] == '--pending':
+            elif sys.argv[1] == "--pending":
                 # Clear only pending orders
-                deleted_count = db_session.query(PendingOrder).filter(
-                    PendingOrder.status == 'pending'
-                ).delete()
+                deleted_count = (
+                    db_session.query(PendingOrder).filter(PendingOrder.status == "pending").delete()
+                )
                 db_session.commit()
                 log(f"Deleted {deleted_count} pending orders", "SUCCESS")
-            elif sys.argv[1] == '--approved':
+            elif sys.argv[1] == "--approved":
                 # Clear only approved orders
-                deleted_count = db_session.query(PendingOrder).filter(
-                    PendingOrder.status == 'approved'
-                ).delete()
+                deleted_count = (
+                    db_session.query(PendingOrder)
+                    .filter(PendingOrder.status == "approved")
+                    .delete()
+                )
                 db_session.commit()
                 log(f"Deleted {deleted_count} approved orders", "SUCCESS")
-            elif sys.argv[1] == '--rejected':
+            elif sys.argv[1] == "--rejected":
                 # Clear only rejected orders
-                deleted_count = db_session.query(PendingOrder).filter(
-                    PendingOrder.status == 'rejected'
-                ).delete()
+                deleted_count = (
+                    db_session.query(PendingOrder)
+                    .filter(PendingOrder.status == "rejected")
+                    .delete()
+                )
                 db_session.commit()
                 log(f"Deleted {deleted_count} rejected orders", "SUCCESS")
-            elif sys.argv[1] == '--help':
+            elif sys.argv[1] == "--help":
                 print("\nUsage:")
                 print("  python test/test_clear_action_center.py           # Interactive menu")
                 print("  python test/test_clear_action_center.py --all     # Clear all orders")
@@ -262,6 +275,7 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"Unexpected error: {e}", "ERROR")
         import traceback
+
         traceback.print_exc()
     finally:
         db_session.close()

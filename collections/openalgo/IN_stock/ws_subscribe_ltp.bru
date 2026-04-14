@@ -1,0 +1,34 @@
+meta {
+  name: Subscribe LTP (Mode 1)
+  type: websocket
+  seq: 2
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Subscribe to Last Traded Price - minimal data, lowest bandwidth
+}
+
+message:json {
+  {
+    "action": "subscribe",
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "mode": 1
+  }
+}
+
+docs {
+  Mode 1 (LTP) returns minimal data:
+  - ltp: Last Traded Price
+  - timestamp: ISO 8601 timestamp
+
+  Alternative array format for multiple symbols:
+  {
+    "action": "subscribe",
+    "symbols": [{"symbol": "RELIANCE", "exchange": "NSE"}],
+    "mode": 1
+  }
+
+  Mode can also be string: "mode": "LTP"
+}
