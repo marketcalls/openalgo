@@ -17,7 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.sql import func
 
 from database.settings_db import get_security_settings
@@ -29,9 +29,18 @@ LOGS_DATABASE_URL = os.getenv("LOGS_DATABASE_URL", "sqlite:///db/logs.db")
 
 # Conditionally create engine based on DB type
 if LOGS_DATABASE_URL and "sqlite" in LOGS_DATABASE_URL:
-    # SQLite: Use NullPool to prevent connection pool exhaustion
+    # SQLite: Use StaticPool (single shared connection) instead of NullPool.
+    # NullPool creates a new connection per request and relies on scoped_session
+    # to clean up via threading.local(). Under eventlet/gevent green threads,
+    # threading.local() doesn't map correctly to green thread lifecycles, so
+    # connections leak (~1 per request). With the TrafficLoggerMiddleware
+    # hitting this on every request, this exhausts file descriptors within
+    # minutes (200+ leaked FDs), causing "unable to open database file" errors
+    # across all endpoints.
+    # StaticPool uses a single persistent connection shared across all threads,
+    # which is safe for SQLite (it serializes writes internally).
     logs_engine = create_engine(
-        LOGS_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        LOGS_DATABASE_URL, poolclass=StaticPool, connect_args={"check_same_thread": False}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
