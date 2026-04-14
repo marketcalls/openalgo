@@ -535,6 +535,10 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=$INSTANCE_DIR
+# Set HOME so Kaleido/choreographer can write temp files for Telegram /chart.
+# Kaleido 1.x creates temp dirs in Path.home() (not TMPDIR); the default
+# www-data home /var/www/ is typically root-owned and not writable.
+Environment="HOME=$INSTANCE_DIR/tmp"
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$INSTANCE_DIR/tmp"
 Environment="NUMBA_CACHE_DIR=$INSTANCE_DIR/tmp/numba_cache"
