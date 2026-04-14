@@ -1,8 +1,8 @@
 import datetime
 import json
-import ssl
 
 import websocket
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -14,25 +14,10 @@ isEncyptOut = False
 isEncyptIn = True
 
 MAX_SCRIPS = 100
-topic_list = {}
-counter = 0
-FieldTypes = {
-    'FLOAT32': 1,
-    'LONG': 2,
-    'DATE': 3,
-    'STRING': 4
-}
+FieldTypes = {"FLOAT32": 1, "LONG": 2, "DATE": 3, "STRING": 4}
 TRASH_VAL = -2147483648
-STRING_INDEX = {
-    'NAME': 51,
-    'SYMBOL': 52,
-    'EXCHG': 53,
-    'TSYMBOL': 54
-}
-DEPTH_INDEX = {
-    "MULTIPLIER": 32,
-    "PRECISION": 33
-}
+STRING_INDEX = {"NAME": 51, "SYMBOL": 52, "EXCHG": 53, "TSYMBOL": 54}
+DEPTH_INDEX = {"MULTIPLIER": 32, "PRECISION": 33}
 BinRespTypes = {
     "CONNECTION_TYPE": 1,
     "THROTTLING_TYPE": 2,
@@ -43,21 +28,11 @@ BinRespTypes = {
     "CHPAUSE_TYPE": 7,
     "CHRESUME_TYPE": 8,
     "SNAPSHOT": 9,
-    "OPC_SUBSCRIBE": 10
+    "OPC_SUBSCRIBE": 10,
 }
-# ws = None
-BinRespStat = {
-    "OK": "K",
-    "NOT_OK": "N"
-}
-ResponseTypes = {
-    "SNAP": 83,
-    "UPDATE": 85
-}
-STAT = {
-    "OK": "Ok",
-    "NOT_OK": "NotOk"
-}
+BinRespStat = {"OK": "K", "NOT_OK": "N"}
+ResponseTypes = {"SNAP": 83, "UPDATE": 85}
+STAT = {"OK": "Ok", "NOT_OK": "NotOk"}
 RespTypeValues = {
     "CONN": "cn",
     "SUBS": "sub",
@@ -65,17 +40,17 @@ RespTypeValues = {
     "SNAP": "snap",
     "CHANNELR": "cr",
     "CHANNELP": "cp",
-    "OPC": "opc"
+    "OPC": "opc",
 }
 RespCodes = {
-    'SUCCESS': 200,
-    'CONNECTION_FAILED': 11001,
-    'CONNECTION_INVALID': 11002,
-    'SUBSCRIPTION_FAILED': 11011,
-    'UNSUBSCRIPTION_FAILED': 11012,
-    'SNAPSHOT_FAILED': 11013,
-    'CHANNELP_FAILED': 11031,
-    'CHANNELR_FAILED': 11032
+    "SUCCESS": 200,
+    "CONNECTION_FAILED": 11001,
+    "CONNECTION_INVALID": 11002,
+    "SUBSCRIPTION_FAILED": 11011,
+    "UNSUBSCRIPTION_FAILED": 11012,
+    "SNAPSHOT_FAILED": 11013,
+    "CHANNELP_FAILED": 11031,
+    "CHANNELR_FAILED": 11032,
 }
 
 
@@ -83,24 +58,8 @@ def DataType(c, d):
     return {"name": c, "type": d}
 
 
-def enable_log(a):
-    global HSD_Flag
-    HSD_Flag = a
-
-
-TopicTypes = {
-    "SCRIP": "sf",
-    "INDEX": "if",
-    "DEPTH": "dp"
-}
-INDEX_INDEX = {
-    "LTP": 2,
-    "CLOSE": 3,
-    "CHANGE": 10,
-    "PERCHANGE": 11,
-    "MULTIPLIER": 8,
-    "PRECISION": 9
-}
+TopicTypes = {"SCRIP": "sf", "INDEX": "if", "DEPTH": "dp"}
+INDEX_INDEX = {"LTP": 2, "CLOSE": 3, "CHANGE": 10, "PERCHANGE": 11, "MULTIPLIER": 8, "PRECISION": 9}
 SCRIP_INDEX = {
     "VOLUME": 4,
     "LTP": 5,
@@ -110,7 +69,7 @@ SCRIP_INDEX = {
     "PRECISION": 24,
     "CHANGE": 25,
     "PERCHANGE": 26,
-    "TURNOVER": 27
+    "TURNOVER": 27,
 }
 Keys = {
     "TYPE": "type",
@@ -128,7 +87,7 @@ Keys = {
     "AUTHORIZATION": "Authorization",
     "SID": "Sid",
     "X_ACCESS_TOKEN": "x-access-token",
-    "SOURCE": "source"
+    "SOURCE": "source",
 }
 ReqTypeValues = {
     "CONNECTION": "cn",
@@ -147,7 +106,7 @@ ReqTypeValues = {
     "THROTTLING_INTERVAL": "ti",
     "STR": "str",
     "FORCE_CONNECTION": "fcn",
-    "LOG": "log"
+    "LOG": "log",
 }
 
 INDEX_MAPPING = [None] * 55
@@ -159,7 +118,7 @@ INDEX_MAPPING[4] = DataType("tvalue", FieldTypes.get("DATE"))
 INDEX_MAPPING[5] = DataType("highPrice", FieldTypes.get("FLOAT32"))
 INDEX_MAPPING[6] = DataType("lowPrice", FieldTypes.get("FLOAT32"))
 INDEX_MAPPING[7] = DataType("openingPrice", FieldTypes.get("FLOAT32"))
-INDEX_MAPPING.append(DataType("mul", FieldTypes.get("LONG")))
+INDEX_MAPPING[INDEX_INDEX["MULTIPLIER"]] = DataType("mul", FieldTypes.get("LONG"))
 INDEX_MAPPING[INDEX_INDEX["PRECISION"]] = DataType("prec", FieldTypes.get("LONG"))
 INDEX_MAPPING[INDEX_INDEX["CHANGE"]] = DataType("cng", FieldTypes.get("FLOAT32"))
 INDEX_MAPPING[INDEX_INDEX["PERCHANGE"]] = DataType("nc", FieldTypes.get("STRING"))
@@ -203,38 +162,38 @@ SCRIP_MAPPING[STRING_INDEX["EXCHG"]] = DataType("e", FieldTypes["STRING"])
 SCRIP_MAPPING[STRING_INDEX["TSYMBOL"]] = DataType("ts", FieldTypes["STRING"])
 
 DEPTH_MAPPING = [None] * 55
-DEPTH_MAPPING[0] = (DataType("ftm0", FieldTypes.get("DATE")))
-DEPTH_MAPPING[1] = (DataType("dtm1", FieldTypes.get("DATE")))
-DEPTH_MAPPING[2] = (DataType("bp", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[3] = (DataType("bp1", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[4] = (DataType("bp2", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[5] = (DataType("bp3", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[6] = (DataType("bp4", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[7] = (DataType("sp", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[8] = (DataType("sp1", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[9] = (DataType("sp2", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[10] = (DataType("sp3", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[11] = (DataType("sp4", FieldTypes.get("FLOAT32")))
-DEPTH_MAPPING[12] = (DataType("bq", FieldTypes.get("LONG")))
-DEPTH_MAPPING[13] = (DataType("bq1", FieldTypes.get("LONG")))
-DEPTH_MAPPING[14] = (DataType("bq2", FieldTypes.get("LONG")))
-DEPTH_MAPPING[15] = (DataType("bq3", FieldTypes.get("LONG")))
-DEPTH_MAPPING[16] = (DataType("bq4", FieldTypes.get("LONG")))
-DEPTH_MAPPING[17] = (DataType("bs", FieldTypes.get("LONG")))
-DEPTH_MAPPING[18] = (DataType("bs1", FieldTypes.get("LONG")))
-DEPTH_MAPPING[19] = (DataType("bs2", FieldTypes.get("LONG")))
-DEPTH_MAPPING[20] = (DataType("bs3", FieldTypes.get("LONG")))
-DEPTH_MAPPING[21] = (DataType("bs4", FieldTypes.get("LONG")))
-DEPTH_MAPPING[22] = (DataType("bno1", FieldTypes.get("LONG")))
-DEPTH_MAPPING[23] = (DataType("bno2", FieldTypes.get("LONG")))
-DEPTH_MAPPING[24] = (DataType("bno3", FieldTypes.get("LONG")))
-DEPTH_MAPPING[25] = (DataType("bno4", FieldTypes.get("LONG")))
-DEPTH_MAPPING[26] = (DataType("bno5", FieldTypes.get("LONG")))
-DEPTH_MAPPING[27] = (DataType("sno1", FieldTypes.get("LONG")))
-DEPTH_MAPPING[28] = (DataType("sno2", FieldTypes.get("LONG")))
-DEPTH_MAPPING[29] = (DataType("sno3", FieldTypes.get("LONG")))
-DEPTH_MAPPING[30] = (DataType("sno4", FieldTypes.get("LONG")))
-DEPTH_MAPPING[31] = (DataType("sno5", FieldTypes.get("LONG")))
+DEPTH_MAPPING[0] = DataType("ftm0", FieldTypes.get("DATE"))
+DEPTH_MAPPING[1] = DataType("dtm1", FieldTypes.get("DATE"))
+DEPTH_MAPPING[2] = DataType("bp", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[3] = DataType("bp1", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[4] = DataType("bp2", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[5] = DataType("bp3", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[6] = DataType("bp4", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[7] = DataType("sp", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[8] = DataType("sp1", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[9] = DataType("sp2", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[10] = DataType("sp3", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[11] = DataType("sp4", FieldTypes.get("FLOAT32"))
+DEPTH_MAPPING[12] = DataType("bq", FieldTypes.get("LONG"))
+DEPTH_MAPPING[13] = DataType("bq1", FieldTypes.get("LONG"))
+DEPTH_MAPPING[14] = DataType("bq2", FieldTypes.get("LONG"))
+DEPTH_MAPPING[15] = DataType("bq3", FieldTypes.get("LONG"))
+DEPTH_MAPPING[16] = DataType("bq4", FieldTypes.get("LONG"))
+DEPTH_MAPPING[17] = DataType("bs", FieldTypes.get("LONG"))
+DEPTH_MAPPING[18] = DataType("bs1", FieldTypes.get("LONG"))
+DEPTH_MAPPING[19] = DataType("bs2", FieldTypes.get("LONG"))
+DEPTH_MAPPING[20] = DataType("bs3", FieldTypes.get("LONG"))
+DEPTH_MAPPING[21] = DataType("bs4", FieldTypes.get("LONG"))
+DEPTH_MAPPING[22] = DataType("bno1", FieldTypes.get("LONG"))
+DEPTH_MAPPING[23] = DataType("bno2", FieldTypes.get("LONG"))
+DEPTH_MAPPING[24] = DataType("bno3", FieldTypes.get("LONG"))
+DEPTH_MAPPING[25] = DataType("bno4", FieldTypes.get("LONG"))
+DEPTH_MAPPING[26] = DataType("bno5", FieldTypes.get("LONG"))
+DEPTH_MAPPING[27] = DataType("sno1", FieldTypes.get("LONG"))
+DEPTH_MAPPING[28] = DataType("sno2", FieldTypes.get("LONG"))
+DEPTH_MAPPING[29] = DataType("sno3", FieldTypes.get("LONG"))
+DEPTH_MAPPING[30] = DataType("sno4", FieldTypes.get("LONG"))
+DEPTH_MAPPING[31] = DataType("sno5", FieldTypes.get("LONG"))
 DEPTH_MAPPING[DEPTH_INDEX["MULTIPLIER"]] = DataType("mul", FieldTypes["LONG"])
 DEPTH_MAPPING[DEPTH_INDEX["PRECISION"]] = DataType("prec", FieldTypes["LONG"])
 DEPTH_MAPPING[STRING_INDEX["NAME"]] = DataType("name", FieldTypes["STRING"])
@@ -249,14 +208,7 @@ def leadingZero(a):
 
 def getFormatDate(a):
     date = datetime.datetime.fromtimestamp(a)
-    formatDate = "{}/{}/{} {}:{}:{}".format(
-        leadingZero(date.day),
-        leadingZero(date.month),
-        date.year,
-        leadingZero(date.hour),
-        leadingZero(date.minute),
-        leadingZero(date.second)
-    )
+    formatDate = f"{leadingZero(date.day)}/{leadingZero(date.month)}/{date.year} {leadingZero(date.hour)}:{leadingZero(date.minute)}:{leadingZero(date.second)}"
     return formatDate
 
 
@@ -275,9 +227,9 @@ class ByteData:
         self.pos += 2
 
     def markEndOfMsg(self):
-        len = (self.pos - self.startOfMsg - 2)
-        self.bytes[0] = ((len >> 8) & 255)
-        self.bytes[1] = (len & 255)
+        len = self.pos - self.startOfMsg - 2
+        self.bytes[0] = (len >> 8) & 255
+        self.bytes[1] = len & 255
 
     def clear(self):
         self.pos = 0
@@ -306,37 +258,37 @@ class ByteData:
         self.bytes[e] = d
 
     def appendShort(self, d):
-        self.bytes[self.pos] = ((d >> 8) & 255)
+        self.bytes[self.pos] = (d >> 8) & 255
         self.pos += 1
-        self.bytes[self.pos] = (d & 255)
+        self.bytes[self.pos] = d & 255
         self.pos += 1
 
     def appendInt(self, d):
-        self.bytes[self.pos] = ((d >> 24) & 255)
+        self.bytes[self.pos] = (d >> 24) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 16) & 255)
+        self.bytes[self.pos] = (d >> 16) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 8) & 255)
+        self.bytes[self.pos] = (d >> 8) & 255
         self.pos += 1
-        self.bytes[self.pos] = (d & 255)
+        self.bytes[self.pos] = d & 255
         self.pos += 1
 
     def appendLong(self, d):
-        self.bytes[self.pos] = ((d >> 56) & 255)
+        self.bytes[self.pos] = (d >> 56) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 48) & 255)
+        self.bytes[self.pos] = (d >> 48) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 40) & 255)
+        self.bytes[self.pos] = (d >> 40) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 32) & 255)
+        self.bytes[self.pos] = (d >> 32) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 24) & 255)
+        self.bytes[self.pos] = (d >> 24) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 16) & 255)
+        self.bytes[self.pos] = (d >> 16) & 255
         self.pos += 1
-        self.bytes[self.pos] = ((d >> 8) & 255)
+        self.bytes[self.pos] = (d >> 8) & 255
         self.pos += 1
-        self.bytes[self.pos] = (d & 255)
+        self.bytes[self.pos] = d & 255
         self.pos += 1
 
     def append_long_as_big_int(self, e):
@@ -415,17 +367,16 @@ class DepthTopicData(TopicData):
         # logger.info("INSIDE DepthTopicData")
         super().__init__(TopicTypes["DEPTH"])
         self.updatedFieldsArray = [None] * 100
-        self.multiplier = None
-        self.precision = None
-        self.precisionValue = None
+        # Inherit sensible defaults from TopicData (multiplier=1, precision=2, precisionValue=100)
+        # setMultiplierAndPrec() will override these once the broker sends actual values
 
     def setMultiplierAndPrec(self):
         # logger.info("INTO setMultiplierAndPrec")
-        if self.updatedFieldsArray[DEPTH_INDEX['PRECISION']]:
-            self.precision = self.fieldDataArray[DEPTH_INDEX['PRECISION']]
-            self.precisionValue = 10 ** self.precision
-        if self.updatedFieldsArray[DEPTH_INDEX['MULTIPLIER']]:
-            self.multiplier = self.fieldDataArray[DEPTH_INDEX['MULTIPLIER']]
+        if self.updatedFieldsArray[DEPTH_INDEX["PRECISION"]]:
+            self.precision = self.fieldDataArray[DEPTH_INDEX["PRECISION"]]
+            self.precisionValue = 10**self.precision
+        if self.updatedFieldsArray[DEPTH_INDEX["MULTIPLIER"]]:
+            self.multiplier = self.fieldDataArray[DEPTH_INDEX["MULTIPLIER"]]
 
     def prepareData(self):
         # logger.info("INSIDE prepareData")
@@ -448,7 +399,7 @@ class DepthTopicData(TopicData):
 
 
 def get_acknowledgement_req(a):
-    buffer = ByteData(11) #bytearray(11)
+    buffer = ByteData(11)  # bytearray(11)
     buffer.markStartOfMsg()
     buffer.appendByte(BinRespTypes["ACK_TYPE"])
     buffer.appendByte(1)
@@ -467,12 +418,13 @@ def prepare_connection_request(a):
     buffer[0] = BinRespTypes.get("CONNECTION_TYPE")
     buffer[1] = 2
     buffer[2] = 1
-    buffer[3:5] = int(user_id_len).to_bytes(2, byteorder='big')
-    buffer[5:5 + user_id_len] = a.encode()
+    buffer[3:5] = int(user_id_len).to_bytes(2, byteorder="big")
+    buffer[5 : 5 + user_id_len] = a.encode()
     buffer[5 + user_id_len] = 2
-    buffer[6 + user_id_len:8 + user_id_len] = int(src_len).to_bytes(2, byteorder='big')
-    buffer[8 + user_id_len:8 + user_id_len + src_len] = src.encode()
-    buffer[8 + user_id_len + src_len] = BinRespTypes.get("END_OF_MSG")
+    buffer[6 + user_id_len : 8 + user_id_len] = int(src_len).to_bytes(2, byteorder="big")
+    buffer[8 + user_id_len : 8 + user_id_len + src_len] = src.encode()
+    # End-of-message marker (0xFF) — not in BinRespTypes since it's a framing byte, not a type
+    buffer[8 + user_id_len + src_len] = 0xFF
     return buffer
 
 
@@ -581,7 +533,7 @@ def prepareChannelRequest(c, a):
     buffer[0] = c
     buffer[1] = 1
     buffer[2] = 1
-    buffer[3:5] = (8).to_bytes(2, byteorder='big')
+    buffer[3:5] = (8).to_bytes(2, byteorder="big")
     int1, int2 = 0, 0
     for d in a:
         if 0 < d <= 32:
@@ -590,8 +542,8 @@ def prepareChannelRequest(c, a):
             int2 |= 1 << d
         else:
             logger.info("Error: Channel values must be in this range  [ val > 0 && val < 65 ]")
-    buffer[5:9] = int2.to_bytes(4, byteorder='big')
-    buffer[9:13] = int1.to_bytes(4, byteorder='big')
+    buffer[5:9] = int2.to_bytes(4, byteorder="big")
+    buffer[9:13] = int1.to_bytes(4, byteorder="big")
     return buffer
 
 
@@ -718,17 +670,14 @@ def buf2long(a):
 
 
 def buf2string(a):
-    import numpy as np
-    return ''.join(map(chr, np.frombuffer(a, dtype=np.uint8)))
+    return bytes(a).decode("utf-8", errors="replace")
 
 
 class ScripTopicData(TopicData):
     def __init__(self):
         super().__init__(TopicTypes["SCRIP"])
-        # logger.info("After topic")
-        self.precision = None
-        self.precisionValue = None
-        self.multiplier = None
+        # Inherit sensible defaults from TopicData (multiplier=1, precision=2, precisionValue=100)
+        # setMultiplierAndPrec() will override these once the broker sends actual values
 
     def setMultiplierAndPrec(self):
         if self.updatedFieldsArray[SCRIP_INDEX["PRECISION"]]:
@@ -739,16 +688,23 @@ class ScripTopicData(TopicData):
 
     def prepareData(self):
         self.prepareCommonData()
-        if self.updatedFieldsArray[SCRIP_INDEX["LTP"]] or self.updatedFieldsArray[SCRIP_INDEX["CLOSE"]]:
+        if (
+            self.updatedFieldsArray[SCRIP_INDEX["LTP"]]
+            or self.updatedFieldsArray[SCRIP_INDEX["CLOSE"]]
+        ):
             ltp = self.fieldDataArray[SCRIP_INDEX["LTP"]]
             close = self.fieldDataArray[SCRIP_INDEX["CLOSE"]]
             if ltp is not None and close is not None:
                 change = ltp - close
                 self.fieldDataArray[SCRIP_INDEX["CHANGE"]] = change
                 self.updatedFieldsArray[SCRIP_INDEX["CHANGE"]] = True
-                self.fieldDataArray[SCRIP_INDEX["PERCHANGE"]] = "{:.2f}".format((change / close * 100))
+                per_change = f"{change / close * 100:.2f}" if close != 0 else "0.00"
+                self.fieldDataArray[SCRIP_INDEX["PERCHANGE"]] = per_change
                 self.updatedFieldsArray[SCRIP_INDEX["PERCHANGE"]] = True
-        if self.updatedFieldsArray[SCRIP_INDEX["VOLUME"]] or self.updatedFieldsArray[SCRIP_INDEX["VWAP"]]:
+        if (
+            self.updatedFieldsArray[SCRIP_INDEX["VOLUME"]]
+            or self.updatedFieldsArray[SCRIP_INDEX["VWAP"]]
+        ):
             volume = self.fieldDataArray[SCRIP_INDEX["VOLUME"]]
             vwap = self.fieldDataArray[SCRIP_INDEX["VWAP"]]
             if volume is not None and vwap is not None:
@@ -761,7 +717,7 @@ class ScripTopicData(TopicData):
             val = self.fieldDataArray[index]
             if self.updatedFieldsArray[index] and val is not None and dataType:
                 if dataType["type"] == FieldTypes["FLOAT32"]:
-                    val = "{:.2f}".format(val / (self.multiplier * self.precisionValue))
+                    val = f"{val / (self.multiplier * self.precisionValue):.2f}"
                 elif dataType["type"] == FieldTypes["DATE"]:
                     val = getFormatDate(val)
                 # logger.info(f'{str(index)}:{dataType["name"]}:{str(val)}')
@@ -775,27 +731,29 @@ class IndexTopicData(TopicData):
         # logger.info("INSIDE IndexTopicData")
         super().__init__(TopicTypes["INDEX"])
         self.updatedFieldsArray = [None] * 100
-        self.multiplier = None
-        self.precision = None
-        self.precisionValue = None
+        # Inherit sensible defaults from TopicData (multiplier=1, precision=2, precisionValue=100)
+        # setMultiplierAndPrec() will override these once the broker sends actual values
 
     def setMultiplierAndPrec(self):
         if self.updatedFieldsArray[INDEX_INDEX["PRECISION"]]:
             self.precision = self.fieldDataArray[INDEX_INDEX["PRECISION"]]
-            self.precisionValue = 10 ** self.precision
+            self.precisionValue = 10**self.precision
         if self.updatedFieldsArray[INDEX_INDEX["MULTIPLIER"]]:
             self.multiplier = self.fieldDataArray[INDEX_INDEX["MULTIPLIER"]]
 
     def prepareData(self):
         self.prepareCommonData()
-        if self.updatedFieldsArray[INDEX_INDEX["LTP"]] or self.updatedFieldsArray[INDEX_INDEX["CLOSE"]]:
+        if (
+            self.updatedFieldsArray[INDEX_INDEX["LTP"]]
+            or self.updatedFieldsArray[INDEX_INDEX["CLOSE"]]
+        ):
             ltp = self.fieldDataArray[INDEX_INDEX["LTP"]]
             close = self.fieldDataArray[INDEX_INDEX["CLOSE"]]
             if ltp is not None and close is not None:
                 change = ltp - close
                 self.fieldDataArray[INDEX_INDEX["CHANGE"]] = change
                 self.updatedFieldsArray[INDEX_INDEX["CHANGE"]] = True
-                per_change = round(change / close * 100, self.precision)
+                per_change = round(change / close * 100, self.precision) if close != 0 else 0.0
                 self.fieldDataArray[INDEX_INDEX["PERCHANGE"]] = per_change
                 self.updatedFieldsArray[INDEX_INDEX["PERCHANGE"]] = True
         # logger.info(f"\nIndex::{self.feedType}|{self.exchange}|{self.symbol}")
@@ -815,9 +773,13 @@ class IndexTopicData(TopicData):
 
 
 class HSWrapper:
-    def __init__(self):
+    def __init__(self, ws_app=None, send_lock=None):
         self.counter = 0
         self.ack_num = 0
+        self._ws_app = ws_app  # Reference to WebSocketApp for sending acks
+        self._send_lock = send_lock  # Serialize sends with subscription messages
+        self.topic_list = {}  # Per-instance topic data, not shared globally
+        self._max_topics = 5000  # Cap topic_list to prevent unbounded memory growth
 
     def getNewTopicData(self, c):
         # logger.info(f"INPUT {c}")
@@ -834,77 +796,88 @@ class HSWrapper:
 
     def getStatus(self, c, d):
         status = BinRespStat.get("NOT_OK")
-        field_count = buf2long(c[d:d + 1])
+        field_count = buf2long(c[d : d + 1])
         d += 1
         if field_count > 0:
-            fld = buf2long(c[d:d + 1])
+            fld = buf2long(c[d : d + 1])
             d = d + 1
-            field_length = buf2long(c[d:d + 2])
+            field_length = buf2long(c[d : d + 2])
             d += 2
-            status = buf2string(c[d:d + field_length])
+            status = buf2string(c[d : d + field_length])
             d += field_length
         return status
 
     def parseData(self, e):
+        if len(e) < 3:
+            logger.warning(f"Truncated binary message: {len(e)} bytes, dropping")
+            return None
         pos = 0
         # logger.info(f"INTO Parse Data {e}")
+        try:
+            return self._parseDataInner(e)
+        except (IndexError, ValueError) as exc:
+            logger.error(f"Malformed binary message ({len(e)} bytes): {exc}, dropping")
+            return None
+
+    def _parseDataInner(self, e):
+        pos = 0
         packetsCount = buf2long(e[pos:2])
         pos += 2
-        type = int.from_bytes(e[pos:pos + 1], 'big')
+        type = int.from_bytes(e[pos : pos + 1], "big")
         pos += 1
         # logger.info(f"Type in HSWebsocket {type}")
         # logger.info(f"parse data {e}")
         # logger.info(f"parse data len {len(e)}")
         if type == BinRespTypes.get("CONNECTION_TYPE"):
             jsonRes = {}
-            fCount = int.from_bytes(e[pos:pos + 1], 'big')
+            fCount = int.from_bytes(e[pos : pos + 1], "big")
             pos += 1
             if fCount >= 2:
-                fid1 = int.from_bytes(e[pos:pos + 1], 'big')
+                fid1 = int.from_bytes(e[pos : pos + 1], "big")
                 pos += 1
-                valLen = int.from_bytes(e[pos:pos + 2], 'big')
+                valLen = int.from_bytes(e[pos : pos + 2], "big")
                 pos += 2
-                status = e[pos:pos + valLen].decode('utf-8')
+                status = e[pos : pos + valLen].decode("utf-8")
                 pos += valLen
-                fid1 = int.from_bytes(e[pos:pos + 1], 'big')
+                fid1 = int.from_bytes(e[pos : pos + 1], "big")
                 pos += 1
-                valLen = int.from_bytes(e[pos:pos + 2], 'big')
+                valLen = int.from_bytes(e[pos : pos + 2], "big")
                 pos += 2
-                ackCount = int.from_bytes(e[pos:pos + valLen], 'big')
+                ackCount = int.from_bytes(e[pos : pos + valLen], "big")
                 # logger.info(f"STATUS {status}")
                 if status == BinRespStat.get("OK"):
-                    jsonRes['stat'] = STAT.get("OK")
-                    jsonRes['type'] = RespTypeValues.get("CONN")
-                    jsonRes['msg'] = "successful"
-                    jsonRes['stCode'] = RespCodes.get("SUCCESS")
+                    jsonRes["stat"] = STAT.get("OK")
+                    jsonRes["type"] = RespTypeValues.get("CONN")
+                    jsonRes["msg"] = "successful"
+                    jsonRes["stCode"] = RespCodes.get("SUCCESS")
                 elif status == BinRespStat.get("NOT_OK"):
-                    jsonRes['stat'] = STAT.get("NOT_OK")
-                    jsonRes['type'] = RespTypeValues.get("CONN")
-                    jsonRes['msg'] = "failed"
-                    jsonRes['stCode'] = RespCodes.get("CONNECTION_FAILED")
+                    jsonRes["stat"] = STAT.get("NOT_OK")
+                    jsonRes["type"] = RespTypeValues.get("CONN")
+                    jsonRes["msg"] = "failed"
+                    jsonRes["stCode"] = RespCodes.get("CONNECTION_FAILED")
                 self.ack_num = ackCount
             elif fCount == 1:
-                fid1 = int.from_bytes(e[pos:pos + 1], 'big')
+                fid1 = int.from_bytes(e[pos : pos + 1], "big")
                 pos += 1
-                valLen = int.from_bytes(e[pos:pos + 2], 'big')
+                valLen = int.from_bytes(e[pos : pos + 2], "big")
                 pos += 2
-                status = e[pos:pos + valLen].decode('utf-8')
+                status = e[pos : pos + valLen].decode("utf-8")
                 pos += valLen
                 if status == BinRespStat.get("OK"):
-                    jsonRes['stat'] = STAT.get("OK")
-                    jsonRes['type'] = RespTypeValues.get("CONN")
-                    jsonRes['msg'] = "successful"
-                    jsonRes['stCode'] = RespCodes.get("SUCCESS")
+                    jsonRes["stat"] = STAT.get("OK")
+                    jsonRes["type"] = RespTypeValues.get("CONN")
+                    jsonRes["msg"] = "successful"
+                    jsonRes["stCode"] = RespCodes.get("SUCCESS")
                 elif status == BinRespStat.get("NOT_OK"):
-                    jsonRes['stat'] = STAT.get("NOT_OK")
-                    jsonRes['type'] = RespTypeValues.get("CONN")
-                    jsonRes['msg'] = "failed"
-                    jsonRes['stCode'] = RespCodes.get("CONNECTION_FAILED")
+                    jsonRes["stat"] = STAT.get("NOT_OK")
+                    jsonRes["type"] = RespTypeValues.get("CONN")
+                    jsonRes["msg"] = "failed"
+                    jsonRes["stCode"] = RespCodes.get("CONNECTION_FAILED")
             else:
-                jsonRes['stat'] = STAT.get("NOT_OK")
-                jsonRes['type'] = RespTypeValues.get("CONN")
-                jsonRes['msg'] = "invalid field count"
-                jsonRes['stCode'] = RespCodes.get("CONNECTION_INVALID")
+                jsonRes["stat"] = STAT.get("NOT_OK")
+                jsonRes["type"] = RespTypeValues.get("CONN")
+                jsonRes["msg"] = "invalid field count"
+                jsonRes["stCode"] = RespCodes.get("CONNECTION_INVALID")
             return send_json_arr_resp(jsonRes)
         else:
             if type == BinRespTypes.get("DATA_TYPE"):
@@ -914,93 +887,131 @@ class HSWrapper:
                 if self.ack_num > 0:
                     # logger.info(f"ack_num {self.ack_num}")
                     self.counter += 1
-                    msg_num = buf2long(e[pos: pos + 4])
+                    msg_num = buf2long(e[pos : pos + 4])
                     pos += 4
                     if self.counter == self.ack_num:
                         req = get_acknowledgement_req(msg_num)
+                        ws = self._ws_app
                         if ws:
-                            ws.send(req, 0x2)
+                            if self._send_lock:
+                                with self._send_lock:
+                                    ws.send(req, 0x2)
+                            else:
+                                ws.send(req, 0x2)
                             self.counter = 0
                         # logger.info(f"Acknowledgement sent for message num: {msg_num}")
                 h = []
-                g = buf2long(e[pos: pos + 2])
+                g = buf2long(e[pos : pos + 2])
                 # logger.info(f"G in {g}")
                 pos += 2
                 for n in range(g):
+                    sub_msg_len = buf2long(e[pos : pos + 2])
                     pos += 2
-                    c = buf2long(e[pos: pos + 1])
+                    sub_msg_start = pos
+                    c = buf2long(e[pos : pos + 1])
                     # logger.info(f"ResponseType: {c}")
                     pos += 1
                     if c == ResponseTypes.get("SNAP"):
-                        f = buf2long(e[pos: pos + 4])
+                        f = buf2long(e[pos : pos + 4])
                         pos += 4
                         # logger.info(f"topic Id: {f}")
-                        name_len = buf2long(e[pos: pos + 1])
+                        name_len = buf2long(e[pos : pos + 1])
                         pos += 1
-                        topic_name = buf2string(e[pos: pos + name_len])
+                        topic_name = buf2string(e[pos : pos + name_len])
                         # logger.info(f"TOPIC Name {topic_name}")
                         pos += name_len
                         d = self.getNewTopicData(topic_name)
                         if d:
-                            topic_list[f] = d
-                            fcount = buf2long(e[pos: pos + 1])
+                            # Evict oldest entries if topic_list exceeds cap
+                            if len(self.topic_list) >= self._max_topics and f not in self.topic_list:
+                                oldest_key = next(iter(self.topic_list))
+                                del self.topic_list[oldest_key]
+                            self.topic_list[f] = d
+                            fcount = buf2long(e[pos : pos + 1])
                             pos += 1
+                            max_fields = len(d.fieldDataArray)
                             # logger.info(f"fcount1: {fcount}")
                             for index in range(fcount):
-                                fvalue = buf2long(e[pos: pos + 4])
-                                d.setLongValues(index, fvalue)
+                                fvalue = buf2long(e[pos : pos + 4])
+                                if index < max_fields:
+                                    d.setLongValues(index, fvalue)
                                 pos += 4
                             # logger.info("Able to set ")
                             d.setMultiplierAndPrec()
-                            fcount = buf2long(e[pos: pos + 1])
+                            fcount = buf2long(e[pos : pos + 1])
                             pos += 1
                             # logger.info(f"fcount2: {fcount}")
                             for index in range(fcount):
-                                fid = buf2long(e[pos: pos + 1])
+                                fid = buf2long(e[pos : pos + 1])
                                 pos += 1
-                                data_len = buf2long(e[pos: pos + 1])
+                                data_len = buf2long(e[pos : pos + 1])
                                 pos += 1
-                                str_val = buf2string(e[pos: pos + data_len])
+                                str_val = buf2string(e[pos : pos + data_len])
                                 pos += data_len
                                 d.setStringValues(fid, str_val)
                                 # logger.info(f"{fid} : {str_val}")
                             h.append(d.prepareData())
                         else:
                             logger.info("Invalid topic feed type !")
+                            # Skip integer fields to keep pos aligned
+                            fcount_skip = buf2long(e[pos : pos + 1])
+                            pos += 1
+                            pos += fcount_skip * 4
+                            # Skip string fields
+                            fcount2_skip = buf2long(e[pos : pos + 1])
+                            pos += 1
+                            for _ in range(fcount2_skip):
+                                pos += 1  # fid
+                                skip_len = buf2long(e[pos : pos + 1])
+                                pos += 1
+                                pos += skip_len
                     else:
                         if c == ResponseTypes.get("UPDATE"):
                             logger.debug("updates ......")
-                            f = buf2long(e[pos: pos + 4])
+                            f = buf2long(e[pos : pos + 4])
                             # logger.info(f"topic Id: {f}")
                             pos += 4
-                            d = topic_list[f]
+                            d = self.topic_list.get(f)
                             if not d:
                                 logger.info("Topic Not Available in TopicList!")
-                            else:
-                                # logger.info("INSIDE Else COndition ")
-                                fcount = buf2long(e[pos:pos + 1])
+                                # Skip remaining fields for this update to keep pos correct
+                                fcount = buf2long(e[pos : pos + 1])
                                 pos += 1
-                                # logger.info(f"fcount1: {fcount}")
-                                for index in range(fcount):
-                                    fvalue = buf2long(e[pos:pos + 4])
+                                pos += fcount * 4
+                                continue
+                            # logger.info("INSIDE Else COndition ")
+                            fcount = buf2long(e[pos : pos + 1])
+                            pos += 1
+                            max_fields = len(d.fieldDataArray)
+                            # logger.info(f"fcount1: {fcount}")
+                            for index in range(fcount):
+                                fvalue = buf2long(e[pos : pos + 4])
+                                if index < max_fields:
                                     d.setLongValues(index, fvalue)
-                                    # d[index] = fvalue
-                                    # logger.info(f"index: {index} val: {fvalue}")
-                                    pos += 4
+                                # d[index] = fvalue
+                                # logger.info(f"index: {index} val: {fvalue}")
+                                pos += 4
+                            d.setMultiplierAndPrec()
                             h.append(d.prepareData())
                         else:
                             logger.info(f"Invalid ResponseType: {c}")
+                            # Skip remaining bytes of this sub-message to keep pos aligned
+                            pos = sub_msg_start + sub_msg_len
                 return h
             else:
-                if type == BinRespTypes.get("SUBSCRIBE_TYPE") or type == BinRespTypes.get("UNSUBSCRIBE_TYPE"):
+                if type == BinRespTypes.get("SUBSCRIBE_TYPE") or type == BinRespTypes.get(
+                    "UNSUBSCRIBE_TYPE"
+                ):
                     # logger.info("INTO SUBScirbe Condition")
                     status = self.getStatus(e, pos)
                     json_res = {}
                     if status == BinRespStat.get("OK"):
                         json_res["stat"] = STAT.get("OK")
-                        json_res[
-                            "type"] = RespTypeValues.get("SUBS") if type == BinRespTypes.get(
-                            "SUBSCRIBE_TYPE") else RespTypeValues.get("UNSUBS")
+                        json_res["type"] = (
+                            RespTypeValues.get("SUBS")
+                            if type == BinRespTypes.get("SUBSCRIBE_TYPE")
+                            else RespTypeValues.get("UNSUBS")
+                        )
                         json_res["msg"] = "successful"
                         json_res["stCode"] = RespCodes.get("SUCCESS")
                     elif status == BinRespStat.get("NOT_OK"):
@@ -1030,7 +1041,9 @@ class HSWrapper:
                             json_res["msg"] = "failed"
                             json_res["stCode"] = RespCodes.get("SNAPSHOT_FAILED")
                         return send_json_arr_resp(json_res)
-                    elif type == BinRespTypes.get("CHPAUSE_TYPE") or type == BinRespTypes.get("CHRESUME_TYPE"):
+                    elif type == BinRespTypes.get("CHPAUSE_TYPE") or type == BinRespTypes.get(
+                        "CHRESUME_TYPE"
+                    ):
                         status = self.getStatus(e, pos)
                         json_res = {}
                         if status == BinRespStat.get("OK"):
@@ -1062,18 +1075,18 @@ class HSWrapper:
                             json_res["type"] = RespTypeValues.get("OPC")
                             json_res["msg"] = "successful"
                             json_res["stCode"] = RespCodes.get("SUCCESS")
-                            fld = buf2long(e[pos: pos + 1])
+                            fld = buf2long(e[pos : pos + 1])
                             pos += 1
-                            field_length = buf2long(e[pos: pos + 2])
+                            field_length = buf2long(e[pos : pos + 2])
                             pos += 2
-                            opc_key = buf2string(e[pos: pos + field_length])
+                            opc_key = buf2string(e[pos : pos + field_length])
                             pos += field_length
                             json_res["key"] = opc_key
-                            fld = buf2long(e[pos: pos + 1])
+                            fld = buf2long(e[pos : pos + 1])
                             pos += 1
-                            field_length = buf2long(e[pos: pos + 2])
+                            field_length = buf2long(e[pos : pos + 2])
                             pos += 2
-                            data = buf2string(e[pos:pos + field_length])
+                            data = buf2string(e[pos : pos + field_length])
                             pos += field_length
                             json_res["scrips"] = json.loads(data)["data"]
                         elif status == BinRespStat.get("NOT_OK"):
@@ -1088,7 +1101,7 @@ class HSWrapper:
 
 
 class StartServer:
-    def __init__(self, a, token, sid, onopen, onmessage, onerror, onclose):
+    def __init__(self, a, token, sid, onopen, onmessage, onerror, onclose, owner=None, send_lock=None):
         self.userSocket = self
         self.a = a
         self.onopen = onopen
@@ -1096,49 +1109,80 @@ class StartServer:
         self.onerror = onerror
         self.onclose = onclose
         self.token, self.sid = token, sid
-        global ws
+        self._owner = owner  # HSWebSocket instance that owns this connection
+        self._send_lock = send_lock  # Lock for serializing WebSocket sends
+        self._ws_app = None
         try:
             # websocket.enableTrace(True)
-            ws = websocket.WebSocketApp(a,
-                                        on_open=self.on_open,
-                                        on_message=self.on_message,
-                                        on_error=self.on_error,
-                                        on_close=self.on_close)
-        except Exception:
-            logger.info("WebSocket not supported!")
+            self._ws_app = websocket.WebSocketApp(
+                a,
+                on_open=self.on_open,
+                on_message=self.on_message,
+                on_error=self.on_error,
+                on_close=self.on_close,
+            )
+        except Exception as e:
+            logger.error(f"WebSocket not supported: {e}")
+            self.onerror(e)
 
-        if ws:
-            # logger.info("WS is a array buffer ")
-            self.hsWrapper = HSWrapper()
-            # logger.info("HS WRAPPER IS DONE ")
+        if self._ws_app:
+            self.hsWrapper = HSWrapper(ws_app=self._ws_app, send_lock=self._send_lock)
+            # Store references on the owning HSWebSocket instance
+            if self._owner is not None:
+                self._owner._ws_app = self._ws_app
+                self._owner._hs_wrapper = self.hsWrapper
+            self._ws_app.run_forever(
+                ping_interval=30,
+                ping_timeout=10,
+            )
+            # run_forever() has returned — clean up references to break reference cycles
+            # so that StartServer, HSWrapper, and WebSocketApp can be GC'd promptly
+            self._ws_app = None
+            self.hsWrapper = None
+            self.onopen = None
+            self.onmessage = None
+            self.onerror = None
+            self.onclose = None
+            if self._owner is not None:
+                self._owner = None
         else:
             logger.info("WebSocket not initialized!")
 
-        ws.run_forever()
-
     def on_open(self, ws):
         # logger.info("[OnOpen]: Function is running in HSWebscoket")
-        self.onopen()
+        callback = self.onopen
+        if callback:
+            callback()
 
     def on_message(self, ws, inData):
         # logger.info("[OnMessage]: Function is running in HSWebsocket")
+        callback = self.onmessage
+        if not callback:
+            return
         outData = None
         if isinstance(inData, bytes):
-            jsonData = self.hsWrapper.parseData(inData)
+            hsw = self.hsWrapper
+            if not hsw:
+                return
+            jsonData = hsw.parseData(inData)
             # logger.info(f"JSON DATA in HSWEBSOCKE ON MESSAGE {jsonData}")
             if jsonData:
                 outData = json.dumps(jsonData) if isEncyptOut else jsonData
         else:
             outData = inData if not isEncyptIn else json.loads(inData) if isEncyptOut else inData
         if outData:
-            self.onmessage(outData)
+            callback(outData)
 
     def on_close(self, ws, close_status_code, close_msg):
         # logger.info(f"[OnClose]: Function is running HSWebsocket {close_status_code}")
-        self.onclose()
+        callback = self.onclose
+        if callback:
+            callback()
 
     def on_error(self, ws, error):
-        self.onerror(error)
+        callback = self.onerror
+        if callback:
+            callback(error)
         logger.info(f"ERROR in HSWebscoket {error}")
         logger.info("[OnError]: Function is running HSWebsocket")
 
@@ -1149,21 +1193,25 @@ DEPTH_PREFIX = "dp"
 
 
 def convert_to_dict(scrips=None, channelnum=None):
-    dict_data = {"scrips": scrips, "sub_type": BinRespTypes.get("SUBSCRIBE_TYPE"), "SCRIP_PREFIX": SCRIP_PREFIX,
-                 "channelnum": channelnum}
+    dict_data = {
+        "scrips": scrips,
+        "sub_type": BinRespTypes.get("SUBSCRIBE_TYPE"),
+        "SCRIP_PREFIX": SCRIP_PREFIX,
+        "channelnum": channelnum,
+    }
     return dict_data
 
 
 class HSWebSocket:
-    OPEN = 0
-    readyState = 0
-
     def __init__(self):
         self.onclose = None
         self.url = None
         self.onopen = None
         self.onmessage = None
         self.on_error = None
+        self._ws_app = None  # Per-instance WebSocketApp reference
+        self._hs_wrapper = None  # Per-instance HSWrapper reference
+        self._send_lock = None  # Optional lock for serializing sends
 
     def open_connection(self, url, token, sid, on_open, on_message, on_error, on_close):
         self.url = url
@@ -1171,7 +1219,7 @@ class HSWebSocket:
         self.onmessage = on_message
         self.on_error = on_error
         self.onclose = on_close
-        StartServer(self.url, token, sid, self.onopen, self.onmessage, self.on_error, self.onclose)
+        StartServer(self.url, token, sid, self.onopen, self.onmessage, self.on_error, self.onclose, owner=self, send_lock=self._send_lock)
 
     def hs_send(self, d):
         req_json = json.loads(d)
@@ -1208,18 +1256,30 @@ class HSWebSocket:
             else:
                 logger.info("Invalid conn mode !")
         elif req_type == ReqTypeValues.get("SCRIP_SUBS"):
-            req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum)
+            req = prepareSubsUnSubsRequest(
+                scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum
+            )
             # logger.info(f"*********** SUB SCRIPS req {req}")
         elif req_type == ReqTypeValues.get("SCRIP_UNSUBS"):
-            req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum)
+            req = prepareSubsUnSubsRequest(
+                scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), SCRIP_PREFIX, channelnum
+            )
         elif req_type == ReqTypeValues.get("INDEX_SUBS"):
-            req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), INDEX_PREFIX, channelnum)
+            req = prepareSubsUnSubsRequest(
+                scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), INDEX_PREFIX, channelnum
+            )
         elif req_type == ReqTypeValues.get("INDEX_UNSUBS"):
-            req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), INDEX_PREFIX, channelnum)
+            req = prepareSubsUnSubsRequest(
+                scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), INDEX_PREFIX, channelnum
+            )
         elif req_type == ReqTypeValues.get("DEPTH_SUBS"):
-            req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), DEPTH_PREFIX, channelnum)
+            req = prepareSubsUnSubsRequest(
+                scrips, BinRespTypes.get("SUBSCRIBE_TYPE"), DEPTH_PREFIX, channelnum
+            )
         elif req_type == ReqTypeValues.get("DEPTH_UNSUBS"):
-            req = prepareSubsUnSubsRequest(scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), DEPTH_PREFIX, channelnum)
+            req = prepareSubsUnSubsRequest(
+                scrips, BinRespTypes.get("UNSUBSCRIBE_TYPE"), DEPTH_PREFIX, channelnum
+            )
         elif req_type == ReqTypeValues.get("CHANNEL_PAUSE"):
             req = prepareChannelRequest(BinRespTypes.get("CHPAUSE_TYPE"), channelnum)
         elif req_type == ReqTypeValues.get("CHANNEL_RESUME"):
@@ -1231,20 +1291,36 @@ class HSWebSocket:
         elif req_type == ReqTypeValues.get("SNAP_IF"):
             req = prepareSnapshotRequest(scrips, BinRespTypes.get("SNAPSHOT"), INDEX_PREFIX)
         elif req_type == ReqTypeValues.get("OPC_SUBS"):
-            req = get_opc_chain_subs_request(req[Keys.get("OPC_KEY")], req[Keys.get("STK_PRC")],
-                                             req[Keys.get("HIGH_STK")],
-                                             req[Keys.get("LOW_STK")], channelnum)
+            req = get_opc_chain_subs_request(
+                req_json[Keys.get("OPC_KEY")],
+                req_json[Keys.get("STK_PRC")],
+                req_json[Keys.get("HIGH_STK")],
+                req_json[Keys.get("LOW_STK")],
+                channelnum,
+            )
         elif req_type == ReqTypeValues.get("THROTTLING_INTERVAL"):
             req = prepareThrottlingIntervalRequest(scrips)
-        elif req_type == ReqTypeValues.get("LOG"):
-            enable_log(req.get('enable'))
+        ws = self._ws_app
         if ws and req:
             ws.send(req, 0x2)
         else:
-            logger.info("Unable to send request !, Reason: Connection faulty or request not valid !")
+            logger.info(
+                "Unable to send request !, Reason: Connection faulty or request not valid !"
+            )
 
     def close(self):
-        ws.close()
+        if self._ws_app:
+            self._ws_app.close()
+            self._ws_app = None
+        if self._hs_wrapper:
+            self._hs_wrapper.topic_list.clear()
+        self._hs_wrapper = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 #
@@ -1329,7 +1405,7 @@ class HSWebSocket:
 
 
 class StartHSIServer:
-    def __init__(self, url, onopen, onmessage, onerror, onclose):
+    def __init__(self, url, onopen, onmessage, onerror, onclose, owner=None):
         self.OPEN = None
         self.readyState = None
         self.url = url
@@ -1337,44 +1413,68 @@ class StartHSIServer:
         self.onmessage = onmessage
         self.onerror = onerror
         self.onclose = onclose
-        # self.token, self.sid = token, sid
-        global hsiws
+        self._owner = owner  # HSIWebSocket instance that owns this connection
+        self._ws_app = None
         try:
             # websocket.enableTrace(True)
-            hsiws = websocket.WebSocketApp(self.url,
-                                           on_open=self.on_open,
-                                           on_message=self.on_message,
-                                           on_error=self.on_error,
-                                           on_close=self.on_close)
+            self._ws_app = websocket.WebSocketApp(
+                self.url,
+                on_open=self.on_open,
+                on_message=self.on_message,
+                on_error=self.on_error,
+                on_close=self.on_close,
+            )
         except Exception:
             logger.info("WebSocket not supported!")
-        hsiws.run_forever()
+        # Store reference on the owning HSIWebSocket instance
+        if self._owner is not None and self._ws_app:
+            self._owner._ws_app = self._ws_app
+        if self._ws_app:
+            self._ws_app.run_forever(
+                ping_interval=30,
+                ping_timeout=10,
+            )
+            # run_forever() returned — break reference cycles for prompt GC
+            self._ws_app = None
+            self.onopen = None
+            self.onmessage = None
+            self.onerror = None
+            self.onclose = None
+            if self._owner is not None:
+                self._owner = None
 
     def on_message(self, ws, message):
         # logger.info(f"Received message: {message}")
-        self.onmessage(message)
+        callback = self.onmessage
+        if callback:
+            callback(message)
 
     def on_error(self, ws, error):
         logger.info(f"Error: {error}")
-        self.onerror(error)
+        callback = self.onerror
+        if callback:
+            callback(error)
 
     def on_close(self, ws, close_status_code, close_msg):
         logger.info("Connection closed")
         self.OPEN = 0
         self.readyState = 0
-        hsiWs = None
-        self.onclose()
+        self._ws_app = None
+        callback = self.onclose
+        if callback:
+            callback()
 
     def on_open(self, ws):
         logger.info("Connection established HSWebSocket")
         self.OPEN = 1
         self.readyState = 1
-        self.onopen()
+        callback = self.onopen
+        if callback:
+            callback()
 
 
 class HSIWebSocket:
     def __init__(self):
-        # self.hsiWs = None
         self.hsiSocket = None
         self.reqData = None
         self.OPEN = 0
@@ -1384,7 +1484,7 @@ class HSIWebSocket:
         self.onmessage = None
         self.onclose = None
         self.onerror = None
-        # self.token, self.sid = token, sid
+        self._ws_app = None  # Per-instance WebSocketApp reference
 
     def open_connection(self, url, onopen, onmessage, onclose, onerror):
         self.url = url
@@ -1392,43 +1492,51 @@ class HSIWebSocket:
         self.onmessage = onmessage
         self.onclose = onclose
         self.onerror = onerror
-        StartHSIServer(self.url, self.onopen, self.onmessage, self.onerror, self.onclose)
+        StartHSIServer(self.url, self.onopen, self.onmessage, self.onerror, self.onclose, owner=self)
 
     def send(self, d):
         reqJson = json.loads(d)
         req = None
-        if reqJson['type'] == 'CONNECTION':
-            if 'Authorization' in reqJson and 'Sid' in reqJson and 'source' in reqJson:
+        if reqJson["type"] == "CONNECTION":
+            if "Authorization" in reqJson and "Sid" in reqJson and "source" in reqJson:
                 req = {
-                    'type': 'cn',
-                    'Authorization': reqJson['Authorization'],
-                    'Sid': reqJson['Sid'],
-                    'src': reqJson['source']
+                    "type": "cn",
+                    "Authorization": reqJson["Authorization"],
+                    "Sid": reqJson["Sid"],
+                    "src": reqJson["source"],
                 }
                 self.reqData = req
             else:
-                if 'x-access-token' in reqJson and 'src' in reqJson:
+                if "x-access-token" in reqJson and "src" in reqJson:
                     req = {
-                        'type': 'cn',
-                        'x-access-token': reqJson['x-access-token'],
-                        'source': reqJson['source']
+                        "type": "cn",
+                        "x-access-token": reqJson["x-access-token"],
+                        "source": reqJson["source"],
                     }
                     self.reqData = req
                 else:
                     logger.info("Invalid connection mode !")
         else:
-            if reqJson['type'] == 'FORCE_CONNECTION':
-                self.reqData = self.reqData['type'] = 'fcn'
+            if reqJson["type"] == "FORCE_CONNECTION":
+                self.reqData = self.reqData["type"] = "fcn"
                 req = self.reqData
             else:
                 logger.info("Invalid Request !")
-        if hsiws and req:
+        if self._ws_app and req:
             js_obj = json.dumps(req)
-            hsiws.send(js_obj)
+            self._ws_app.send(js_obj)
         else:
             logger.info("Unable to send request! Reason: Connection faulty or request not valid!")
 
     def close(self):
         self.OPEN = 0
         self.readyState = 0
-        hsiws.close()
+        if self._ws_app:
+            self._ws_app.close()
+            self._ws_app = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

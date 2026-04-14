@@ -17,31 +17,31 @@ class MotilalExchangeMapper:
     # Exchange type mapping for Motilal broker
     # Based on WebSocket documentation and API doc
     EXCHANGE_TYPES = {
-        'NSE': 'NSE',        # NSE Cash Market
-        'BSE': 'BSE',        # BSE Cash Market
-        'NFO': 'NSEFO',      # NSE Futures & Options
-        'BFO': 'BSEFO',      # BSE F&O
-        'MCX': 'MCX',        # MCX Commodity
-        'CDS': 'NSECD',      # NSE Currency Derivatives
-        'NCX': 'NCDEX',      # NCDEX
+        "NSE": "NSE",  # NSE Cash Market
+        "BSE": "BSE",  # BSE Cash Market
+        "NFO": "NSEFO",  # NSE Futures & Options
+        "BFO": "BSEFO",  # BSE F&O
+        "MCX": "MCX",  # MCX Commodity
+        "CDS": "NSECD",  # NSE Currency Derivatives
+        "NCX": "NCDEX",  # NCDEX
     }
 
     # Exchange character mapping for binary protocol (as per motilal_websocket.py)
     EXCHANGE_CHAR_MAP = {
-        'NSE': 'N',
-        'BSE': 'B',
-        'MCX': 'M',
-        'NSECD': 'C',
-        'NCDEX': 'D',
-        'BSEFO': 'G',
-        'NSEFO': 'N'  # NSEFO uses 'N' like NSE
+        "NSE": "N",
+        "BSE": "B",
+        "MCX": "M",
+        "NSECD": "C",
+        "NCDEX": "D",
+        "BSEFO": "G",
+        "NSEFO": "N",  # NSEFO uses 'N' like NSE
     }
 
     # Reverse mapping for binary packets
     # Note: NSE and NSEFO both use 'N', differentiated by exchange type (CASH vs DERIVATIVES)
     # We default 'N' to 'NSE' in the reverse mapping
     CHAR_TO_EXCHANGE = {v: k for k, v in EXCHANGE_CHAR_MAP.items()}
-    CHAR_TO_EXCHANGE['N'] = 'NSE'  # Ensure 'N' maps to NSE (not NSEFO)
+    CHAR_TO_EXCHANGE["N"] = "NSE"  # Ensure 'N' maps to NSE (not NSEFO)
 
     @staticmethod
     def get_exchange_type(exchange):
@@ -68,7 +68,9 @@ class MotilalExchangeMapper:
             str: Single character exchange code
         """
         exchange_upper = exchange.upper()
-        return MotilalExchangeMapper.EXCHANGE_CHAR_MAP.get(exchange_upper, exchange_upper[0] if exchange_upper else 'N')
+        return MotilalExchangeMapper.EXCHANGE_CHAR_MAP.get(
+            exchange_upper, exchange_upper[0] if exchange_upper else "N"
+        )
 
     @staticmethod
     def get_exchange_from_char(char):
@@ -96,7 +98,7 @@ class MotilalCapabilityRegistry:
     """
 
     # Motilal broker capabilities
-    exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'NCX']
+    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "NCX"]
 
     # Subscription modes:
     # 1: LTP only
@@ -106,24 +108,24 @@ class MotilalCapabilityRegistry:
 
     # Motilal supports 5-level market depth for all exchanges
     depth_support = {
-        'NSE': [5],
-        'BSE': [5],
-        'NFO': [5],
-        'BFO': [5],
-        'MCX': [5],
-        'CDS': [5],
-        'NCX': [5]
+        "NSE": [5],
+        "BSE": [5],
+        "NFO": [5],
+        "BFO": [5],
+        "MCX": [5],
+        "CDS": [5],
+        "NCX": [5],
     }
 
     # Exchange types for subscription (CASH vs DERIVATIVES)
     exchange_segment_map = {
-        'NSE': 'CASH',
-        'BSE': 'CASH',
-        'NFO': 'DERIVATIVES',
-        'BFO': 'DERIVATIVES',
-        'MCX': 'DERIVATIVES',
-        'CDS': 'DERIVATIVES',
-        'NCX': 'DERIVATIVES'
+        "NSE": "CASH",
+        "BSE": "CASH",
+        "NFO": "DERIVATIVES",
+        "BFO": "DERIVATIVES",
+        "MCX": "DERIVATIVES",
+        "CDS": "DERIVATIVES",
+        "NCX": "DERIVATIVES",
     }
 
     @classmethod
@@ -184,4 +186,4 @@ class MotilalCapabilityRegistry:
         Returns:
             str: 'CASH' or 'DERIVATIVES'
         """
-        return cls.exchange_segment_map.get(exchange, 'CASH')
+        return cls.exchange_segment_map.get(exchange, "CASH")

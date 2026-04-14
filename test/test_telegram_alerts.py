@@ -3,14 +3,17 @@ Test script for Telegram Alert Service
 Tests the integration of telegram alerts with order services
 """
 
-import sys
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.telegram_alert_service import telegram_alert_service
-from database.telegram_db import get_telegram_user_by_username
-from database.auth_db import get_username_by_apikey
 import time
+
+from database.auth_db import get_username_by_apikey
+from database.telegram_db import get_telegram_user_by_username
+from services.telegram_alert_service import telegram_alert_service
+
 
 def test_telegram_alerts():
     """Test various order alert types"""
@@ -21,127 +24,98 @@ def test_telegram_alerts():
     # Test data
     test_orders = [
         {
-            'type': 'placeorder',
-            'data': {
-                'symbol': 'RELIANCE',
-                'action': 'BUY',
-                'quantity': 10,
-                'pricetype': 'MARKET',
-                'exchange': 'NSE',
-                'product': 'MIS',
-                'strategy': 'Test Strategy'
+            "type": "placeorder",
+            "data": {
+                "symbol": "RELIANCE",
+                "action": "BUY",
+                "quantity": 10,
+                "pricetype": "MARKET",
+                "exchange": "NSE",
+                "product": "MIS",
+                "strategy": "Test Strategy",
             },
-            'response_live': {
-                'status': 'success',
-                'orderid': 'TEST123456',
-                'mode': 'live'
+            "response_live": {"status": "success", "orderid": "TEST123456", "mode": "live"},
+            "response_analyze": {
+                "status": "success",
+                "orderid": "ANALYZE123456",
+                "mode": "analyze",
             },
-            'response_analyze': {
-                'status': 'success',
-                'orderid': 'ANALYZE123456',
-                'mode': 'analyze'
-            }
         },
         {
-            'type': 'placesmartorder',
-            'data': {
-                'symbol': 'TATASTEEL',
-                'action': 'SELL',
-                'quantity': 5,
-                'position_size': 10,
-                'exchange': 'NSE',
-                'strategy': 'Smart Strategy'
+            "type": "placesmartorder",
+            "data": {
+                "symbol": "TATASTEEL",
+                "action": "SELL",
+                "quantity": 5,
+                "position_size": 10,
+                "exchange": "NSE",
+                "strategy": "Smart Strategy",
             },
-            'response_live': {
-                'status': 'success',
-                'orderid': 'SMART789',
-                'mode': 'live'
+            "response_live": {"status": "success", "orderid": "SMART789", "mode": "live"},
+            "response_analyze": {
+                "status": "success",
+                "orderid": "SMARTANALYZE789",
+                "mode": "analyze",
             },
-            'response_analyze': {
-                'status': 'success',
-                'orderid': 'SMARTANALYZE789',
-                'mode': 'analyze'
-            }
         },
         {
-            'type': 'basketorder',
-            'data': {
-                'strategy': 'Basket Strategy',
-                'orders': [
-                    {'symbol': 'INFY', 'action': 'BUY', 'quantity': 5},
-                    {'symbol': 'TCS', 'action': 'BUY', 'quantity': 3}
-                ]
-            },
-            'response_live': {
-                'status': 'success',
-                'results': [
-                    {'symbol': 'INFY', 'status': 'success', 'orderid': 'B001'},
-                    {'symbol': 'TCS', 'status': 'success', 'orderid': 'B002'}
+            "type": "basketorder",
+            "data": {
+                "strategy": "Basket Strategy",
+                "orders": [
+                    {"symbol": "INFY", "action": "BUY", "quantity": 5},
+                    {"symbol": "TCS", "action": "BUY", "quantity": 3},
                 ],
-                'mode': 'live'
             },
-            'response_analyze': {
-                'status': 'success',
-                'results': [
-                    {'symbol': 'INFY', 'status': 'success', 'orderid': 'AB001'},
-                    {'symbol': 'TCS', 'status': 'success', 'orderid': 'AB002'}
+            "response_live": {
+                "status": "success",
+                "results": [
+                    {"symbol": "INFY", "status": "success", "orderid": "B001"},
+                    {"symbol": "TCS", "status": "success", "orderid": "B002"},
                 ],
-                'mode': 'analyze'
-            }
+                "mode": "live",
+            },
+            "response_analyze": {
+                "status": "success",
+                "results": [
+                    {"symbol": "INFY", "status": "success", "orderid": "AB001"},
+                    {"symbol": "TCS", "status": "success", "orderid": "AB002"},
+                ],
+                "mode": "analyze",
+            },
         },
         {
-            'type': 'modifyorder',
-            'data': {
-                'orderid': 'MOD123',
-                'symbol': 'HDFC',
-                'quantity': 20,
-                'price': 1500.50,
-                'strategy': 'Modify Test'
+            "type": "modifyorder",
+            "data": {
+                "orderid": "MOD123",
+                "symbol": "HDFC",
+                "quantity": 20,
+                "price": 1500.50,
+                "strategy": "Modify Test",
             },
-            'response_live': {
-                'status': 'success',
-                'orderid': 'MOD123',
-                'mode': 'live'
-            },
-            'response_analyze': {
-                'status': 'success',
-                'orderid': 'MOD123',
-                'mode': 'analyze'
-            }
+            "response_live": {"status": "success", "orderid": "MOD123", "mode": "live"},
+            "response_analyze": {"status": "success", "orderid": "MOD123", "mode": "analyze"},
         },
         {
-            'type': 'cancelorder',
-            'data': {
-                'orderid': 'CANCEL456',
-                'strategy': 'Cancel Test'
-            },
-            'response_live': {
-                'status': 'success',
-                'orderid': 'CANCEL456',
-                'mode': 'live'
-            },
-            'response_analyze': {
-                'status': 'success',
-                'orderid': 'CANCEL456',
-                'mode': 'analyze'
-            }
+            "type": "cancelorder",
+            "data": {"orderid": "CANCEL456", "strategy": "Cancel Test"},
+            "response_live": {"status": "success", "orderid": "CANCEL456", "mode": "live"},
+            "response_analyze": {"status": "success", "orderid": "CANCEL456", "mode": "analyze"},
         },
         {
-            'type': 'closeposition',
-            'data': {
-                'strategy': 'Close All Positions'
+            "type": "closeposition",
+            "data": {"strategy": "Close All Positions"},
+            "response_live": {
+                "status": "success",
+                "message": "All positions closed",
+                "mode": "live",
             },
-            'response_live': {
-                'status': 'success',
-                'message': 'All positions closed',
-                'mode': 'live'
+            "response_analyze": {
+                "status": "success",
+                "message": "All positions will be closed",
+                "mode": "analyze",
             },
-            'response_analyze': {
-                'status': 'success',
-                'message': 'All positions will be closed',
-                'mode': 'analyze'
-            }
-        }
+        },
     ]
 
     # Test formatting for each order type
@@ -151,26 +125,22 @@ def test_telegram_alerts():
 
         # Test LIVE mode
         message_live = telegram_alert_service.format_order_details(
-            test['type'],
-            test['data'],
-            test['response_live']
+            test["type"], test["data"], test["response_live"]
         )
-        print(f"   LIVE Mode:")
+        print("   LIVE Mode:")
         try:
-            print("   " + message_live.replace('\n', '\n   '))
+            print("   " + message_live.replace("\n", "\n   "))
         except UnicodeEncodeError:
             # Fallback for terminals that don't support unicode
             print("   [Message formatted correctly but contains unicode characters]")
 
         # Test ANALYZE mode
         message_analyze = telegram_alert_service.format_order_details(
-            test['type'],
-            test['data'],
-            test['response_analyze']
+            test["type"], test["data"], test["response_analyze"]
         )
-        print(f"\n   ANALYZE Mode:")
+        print("\n   ANALYZE Mode:")
         try:
-            print("   " + message_analyze.replace('\n', '\n   '))
+            print("   " + message_analyze.replace("\n", "\n   "))
         except UnicodeEncodeError:
             # Fallback for terminals that don't support unicode
             print("   [Message formatted correctly but contains unicode characters]")
@@ -184,10 +154,10 @@ def test_telegram_alerts():
     for test in test_orders[:2]:  # Test only first 2 to avoid spam
         print(f"   Queuing {test['type']} alert...")
         telegram_alert_service.send_order_alert(
-            test['type'],
-            test['data'],
-            test['response_live'],
-            api_key=None  # No actual API key for test
+            test["type"],
+            test["data"],
+            test["response_live"],
+            api_key=None,  # No actual API key for test
         )
 
     print("   Alerts queued successfully (would be sent if user configured)")
@@ -197,10 +167,7 @@ def test_telegram_alerts():
     try:
         # Test with missing data
         telegram_alert_service.send_order_alert(
-            'placeorder',
-            {},
-            {'status': 'error', 'message': 'Test error'},
-            api_key=None
+            "placeorder", {}, {"status": "error", "message": "Test error"}, api_key=None
         )
         print("   Error handling works correctly")
     except Exception as e:
@@ -216,6 +183,7 @@ def test_telegram_alerts():
     print("3. Place actual orders through the API")
 
     return True
+
 
 if __name__ == "__main__":
     success = test_telegram_alerts()

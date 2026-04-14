@@ -6,10 +6,6 @@ integrating with OpenAlgo's WebSocket proxy infrastructure.
 """
 
 from .motilal_adapter import MotilalWebSocketAdapter
-from .motilal_mapping import MotilalExchangeMapper, MotilalCapabilityRegistry
+from .motilal_mapping import MotilalCapabilityRegistry, MotilalExchangeMapper
 
-__all__ = [
-    'MotilalWebSocketAdapter',
-    'MotilalExchangeMapper',
-    'MotilalCapabilityRegistry'
-]
+__all__ = ["MotilalWebSocketAdapter", "MotilalExchangeMapper", "MotilalCapabilityRegistry"]

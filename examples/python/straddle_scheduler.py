@@ -1,7 +1,8 @@
-from openalgo import api
-from apscheduler.schedulers.background import BackgroundScheduler
-import pytz
 import time
+
+import pytz
+from apscheduler.schedulers.background import BackgroundScheduler
+from openalgo import api
 
 print("🔁 OpenAlgo Python Bot is running.")
 
@@ -10,11 +11,11 @@ print("🔁 OpenAlgo Python Bot is running.")
 # ===============================
 client = api(
     api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
-    host="http://127.0.0.1:5000"
+    host="http://127.0.0.1:5000",
 )
 
-NIFTY_LOT = 75    # NSE Index lot size
-LOTS = 1          # Number of lots
+NIFTY_LOT = 75  # NSE Index lot size
+LOTS = 1  # Number of lots
 
 
 # ===============================
@@ -33,11 +34,23 @@ def place_nifty_straddle_0920():
             strategy="NIFTY_09DEC25_STRADDLE_0920",
             underlying="NIFTY",
             exchange="NSE_INDEX",
-            expiry_date="09DEC25",    # FIXED EXPIRY
+            expiry_date="09DEC25",  # FIXED EXPIRY
             legs=[
-                {"offset": "ATM", "option_type": "CE", "action": "SELL", "quantity": qty, "product": "NRML"},
-                {"offset": "ATM", "option_type": "PE", "action": "SELL", "quantity": qty, "product": "NRML"}
-            ]
+                {
+                    "offset": "ATM",
+                    "option_type": "CE",
+                    "action": "SELL",
+                    "quantity": qty,
+                    "product": "NRML",
+                },
+                {
+                    "offset": "ATM",
+                    "option_type": "PE",
+                    "action": "SELL",
+                    "quantity": qty,
+                    "product": "NRML",
+                },
+            ],
         )
 
         print("ORDER RESPONSE:", response)
@@ -58,9 +71,9 @@ def schedule_straddle():
         place_nifty_straddle_0920,
         trigger="cron",
         day_of_week="mon-sun",
-        hour=09,
+        hour=9,
         minute=20,
-        id="nifty_0920_straddle"
+        id="nifty_0920_straddle",
     )
 
     scheduler.start()

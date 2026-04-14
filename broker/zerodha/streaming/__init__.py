@@ -7,4 +7,4 @@ following the OpenAlgo WebSocket proxy architecture.
 
 from .zerodha_adapter import ZerodhaWebSocketAdapter
 
-__all__ = ['ZerodhaWebSocketAdapter']
+__all__ = ["ZerodhaWebSocketAdapter"]

@@ -37,7 +37,4 @@ def parse_margin_response(response_data):
     Returns:
         Error dict (API not supported)
     """
-    return {
-        'status': 'error',
-        'message': 'Motilal Oswal does not support margin calculator API'
-    }
+    return {"status": "error", "message": "Motilal Oswal does not support margin calculator API"}

@@ -1,6 +1,7 @@
 """
 Helper module for database initialization with better logging
 """
+
 from sqlalchemy import inspect
 
 
@@ -33,7 +34,9 @@ def init_db_with_logging(base, engine, db_name, logger):
 
     # Log appropriately
     if tables_to_create:
-        logger.debug(f"{db_name}: Created {len(tables_to_create)} new table(s): {', '.join(sorted(tables_to_create))}")
+        logger.debug(
+            f"{db_name}: Created {len(tables_to_create)} new table(s): {', '.join(sorted(tables_to_create))}"
+        )
 
     if tables_already_exist:
         logger.debug(f"{db_name}: Verified {len(tables_already_exist)} existing table(s)")

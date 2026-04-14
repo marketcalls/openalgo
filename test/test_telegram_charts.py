@@ -1,15 +1,19 @@
 """
 Test script to verify Telegram bot chart generation
 """
+
 import asyncio
-import sys
 import os
+import sys
+
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.telegram_bot_service import telegram_bot_service
-from database.telegram_db import get_telegram_user, create_or_update_telegram_user
 from datetime import datetime
+
+from database.telegram_db import create_or_update_telegram_user, get_telegram_user
+from services.telegram_bot_service import telegram_bot_service
+
 
 async def test_chart_generation():
     """Test chart generation directly"""
@@ -24,7 +28,9 @@ async def test_chart_generation():
             telegram_id=telegram_id,
             username="test_user",
             # Use the API key from environment or a test key
-            api_key=os.getenv('TEST_API_KEY', '56c3dc6ba7d9c9df478e4f19ffc5d3e15e1dd91b5aa11e91c910f202c91eff9d')
+            api_key=os.getenv(
+                "TEST_API_KEY", "56c3dc6ba7d9c9df478e4f19ffc5d3e15e1dd91b5aa11e91c910f202c91eff9d"
+            ),
         )
 
     print("Testing chart generation...")
@@ -32,11 +38,7 @@ async def test_chart_generation():
     # Test intraday chart
     print("\n1. Testing intraday chart (5m interval, 5 days)...")
     intraday_chart = await telegram_bot_service._generate_intraday_chart(
-        symbol="RELIANCE",
-        exchange="NSE",
-        interval="5m",
-        days=5,
-        telegram_id=telegram_id
+        symbol="RELIANCE", exchange="NSE", interval="5m", days=5, telegram_id=telegram_id
     )
 
     if intraday_chart:
@@ -51,11 +53,7 @@ async def test_chart_generation():
     # Test daily chart
     print("\n2. Testing daily chart (D interval, 30 days)...")
     daily_chart = await telegram_bot_service._generate_daily_chart(
-        symbol="RELIANCE",
-        exchange="NSE",
-        interval="D",
-        days=30,
-        telegram_id=telegram_id
+        symbol="RELIANCE", exchange="NSE", interval="D", days=30, telegram_id=telegram_id
     )
 
     if daily_chart:
@@ -68,6 +66,7 @@ async def test_chart_generation():
         print("   [FAIL] Failed to generate daily chart")
 
     print("\n[OK] Chart generation test completed!")
+
 
 if __name__ == "__main__":
     asyncio.run(test_chart_generation())

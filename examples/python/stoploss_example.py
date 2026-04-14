@@ -2,15 +2,16 @@
 🔁 OpenAlgo Python Bot is running.
 """
 
-from openalgo import api
 import time
 from datetime import datetime
+
+from openalgo import api
 
 # Setup OpenAlgo client
 client = api(
     api_key="your-openalgo-api-key",  # Replace with your API key
     host="http://127.0.0.1:5000",  # Replace with your API host
-    ws_url="ws://127.0.0.1:8765"  # Explicit WebSocket URL (can be different from REST API host)
+    ws_url="ws://127.0.0.1:8765",  # Explicit WebSocket URL (can be different from REST API host)
 )
 
 # Strategy details
@@ -28,6 +29,7 @@ entry_price = None
 stoploss_price = None
 ltp_hit = False
 
+
 # Step 1: Place a buy order
 def place_entry_order():
     global order_id
@@ -39,13 +41,14 @@ def place_entry_order():
         action=ACTION,
         price_type=PRICE_TYPE,
         product=PRODUCT,
-        quantity=QUANTITY
+        quantity=QUANTITY,
     )
     print("Place Order Response:", response)
     if response.get("status") == "success":
         order_id = response.get("orderid")
         return True
     return False
+
 
 # Step 2: Get order status and price
 def wait_for_execution():
@@ -71,6 +74,7 @@ def wait_for_execution():
     print("❌ Order not completed in time. Exiting.")
     exit(1)
 
+
 # Step 3: LTP Callback
 def on_data_received(data):
     global ltp_hit
@@ -83,6 +87,7 @@ def on_data_received(data):
             print(f"🛑 Stoploss hit at LTP {ltp}. Sending exit order...")
             send_exit_order()
 
+
 # Step 4: Exit order logic
 def send_exit_order():
     response = client.placeorder(
@@ -92,9 +97,10 @@ def send_exit_order():
         action="SELL",
         price_type="MARKET",
         product=PRODUCT,
-        quantity=QUANTITY
+        quantity=QUANTITY,
     )
     print("Exit Order Response:", response)
+
 
 # === Main Execution ===
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 def transform_margin_positions(positions):
     """
     Transform OpenAlgo margin position format to Zerodha margin format.
@@ -21,14 +22,14 @@ def transform_margin_positions(positions):
 
     for position in positions:
         try:
-            symbol = position['symbol']
-            exchange = position['exchange']
+            symbol = position["symbol"]
+            exchange = position["exchange"]
 
             # Get the broker symbol for Zerodha
             br_symbol = get_br_symbol(symbol, exchange)
 
             # Validate symbol exists and is not None
-            if not br_symbol or br_symbol is None or str(br_symbol).lower() == 'none':
+            if not br_symbol or br_symbol is None or str(br_symbol).lower() == "none":
                 logger.warning(f"Symbol not found for: {symbol} on exchange: {exchange}")
                 skipped_positions.append(f"{symbol} ({exchange})")
                 continue
@@ -36,7 +37,9 @@ def transform_margin_positions(positions):
             # Validate symbol is a valid string
             br_symbol_str = str(br_symbol).strip()
             if not br_symbol_str:
-                logger.warning(f"Invalid symbol format for {symbol} ({exchange}): '{br_symbol_str}'")
+                logger.warning(
+                    f"Invalid symbol format for {symbol} ({exchange}): '{br_symbol_str}'"
+                )
                 skipped_positions.append(f"{symbol} ({exchange}) - invalid symbol: {br_symbol_str}")
                 continue
 
@@ -44,17 +47,19 @@ def transform_margin_positions(positions):
             transformed_position = {
                 "exchange": exchange,
                 "tradingsymbol": br_symbol_str,
-                "transaction_type": position['action'].upper(),
+                "transaction_type": position["action"].upper(),
                 "variety": "regular",  # Default variety for margin calculation
-                "product": map_product_type(position['product']),
-                "order_type": map_order_type(position['pricetype']),
-                "quantity": int(position['quantity']),
-                "price": float(position.get('price', 0)),
-                "trigger_price": float(position.get('trigger_price', 0))
+                "product": map_product_type(position["product"]),
+                "order_type": map_order_type(position["pricetype"]),
+                "quantity": int(position["quantity"]),
+                "price": float(position.get("price", 0)),
+                "trigger_price": float(position.get("trigger_price", 0)),
             }
 
             transformed_positions.append(transformed_position)
-            logger.debug(f"Successfully transformed position: {symbol} ({exchange}) -> {br_symbol_str}")
+            logger.debug(
+                f"Successfully transformed position: {symbol} ({exchange}) -> {br_symbol_str}"
+            )
 
         except Exception as e:
             logger.error(f"Error transforming position: {position}, Error: {e}")
@@ -63,12 +68,17 @@ def transform_margin_positions(positions):
 
     # Log summary
     if skipped_positions:
-        logger.warning(f"Skipped {len(skipped_positions)} position(s) due to missing/invalid symbols: {', '.join(skipped_positions)}")
+        logger.warning(
+            f"Skipped {len(skipped_positions)} position(s) due to missing/invalid symbols: {', '.join(skipped_positions)}"
+        )
 
     if transformed_positions:
-        logger.info(f"Successfully transformed {len(transformed_positions)} position(s) for margin calculation")
+        logger.info(
+            f"Successfully transformed {len(transformed_positions)} position(s) for margin calculation"
+        )
 
     return transformed_positions
+
 
 def map_product_type(product):
     """
@@ -84,6 +94,7 @@ def map_product_type(product):
     }
     return product_type_mapping.get(product, "MIS")
 
+
 def map_order_type(pricetype):
     """
     Maps OpenAlgo price type to Zerodha order type.
@@ -91,13 +102,9 @@ def map_order_type(pricetype):
     OpenAlgo: MARKET, LIMIT, SL, SL-M
     Zerodha: MARKET, LIMIT, SL, SL-M (Direct mapping - no transformation needed)
     """
-    order_type_mapping = {
-        "MARKET": "MARKET",
-        "LIMIT": "LIMIT",
-        "SL": "SL",
-        "SL-M": "SL-M"
-    }
+    order_type_mapping = {"MARKET": "MARKET", "LIMIT": "LIMIT", "SL": "SL", "SL-M": "SL-M"}
     return order_type_mapping.get(pricetype, "MARKET")
+
 
 def parse_margin_response(response_data):
     """
@@ -134,24 +141,18 @@ def parse_margin_response(response_data):
     """
     try:
         if not response_data or not isinstance(response_data, dict):
-            return {
-                'status': 'error',
-                'message': 'Invalid response from broker'
-            }
+            return {"status": "error", "message": "Invalid response from broker"}
 
         # Check if the response has the expected structure
-        if response_data.get('status') != 'success':
-            error_message = response_data.get('message', 'Failed to calculate margin')
+        if response_data.get("status") != "success":
+            error_message = response_data.get("message", "Failed to calculate margin")
             # Check for error_type field in Zerodha responses
-            if 'error_type' in response_data:
+            if "error_type" in response_data:
                 error_message = f"{response_data.get('error_type')}: {error_message}"
-            return {
-                'status': 'error',
-                'message': error_message
-            }
+            return {"status": "error", "message": error_message}
 
         # Extract margin data
-        data = response_data.get('data', {})
+        data = response_data.get("data", {})
 
         # Initialize variables
         total_margin_required = 0
@@ -159,45 +160,45 @@ def parse_margin_response(response_data):
         exposure_margin = 0
         margin_benefit = 0
 
-        if isinstance(data, dict) and 'final' in data:
+        if isinstance(data, dict) and "final" in data:
             # Basket response - use final values which include spread benefit
-            initial = data.get('initial', {})
-            final = data.get('final', {})
+            initial = data.get("initial", {})
+            final = data.get("final", {})
 
             # Extract all margin components
             # Use initial.total for total_margin_required as per requirement
-            total_margin_required = initial.get('total', 0)
-            span_margin = final.get('span', 0)
-            exposure_margin = final.get('exposure', 0)
-            option_premium = final.get('option_premium', 0)
-            additional = final.get('additional', 0)
-            bo = final.get('bo', 0)
-            cash = final.get('cash', 0)
-            var = final.get('var', 0)
+            total_margin_required = initial.get("total", 0)
+            span_margin = final.get("span", 0)
+            exposure_margin = final.get("exposure", 0)
+            option_premium = final.get("option_premium", 0)
+            additional = final.get("additional", 0)
+            bo = final.get("bo", 0)
+            cash = final.get("cash", 0)
+            var = final.get("var", 0)
 
             # Extract initial values (individual position margins)
-            initial_total = initial.get('total', 0)
-            initial_span = initial.get('span', 0)
-            initial_exposure = initial.get('exposure', 0)
-            initial_option_premium = initial.get('option_premium', 0)
+            initial_total = initial.get("total", 0)
+            initial_span = initial.get("span", 0)
+            initial_exposure = initial.get("exposure", 0)
+            initial_option_premium = initial.get("option_premium", 0)
 
-            final_total = final.get('total', 0)
+            final_total = final.get("total", 0)
 
             # Calculate margin benefit (savings from spread/hedge recognition)
             # Formula: Margin Benefit = Sum of Individual Margins - Optimized Combined Margin
             # Example: 4,27,882 (individual) - 2,56,121 (optimized) = 1,71,761 (benefit)
             margin_benefit = initial_total - final_total
 
-            logger.info("="*80)
+            logger.info("=" * 80)
             logger.info("ZERODHA BASKET MARGIN - DETAILED BREAKDOWN")
-            logger.info("="*80)
-            logger.info(f"BASKET INITIAL VALUES (Partially Optimized):")
+            logger.info("=" * 80)
+            logger.info("BASKET INITIAL VALUES (Partially Optimized):")
             logger.info(f"  initial.total           = Rs. {initial_total:,.2f}")
             logger.info(f"  initial.span            = Rs. {initial_span:,.2f}")
             logger.info(f"  initial.exposure        = Rs. {initial_exposure:,.2f}")
             logger.info(f"  initial.option_premium  = Rs. {initial_option_premium:,.2f}")
             logger.info("")
-            logger.info(f"BASKET FINAL VALUES (Fully Optimized):")
+            logger.info("BASKET FINAL VALUES (Fully Optimized):")
             logger.info(f"  final.total             = Rs. {final_total:,.2f}")
             logger.info(f"  final.span              = Rs. {span_margin:,.2f}")
             logger.info(f"  final.exposure          = Rs. {exposure_margin:,.2f}")
@@ -207,26 +208,34 @@ def parse_margin_response(response_data):
             logger.info(f"  final.cash              = Rs. {cash:,.2f}")
             logger.info(f"  final.var               = Rs. {var:,.2f}")
             logger.info("")
-            logger.info(f"MARGIN BENEFIT (From Basket API):")
-            logger.info(f"  Formula: initial.total - final.total")
-            logger.info(f"  Calculation: {initial_total:,.2f} - {final_total:,.2f} = Rs. {margin_benefit:,.2f}")
-            logger.info(f"  Note: This equals option_premium change ({option_premium - initial_option_premium:,.2f})")
+            logger.info("MARGIN BENEFIT (From Basket API):")
+            logger.info("  Formula: initial.total - final.total")
+            logger.info(
+                f"  Calculation: {initial_total:,.2f} - {final_total:,.2f} = Rs. {margin_benefit:,.2f}"
+            )
+            logger.info(
+                f"  Note: This equals option_premium change ({option_premium - initial_option_premium:,.2f})"
+            )
             logger.info("")
-            logger.warning("⚠ IMPORTANT: Zerodha's basket initial.total is ALREADY partially optimized!")
-            logger.warning("⚠ For TRUE margin benefit matching web UI, query each order separately first.")
-            logger.info("="*80)
+            logger.warning(
+                "⚠ IMPORTANT: Zerodha's basket initial.total is ALREADY partially optimized!"
+            )
+            logger.warning(
+                "⚠ For TRUE margin benefit matching web UI, query each order separately first."
+            )
+            logger.info("=" * 80)
 
             # Log individual order margins if available
-            orders = data.get('orders', [])
+            orders = data.get("orders", [])
             if orders:
                 logger.info("INDIVIDUAL ORDER MARGINS IN BASKET:")
-                logger.info("-"*80)
+                logger.info("-" * 80)
                 basket_orders_sum = 0
                 for idx, order in enumerate(orders, 1):
-                    order_total = order.get('total', 0)
-                    order_span = order.get('span', 0)
-                    order_exposure = order.get('exposure', 0)
-                    order_premium = order.get('option_premium', 0)
+                    order_total = order.get("total", 0)
+                    order_span = order.get("span", 0)
+                    order_exposure = order.get("exposure", 0)
+                    order_premium = order.get("option_premium", 0)
                     basket_orders_sum += order_total
 
                     hedged_note = " ← HEDGED (Zero SPAN!)" if order_span == 0 else ""
@@ -236,38 +245,37 @@ def parse_margin_response(response_data):
                     logger.info(f"  Option Premium:  Rs. {order_premium:,.2f}")
                     logger.info(f"  Total:           Rs. {order_total:,.2f}")
 
-                logger.info("-"*80)
+                logger.info("-" * 80)
                 logger.info(f"Sum of basket orders: Rs. {basket_orders_sum:,.2f}")
                 logger.info(f"Matches initial.total: {abs(basket_orders_sum - initial_total) < 1}")
-                logger.info("="*80)
+                logger.info("=" * 80)
 
         elif isinstance(data, list):
             # Orders response - aggregate all order margins
             for order in data:
-                span_margin += order.get('span', 0)
-                exposure_margin += order.get('exposure', 0)
-                total_margin_required += order.get('total', 0)
+                span_margin += order.get("span", 0)
+                exposure_margin += order.get("exposure", 0)
+                total_margin_required += order.get("total", 0)
 
             # No margin benefit for simple orders (no spread optimization)
             margin_benefit = 0
 
-            logger.debug(f"Orders margin: total={total_margin_required}, span={span_margin}, exposure={exposure_margin}")
+            logger.debug(
+                f"Orders margin: total={total_margin_required}, span={span_margin}, exposure={exposure_margin}"
+            )
 
         # Return standardized format matching OpenAlgo API specification
         response_data = {
-            'status': 'success',
-            'data': {
-                'total_margin_required': total_margin_required,
-                'span_margin': span_margin,
-                'exposure_margin': exposure_margin
-            }
+            "status": "success",
+            "data": {
+                "total_margin_required": total_margin_required,
+                "span_margin": span_margin,
+                "exposure_margin": exposure_margin,
+            },
         }
 
         return response_data
 
     except Exception as e:
         logger.error(f"Error parsing Zerodha margin response: {e}")
-        return {
-            'status': 'error',
-            'message': f'Failed to parse margin response: {str(e)}'
-        }
+        return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}

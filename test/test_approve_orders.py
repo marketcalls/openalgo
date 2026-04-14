@@ -3,15 +3,17 @@ Diagnostic script to test order approval and execution
 Run with: python test/test_approve_orders.py
 """
 
-import sys
 import os
+import sys
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database.action_center_db import get_pending_orders, get_pending_order_by_id
-from services.pending_order_execution_service import execute_approved_order
 import json
+
+from database.action_center_db import get_pending_order_by_id, get_pending_orders
+from services.pending_order_execution_service import execute_approved_order
+
 
 def test_order_execution():
     """Test execution of pending orders"""
@@ -22,9 +24,9 @@ def test_order_execution():
     print("=" * 80)
 
     # Note: Replace 'openalgo' with your actual user_id
-    user_id = 'openalgo'
+    user_id = "openalgo"
 
-    orders = get_pending_orders(user_id, status='pending')
+    orders = get_pending_orders(user_id, status="pending")
 
     if not orders:
         print("No pending orders found")
@@ -52,7 +54,7 @@ def test_order_execution():
     print()
     order_id_to_test = input("Enter Order ID to test execution (or 'q' to quit): ").strip()
 
-    if order_id_to_test.lower() == 'q':
+    if order_id_to_test.lower() == "q":
         return
 
     try:
@@ -76,7 +78,8 @@ def test_order_execution():
 
     # First approve it
     from database.action_center_db import approve_pending_order
-    approve_success = approve_pending_order(order_id, approved_by='test_user')
+
+    approve_success = approve_pending_order(order_id, approved_by="test_user")
 
     if not approve_success:
         print("Failed to approve order")
@@ -91,7 +94,7 @@ def test_order_execution():
     try:
         success, response_data, status_code = execute_approved_order(order_id)
 
-        print(f"Execution Result:")
+        print("Execution Result:")
         print(f"  Success: {success}")
         print(f"  Status Code: {status_code}")
         print(f"  Response: {json.dumps(response_data, indent=2)}")
@@ -105,10 +108,12 @@ def test_order_execution():
             print(f"  Error: {response_data.get('message', 'Unknown error')}")
 
     except Exception as e:
-        print(f"✗ EXCEPTION DURING EXECUTION:")
+        print("✗ EXCEPTION DURING EXECUTION:")
         print(f"  {type(e).__name__}: {str(e)}")
         import traceback
+
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     test_order_execution()

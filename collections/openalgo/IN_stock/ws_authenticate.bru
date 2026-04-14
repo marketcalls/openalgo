@@ -1,0 +1,25 @@
+meta {
+  name: WebSocket Authenticate
+  type: websocket
+  seq: 1
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Authenticate with the WebSocket server using API key
+}
+
+message:json {
+  {
+    "action": "authenticate",
+    "apikey": ""
+  }
+}
+
+docs {
+  Server responds with:
+  - Success: {"type": "auth", "status": "success", "user_id": "...", "broker": "..."}
+  - Failure: {"type": "auth", "status": "error", "message": "..."}
+
+  Authentication is required before subscribing to market data.
+}

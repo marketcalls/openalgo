@@ -39,11 +39,15 @@
 ### Broker Setup (Required)
 - Choose your broker from the supported list:
   ```
-  fivepaisa, aliceblue, angel, dhan, fyers, icici, kotak, shoonya, upstox, zebu, zerodha
+  fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, deltaexchange, dhan, dhan_sandbox,
+  firstock, flattrade, fyers, groww, ibulls, iifl, iiflcaital, indmoney, jainamxts, kotak, motilal,
+  mstock, nubra, paytm, pocketful, rmoney, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha
   ```
 - Obtain your broker's API credentials:
   - API Key
   - API Secret
+- XTS brokers also need market data credentials:
+  - `fivepaisaxts`, `compositedge`, `ibulls`, `iifl`, `jainamxts`, `rmoney`, `wisdom`
 
 ## Installation Steps
 
