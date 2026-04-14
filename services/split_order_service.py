@@ -2,7 +2,6 @@ import copy
 import importlib
 import os
 import time
-import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
