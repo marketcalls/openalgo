@@ -84,4 +84,4 @@ def register_all():
     bus.subscribe("analyzer.error", socketio_subscriber.on_analyzer_error, "socketio:analyzer_error")
     bus.subscribe("analyzer.error", telegram_subscriber.on_analyzer_error, "telegram:analyzer_error")
 
-    logger.info("EventBus: all subscribers registered")
+    logger.debug("EventBus: all subscribers registered")

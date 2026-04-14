@@ -38,9 +38,17 @@ HEALTH_MONITOR_ENABLED = os.getenv("HEALTH_MONITOR_ENABLED", "true").lower() == 
 HEALTH_SAMPLE_INTERVAL = int(os.getenv("HEALTH_SAMPLE_INTERVAL", "10"))  # seconds
 HEALTH_RETENTION_DAYS = int(os.getenv("HEALTH_RETENTION_DAYS", "7"))
 
-# File Descriptor Thresholds
-FD_WARNING_THRESHOLD = int(os.getenv("HEALTH_FD_WARNING_THRESHOLD", "700"))
-FD_CRITICAL_THRESHOLD = int(os.getenv("HEALTH_FD_CRITICAL_THRESHOLD", "900"))
+# File Descriptor / Handle Thresholds
+# Windows handles are NOT Unix FDs — a normal Flask app uses 500-2000+ handles.
+# Use platform-appropriate defaults unless overridden via env.
+import platform as _platform
+_IS_WINDOWS = _platform.system() == "Windows"
+FD_WARNING_THRESHOLD = int(os.getenv(
+    "HEALTH_FD_WARNING_THRESHOLD", "5000" if _IS_WINDOWS else "700"
+))
+FD_CRITICAL_THRESHOLD = int(os.getenv(
+    "HEALTH_FD_CRITICAL_THRESHOLD", "10000" if _IS_WINDOWS else "900"
+))
 
 # Memory Thresholds (MB)
 MEMORY_WARNING_THRESHOLD = int(os.getenv("HEALTH_MEMORY_WARNING_THRESHOLD", "500"))
@@ -147,30 +155,36 @@ def check_db_connectivity():
 
 
 def get_fd_metrics():
-    """Get file descriptor metrics (lightweight, <1ms)"""
+    """Get file descriptor / handle metrics (lightweight, <1ms)"""
     try:
         process = psutil.Process(os.getpid())
 
-        # Get FD count (Unix/Linux/macOS only)
+        # Get FD count (Unix) or handle count (Windows)
         if hasattr(process, "num_fds"):
             fd_count = process.num_fds()
         else:
-            # Windows - count handles instead
+            # Windows - count handles (includes threads, mutexes, registry keys, etc.)
             fd_count = process.num_handles() if hasattr(process, "num_handles") else 0
 
-        # Get FD limit
+        # Get FD limit — only meaningful on Unix
         if hasattr(os, "sysconf") and hasattr(os, "sysconf_names"):
             if "SC_OPEN_MAX" in os.sysconf_names:
                 fd_limit = os.sysconf("SC_OPEN_MAX")
             else:
                 fd_limit = 1024  # Default
         else:
-            fd_limit = 16777216  # Windows default
+            # Windows has no process-level handle limit — set to None
+            fd_limit = None
 
-        fd_usage_percent = (fd_count / fd_limit * 100) if fd_limit else 0
-        fd_available = fd_limit - fd_count
+        if fd_limit:
+            fd_usage_percent = fd_count / fd_limit * 100
+            fd_available = fd_limit - fd_count
+        else:
+            fd_usage_percent = 0.0
+            fd_available = None
 
-        # Determine status
+        # Determine status using absolute thresholds (platform-aware defaults)
+        metric_label = "Handle" if _IS_WINDOWS else "File descriptor"
         if fd_count >= FD_CRITICAL_THRESHOLD:
             status = "fail"
             HealthAlert.create_alert(
@@ -179,7 +193,7 @@ def get_fd_metrics():
                 metric_name="fd_count",
                 metric_value=fd_count,
                 threshold_value=FD_CRITICAL_THRESHOLD,
-                message=f"File descriptor count critical: {fd_count}/{fd_limit} ({fd_usage_percent:.1f}%)",
+                message=f"{metric_label} count critical: {fd_count} (threshold: {FD_CRITICAL_THRESHOLD})",
             )
         elif fd_count >= FD_WARNING_THRESHOLD:
             status = "warn"
@@ -189,7 +203,7 @@ def get_fd_metrics():
                 metric_name="fd_count",
                 metric_value=fd_count,
                 threshold_value=FD_WARNING_THRESHOLD,
-                message=f"File descriptor count elevated: {fd_count}/{fd_limit} ({fd_usage_percent:.1f}%)",
+                message=f"{metric_label} count elevated: {fd_count} (threshold: {FD_WARNING_THRESHOLD})",
             )
         else:
             status = "pass"
@@ -204,7 +218,7 @@ def get_fd_metrics():
         }
     except Exception as e:
         logger.error(f"Error getting FD metrics: {e}")
-        return {"count": 0, "limit": 0, "usage_percent": 0, "available": 0, "status": "unknown"}
+        return {"count": 0, "limit": None, "usage_percent": 0.0, "available": None, "status": "unknown"}
 
 
 def get_memory_metrics():

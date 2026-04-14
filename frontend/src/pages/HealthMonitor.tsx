@@ -471,18 +471,18 @@ export default function HealthMonitor() {
       {/* Metric Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <MetricCard
-          title="File Descriptors"
+          title={currentMetrics?.fd.limit == null ? "Process Handles" : "File Descriptors"}
           icon={HardDrive}
-          value={currentMetrics ? `${currentMetrics.fd.count} / ${currentMetrics.fd.limit}` : '-'}
-          subtitle={currentMetrics ? `${currentMetrics.fd.usage_percent.toFixed(1)}% used` : undefined}
+          value={currentMetrics ? (currentMetrics.fd.limit != null ? `${currentMetrics.fd.count} / ${currentMetrics.fd.limit}` : `${currentMetrics.fd.count}`) : '-'}
+          subtitle={currentMetrics ? (currentMetrics.fd.limit != null ? `${(currentMetrics.fd.usage_percent ?? 0).toFixed(1)}% used` : `threshold: ${currentMetrics.fd.status === 'pass' ? 'OK' : currentMetrics.fd.status}`) : undefined}
           status={currentMetrics?.fd.status || 'unknown'}
           loading={!currentMetrics}
         />
         <MetricCard
           title="Memory Usage"
           icon={MemoryStick}
-          value={currentMetrics ? `${currentMetrics.memory.rss_mb.toFixed(1)} MB` : '-'}
-          subtitle={currentMetrics ? `${currentMetrics.memory.percent.toFixed(1)}% of system` : undefined}
+          value={currentMetrics ? `${(currentMetrics.memory.rss_mb ?? 0).toFixed(1)} MB` : '-'}
+          subtitle={currentMetrics ? `${(currentMetrics.memory.percent ?? 0).toFixed(1)}% of system` : undefined}
           status={currentMetrics?.memory.status || 'unknown'}
           loading={!currentMetrics}
         />
