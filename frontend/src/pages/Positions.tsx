@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { showToast } from '@/utils/toast'
 import { tradingApi } from '@/api/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -235,16 +236,12 @@ export default function Positions() {
 
     fetchPositions()
     lastFetchRef.current = Date.now()
+  }, [fetchPositions, isVisible])
 
-    // Reduce polling interval when live (WebSocket connected AND market open)
-    const intervalMs = isLive ? 30000 : 10000
-    const interval = setInterval(() => {
-      fetchPositions()
-      lastFetchRef.current = Date.now()
-    }, intervalMs)
-
-    return () => clearInterval(interval)
-  }, [fetchPositions, isLive, isVisible])
+  // Refresh on order events instead of polling
+  useOrderEventRefresh(fetchPositions, {
+    events: ['order_event', 'analyzer_update', 'close_position_event'],
+  })
 
   // Refresh data when tab becomes visible after being hidden
   useEffect(() => {

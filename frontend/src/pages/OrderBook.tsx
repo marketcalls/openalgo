@@ -10,6 +10,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { showToast } from '@/utils/toast'
 import { type QuotesData, tradingApi } from '@/api/trading'
 import {
@@ -174,9 +175,12 @@ export default function OrderBook() {
 
   useEffect(() => {
     fetchOrders()
-    const interval = setInterval(() => fetchOrders(), 10000)
-    return () => clearInterval(interval)
   }, [fetchOrders])
+
+  // Refresh on order events instead of polling
+  useOrderEventRefresh(fetchOrders, {
+    events: ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'],
+  })
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {

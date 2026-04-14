@@ -1,5 +1,6 @@
 import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
 import { showToast } from '@/utils/toast'
@@ -146,9 +147,12 @@ export default function TradeBook() {
 
   useEffect(() => {
     fetchTrades()
-    const interval = setInterval(() => fetchTrades(), 10000)
-    return () => clearInterval(interval)
   }, [fetchTrades])
+
+  // Refresh on order events instead of polling
+  useOrderEventRefresh(fetchTrades, {
+    events: ['order_event', 'analyzer_update'],
+  })
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
