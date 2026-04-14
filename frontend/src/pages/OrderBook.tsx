@@ -61,10 +61,13 @@ interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
-function formatTime(timestamp: string): string {
-  if (!timestamp) return '-'
+/**
+ * Helper to convert various broker timestamp formats into a sortable number.
+ * Ensures chronological accuracy for non-ISO formats.
+ */
+function parseTimestamp(timestamp: string): number {
+  if (!timestamp) return 0
 
-  // Try native Date parsing first (handles ISO and standard formats)
   let date = new Date(timestamp)
 
   // If invalid, try "HH:MM:SS DD-MM-YYYY" (Flattrade/Shoonya/Zebu/Firstock norentm format)
@@ -83,19 +86,25 @@ function formatTime(timestamp: string): string {
     }
   }
 
-  if (!Number.isNaN(date.getTime())) {
-    return date.toLocaleTimeString('en-IN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
+  return date.getTime() || 0
+}
+
+function formatTime(timestamp: string): string {
+  if (!timestamp) return '-'
+
+  const timeValue = parseTimestamp(timestamp)
+  if (timeValue === 0) {
+     // Last resort: extract HH:MM:SS if embedded in the string
+    const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
+    return timeMatch ? timeMatch[1] : timestamp
   }
 
-  // Last resort: extract HH:MM:SS if embedded in the string
-  const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
-  if (timeMatch) return timeMatch[1]
-
-  return timestamp
+  const date = new Date(timeValue)
+  return date.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; label: string }> = {
@@ -151,13 +160,8 @@ export default function OrderBook() {
       const bValue = b[sortConfig.key]
 
       if (sortConfig.key === 'timestamp') {
-        const aTime = new Date(aValue).getTime()
-        const bTime = new Date(bValue).getTime()
-        if (isNaN(aTime) || isNaN(bTime)) {
-          return sortConfig.direction === 'asc' 
-            ? String(aValue).localeCompare(String(bValue))
-            : String(bValue).localeCompare(String(aValue))
-        }
+        const aTime = parseTimestamp(aValue as string)
+        const bTime = parseTimestamp(bValue as string)
         return sortConfig.direction === 'asc' ? aTime - bTime : bTime - aTime
       }
 
