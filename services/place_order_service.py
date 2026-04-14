@@ -120,6 +120,7 @@ def place_order_with_auth(
     broker: str,
     original_data: dict[str, Any],
     emit_event: bool = True,
+    prefetched_quote: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Place an order using provided auth token.
@@ -130,6 +131,7 @@ def place_order_with_auth(
         broker: Name of the broker
         original_data: Original request data for logging
         emit_event: Whether to emit socket event (default True, set False for batch orders)
+        prefetched_quote: Pre-fetched quote from batch call (optional, sandbox only)
 
     Returns:
         Tuple containing:
@@ -155,7 +157,9 @@ def place_order_with_auth(
             }
             return False, error_response, 400
 
-        success, response, status_code = sandbox_place_order(order_data, api_key, original_data)
+        success, response, status_code = sandbox_place_order(
+            order_data, api_key, original_data, prefetched_quote=prefetched_quote
+        )
 
         if emit_event:
             bus.publish(OrderPlacedEvent(
@@ -259,6 +263,7 @@ def place_order(
     auth_token: str | None = None,
     broker: str | None = None,
     emit_event: bool = True,
+    prefetched_quote: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Place an order with the broker.
@@ -270,6 +275,8 @@ def place_order(
         auth_token: Direct broker authentication token (for internal calls)
         broker: Direct broker name (for internal calls)
         emit_event: Whether to emit socket event (default True, set False for batch orders)
+        prefetched_quote: Pre-fetched quote from batch call (optional, sandbox only).
+            Skips per-order REST API quote fetch when provided.
 
     Returns:
         Tuple containing:
@@ -316,11 +323,11 @@ def place_order(
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
 
-        return place_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data, emit_event)
+        return place_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data, emit_event, prefetched_quote)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return place_order_with_auth(order_data, auth_token, broker, original_data, emit_event)
+        return place_order_with_auth(order_data, auth_token, broker, original_data, emit_event, prefetched_quote)
 
     # Case 3: Invalid parameters
     else:
