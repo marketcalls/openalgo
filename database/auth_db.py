@@ -22,7 +22,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
 from utils.logging import get_logger
@@ -126,10 +126,12 @@ invalid_api_key_cache = TTLCache(maxsize=512, ttl=300)  # 5 minutes
 
 # Conditionally create engine based on DB type
 if DATABASE_URL and "sqlite" in DATABASE_URL:
-    # SQLite: Use StaticPool (single shared connection) to prevent FD leaks
-    # under eventlet green threads. NullPool leaked ~1 connection per request.
+    # SQLite: Use NullPool — each checkout creates a fresh connection.
+    # Session cleanup is handled by app.py teardown_appcontext.
+    # StaticPool must NOT be used: concurrent requests on a single shared
+    # SQLite connection cause "bad parameter or other API misuse" errors.
     engine = create_engine(
-        DATABASE_URL, poolclass=StaticPool, connect_args={"check_same_thread": False}
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
@@ -227,6 +229,7 @@ class LoginAttempt(Base):
 
 def _now_ist():
     """Get current time in IST."""
+    from datetime import datetime
     import pytz
     return datetime.now(pytz.timezone("Asia/Kolkata"))
 
