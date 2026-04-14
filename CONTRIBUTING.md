@@ -473,6 +473,32 @@ Closes #456
 - [x] No breaking changes to existing code
 ```
 
+### 8. Automated Fork Sync (Maintainers)
+
+This repository includes GitHub Actions workflows to keep a fork aligned with upstream and prepare merge PRs.
+
+1. `Sync Upstream to Develop`
+    - Runs daily and on manual dispatch.
+    - Merges `upstream/main` into `develop`.
+    - Creates `develop` from `main` if it does not exist yet.
+    - Stops safely on merge conflicts (no force push).
+
+2. `Create or Update Develop to Main PR`
+    - Runs after a successful upstream sync and on manual dispatch.
+    - Creates a `develop` to `main` PR only when `develop` is ahead.
+    - Keeps one open PR only. After merge, a new PR is created on the next sync with new commits.
+
+Repository settings required:
+
+- `Settings` > `Actions` > `General` > `Workflow permissions` > `Read and write permissions`
+- Enable `Allow GitHub Actions to create and approve pull requests`
+
+Manual recovery option:
+
+```bash
+./scripts/update_from_upstream.sh --remote upstream --branch main --strategy merge
+```
+
 ---
 
 ## Contributing Guidelines
