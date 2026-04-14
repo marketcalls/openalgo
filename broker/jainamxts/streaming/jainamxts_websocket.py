@@ -712,9 +712,7 @@ class JainamXTSWebSocketClient:
 
         except Exception as e:
             self.logger.error(f"[XTS-BINARY] Error: {e}")
-            import traceback
-
-            self.logger.error(traceback.format_exc())
+            self.logger.exception(f"[XTS-BINARY] Error details: {e}")
 
     def _parse_touchline(self, payload, market_data, ltp_offset):
         """Parse touchline/price data from payload at given offset"""

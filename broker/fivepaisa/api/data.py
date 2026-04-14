@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -197,11 +196,8 @@ class BrokerData:
             return {"bid": bid, "ask": ask}
 
         except Exception as e:
-            logger.error(f"Error fetching market depth: {e}")
+            logger.exception(f"Error fetching market depth: {e}")
             logger.info(f"Exception type: {type(e)}")
-            import traceback
-
-            logger.info(f"Traceback: {traceback.format_exc()}")
             return None
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
@@ -958,8 +954,8 @@ class BrokerData:
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(
-                f"Error in get_history: {error_msg}\nTraceback: {traceback.format_exc()}"
+            logger.exception(
+                f"Error in get_history: {error_msg}"
             )  # Debug log
 
             # Check if this is the timestamp conversion error with raw_data available

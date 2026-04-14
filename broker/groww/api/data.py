@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
@@ -920,10 +919,7 @@ class BrokerData:
             return df
 
         except Exception as e:
-            logger.error(f"Error getting historical data: {str(e)}")
-            import traceback
-
-            traceback.print_exc()
+            logger.exception(f"Error getting historical data: {str(e)}")
             # Return empty DataFrame with expected columns on error
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
@@ -1763,8 +1759,7 @@ class BrokerData:
             return depth_response
 
         except Exception as e:
-            logger.error(f"Error getting market depth: {str(e)}")
-            traceback.print_exc()
+            logger.exception(f"Error getting market depth: {str(e)}")
             return {}
 
     def get_market_depth(self, symbol_list, timeout: int = 5) -> dict[str, Any]:
