@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import traceback
 import threading
 import time
 
@@ -114,10 +113,7 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
         return response.json()
 
     except Exception as e:
-        logger.error(f"get_api_response - Exception occurred: {str(e)}")
-        import traceback
-
-        logger.error(f"get_api_response - Traceback: {traceback.format_exc()}")
+        logger.exception(f"get_api_response - Exception occurred: {str(e)}")
         raise
 
 
@@ -222,10 +218,7 @@ def get_order_book(auth):
             }
 
     except Exception as e:
-        logger.error(f"get_order_book - Exception occurred: {str(e)}")
-        import traceback
-
-        logger.error(f"get_order_book - Traceback: {traceback.format_exc()}")
+        logger.exception(f"get_order_book - Exception occurred: {str(e)}")
         raise
 
 
@@ -352,10 +345,7 @@ def get_trade_book(auth):
 
     except Exception as e:
         error_msg = f"Error fetching trade book: {str(e)}"
-        logger.error(error_msg)
-        import traceback
-
-        logger.error(f"get_trade_book - Traceback: {traceback.format_exc()}")
+        logger.exception(error_msg)
         # Return empty array - service layer will handle error formatting
         return []
 
@@ -849,10 +839,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
                     return str(pos_qty)
 
             except Exception as e:
-                logger.error(f"get_open_position - Error processing position: {str(e)}")
-                import traceback
-
-                logger.error(f"get_open_position - Traceback: {traceback.format_exc()}")
+                logger.exception(f"get_open_position - Error processing position: {str(e)}")
                 continue
 
         logger.info(
@@ -861,10 +848,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         return "0"
 
     except Exception as e:
-        logger.error(f"get_open_position - Exception: {str(e)}")
-        import traceback
-
-        logger.error(f"get_open_position - Traceback: {traceback.format_exc()}")
+        logger.exception(f"get_open_position - Exception: {str(e)}")
         return "0"
 
 
@@ -909,8 +893,7 @@ def place_order_api(data, auth):
             logger.debug(f"place_order_api - Transformed data: {transformed_data}")
         except Exception as e:
             error_msg = f"Error transforming order data: {str(e)}"
-            logger.error(error_msg)
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(error_msg)
             return None, {"status": "error", "message": error_msg}, None
 
         # Convert transformed data to x-www-form-urlencoded format
@@ -1007,14 +990,12 @@ def place_order_api(data, auth):
 
         except Exception as e:
             error_msg = f"Error placing order: {str(e)}"
-            logger.error(error_msg)
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(error_msg)
             return None, {"status": "error", "message": error_msg}, None
 
     except Exception as e:
         error_msg = f"Unexpected error in place_order_api: {str(e)}"
-        logger.error(error_msg)
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.exception(error_msg)
         return None, {"status": "error", "message": error_msg}, None
 
 
@@ -1073,10 +1054,7 @@ def place_smartorder_api(data, auth):
                 )
 
             except Exception as e:
-                logger.error(f"place_smartorder_api - Error getting position: {str(e)}")
-                import traceback
-
-                logger.error(f"place_smartorder_api - Traceback: {traceback.format_exc()}")
+                logger.exception(f"place_smartorder_api - Error getting position: {str(e)}")
                 return None, {"status": "error", "message": f"Failed to get position: {str(e)}"}, ""
             # Initialize action and quantity
             final_action = None
@@ -1214,16 +1192,12 @@ def place_smartorder_api(data, auth):
 
             except Exception as e:
                 error_msg = f"Exception in place_order_api: {str(e)}"
-                logger.error(error_msg)
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception(error_msg)
                 return None, {"status": "error", "message": error_msg}, None
 
     except Exception as e:
         error_msg = f"Smart order placement failed: {str(e)}"
-        logger.error(f"place_smartorder_api - Exception occurred: {error_msg}")
-        import traceback
-
-        logger.error(f"place_smartorder_api - Traceback: {traceback.format_exc()}")
+        logger.exception(f"place_smartorder_api - Exception occurred: {error_msg}")
         return None, {"status": "error", "message": error_msg}, None
 
 
@@ -1351,10 +1325,7 @@ def close_all_positions(current_api_key, auth):
 
     except Exception as e:
         error_msg = f"Failed to close positions: {str(e)}"
-        logger.error(f"close_all_positions - {error_msg}")
-        import traceback
-
-        logger.error(f"close_all_positions - Traceback: {traceback.format_exc()}")
+        logger.exception(f"close_all_positions - {error_msg}")
         response_data = {"status": "error", "message": error_msg}
         return response_data, 500
 
@@ -1409,10 +1380,7 @@ def cancel_order(orderid, auth):
 
     except Exception as e:
         error_msg = f"Exception in cancel_order: {str(e)}"
-        logger.error(f"cancel_order - {error_msg}")
-        import traceback
-
-        logger.error(f"cancel_order - Traceback: {traceback.format_exc()}")
+        logger.exception(f"cancel_order - {error_msg}")
         return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500
 
 
@@ -1542,10 +1510,7 @@ def cancel_all_orders_api(data, auth):
 
     except Exception as e:
         error_msg = f"Exception in cancel_all_orders_api: {str(e)}"
-        logger.error(f"cancel_all_orders_api - {error_msg}")
-        import traceback
-
-        logger.error(f"cancel_all_orders_api - Traceback: {traceback.format_exc()}")
+        logger.exception(f"cancel_all_orders_api - {error_msg}")
         return [], []
 
 
@@ -1610,8 +1575,5 @@ def modify_order(data, auth):
 
     except Exception as e:
         error_msg = f"Exception in modify_order: {str(e)}"
-        logger.error(f"modify_order - {error_msg}")
-        import traceback
-
-        logger.error(f"modify_order - Traceback: {traceback.format_exc()}")
+        logger.exception(f"modify_order - {error_msg}")
         return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500

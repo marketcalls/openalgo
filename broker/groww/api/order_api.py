@@ -728,10 +728,7 @@ def get_trade_book(auth):
                 else:
                     logger.warning(f"Unexpected format for trades result for order {order_id}")
             except Exception as e:
-                logger.error(f"Error fetching trades for order {order_id}: {e}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception(f"Error fetching trades for order {order_id}: {e}")
 
         # Log summary of trade fetching
         if all_trades:
@@ -1779,10 +1776,7 @@ def direct_place_order_api(data, auth):
             return res, response_data, None
 
     except Exception as e:
-        logger.error(f"Error placing order: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error placing order: {e}")
 
         class ResponseObject:
             def __init__(self, status_code):
@@ -1879,10 +1873,7 @@ def direct_place_order(
         return response
 
     except Exception as e:
-        logger.error(f"Direct order error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Direct order error: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -2087,10 +2078,7 @@ def place_smartorder_api(data, auth):
             return None, response, None
 
     except Exception as e:
-        logger.error(f"Error in smart order placement: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error in smart order placement: {e}")
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}
         return None, response, None
 
@@ -2319,10 +2307,7 @@ def close_all_positions(token=None, auth=None):
                 detailed_results.append(result_entry)
 
             except Exception as e:
-                logger.error(f"Error processing position {position}: {str(e)}")
-                import traceback
-
-                logger.error(traceback.format_exc())
+                logger.exception(f"Error processing position {position}: {str(e)}")
                 failure_count += 1
                 detailed_results.append(
                     {"symbol": trading_symbol, "status": "error", "error_message": str(e)}
@@ -2334,20 +2319,11 @@ def close_all_positions(token=None, auth=None):
 
     except Exception as e:
         error_msg = f"Error in close_all_positions: {str(e)}"
-        logger.error(error_msg, exc_info=True)  # Log full traceback
+        logger.exception(error_msg)
 
         # Log additional context
         logger.error(f"Exception type: {type(e).__name__}")
         logger.error(f"Auth token length: {len(auth) if auth else 'None'}")
-
-        # Attempt to get more context about the error
-        try:
-            import traceback
-
-            error_details = traceback.format_exc()
-            logger.error(f"Detailed traceback: {error_details}")
-        except Exception as log_error:
-            logger.error(f"Could not log detailed traceback: {log_error}")
 
         return {
             "status": "error",
@@ -2603,14 +2579,7 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
         # Return the response with 200 status code as expected by the endpoint
         return response, 200
     except Exception as e:
-        logger.error(f"-------- ERROR CANCELLING ORDER {orderid} --------")
-        logger.error(f"Exception: {str(e)}")
-
-        # Get exception details for better debugging
-        import traceback
-
-        tb = traceback.format_exc()
-        logger.error(f"Traceback: {tb}")
+        logger.exception(f"-------- ERROR CANCELLING ORDER {orderid} --------")
 
         # Even if we got an exception, return success format for consistency
         # The order cancellation might actually be processing despite the error
@@ -2629,12 +2598,11 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
                 "message": "Order cancellation request submitted with errors",
                 "details": str(e),
                 "exception_type": type(e).__name__,
-                "traceback": tb,
             }
 
             # Log the response we're returning for debugging
             logger.info(
-                f"Returning error response: {json.dumps({k: v for k, v in response.items() if k != 'traceback'}, indent=2)}"
+                f"Returning error response: {json.dumps(response, indent=2)}"
             )
 
         # Return the error response with 200 status code for consistency
@@ -2885,10 +2853,7 @@ def direct_modify_order(data, auth):
             return ResponseObject(200), response
 
     except Exception as e:
-        logger.error(f"Error in direct_modify_order: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error in direct_modify_order: {e}")
 
         # Create a response object to maintain compatibility with existing code
         class ResponseObject:
@@ -3441,13 +3406,7 @@ def get_order_trades(orderid, auth, segment=None):
             }, response_obj.status_code
 
     except Exception as e:
-        # Get exception details for better debugging
-        import traceback
-
-        tb = traceback.format_exc()
-        logger.error(f"-------- ERROR GETTING TRADES FOR ORDER {orderid} --------")
-        logger.error(f"Exception: {str(e)}")
-        logger.error(f"Traceback: {tb}")
+        logger.exception(f"-------- ERROR GETTING TRADES FOR ORDER {orderid} --------")
 
         return {
             "status": "error",
@@ -3456,5 +3415,4 @@ def get_order_trades(orderid, auth, segment=None):
             "segment": segment,
             "trades": [],
             "exception_details": str(e),
-            "traceback": tb,
         }, 500

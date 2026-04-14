@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import traceback
 from datetime import datetime, timedelta
 
 import httpx
@@ -110,8 +109,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
             logger.error("Connection error while calling Firstock API")
             raise Exception("Connection error - please check your internet connection")
         else:
-            logger.error(f"API Error: {e}")
-            logger.info(f"Traceback: {traceback.format_exc()}")
+            logger.exception(f"API Error: {e}")
             raise
 
 
@@ -578,8 +576,7 @@ class BrokerData:
             return combined_df
 
         except Exception as e:
-            logger.error(f"Error in get_history_chunked: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(f"Error in get_history_chunked: {e}")
             raise Exception(f"Error fetching chunked historical data: {str(e)}")
 
     def get_history_intraday_chunks(
@@ -1080,6 +1077,5 @@ class BrokerData:
             return df
 
         except Exception as e:
-            logger.error(f"Error in get_history: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(f"Error in get_history: {e}")
             raise Exception(f"Error fetching historical data: {str(e)}")
