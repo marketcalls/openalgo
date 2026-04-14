@@ -1,0 +1,92 @@
+name: Sync Upstream to Develop
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-to-develop
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      merge_conflict: ${{ steps.sync.outputs.merge_conflict }}
+      develop_sha: ${{ steps.sync.outputs.develop_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "openalgo-sync-bot"
+          git config user.email "openalgo-sync-bot@users.noreply.github.com"
+
+      - name: Sync upstream/main into develop
+        id: sync
+        run: |
+          set -euo pipefail
+
+          if git remote get-url upstream > /dev/null 2>&1; then
+            git remote set-url upstream https://github.com/marketcalls/openalgo.git
+          else
+            git remote add upstream https://github.com/marketcalls/openalgo.git
+          fi
+
+          git fetch upstream main
+          git fetch origin main
+
+          if git ls-remote --exit-code --heads origin develop > /dev/null 2>&1; then
+            git fetch origin develop
+            git checkout -B develop origin/develop
+          else
+            git checkout -B develop origin/main
+            git push -u origin develop
+          fi
+
+          BEFORE_SHA=$(git rev-parse HEAD)
+
+          set +e
+          git merge --no-edit upstream/main
+          MERGE_EXIT=$?
+          set -e
+
+          if [ "$MERGE_EXIT" -ne 0 ]; then
+            echo "merge_conflict=true" >> "$GITHUB_OUTPUT"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "develop_sha=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Upstream Sync Conflict"
+              echo "Automatic sync failed with merge conflicts in these files:"
+              git diff --name-only --diff-filter=U | sed 's/^/- /'
+              echo
+              echo "Resolve conflicts on branch develop and re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          AFTER_SHA=$(git rev-parse HEAD)
+          echo "merge_conflict=false" >> "$GITHUB_OUTPUT"
+          echo "develop_sha=$AFTER_SHA" >> "$GITHUB_OUTPUT"
+
+          if [ "$BEFORE_SHA" = "$AFTER_SHA" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No new upstream commits to sync." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git push origin develop
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Upstream Sync Completed"
+            echo "- Previous develop SHA: $BEFORE_SHA"
+            echo "- New develop SHA: $AFTER_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
