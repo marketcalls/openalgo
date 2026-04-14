@@ -1,7 +1,9 @@
+import json
 import logging
 import os
 import re
 import sys
+import traceback
 from datetime import datetime, timedelta
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -275,6 +277,42 @@ class ColoredFormatter(logging.Formatter):
         return original_format
 
 
+class JSONErrorFormatter(logging.Formatter):
+    """Formats ERROR+ records as single-line JSON for machine consumption.
+
+    Output goes to log/errors.jsonl — one JSON object per line.
+    Claude Code can read this file directly to diagnose issues.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "ts": datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "module": record.module,
+            "file": f"{record.pathname}:{record.lineno}",
+            "message": record.getMessage(),
+        }
+
+        # Capture full traceback if present
+        if record.exc_info and record.exc_info[0] is not None:
+            entry["exception"] = traceback.format_exception(*record.exc_info)
+
+        # Capture Flask request context if available
+        try:
+            from flask import has_request_context, request
+            if has_request_context():
+                entry["request"] = {
+                    "method": request.method,
+                    "path": request.path,
+                    "ip": request.remote_addr,
+                }
+        except Exception:
+            pass
+
+        return json.dumps(entry, default=str)
+
+
 def cleanup_old_logs(log_dir: Path, retention_days: int):
     """Remove log files older than retention_days."""
     if not log_dir.exists():
@@ -345,6 +383,29 @@ def setup_logging():
         file_handler.setFormatter(file_formatter)
         file_handler.addFilter(sensitive_filter)
         root_logger.addHandler(file_handler)
+
+    # JSON error log — always active, captures ERROR+ to log/errors.jsonl
+    # Truncate to last 1000 entries on startup to prevent unbounded growth
+    errors_dir = Path(log_dir)
+    errors_dir.mkdir(exist_ok=True)
+    errors_file = errors_dir / "errors.jsonl"
+    try:
+        if errors_file.exists() and errors_file.stat().st_size > 0:
+            lines = errors_file.read_text(encoding="utf-8").splitlines()
+            if len(lines) > 1000:
+                errors_file.write_text(
+                    "\n".join(lines[-1000:]) + "\n", encoding="utf-8"
+                )
+    except Exception:
+        pass
+    json_handler = logging.FileHandler(
+        filename=str(errors_file),
+        encoding="utf-8",
+    )
+    json_handler.setLevel(logging.ERROR)
+    json_handler.setFormatter(JSONErrorFormatter())
+    json_handler.addFilter(sensitive_filter)
+    root_logger.addHandler(json_handler)
 
     # Suppress noisy third-party loggers
     logging.getLogger("werkzeug").setLevel(logging.WARNING)

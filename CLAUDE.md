@@ -335,6 +335,16 @@ const { data, isLoading, error } = useQuery({
 });
 ```
 
+## Error Log for Debugging
+
+All ERROR and CRITICAL log entries are written to `log/errors.jsonl` (JSON Lines format, one JSON object per line). This file is always active regardless of `LOG_TO_FILE` setting. When debugging issues, read this file first:
+
+```
+log/errors.jsonl
+```
+
+Each entry contains: timestamp, logger name, module, source file:line, error message, full exception traceback (if any), and Flask request context (method, path, IP) when available. The file is auto-truncated to the last 1000 entries on app startup.
+
 ## Troubleshooting Common Issues
 
 ### WebSocket Connection Issues
