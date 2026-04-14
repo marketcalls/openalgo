@@ -35,6 +35,13 @@ interface FilterState {
   product: string[]
 }
 
+// Sort configuration types
+type SortKey = 'timestamp' | 'symbol' | 'action';
+interface SortConfig {
+  key: SortKey;
+  direction: 'asc' | 'desc';
+}
+
 function formatTime(timestamp: string): string {
   if (!timestamp) return '-'
 
@@ -89,15 +96,52 @@ export default function TradeBook() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  // Filter trades
-  const filteredTrades = useMemo(() => {
-    return trades.filter((trade) => {
+  // Sort state - Default: most recent first
+  const [sortConfig, setSortConfig] = useState<SortConfig>({
+    key: 'timestamp',
+    direction: 'desc',
+  })
+
+  // Filter and Sort trades
+  const sortedAndFilteredTrades = useMemo(() => {
+    // 1. Filter Logic
+    const filtered = trades.filter((trade) => {
       if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
       return true
     })
-  }, [trades, filters])
+
+    // 2. Sort Logic
+    return [...filtered].sort((a, b) => {
+      const aValue = a[sortConfig.key]
+      const bValue = b[sortConfig.key]
+
+      if (sortConfig.key === 'timestamp') {
+        const aTime = new Date(aValue).getTime()
+        const bTime = new Date(bValue).getTime()
+        // If date parsing fails for any reason, fallback to original string comparison
+        if (isNaN(aTime) || isNaN(bTime)) {
+           return sortConfig.direction === 'asc' 
+            ? String(aValue).localeCompare(String(bValue))
+            : String(bValue).localeCompare(String(aValue))
+        }
+        return sortConfig.direction === 'asc' ? aTime - bTime : bTime - aTime
+      }
+
+      // Standard alphabetical sort for Symbol and Action
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [trades, filters, sortConfig])
+
+  const requestSort = (key: SortKey) => {
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+    }))
+  }
 
   const hasActiveFilters =
     filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0
@@ -159,7 +203,7 @@ export default function TradeBook() {
   }, [fetchTrades])
 
   const exportToCSV = () => {
-    if (filteredTrades.length === 0) {
+    if (sortedAndFilteredTrades.length === 0) {
       showToast.error('No data to export', 'system')
       return
     }
@@ -176,7 +220,7 @@ export default function TradeBook() {
         'Order ID',
         'Time',
       ]
-      const rows = filteredTrades.map((t) => [
+      const rows = sortedAndFilteredTrades.map((t) => [
         sanitizeCSV(t.symbol),
         sanitizeCSV(t.exchange),
         ...(isCrypto ? [] : [sanitizeCSV(t.product)]),
@@ -204,9 +248,9 @@ export default function TradeBook() {
   }
 
   const stats = {
-    total: filteredTrades.length,
-    buyTrades: filteredTrades.filter((t) => t.action === 'BUY').length,
-    sellTrades: filteredTrades.filter((t) => t.action === 'SELL').length,
+    total: sortedAndFilteredTrades.length,
+    buyTrades: sortedAndFilteredTrades.filter((t) => t.action === 'BUY').length,
+    sellTrades: sortedAndFilteredTrades.filter((t) => t.action === 'SELL').length,
   }
 
   const FilterChip = ({
@@ -410,7 +454,7 @@ export default function TradeBook() {
             </div>
           ) : error ? (
             <div className="text-center py-12 text-muted-foreground">{error}</div>
-          ) : filteredTrades.length === 0 ? (
+          ) : sortedAndFilteredTrades.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {hasActiveFilters ? (
                 <div>
@@ -428,19 +472,34 @@ export default function TradeBook() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Symbol</TableHead>
+                    <TableHead 
+                      onClick={() => requestSort('symbol')}
+                      className="cursor-pointer hover:bg-muted/50 transition-colors"
+                    >
+                      Symbol {sortConfig.key === 'symbol' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </TableHead>
                     <TableHead>Exchange</TableHead>
                     {!isCrypto && <TableHead>Product</TableHead>}
-                    <TableHead>Action</TableHead>
+                    <TableHead 
+                      onClick={() => requestSort('action')}
+                      className="cursor-pointer hover:bg-muted/50 transition-colors"
+                    >
+                      Action {sortConfig.key === 'action' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </TableHead>
                     <TableHead className="text-right">Qty</TableHead>
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Trade Value</TableHead>
                     <TableHead>Order ID</TableHead>
-                    <TableHead>Time</TableHead>
+                    <TableHead 
+                      onClick={() => requestSort('timestamp')}
+                      className="cursor-pointer hover:bg-muted/50 transition-colors"
+                    >
+                      Time {sortConfig.key === 'timestamp' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredTrades.map((trade, index) => (
+                  {sortedAndFilteredTrades.map((trade, index) => (
                     <TableRow key={`${trade.orderid}-${index}`}>
                       <TableCell className="font-medium">{trade.symbol}</TableCell>
                       <TableCell>

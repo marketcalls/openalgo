@@ -8,6 +8,8 @@ import {
   Settings2,
   X,
   XCircle,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { showToast } from '@/utils/toast'
@@ -51,6 +53,13 @@ import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
+
+// Sort configuration types
+type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status';
+interface SortConfig {
+  key: SortKey;
+  direction: 'asc' | 'desc';
+}
 
 function formatTime(timestamp: string): string {
   if (!timestamp) return '-'
@@ -110,6 +119,12 @@ export default function OrderBook() {
   const [statusFilter, setStatusFilter] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
 
+  // Sort state - Default: most recent first
+  const [sortConfig, setSortConfig] = useState<SortConfig>({
+    key: 'timestamp',
+    direction: 'desc',
+  })
+
   // Modify order state
   const [modifyDialogOpen, setModifyDialogOpen] = useState(false)
   const [modifyingOrder, setModifyingOrder] = useState<Order | null>(null)
@@ -123,11 +138,42 @@ export default function OrderBook() {
     product: 'MIS' as string,
   })
 
-  // Filter orders based on status
-  const filteredOrders = useMemo(() => {
-    if (statusFilter.length === 0) return orders
-    return orders.filter((order) => statusFilter.includes(order.order_status))
-  }, [orders, statusFilter])
+  // Filter and Sort orders
+  const sortedAndFilteredOrders = useMemo(() => {
+    // 1. Filter Logic
+    const filtered = statusFilter.length === 0 
+      ? orders 
+      : orders.filter((order) => statusFilter.includes(order.order_status))
+
+    // 2. Sort Logic
+    return [...filtered].sort((a, b) => {
+      const aValue = a[sortConfig.key]
+      const bValue = b[sortConfig.key]
+
+      if (sortConfig.key === 'timestamp') {
+        const aTime = new Date(aValue).getTime()
+        const bTime = new Date(bValue).getTime()
+        if (isNaN(aTime) || isNaN(bTime)) {
+          return sortConfig.direction === 'asc' 
+            ? String(aValue).localeCompare(String(bValue))
+            : String(bValue).localeCompare(String(aValue))
+        }
+        return sortConfig.direction === 'asc' ? aTime - bTime : bTime - aTime
+      }
+
+      // Standard string comparison for Symbol, Action, and Status
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [orders, statusFilter, sortConfig])
+
+  const requestSort = (key: SortKey) => {
+    setSortConfig((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+    }))
+  }
 
   const hasActiveFilters = statusFilter.length > 0
 
@@ -278,7 +324,7 @@ export default function OrderBook() {
   }
 
   const exportToCSV = () => {
-    if (filteredOrders.length === 0) {
+    if (sortedAndFilteredOrders.length === 0) {
       showToast.error('No data to export', 'system')
       return
     }
@@ -297,7 +343,7 @@ export default function OrderBook() {
         'Status',
         'Time',
       ]
-      const rows = filteredOrders.map((o) => [
+      const rows = sortedAndFilteredOrders.map((o) => [
         sanitizeCSV(o.symbol),
         sanitizeCSV(o.exchange),
         sanitizeCSV(o.action),
@@ -506,7 +552,7 @@ export default function OrderBook() {
             </div>
           ) : error ? (
             <div className="text-center py-12 text-muted-foreground">{error}</div>
-          ) : filteredOrders.length === 0 ? (
+          ) : sortedAndFilteredOrders.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {hasActiveFilters ? (
                 <div>
@@ -524,23 +570,43 @@ export default function OrderBook() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[120px]">Symbol</TableHead>
+                    <TableHead 
+                      className="w-[120px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('symbol')}
+                    >
+                      Symbol {sortConfig.key === 'symbol' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </TableHead>
                     <TableHead className="w-[80px]">Exchange</TableHead>
-                    <TableHead className="w-[70px]">Action</TableHead>
+                    <TableHead 
+                      className="w-[70px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('action')}
+                    >
+                      Action {sortConfig.key === 'action' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </TableHead>
                     <TableHead className="w-[70px] text-right">Qty</TableHead>
                     <TableHead className="w-[100px] text-right">Price</TableHead>
                     <TableHead className="w-[100px] text-right">Trigger</TableHead>
                     <TableHead className="w-[80px]">Type</TableHead>
                     {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
                     <TableHead className="w-[140px]">Order ID</TableHead>
-                    <TableHead className="w-[100px]">Status</TableHead>
-                    <TableHead className="w-[100px]">Time</TableHead>
+                    <TableHead 
+                      className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('order_status')}
+                    >
+                      Status {sortConfig.key === 'order_status' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </TableHead>
+                    <TableHead 
+                      className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => requestSort('timestamp')}
+                    >
+                      Time {sortConfig.key === 'timestamp' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </TableHead>
                     <TableHead className="w-[60px]">Cancel</TableHead>
                     <TableHead className="w-[60px]">Modify</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredOrders.map((order, index) => {
+                  {sortedAndFilteredOrders.map((order, index) => {
                     const status = statusConfig[order.order_status] || statusConfig.open
                     const StatusIcon = status.icon
                     const canCancel = order.order_status === 'open'
@@ -774,5 +840,3 @@ export default function OrderBook() {
     </div>
   )
 }
-
-
