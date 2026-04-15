@@ -838,10 +838,7 @@ def master_contract_download():
         )
 
     except Exception as e:
-        import traceback
-
-        logger.error(f"Error in master_contract_download: {e}")
-        logger.info(f"{traceback.format_exc()}")
+        logger.exception(f"Error in master_contract_download: {e}")
         return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
 
 

@@ -700,10 +700,7 @@ def process_definedge_allmaster_csv(path):
         return processed_df
 
     except Exception as e:
-        logger.error(f"Error processing allmaster.csv: {e}")
-        import traceback
-
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.exception(f"Error processing allmaster.csv: {e}")
         return pd.DataFrame()
 
 

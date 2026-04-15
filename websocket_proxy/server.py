@@ -829,8 +829,7 @@ class WebSocketProxy:
                         await self.send_error(client_id, "BROKER_ERROR", str(retry_error))
                         return
                 else:
-                    import traceback
-                    logger.exception(traceback.format_exc())
+                    logger.exception(f"Broker error for {broker_name}: {error_str}")
                     await self.send_error(client_id, "BROKER_ERROR", error_str)
                     return
 
@@ -1634,10 +1633,7 @@ async def main():
             logger.error(f"Runtime error: {e}")
             raise
     except Exception as e:
-        import traceback
-
-        error_details = traceback.format_exc()
-        logger.exception(f"Server error: {e}\n{error_details}")
+        logger.exception(f"Server error: {e}")
         raise
     finally:
         # Always clean up resources

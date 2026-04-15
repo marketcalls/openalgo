@@ -232,7 +232,7 @@ export default function OrderBook() {
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchOrders, {
-    events: ORDER_BOOK_EVENTS,
+    events: ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'],
   })
 
   // Listen for mode changes (live/analyze) and refresh data

@@ -2065,9 +2065,7 @@ class DhanWebSocket:
                 logger.error(f"msg_length parsed: {'msg_length' in locals()}")
                 logger.error(f"feed_code parsed: {'feed_code' in locals()}")
                 logger.error(f"token parsed: {'token' in locals()}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception("Error in 20-level depth message parsing")
                 return
             except Exception as e:
                 logger.error(f"Error processing 20-level depth message: {e}", exc_info=True)
@@ -2617,9 +2615,7 @@ class DhanWebSocket:
             except Exception as parse_error:
                 logger.error(f"Error parsing bid packets: {parse_error}")
                 logger.error(f"Error type: {type(parse_error).__name__}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception("Bid packet parsing traceback")
                 # Create empty depth data to avoid crashes
                 depth_data = []
 
@@ -2649,7 +2645,6 @@ class DhanWebSocket:
         except Exception as e:
             logger.error(f"Error handling 20-level bid data: {e}", exc_info=True)
             logger.error(f"Message hex: {message.hex()}")
-            logger.error(traceback.format_exc())
 
     def _handle_depth_20_ask(self, message, token=None):
         """Handle 20-level ask data (message type 51)"""
@@ -2783,9 +2778,7 @@ class DhanWebSocket:
             except Exception as parse_error:
                 logger.error(f"Error parsing ask packets: {parse_error}")
                 logger.error(f"Error type: {type(parse_error).__name__}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception("Ask packet parsing traceback")
                 # Create empty depth data to avoid crashes
                 depth_data = []
 
@@ -2813,11 +2806,8 @@ class DhanWebSocket:
                 self._check_and_send_depth_20(token)
 
         except Exception as e:
-            logger.error(f"Error handling 20-level ask data: {e}")
+            logger.exception(f"Error handling 20-level ask data: {e}")
             logger.error(f"Message hex: {message.hex()}")
-            import traceback
-
-            logger.error(traceback.format_exc())
 
     def _check_and_send_depth_20(self, token):
         """Check if we have both bid and ask data and send combined tick"""

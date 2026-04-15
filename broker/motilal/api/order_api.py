@@ -96,6 +96,29 @@ def get_holdings(auth):
     # Motilal requires POST with JSON body (empty for non-dealer accounts)
     payload = json.dumps({})
 
+    logger.info("Fetching holdings from Motilal API...")
+    response = get_api_response(
+        "/rest/report/v1/getdpholding", auth, method="POST", payload=payload
+    )
+
+    # Log the raw response for debugging
+    logger.info(
+        f"Motilal Holdings API raw response: status={response.get('status')}, message={response.get('message')}, data_length={len(response.get('data', [])) if response.get('data') else 0}"
+    )
+
+    if response.get("status") == "SUCCESS" and response.get("data"):
+        logger.info(f"Successfully fetched {len(response.get('data', []))} holdings from Motilal")
+    elif response.get("status") == "SUCCESS" and not response.get("data"):
+        logger.warning(
+            "Motilal API returned SUCCESS but data is null/empty. This might indicate no holdings or an API issue."
+        )
+    else:
+        logger.error(
+            f"Motilal Holdings API error: {response.get('message', 'Unknown error')}, errorcode: {response.get('errorcode', '')}"
+        )
+
+    return response
+
 
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
@@ -140,30 +163,6 @@ def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
     with _position_cache_lock:
         _position_cache.pop(auth, None)
-
-
-    logger.info("Fetching holdings from Motilal API...")
-    response = get_api_response(
-        "/rest/report/v1/getdpholding", auth, method="POST", payload=payload
-    )
-
-    # Log the raw response for debugging
-    logger.info(
-        f"Motilal Holdings API raw response: status={response.get('status')}, message={response.get('message')}, data_length={len(response.get('data', [])) if response.get('data') else 0}"
-    )
-
-    if response.get("status") == "SUCCESS" and response.get("data"):
-        logger.info(f"Successfully fetched {len(response.get('data', []))} holdings from Motilal")
-    elif response.get("status") == "SUCCESS" and not response.get("data"):
-        logger.warning(
-            "Motilal API returned SUCCESS but data is null/empty. This might indicate no holdings or an API issue."
-        )
-    else:
-        logger.error(
-            f"Motilal Holdings API error: {response.get('message', 'Unknown error')}, errorcode: {response.get('errorcode', '')}"
-        )
-
-    return response
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
@@ -229,7 +228,7 @@ def place_order_api(data, auth):
         lotsize = symbol_info.lotsize
         logger.debug(f"Lot size for {data['symbol']}: {lotsize}")
 
-    newdata = transform_data(data, token)
+    newdata = transform_data(data, token, auth_token=AUTH_TOKEN)
 
     # Motilal Oswal Header Parameters
     headers = {

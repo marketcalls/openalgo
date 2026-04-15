@@ -312,6 +312,7 @@ for ((i=1; i<=INSTANCES; i++)); do
     DB_PATH="sqlite:///db/openalgo${i}.db"
     LATENCY_DB="sqlite:///db/latency${i}.db"
     LOGS_DB="sqlite:///db/logs${i}.db"
+    HEALTH_DB="sqlite:///db/health${i}.db"
     SANDBOX_DB="sqlite:///db/sandbox${i}.db"
     HISTORIFY_DB="db/historify${i}.duckdb"
 
@@ -351,10 +352,11 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
     sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" "$ENV_FILE"
 
-    # 8. Update database paths (unique per instance - ALL 5 databases)
+    # 8. Update database paths (unique per instance - ALL 6 databases)
     sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
     sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
     sudo sed -i "s|LOGS_DATABASE_URL = '.*'|LOGS_DATABASE_URL = '$LOGS_DB'|g" "$ENV_FILE"
+    sudo sed -i "s|HEALTH_DATABASE_URL = '.*'|HEALTH_DATABASE_URL = '$HEALTH_DB'|g" "$ENV_FILE"
     sudo sed -i "s|SANDBOX_DATABASE_URL = '.*'|SANDBOX_DATABASE_URL = '$SANDBOX_DB'|g" "$ENV_FILE"
     sudo sed -i "s|HISTORIFY_DATABASE_URL = '.*'|HISTORIFY_DATABASE_URL = '$HISTORIFY_DB'|g" "$ENV_FILE"
 
@@ -535,6 +537,10 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=$INSTANCE_DIR
+# Set HOME so Kaleido/choreographer can write temp files for Telegram /chart.
+# Kaleido 1.x creates temp dirs in Path.home() (not TMPDIR); the default
+# www-data home /var/www/ is typically root-owned and not writable.
+Environment="HOME=$INSTANCE_DIR/tmp"
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$INSTANCE_DIR/tmp"
 Environment="NUMBA_CACHE_DIR=$INSTANCE_DIR/tmp/numba_cache"
