@@ -52,6 +52,7 @@ const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
+const ReplayData = lazy(() => import('@/pages/ReplayData'))
 
 // Tools & Option Chain
 const Tools = lazy(() => import('@/pages/Tools'))
@@ -182,6 +183,7 @@ function App() {
                 {/* Phase 4: Sandbox & Analyzer */}
                 <Route path="/sandbox" element={<Sandbox />} />
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
+                <Route path="/sandbox/replay" element={<ReplayData />} />
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/tools" element={<Tools />} />
                 <Route path="/optionchain" element={<OptionChain />} />
