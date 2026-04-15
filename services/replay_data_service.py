@@ -307,13 +307,11 @@ def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
         if all_rows:
             combined = pd.concat(all_rows, ignore_index=True)
 
-            # Upsert per symbol for proper catalog tracking
-            symbols = combined['symbol'].unique()
+            # Upsert per symbol for proper catalog tracking (using groupby for efficiency)
             total_upserted = 0
 
-            for symbol in symbols:
-                sym_df = combined[combined['symbol'] == symbol].copy()
-                sym_df = sym_df.drop(columns=['symbol'])
+            for symbol, group_df in combined.groupby('symbol'):
+                sym_df = group_df.drop(columns=['symbol']).copy()
                 try:
                     count = upsert_market_data(sym_df, symbol, 'NSE', 'D')
                     total_upserted += count
@@ -321,7 +319,7 @@ def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     stats["errors"].append(f"Error upserting {symbol}: {str(e)}")
 
             stats["rows_upserted"] = total_upserted
-            stats["symbols_count"] = len(symbols)
+            stats["symbols_count"] = combined['symbol'].nunique()
 
             timestamps = combined['timestamp'].dropna()
             if not timestamps.empty:
@@ -512,12 +510,10 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
 
         if all_rows:
             combined = pd.concat(all_rows, ignore_index=True)
-            symbols = combined['symbol'].unique()
             total_upserted = 0
 
-            for symbol in symbols:
-                sym_df = combined[combined['symbol'] == symbol].copy()
-                sym_df = sym_df.drop(columns=['symbol'])
+            for symbol, group_df in combined.groupby('symbol'):
+                sym_df = group_df.drop(columns=['symbol']).copy()
                 try:
                     count = upsert_market_data(sym_df, symbol, 'NFO', 'D')
                     total_upserted += count
@@ -525,7 +521,7 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     stats["errors"].append(f"Error upserting {symbol}: {str(e)}")
 
             stats["rows_upserted"] = total_upserted
-            stats["symbols_count"] = len(symbols)
+            stats["symbols_count"] = combined['symbol'].nunique()
 
             timestamps = combined['timestamp'].dropna()
             if not timestamps.empty:

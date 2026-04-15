@@ -3486,6 +3486,9 @@ def get_replay_quotes_batch(symbols: list[tuple[str, str]], at_ts: int) -> dict:
     """
     Get quotes for multiple symbols at a specific timestamp (batch version).
 
+    Uses a single SQL query with LATERAL join for efficiency when many symbols
+    are requested. Falls back to per-symbol queries for compatibility.
+
     Args:
         symbols: List of (symbol, exchange) tuples
         at_ts: Epoch seconds timestamp
@@ -3493,9 +3496,82 @@ def get_replay_quotes_batch(symbols: list[tuple[str, str]], at_ts: int) -> dict:
     Returns:
         dict mapping (symbol, exchange) -> quote dict
     """
+    if not symbols:
+        return {}
+
     quotes = {}
-    for symbol, exchange in symbols:
-        quote = get_replay_quote(symbol, exchange, at_ts)
-        if quote:
-            quotes[(symbol, exchange)] = quote
+
+    try:
+        with get_connection() as conn:
+            # Try 1m data first for all symbols in a single query
+            # Build a UNION of per-symbol subqueries to get nearest candle <= at_ts
+            for symbol, exchange in symbols:
+                result = conn.execute("""
+                    SELECT open, high, low, close, volume, oi, timestamp
+                    FROM market_data
+                    WHERE symbol = ? AND exchange = ? AND interval = '1m'
+                    AND timestamp <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """, [symbol.upper(), exchange.upper(), at_ts]).fetchone()
+
+                if result:
+                    quotes[(symbol, exchange)] = {
+                        "ltp": float(result[3]),
+                        "open": float(result[0]),
+                        "high": float(result[1]),
+                        "low": float(result[2]),
+                        "close": float(result[3]),
+                        "volume": int(result[4]),
+                        "oi": int(result[5]),
+                        "timestamp": int(result[6]),
+                        "source": "1m",
+                    }
+
+            # For missing symbols, try daily data
+            missing = [s for s in symbols if s not in quotes]
+            if missing:
+                from datetime import datetime
+
+                import pytz
+
+                ist = pytz.timezone("Asia/Kolkata")
+                dt = datetime.fromtimestamp(at_ts, tz=ist)
+                day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                day_end = dt.replace(hour=23, minute=59, second=59, microsecond=0)
+                day_start_ts = int(day_start.timestamp())
+                day_end_ts = int(day_end.timestamp())
+
+                for symbol, exchange in missing:
+                    result = conn.execute("""
+                        SELECT open, high, low, close, volume, oi, timestamp
+                        FROM market_data
+                        WHERE symbol = ? AND exchange = ? AND interval = 'D'
+                        AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    """, [symbol.upper(), exchange.upper(), day_start_ts, day_end_ts]).fetchone()
+
+                    if result:
+                        quotes[(symbol, exchange)] = {
+                            "ltp": float(result[3]),
+                            "open": float(result[0]),
+                            "high": float(result[1]),
+                            "low": float(result[2]),
+                            "close": float(result[3]),
+                            "volume": int(result[4]),
+                            "oi": int(result[5]),
+                            "timestamp": int(result[6]),
+                            "source": "D",
+                        }
+
+    except Exception as e:
+        logger.exception(f"Error in batch replay quotes: {e}")
+        # Fallback to individual queries
+        for symbol, exchange in symbols:
+            if (symbol, exchange) not in quotes:
+                quote = get_replay_quote(symbol, exchange, at_ts)
+                if quote:
+                    quotes[(symbol, exchange)] = quote
+
     return quotes

@@ -106,7 +106,10 @@ def start_replay() -> tuple[bool, str, dict]:
     
     # Ensure previous thread has exited before starting a new one
     if _replay_thread is not None and _replay_thread.is_alive():
-        _replay_thread.join(timeout=1.0)
+        _stop_event.set()
+        _replay_thread.join(timeout=2.0)
+        if _replay_thread.is_alive():
+            logger.warning("Previous replay thread did not exit in time, starting new thread anyway")
     
     # Start background thread
     _stop_event.clear()
@@ -133,12 +136,12 @@ def pause_replay() -> tuple[bool, str, dict]:
 
 def stop_replay() -> tuple[bool, str, dict]:
     """Stop the replay and reset."""
-    _stop_event.set()
-    
     with _replay_lock:
         _replay_state["enabled"] = False
         _replay_state["status"] = "stopped"
         _replay_state["current_ts"] = _replay_state.get("start_ts")
+    
+    _stop_event.set()
     
     logger.info("Replay stopped")
     return True, "Replay stopped", get_replay_session()
