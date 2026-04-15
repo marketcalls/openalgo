@@ -2,6 +2,7 @@ import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
+from utils.data_router import build_data_handler
 from utils.logging import get_logger
 
 # Initialize logger
@@ -41,14 +42,13 @@ def get_intervals_with_auth(auth_token: str, broker: str) -> tuple[bool, dict[st
         - Response data (dict)
         - HTTP status code (int)
     """
-    broker_module = import_broker_module(broker)
-    if broker_module is None:
-        return False, {"status": "error", "message": "Broker-specific module not found"}, 404
+    try:
+        data_handler, _kind, _name = build_data_handler(broker, auth_token)
+    except Exception as e:
+        logger.exception(f"Failed to build data handler: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
 
     try:
-        # Initialize broker's data handler
-        data_handler = broker_module.BrokerData(auth_token)
-
         # Get supported intervals from the timeframe map with proper numerical sorting
         def sort_intervals(interval_list):
             """Sort intervals numerically instead of alphabetically"""
