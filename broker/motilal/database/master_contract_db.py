@@ -2,6 +2,7 @@
 
 import io
 import os
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -11,10 +12,6 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
-from utils.index_symbol_mapping import (
-    normalize_bse_index_symbol,
-    normalize_nse_index_symbol,
-)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -120,25 +117,124 @@ def download_csv_motilal_data(exchange_name):
         raise
 
 
+# --- Index symbol normalization (Motilal-specific) -----------------------
+#
+# Motilal ships index names in its own house-style ("Nifty 50", "BSE CAPGOOD",
+# "SNXT50", ...) while OpenAlgo needs canonical symbols per symbol_Openalgo.md.
+# The mapping is kept local to this broker loader so other brokers — which
+# already feed clean strings — aren't affected.
+
+# Broker-house-style NSE index name -> OpenAlgo canonical symbol. Keys are
+# upper-cased and whitespace-stripped before lookup.
+_NSE_INDEX_ALIASES: dict[str, str] = {
+    "NIFTY50": "NIFTY",
+    "NIFTYNEXT50": "NIFTYNXT50",
+    "NIFTYFINSERVICE": "FINNIFTY",
+    "NIFTYFINSERV": "FINNIFTY",
+    "NIFTYBANK": "BANKNIFTY",
+    "NIFTYMIDSELECT": "MIDCPNIFTY",
+    "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+    "INDIAVIX": "INDIAVIX",
+}
+
+# Broker-house-style BSE index name -> OpenAlgo canonical symbol. Keys are
+# matched against the raw broker string after upper-casing + collapsing runs
+# of whitespace to a single space (so "BSE  CAPGOOD" still hits "BSE CAPGOOD").
+_BSE_INDEX_ALIASES_RAW: dict[str, str] = {
+    "BSE SENSEX": "SENSEX",
+    "BSE BANKEX": "BANKEX",
+    "SNSX50": "SENSEX50",
+    "BSE 100": "BSE100",
+    "BSE 150 MIDCAP": "BSE150MIDCAPINDEX",
+    "BSE 200": "BSE200",
+    "BSE 250 LARGEMIDCAP": "BSE250LARGEMIDCAPINDEX",
+    "BSE 400 MIDSMALLCAP": "BSE400MIDSMALLCAPINDEX",
+    "BSE 500": "BSE500",
+    "BSE AUTO": "BSEAUTO",
+    "BSE CAPGOOD": "BSECAPITALGOODS",
+    "BSE CARBON": "BSECARBONEX",
+    "BSE CONSDUR": "BSECONSUMERDURABLES",
+    "BSE CPSE": "BSECPSE",
+    "BSE DOLLEX 100": "BSEDOLLEX100",
+    "BSE DOLLEX 200": "BSEDOLLEX200",
+    "BSE DOLLEX 30": "BSEDOLLEX30",
+    "BSE ENERGY": "BSEENERGY",
+    "BSE FMCG": "BSEFASTMOVINGCONSUMERGOODS",
+    "BSE FINANCIAL SERVICES": "BSEFINANCIALSERVICES",
+    "BSE GREENEX": "BSEGREENEX",
+    "BSE HEALTHCARE": "BSEHEALTHCARE",
+    "BSE INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+    "BSE INDUSTRIALS": "BSEINDUSTRIALS",
+    "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+    "BSE IPO": "BSEIPO",
+    "BSE LARGECAP": "BSELARGECAP",
+    "BSE METAL": "BSEMETAL",
+    "BSE MIDCAP": "BSEMIDCAP",
+    "BSE MIDCAP SELECT": "BSEMIDCAPSELECTINDEX",
+    "BSE OIL&GAS": "BSEOIL&GAS",
+    "BSE POWER": "BSEPOWER",
+    "BSE PSU": "BSEPSU",
+    "BSE REALTY": "BSEREALTY",
+    "SNXT50": "BSESENSEXNEXT50",
+    "BSE SMALLCAP": "BSESMALLCAP",
+    "BSE SMALLCAP SELECT": "BSESMALLCAPSELECTINDEX",
+    "BSE SME IPO": "BSESMEIPO",
+    "BSE TECK": "BSETECK",
+    "BSE TELECOM": "BSETELECOM",
+}
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _collapse_ws(s: str) -> str:
+    """Upper-case + collapse runs of whitespace to a single space + strip."""
+    return _WHITESPACE_RE.sub(" ", s.upper()).strip()
+
+
+_BSE_INDEX_ALIASES = {_collapse_ws(k): v for k, v in _BSE_INDEX_ALIASES_RAW.items()}
+
+
+def _normalize_nse_index_symbol(broker_symbol):
+    """NSE: upper + strip whitespace, then alias lookup; unlisted fall through."""
+    if not broker_symbol:
+        return broker_symbol
+    cleaned = _WHITESPACE_RE.sub("", str(broker_symbol).upper())
+    return _NSE_INDEX_ALIASES.get(cleaned, cleaned)
+
+
+def _normalize_bse_index_symbol(broker_symbol):
+    """
+    BSE: alias lookup first (keys contain spaces / abbreviations that can't
+    be auto-derived, e.g. "BSE CAPGOOD" -> "BSECAPITALGOODS"), then fall back
+    to upper + strip whitespace so unlisted indices still come out canonical
+    ("BSE 1000" -> "BSE1000").
+    """
+    if not broker_symbol:
+        return broker_symbol
+    raw = str(broker_symbol)
+    aliased = _BSE_INDEX_ALIASES.get(_collapse_ws(raw))
+    if aliased is not None:
+        return aliased
+    return _WHITESPACE_RE.sub("", raw.upper())
+
+
 def standardize_index_symbols(df):
     """
-    Standardize NSE_INDEX and BSE_INDEX symbol names to the OpenAlgo canonical
-    form. The actual mapping lives in utils.index_symbol_mapping so every
-    broker uses the same alias table; this function is just the pandas glue.
-    Symbols not in the alias map pass through unchanged.
+    Standardize NSE_INDEX and BSE_INDEX symbol names to OpenAlgo canonical form
+    using Motilal-specific alias maps. Symbols not in the maps pass through
+    after basic cleanup (upper-case + whitespace removed). NaN rows are
+    preserved — the old `.str` pipeline was NaN-safe and `.apply` is not.
     """
     nse_idx_mask = df["exchange"] == "NSE_INDEX"
     if nse_idx_mask.any():
-        # Guard NaN — str(NaN) becomes "nan" and would normalize to the
-        # literal "NAN" symbol, polluting the SymToken table.
         df.loc[nse_idx_mask, "symbol"] = df.loc[nse_idx_mask, "symbol"].apply(
-            lambda s: normalize_nse_index_symbol(s) if pd.notna(s) else s
+            lambda s: _normalize_nse_index_symbol(s) if pd.notna(s) else s
         )
 
     bse_idx_mask = df["exchange"] == "BSE_INDEX"
     if bse_idx_mask.any():
         df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].apply(
-            lambda s: normalize_bse_index_symbol(s) if pd.notna(s) else s
+            lambda s: _normalize_bse_index_symbol(s) if pd.notna(s) else s
         )
 
     return df
