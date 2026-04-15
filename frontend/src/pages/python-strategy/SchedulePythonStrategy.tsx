@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { PythonStrategy } from '@/types/python-strategy'
-import { SCHEDULE_DAYS } from '@/types/python-strategy'
+import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS, STRATEGY_EXCHANGES } from '@/types/python-strategy'
 
 export default function SchedulePythonStrategy() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -17,9 +17,12 @@ export default function SchedulePythonStrategy() {
   const [strategy, setStrategy] = useState<PythonStrategy | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [exchange, setExchange] = useState<string>('NSE')
   const [startTime, setStartTime] = useState('09:15')
   const [stopTime, setStopTime] = useState('15:30')
   const [selectedDays, setSelectedDays] = useState<string[]>(['mon', 'tue', 'wed', 'thu', 'fri'])
+
+  const isCrypto = exchange === CRYPTO_EXCHANGE_VALUE
 
   useEffect(() => {
     const fetchStrategy = async () => {
@@ -29,6 +32,7 @@ export default function SchedulePythonStrategy() {
         const data = await pythonStrategyApi.getStrategy(strategyId)
         setStrategy(data)
         // Pre-fill with existing schedule (schedule is always enabled)
+        if (data.exchange) setExchange(data.exchange)
         if (data.schedule_start_time) setStartTime(data.schedule_start_time)
         if (data.schedule_stop_time) setStopTime(data.schedule_stop_time)
         if (data.schedule_days?.length) setSelectedDays(data.schedule_days)
@@ -72,6 +76,7 @@ export default function SchedulePythonStrategy() {
         start_time: startTime,
         stop_time: stopTime,
         days: selectedDays,
+        exchange,
       })
 
       if (response.status === 'success') {
@@ -150,6 +155,28 @@ export default function SchedulePythonStrategy() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Exchange */}
+            <div className="space-y-2">
+              <Label htmlFor="exchange">Exchange</Label>
+              <select
+                id="exchange"
+                value={exchange}
+                onChange={(e) => setExchange(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {STRATEGY_EXCHANGES.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {isCrypto
+                  ? 'CRYPTO is 24/7 — the schedule below merely limits when this script runs.'
+                  : 'Drives holiday awareness for this strategy. Each exchange has its own holiday list and per-date session timings (e.g. on 14-Apr-2026 NSE/BSE are closed but MCX runs 17:00-23:55 per the calendar DB). SPECIAL_SESSION entries also override weekend rejects (e.g. Sunday Muhurat).'}
+              </p>
+            </div>
+
             {/* Time Inputs */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">

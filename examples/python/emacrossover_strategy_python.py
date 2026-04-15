@@ -9,8 +9,15 @@ Run standalone:
     python emacrossover_strategy_python.py
 
 Run via OpenAlgo's /python strategy runner:
-    OPENALGO_API_KEY is injected by the platform (PR #1247).
-    HOST_SERVER and WEBSOCKET_URL are inherited from OpenAlgo's .env file.
+    OPENALGO_API_KEY            : injected per-strategy (PR #1247).
+    OPENALGO_STRATEGY_EXCHANGE  : set from the strategy's `exchange` config
+                                  (NSE / BSE / NFO / BFO / MCX / BCD / CDS / CRYPTO).
+                                  Drives both this script's trading exchange and
+                                  the host's calendar/holiday gating, so the two
+                                  always agree (no NSE-only orders on an MCX-gated
+                                  strategy).
+    STRATEGY_ID / STRATEGY_NAME : injected for log/order tagging.
+    HOST_SERVER / WEBSOCKET_URL : inherited from OpenAlgo's .env.
     No code changes required.
 """
 
@@ -36,8 +43,14 @@ API_HOST = os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
 WS_URL = os.getenv("WEBSOCKET_URL", "ws://127.0.0.1:8765")
 
 # Trade Settings
+# EXCHANGE prefers OPENALGO_STRATEGY_EXCHANGE (set by /python runner from the
+# strategy's config) so the script trades on whichever exchange the host is
+# gating its calendar against. Falls back to EXCHANGE env var, then NSE.
 SYMBOL = os.getenv("SYMBOL", "NHPC")              # Stock to trade
-EXCHANGE = os.getenv("EXCHANGE", "NSE")           # NSE, BSE, NFO, etc.
+EXCHANGE = os.getenv(
+    "OPENALGO_STRATEGY_EXCHANGE",
+    os.getenv("EXCHANGE", "NSE"),
+)                                                 # NSE, BSE, NFO, BFO, MCX, BCD, CDS, CRYPTO
 QUANTITY = int(os.getenv("QUANTITY", "1"))        # Number of shares
 PRODUCT = os.getenv("PRODUCT", "MIS")             # MIS (Intraday) or CNC (Delivery)
 
@@ -106,10 +119,16 @@ class ConfigurableEMABot:
 
         print("[BOT] OpenAlgo Trading Bot Started")
         print(f"[BOT] Host: {API_HOST} | WS: {WS_URL}")
+        print(f"[BOT] Symbol: {SYMBOL} on {EXCHANGE}")
         print(f"[BOT] Direction Mode: {TRADE_DIRECTION}")
         print(f"[BOT] Strategy: {FAST_EMA_PERIOD} EMA x {SLOW_EMA_PERIOD} EMA")
         print(f"[BOT] Lookback Period: {self.lookback_days} days")
         print(f"[BOT] Signal Check Interval: {SIGNAL_CHECK_INTERVAL} seconds")
+        if os.getenv("OPENALGO_STRATEGY_EXCHANGE"):
+            print(
+                f"[BOT] Exchange resolved from OPENALGO_STRATEGY_EXCHANGE "
+                f"(host calendar = {EXCHANGE})"
+            )
 
     # ===========================================================================
     # WEBSOCKET HANDLER WITH IMMEDIATE EXIT
