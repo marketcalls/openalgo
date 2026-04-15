@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+import pytz
 from dotenv import load_dotenv
 
 from utils.logging import get_logger
@@ -3445,7 +3446,6 @@ def get_replay_quote(symbol: str, exchange: str, at_ts: int) -> dict | None:
 
             # Fallback: try daily data for the same date
             # Convert at_ts to start/end of day in IST
-            import pytz
             ist = pytz.timezone("Asia/Kolkata")
             dt = datetime.fromtimestamp(at_ts, tz=ist)
             day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)

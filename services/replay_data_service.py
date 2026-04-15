@@ -31,6 +31,9 @@ MAX_ZIP_SIZE = int(os.getenv("REPLAY_MAX_ZIP_SIZE_MB", "200")) * 1024 * 1024
 # Allowed file extensions inside ZIP
 ALLOWED_EXTENSIONS = {".csv", ".txt"}
 
+# Valid NSE CM series: EQ=Equity, BE=Book Entry, BZ=Z-category
+VALID_CM_SERIES = {'EQ', 'BE', 'BZ'}
+
 
 def validate_zip_file(file_storage) -> tuple[bool, str]:
     """
@@ -151,6 +154,14 @@ def _date_to_epoch(dt: datetime) -> int:
     return int(dt.timestamp())
 
 
+def _format_strike_price(strike) -> str:
+    """Format a strike price value, removing trailing .0 for whole numbers."""
+    strike_val = float(strike) if strike and str(strike) != 'nan' else 0
+    if strike_val == int(strike_val):
+        return str(int(strike_val))
+    return str(strike_val)
+
+
 def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
     """
     Import NSE CM (Cash Market) Bhavcopy ZIP into DuckDB.
@@ -236,7 +247,7 @@ def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
 
                 # Filter for EQ series if SERIES column exists
                 if 'SERIES' in df.columns:
-                    df = df[df['SERIES'].str.strip().isin(['EQ', 'BE', 'BZ'])]
+                    df = df[df['SERIES'].str.strip().isin(VALID_CM_SERIES)]
 
                 if df.empty:
                     continue
@@ -427,18 +438,14 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     if expiry and expiry != 'nan':
                         try:
                             exp_dt = _parse_nse_date(expiry)
-                            exp_str = exp_dt.strftime('%d%b%y').upper()  # e.g., 28MAR24
+                            exp_str = exp_dt.strftime('%d%b%y').upper()  # e.g., 28mar24 -> 28MAR24
                         except ValueError:
                             exp_str = expiry.replace('-', '')
 
                         if instrument in ('FUTIDX', 'FUTSTK') or opt_type in ('XX', '', 'nan'):
                             return f"{base}{exp_str}FUT"
                         elif opt_type in ('CE', 'PE'):
-                            strike_val = float(strike) if strike and str(strike) != 'nan' else 0
-                            if strike_val == int(strike_val):
-                                strike_str = str(int(strike_val))
-                            else:
-                                strike_str = str(strike_val)
+                            strike_str = _format_strike_price(strike)
                             return f"{base}{exp_str}{strike_str}{opt_type}"
 
                     return base
