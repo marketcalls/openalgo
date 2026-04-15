@@ -55,12 +55,15 @@ class SecurityMiddleware:
         # Get real client IP (handles proxies)
         client_ip = get_real_ip_from_environ(environ)
 
-        # Check if IP is banned
-        if IPBan.is_ip_banned(client_ip):
-            # Clean up scoped session — this runs at WSGI level, outside Flask
-            # request context, so blueprint/app teardown handlers won't fire.
+        # Check if IP is banned — this opens a logs_session connection.
+        # Must clean up in ALL paths (banned and non-banned) because this
+        # runs at WSGI level, outside Flask's teardown_appcontext scope.
+        try:
+            is_banned = IPBan.is_ip_banned(client_ip)
+        finally:
             logs_session.remove()
 
+        if is_banned:
             # Return 403 Forbidden for banned IPs
             status = "403 Forbidden"
             headers = [("Content-Type", "text/plain")]
@@ -68,8 +71,6 @@ class SecurityMiddleware:
             logger.warning(f"Blocked banned IP: {client_ip}")
             return [b"Access Denied: Your IP has been banned"]
 
-        # For non-banned IPs: session cleanup is handled by Flask's
-        # teardown_app_request in traffic.py and security.py blueprints.
         return self.app(environ, start_response)
 
 
