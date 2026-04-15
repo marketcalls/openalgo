@@ -457,6 +457,23 @@ def start_strategy_process(strategy_id):
             subprocess_args["stderr"] = subprocess.STDOUT
             subprocess_args["cwd"] = str(Path.cwd())
 
+            # Inject documented strategy environment variables
+            # (per strategies/README.md: STRATEGY_ID, STRATEGY_NAME, OPENALGO_API_KEY, OPENALGO_HOST)
+            strategy_env = os.environ.copy()
+            strategy_env["STRATEGY_ID"] = strategy_id
+            strategy_env["STRATEGY_NAME"] = config.get("name", strategy_id)
+            strategy_env.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
+            try:
+                from database.auth_db import get_api_key_for_tradingview
+                user_id = config.get("user_id")
+                if user_id:
+                    _api_key = get_api_key_for_tradingview(user_id)
+                    if _api_key:
+                        strategy_env["OPENALGO_API_KEY"] = _api_key
+            except Exception as e:
+                logger.warning(f"Could not inject API key for strategy {strategy_id}: {e}")
+            subprocess_args["env"] = strategy_env
+
             # Start the process
             # Use Python unbuffered mode for real-time output
             cmd = [get_python_executable(), "-u", str(file_path.absolute())]
