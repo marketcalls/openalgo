@@ -76,7 +76,7 @@ def broadcast_status_update(strategy_id: str, status: str, message: str = None):
             try:
                 q.put_nowait(event)
                 active_subscribers.append(q)
-            except:
+            except Exception:
                 pass  # Queue full or dead, skip
         SSE_SUBSCRIBERS.clear()
         SSE_SUBSCRIBERS.extend(active_subscribers)
@@ -123,6 +123,19 @@ def init_scheduler():
         )
         logger.debug("Market hours enforcer scheduled (runs every minute)")
 
+        # Periodically reap crashed strategies so headless deployments don't
+        # accumulate stale entries in RUNNING_STRATEGIES. Without this, a
+        # strategy that exits unexpectedly stays tracked (and its parent-side
+        # resources pinned) until someone opens the /python UI.
+        SCHEDULER.add_job(
+            func=cleanup_dead_processes,
+            trigger="interval",
+            seconds=60,
+            id="reap_dead_strategies",
+            replace_existing=True,
+        )
+        logger.debug("Dead-process reaper scheduled (runs every 60 seconds)")
+
 
 def load_configs():
     """Load strategy configurations from file"""
@@ -138,11 +151,19 @@ def load_configs():
 
 
 def save_configs():
-    """Save strategy configurations to file"""
+    """Save strategy configurations to file atomically.
+
+    Writes to a temp file and then renames into place so a kill mid-write
+    cannot leave a half-written JSON blob behind.
+    """
     try:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        tmp_path = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(STRATEGY_CONFIGS, f, indent=2, default=str, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_FILE)
         logger.debug("Configurations saved")
     except Exception as e:
         logger.exception(f"Failed to save configs: {e}")
@@ -507,13 +528,23 @@ def start_strategy_process(strategy_id):
                 logger.exception(f"Unexpected error starting process: {e}")
                 return False, f"Failed to start process: {str(e)}"
 
+            # The subprocess has inherited log_handle's fd, so the child can
+            # write to the log on its own. We close the parent-side handle
+            # now to avoid pinning an extra fd for the lifetime of the
+            # strategy (multiplied by every running strategy). If closing
+            # fails we swallow the error — the child's inherited fd is the
+            # authoritative one and stays open.
+            try:
+                log_handle.close()
+            except Exception as e:
+                logger.debug(f"Error closing parent-side log handle for {strategy_id}: {e}")
+
             # Store process info
             RUNNING_STRATEGIES[strategy_id] = {
                 "process": process,
                 "pid": process.pid,
                 "started_at": ist_now,
                 "log_file": str(log_file),
-                "log_handle": log_handle,  # Keep file handle open
             }
 
             # Update config with IST time
@@ -698,7 +729,13 @@ def check_process_status(pid):
 
 
 def close_log_handle_safely(strategy_info):
-    """Safely close a log file handle, handling all edge cases"""
+    """Safely close a log file handle, handling all edge cases.
+
+    As of the FD-hygiene fix, parent-side log handles are closed immediately
+    after Popen inherits them, so ``strategy_info`` normally has no
+    ``log_handle`` key. This helper is retained for defensive compatibility
+    with older records (e.g. adopted processes, future code paths).
+    """
     if not strategy_info:
         return
     log_handle = strategy_info.get("log_handle")
@@ -2106,8 +2143,14 @@ def api_get_strategies():
 
 
 @python_strategy_bp.route("/api/events")
+@check_session_validity
 def api_strategy_events():
-    """SSE endpoint for real-time strategy status updates"""
+    """SSE endpoint for real-time strategy status updates.
+
+    Authenticated-only — broadcasts strategy start/stop/error events and
+    would otherwise let any network client enumerate the user's running
+    strategies and their lifecycle timestamps.
+    """
 
     def event_stream():
         # Create a queue for this subscriber
