@@ -6,7 +6,6 @@ import struct
 import sys
 import threading
 import time
-import traceback
 import zlib
 from datetime import datetime
 

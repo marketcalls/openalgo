@@ -1,6 +1,5 @@
 import copy
 import importlib
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
@@ -141,8 +140,7 @@ def close_position_with_auth(
         api_key = position_data.get("apikey", "")
         response_code, status_code = broker_module.close_all_positions(api_key, auth_token)
     except Exception as e:
-        logger.error(f"Error in broker_module.close_all_positions: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.close_all_positions: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to close positions due to internal error",

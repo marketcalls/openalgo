@@ -2,7 +2,6 @@ import copy
 import importlib
 import os
 import time
-import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
@@ -232,15 +231,35 @@ def split_order_with_auth(
 
         analyze_results = []
 
+        # Pre-fetch quote once for the symbol — all split orders share the
+        # same symbol, so N individual REST calls are redundant.
+        prefetched_quote = None
+        try:
+            from services.quotes_service import get_quotes
+            success_q, q_response, _ = get_quotes(
+                symbol=split_data.get("symbol"),
+                exchange=split_data.get("exchange"),
+                api_key=api_key,
+            )
+            if success_q and "data" in q_response:
+                prefetched_quote = q_response["data"]
+                logger.info(
+                    f"Pre-fetched quote for split order: {split_data.get('symbol')} "
+                    f"LTP={prefetched_quote.get('ltp')}"
+                )
+        except Exception as e:
+            logger.debug(f"Quote pre-fetch failed for split order, falling back to per-order fetch: {e}")
+
         # Place full-size orders in sandbox
         for i in range(num_full_orders):
             order_data = copy.deepcopy(split_data)
             order_data["quantity"] = str(split_size)
             order_data["apikey"] = api_key
 
-            # Place order in sandbox
+            # Place order in sandbox with pre-fetched quote
             success, response, status_code = sandbox_place_order(
-                order_data, api_key, {"apikey": api_key, "order_type": "split"}
+                order_data, api_key, {"apikey": api_key, "order_type": "split"},
+                prefetched_quote=prefetched_quote,
             )
 
             if success:
@@ -269,7 +288,8 @@ def split_order_with_auth(
             order_data["apikey"] = api_key
 
             success, response, status_code = sandbox_place_order(
-                order_data, api_key, {"apikey": api_key, "order_type": "split"}
+                order_data, api_key, {"apikey": api_key, "order_type": "split"},
+                prefetched_quote=prefetched_quote,
             )
 
             if success:

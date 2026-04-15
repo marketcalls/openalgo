@@ -29,7 +29,16 @@ LOGS_DATABASE_URL = os.getenv("LOGS_DATABASE_URL", "sqlite:///db/logs.db")
 
 # Conditionally create engine based on DB type
 if LOGS_DATABASE_URL and "sqlite" in LOGS_DATABASE_URL:
-    # SQLite: Use NullPool to prevent connection pool exhaustion
+    # SQLite: Use NullPool — each checkout creates a fresh connection, and
+    # closing it returns the FD immediately.  Session cleanup (which prevents
+    # FD leaks) is handled by:
+    #   - app.py teardown_appcontext (removes all scoped sessions per request)
+    #   - traffic_logger.py (logs_session.remove() in finally block)
+    #   - security_middleware.py (logs_session.remove() for banned-IP path)
+    # StaticPool (single shared connection) must NOT be used here: concurrent
+    # requests on the same SQLite connection cause "bad parameter or other API
+    # misuse" and "cannot commit — SQL statements in progress" errors on all
+    # platforms (Windows, Mac, Linux).
     logs_engine = create_engine(
         LOGS_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )

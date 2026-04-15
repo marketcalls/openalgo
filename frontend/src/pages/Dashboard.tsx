@@ -1,6 +1,7 @@
 import { BarChart3, BookOpen, FileText, MessageCircle, Search, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -98,10 +99,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchFundsData()
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchFundsData, 30000)
-    return () => clearInterval(interval)
   }, [fetchFundsData])
+
+  // Refresh funds when an order is placed (via SocketIO event)
+  useOrderEventRefresh(fetchFundsData, {
+    events: ['order_event', 'analyzer_update', 'close_position_event'],
+  })
 
   // Listen for mode changes and refresh data
   useEffect(() => {

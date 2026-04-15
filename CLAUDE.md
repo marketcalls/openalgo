@@ -9,6 +9,16 @@ OpenAlgo is a production-ready algorithmic trading platform built with Flask (ba
 **Repository**: https://github.com/marketcalls/openalgo
 **Documentation**: https://docs.openalgo.in
 
+## Security and Deployment Model
+
+- **Single user per deployment** — no multi-user, no privilege escalation. One user, one broker session per instance.
+- **Self-hosted on user's own server** — server access = full control. No SaaS component.
+- All official install scripts (`install.sh`, `install-docker.sh`, `install-multi.sh`, `docker-run.sh`, `docker-run.bat`, `start.sh`) auto-generate unique `APP_KEY` and `API_KEY_PEPPER` via `secrets.token_hex(32)`.
+- **SEBI static IP mandate** (effective April 1, 2026): All transactional API orders require broker-side static IP whitelisting. Delta Exchange (crypto) also enforces this. Stolen broker credentials CANNOT be used from an attacker's machine — the broker rejects requests from non-registered IPs. However, attacks routed THROUGH the OpenAlgo server (which has the registered IP) are still viable.
+- External platforms (TradingView, GoCharting, Chartink) send API keys in JSON body or URL query params — they cannot set custom HTTP headers. This is an accepted architectural trade-off.
+- The MCP server (`mcp/mcpserver.py`) is local-only, communicates via stdio with Claude Desktop/Cursor/Windsurf. It is NOT remotely exposed.
+- Indian broker tokens expire daily at ~3:00 AM IST. Session management is aligned to this schedule.
+
 ## Development Environment Setup
 
 ### Prerequisites
@@ -97,15 +107,30 @@ npm run format
 
 ### Database Architecture
 
-OpenAlgo uses **5 separate databases** for isolation:
+OpenAlgo uses **6 separate databases** for isolation:
 
 - `db/openalgo.db` - Main database (users, orders, positions, settings)
 - `db/logs.db` - Traffic and API logs
 - `db/latency.db` - Latency monitoring data
+- `db/health.db` - Health monitoring data
 - `db/sandbox.db` - Analyzer/sandbox mode (isolated virtual trading)
 - `db/historify.duckdb` - Historical market data (DuckDB)
 
 Each database has its own initialization function in `/database/`.
+
+#### SQLite Connection Pooling (NullPool)
+
+All SQLite databases use `NullPool` — each operation gets a fresh connection, closed immediately after use. **Do NOT use `StaticPool`** (single shared connection) — it causes `"bad parameter or other API misuse"` and `"cannot commit - SQL statements in progress"` errors because concurrent requests corrupt the shared connection's cursor state. This applies to all platforms (Windows, Mac, Linux).
+
+FD leak prevention is handled by 5 layers of session cleanup:
+- `app.py` `teardown_appcontext` removes all scoped sessions after every request
+- `traffic_logger.py` explicit `logs_session.remove()` in finally block
+- `security_middleware.py` explicit cleanup for banned-IP WSGI path
+- `blueprints/traffic.py` and `blueprints/security.py` teardown handlers
+
+#### HTTP Client Pooling
+
+Broker API calls use `httpx` with HTTP/2 connection pooling (`utils/httpx_client.py`). A single shared client instance per broker session maintains persistent connections to the broker's API servers, avoiding TCP/TLS handshake overhead on every order or data request.
 
 ### Broker Integration Pattern
 
@@ -124,10 +149,46 @@ Reference implementations: `/broker/zerodha/`, `/broker/dhan/`, `/broker/angel/`
 
 ### WebSocket Architecture
 
-- **Unified Proxy Server**: `websocket_proxy/server.py` (port 8765)
-- **ZeroMQ Message Bus**: High-performance data distribution (port 5555)
-- **Broker Adapters**: Normalize broker-specific WebSocket data
-- **Connection Pooling**: `MAX_SYMBOLS_PER_WEBSOCKET` (default: 1000) × `MAX_WEBSOCKET_CONNECTIONS` (default: 3) = 3000 symbols
+Real-time market data flows through a three-layer pipeline:
+
+1. **Broker WebSocket Adapters** (`broker/*/streaming/`): Each broker has a WebSocket adapter that connects to the broker's proprietary feed and normalizes data into OpenAlgo's internal format. Connection pooling is per-broker: `MAX_SYMBOLS_PER_WEBSOCKET` (default: 1000) x `MAX_WEBSOCKET_CONNECTIONS` (default: 3) = 3000 symbols max.
+
+2. **ZeroMQ Message Bus** (port 5555): Broker adapters publish normalized tick data to a ZeroMQ PUB socket. This decouples the broker feed from client delivery — the broker adapter runs independently and never blocks on slow clients.
+
+3. **Unified WebSocket Proxy Server** (`websocket_proxy/server.py`, port 8765): Subscribes to ZeroMQ, manages client WebSocket connections, handles symbol subscriptions/unsubscriptions, and delivers filtered ticks to each connected client. Includes per-symbol throttling to prevent flooding slow clients.
+
+### Request Processing Pipeline
+
+WSGI middleware wraps in reverse order — last registered is outermost. The request flows:
+
+```
+Incoming Request
+  → TrafficLoggerMiddleware (logs method, path, duration, status code)
+    → SecurityMiddleware (checks IP ban list, blocks banned IPs with 403)
+      → CSP Middleware (sets Content-Security-Policy headers)
+        → Flask app (routing, blueprints, CSRF, session)
+          → API key auth (for /api/v1/ endpoints)
+            → Service layer → Broker API
+```
+
+Registered in `app.py:319-323`: security middleware first, then traffic logging (so traffic wraps outside security). Session cleanup happens in `teardown_appcontext` after the response is sent.
+
+## Runtime Constraints
+
+### Eventlet + Gunicorn (Production)
+
+Production deployments (Ubuntu direct and Docker) run under **Gunicorn with eventlet worker** (`--worker-class eventlet -w 1`). This has critical implications:
+
+- **No `asyncio`**: eventlet monkey-patches the stdlib and is incompatible with `asyncio.run()`, `async/await`, and `asyncio.get_event_loop()`. Any code that needs async behavior must use eventlet green threads or run async work on a separate real OS thread (see `telegram_bot_service.py:_render_plotly_png` for the pattern).
+- **Single worker (`-w 1`)**: Required for WebSocket and SocketIO compatibility. Flask-SocketIO state is in-process and cannot be shared across workers.
+- **`threading.local()` maps to green threads**: eventlet monkey-patches `threading.local()` so each green thread gets its own session. This is why `scoped_session` works correctly under eventlet.
+
+### Windows / Mac Development
+
+The Flask development server (`uv run app.py`) uses standard threading, not eventlet. Code must work in both environments. Key differences:
+- No monkey-patching — standard `threading` and `socket` modules
+- `asyncio` works normally on dev server but will break under eventlet in production
+- SQLite concurrency behavior differs (Windows is more restrictive with file locking)
 
 ## Common Development Tasks
 
@@ -237,11 +298,21 @@ Separate database (`sandbox.db`) with ₹1 Crore virtual capital:
 - Complete isolation from live trading
 - Toggle via `/analyzer` blueprint
 
-### Real-Time Communication
+### Real-Time Communication (Event-Driven Architecture)
 
-1. **Flask-SocketIO**: Real-time updates for orders, trades, positions, logs
-2. **WebSocket Proxy**: Unified market data streaming (port 8765)
-3. **ZeroMQ**: High-performance message bus for internal communication
+OpenAlgo uses an event-driven architecture where state changes are broadcast to the UI in real-time:
+
+1. **Flask-SocketIO events**: Order placement, modification, cancellation, position updates, and analyzer results all emit SocketIO events (e.g., `order_update`, `analyzer_update`, `cache_loaded`). The React frontend subscribes to these events for live dashboard updates without polling.
+
+2. **WebSocket Proxy**: Unified market data streaming (port 8765) — see WebSocket Architecture above.
+
+3. **ZeroMQ PUB/SUB**: Internal message bus between broker adapters and WebSocket proxy (port 5555). Also used for cache invalidation events across modules.
+
+Key event flows:
+- **Order placed** → `order_router_service.py` → broker API → `socketio.emit("order_update")` → UI updates
+- **Market data tick** → broker WebSocket adapter → ZeroMQ PUB → WebSocket proxy → client browser
+- **Master contract loaded** → `master_contract_cache_hook.py` → `socketio.emit("cache_loaded")` → UI notified
+- **Analyzer trade** → `sandbox_service.py` → `socketio.emit("analyzer_update")` → sandbox UI updates
 
 ## Important Configuration
 
@@ -293,14 +364,22 @@ API keys are generated at `/apikey` and hashed with pepper before storage.
 
 ### Symbol Format
 
-OpenAlgo uses standardized symbol format across all brokers:
-```
-NSE:SBIN-EQ          # Equity
-NFO:NIFTY24JAN24000CE  # Options
-NSE:NIFTY-INDEX      # Index
-```
+OpenAlgo uses a standardized symbol format across all 24+ brokers. Broker-specific symbols are mapped via `broker/*/mapping/` modules and stored in the `SymToken` table.
 
-Broker-specific symbols are mapped via `broker/*/mapping/` modules.
+**Equity:** Just the base symbol — `INFY`, `SBIN`, `TATAMOTORS`
+
+**Futures:** `[BaseSymbol][ExpiryDate]FUT` — `BANKNIFTY24APR24FUT`, `CRUDEOILM20MAY24FUT`
+
+**Options:** `[BaseSymbol][ExpiryDate][Strike][CE/PE]` — `NIFTY28MAR2420800CE`, `VEDL25APR24292.5CE`
+
+**Exchange codes:** `NSE` (equity), `BSE` (equity), `NFO` (NSE F&O), `BFO` (BSE F&O), `CDS` (NSE currency), `BCD` (BSE currency), `MCX` (commodity), `NCDEX` (commodity), `NSE_INDEX` (indices), `BSE_INDEX` (indices)
+
+**Order constants:**
+- **Product:** `CNC` (cash & carry / delivery), `NRML` (futures & options carry), `MIS` (intraday square-off)
+- **Price type:** `MARKET`, `LIMIT`, `SL` (stop-loss limit), `SL-M` (stop-loss market)
+- **Action:** `BUY`, `SELL`
+
+**Database schema (`SymToken`):** `symbol` (OpenAlgo format), `brsymbol` (broker format), `exchange`, `brexchange`, `token` (broker instrument token), `expiry`, `strike`, `lotsize`, `instrumenttype`, `tick_size`
 
 ### Database Queries
 
@@ -314,13 +393,17 @@ user = User.query.filter_by(username='admin').first()
 
 ### Error Handling
 
-Return consistent JSON responses:
+Return consistent JSON responses and use `logger.exception()` for error logging:
 ```python
-return {
-    'status': 'success' | 'error',
-    'message': 'Human-readable message',
-    'data': {...}  # Optional payload
-}
+from utils.logging import get_logger
+logger = get_logger(__name__)
+
+try:
+    result = broker_module.place_order(data, token)
+    return {'status': 'success', 'data': result}
+except Exception as e:
+    logger.exception(f"Error placing order: {e}")  # auto-captures traceback
+    return {'status': 'error', 'message': str(e)}
 ```
 
 ### React API Calls
@@ -334,6 +417,26 @@ const { data, isLoading, error } = useQuery({
   queryFn: () => api.getPositions()
 });
 ```
+
+## Logging Architecture
+
+### Centralized Logging (`utils/logging.py`)
+
+All logging flows through Python's standard `logging` module, configured in `setup_logging()` at import time. Every module uses `logger = get_logger(__name__)`.
+
+**Three output handlers (all share the same `SensitiveDataFilter` to redact API keys/tokens):**
+
+1. **Console** (always active): Colored output via `ColoredFormatter`, level controlled by `LOG_LEVEL` env var.
+2. **File** (if `LOG_TO_FILE=True`): Daily-rotated text logs in `log/openalgo_YYYY-MM-DD.log`, retained for `LOG_RETENTION` days.
+3. **JSON error log** (always active): `log/errors.jsonl` — structured JSON Lines, ERROR+ only.
+
+### Error Log for Debugging
+
+When debugging issues, **read `log/errors.jsonl` first**. Each line is a JSON object with: timestamp, logger name, module, source file:line, error message, full exception traceback (if any), and Flask request context (method, path, IP) when available. Auto-truncated to the last 1000 entries on app startup.
+
+### Error Handling Convention
+
+All error logging uses `logger.exception()` (not `logger.error()` + manual traceback). This automatically captures the full traceback and routes it to the JSON error handler. Do NOT use `import traceback` / `traceback.print_exc()` / `traceback.format_exc()` — these bypass centralized logging.
 
 ## Troubleshooting Common Issues
 

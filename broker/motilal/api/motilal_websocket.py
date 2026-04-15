@@ -80,6 +80,15 @@ class MotilalWebSocket:
         self._connect_thread = None
         self._stop_event = threading.Event()
         self._heartbeat_thread = None
+        # Pending delayed_reconnect daemons spawned from on_close(); tracked so
+        # disconnect() can wait for them and so they exit early when _stop_event fires.
+        self._reconnect_threads = []
+        self._reconnect_threads_lock = threading.Lock()
+        # Flag set while we are intentionally closing a stale WebSocketApp inside
+        # the retry loop. The resulting on_close() callback must NOT spawn a
+        # delayed_reconnect — the retry loop is already about to create a fresh
+        # connection, and racing two connect()s corrupts subscription state.
+        self._closing_old_ws = False
 
     def connect(self):
         """
@@ -110,6 +119,20 @@ class MotilalWebSocket:
             try:
                 logger.info(f"Connecting to Motilal Oswal WebSocket: {self.ws_url}")
                 websocket.enableTrace(False)
+
+                # Close the previous WebSocketApp before overwriting self.ws so
+                # the underlying socket fd is released on retry attempts. Set
+                # _closing_old_ws first so the on_close callback knows not to
+                # schedule another reconnect (this loop already will).
+                old_ws = self.ws
+                if old_ws is not None:
+                    self._closing_old_ws = True
+                    try:
+                        old_ws.close()
+                    except Exception as close_err:
+                        logger.debug(f"Error closing stale WebSocketApp: {close_err}")
+                    finally:
+                        self._closing_old_ws = False
 
                 self.ws = websocket.WebSocketApp(
                     self.ws_url,
@@ -144,7 +167,9 @@ class MotilalWebSocket:
             logger.debug(
                 f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS} failed. Retrying in {sleep_time}s"
             )
-            time.sleep(sleep_time)
+            # Interruptible backoff so disconnect() doesn't wait out the full delay.
+            if self._stop_event.wait(timeout=sleep_time):
+                break
 
         if attempt >= self.MAX_RECONNECT_ATTEMPTS and not self.is_connected:
             logger.error(
@@ -157,9 +182,19 @@ class MotilalWebSocket:
         """
         self._stop_event.set()
 
-        # Stop heartbeat thread
-        if self._heartbeat_thread:
-            self._heartbeat_thread = None
+        # Stop heartbeat thread (currently disabled in _start_heartbeat, but
+        # join here so re-enabling it later doesn't silently leak a thread).
+        if (
+            self._heartbeat_thread
+            and self._heartbeat_thread.is_alive()
+            and self._heartbeat_thread is not threading.current_thread()
+        ):
+            self._heartbeat_thread.join(timeout=2)
+            if self._heartbeat_thread.is_alive():
+                logger.warning(
+                    "Motilal heartbeat thread did not exit within 2s of disconnect"
+                )
+        self._heartbeat_thread = None
 
         if self.ws:
             logger.info("Closing Motilal WebSocket connection")
@@ -173,6 +208,34 @@ class MotilalWebSocket:
             self.ws.close()
 
         self.is_connected = False
+
+        # Wait for any pending delayed_reconnect daemons to exit. _stop_event was
+        # set above, so they short-circuit on _stop_event.wait() and return quickly.
+        with self._reconnect_threads_lock:
+            pending = [t for t in self._reconnect_threads if t.is_alive()]
+            self._reconnect_threads = []
+        for t in pending:
+            t.join(timeout=2)
+            if t.is_alive():
+                logger.warning("Motilal delayed_reconnect thread did not exit within 2s")
+
+        # Join the connect thread so run_forever() actually unwinds before we
+        # declare the adapter disconnected. Without this the thread leaks one
+        # OS thread per session teardown. Skip the join if disconnect() is
+        # being invoked from within the connect thread itself (e.g. via an
+        # on_close callback) to avoid a self-join deadlock.
+        if (
+            self._connect_thread
+            and self._connect_thread.is_alive()
+            and self._connect_thread is not threading.current_thread()
+        ):
+            self._connect_thread.join(timeout=5)
+            if self._connect_thread.is_alive():
+                logger.warning(
+                    "Motilal connect thread did not exit within 5s of disconnect"
+                )
+        self._connect_thread = None
+
         logger.info("Motilal WebSocket disconnected")
 
     def on_open(self, ws):
@@ -773,7 +836,13 @@ class MotilalWebSocket:
 
         logger.debug(f"Motilal WebSocket connection closed: {close_status_code}, {close_msg}")
 
-        # Only attempt to reconnect if we didn't explicitly stop
+        # Skip reconnect if we explicitly stopped, or if this on_close was
+        # triggered by the retry loop intentionally closing a stale WebSocketApp
+        # (in which case the retry loop is about to open a fresh one itself).
+        if self._closing_old_ws:
+            logger.debug("on_close from stale WebSocketApp closure; skipping reconnect")
+            return
+
         if not self._stop_event.is_set():
             self.reconnect_count += 1
 
@@ -782,11 +851,20 @@ class MotilalWebSocket:
             logger.info(f"Attempting to reconnect in {sleep_time} seconds")
 
             def delayed_reconnect():
-                time.sleep(sleep_time)
-                if not self._stop_event.is_set():
-                    self.connect()
+                # wait() returns True if the stop event fires during the backoff,
+                # so we abort instead of racing a fresh connect() against disconnect().
+                if self._stop_event.wait(timeout=sleep_time):
+                    return
+                self.connect()
 
-            threading.Thread(target=delayed_reconnect, daemon=True).start()
+            t = threading.Thread(target=delayed_reconnect, daemon=True)
+            with self._reconnect_threads_lock:
+                # prune dead refs to keep the list bounded
+                self._reconnect_threads = [
+                    th for th in self._reconnect_threads if th.is_alive()
+                ]
+                self._reconnect_threads.append(t)
+            t.start()
 
     def register_scrip(
         self, exchange: str, exchange_type: str, scrip_code: int, symbol: str = None

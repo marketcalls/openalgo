@@ -154,7 +154,7 @@ class UpstoxWebSocketClient:
             # await websocket.send(json.dumps(msg).encode("utf-8"))
             self.ws.send(json.dumps(message).encode("utf-8"), opcode=websocket.ABNF.OPCODE_BINARY)
             self._subscriptions.update(instrument_keys)
-            self.logger.info(f"Subscribed to {len(instrument_keys)} instruments in {mode} mode")
+            self.logger.debug(f"Subscribed to {len(instrument_keys)} instruments in {mode} mode")
             return True
         except Exception as e:
             self.logger.error(f"Subscribe error: {e}")
@@ -169,7 +169,7 @@ class UpstoxWebSocketClient:
             message = self._create_subscription_message(instrument_keys, method="unsub")
             self.ws.send(json.dumps(message).encode("utf-8"), opcode=websocket.ABNF.OPCODE_BINARY)
             self._subscriptions.difference_update(instrument_keys)
-            self.logger.info(f"Unsubscribed from {len(instrument_keys)} instruments")
+            self.logger.debug(f"Unsubscribed from {len(instrument_keys)} instruments")
             return True
         except Exception as e:
             self.logger.error(f"Unsubscribe error: {e}")
@@ -205,7 +205,7 @@ class UpstoxWebSocketClient:
     # WebSocket callbacks
     def _on_ws_open(self, ws):
         """Called when WebSocket connection is opened"""
-        self.logger.info("Upstox WebSocket connection opened")
+        self.logger.debug("Upstox WebSocket connection opened")
         self._connected = True
         self._reconnect_attempts = 0
         self._last_message_time = time.time()
@@ -329,7 +329,7 @@ class UpstoxWebSocketClient:
             auth_data = response.json()
             ws_url = auth_data.get("data", {}).get("authorized_redirect_uri")
             if ws_url:
-                self.logger.info(f"Received WebSocket URL: {ws_url}")
+                self.logger.debug(f"Received WebSocket URL: {ws_url}")
                 return ws_url
             else:
                 self.logger.error("No WebSocket URL in auth response")

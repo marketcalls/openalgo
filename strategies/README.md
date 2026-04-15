@@ -60,9 +60,11 @@ import time
 from datetime import datetime
 
 # Get parameters from environment
-SYMBOL = os.getenv('SYMBOL', 'RELIANCE')
+SYMBOL   = os.getenv('SYMBOL', 'RELIANCE')
 EXCHANGE = os.getenv('EXCHANGE', 'NSE')
-API_KEY = os.getenv('OPENALGO_API_KEY', '')
+API_KEY  = os.getenv('OPENALGO_API_KEY', '')
+API_HOST = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+WS_URL   = os.getenv('WEBSOCKET_URL', 'ws://127.0.0.1:8765')
 
 def main():
     print(f"Strategy started at {datetime.now()}")
@@ -92,13 +94,29 @@ if __name__ == "__main__":
 
 ## Environment Variables
 
-The following environment variables are automatically set for each strategy:
+### Injected by the platform
 
-- `STRATEGY_ID`: Unique identifier for the strategy
-- `STRATEGY_NAME`: Name of the strategy
-- `OPENALGO_API_KEY`: API key from .env file
-- `OPENALGO_HOST`: OpenAlgo host URL
-- Plus any custom parameters you define
+These are set directly on each strategy subprocess:
+
+- `STRATEGY_ID` — unique identifier for the strategy
+- `STRATEGY_NAME` — name of the strategy
+- `OPENALGO_API_KEY` — decrypted API key for this user
+- `OPENALGO_HOST` — OpenAlgo host URL (defaults to `http://127.0.0.1:5000`; kept as a documented alias of `HOST_SERVER`)
+
+### Inherited from `.env`
+
+Strategies also inherit every variable defined in OpenAlgo's `.env`, so the following can be read directly:
+
+- `HOST_SERVER` — e.g. `http://127.0.0.1:5000` (preferred over `OPENALGO_HOST`)
+- `WEBSOCKET_URL` — e.g. `ws://127.0.0.1:8765`
+- `WEBSOCKET_HOST` / `WEBSOCKET_PORT` — raw components if you prefer to build the URL yourself
+- Any other key in `.env`
+
+Prefer `HOST_SERVER` and `WEBSOCKET_URL` in new strategies — they match the variable names used by OpenAlgo's own configuration, so the same `.env` drives both the server and your strategies.
+
+### Per-strategy parameters
+
+Plus any custom parameters you define in the strategy upload form — these become additional environment variables.
 
 ## Directory Structure
 
@@ -118,14 +136,15 @@ logs/
 Example of integrating with OpenAlgo API in your strategy:
 
 ```python
+import os
 import requests
 
 class OpenAlgoAPI:
-    def __init__(self, host, api_key):
-        self.host = host
-        self.api_key = api_key
-        self.headers = {'X-API-KEY': api_key}
-    
+    def __init__(self, host=None, api_key=None):
+        self.host = host or os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+        self.api_key = api_key or os.getenv('OPENALGO_API_KEY', '')
+        self.headers = {'X-API-KEY': self.api_key}
+
     def place_order(self, symbol, exchange, action, quantity):
         data = {
             'symbol': symbol,

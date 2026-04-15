@@ -41,6 +41,9 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self._data_poll_thread = None
         self._stop_poll = threading.Event()
+        # Adapter-level connect-with-retry thread; tracked so disconnect() can
+        # join it instead of leaving an orphan in-flight retry loop.
+        self._connect_thread = None
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -99,7 +102,15 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        if self._connect_thread and self._connect_thread.is_alive():
+            self.logger.debug("Motilal adapter connect thread already running")
+            return
+
+        # Clear _stop_poll so a fresh connect after a previous disconnect()
+        # doesn't short-circuit immediately on its first wait().
+        self._stop_poll.clear()
+        self._connect_thread = threading.Thread(target=self._connect_with_retry, daemon=True)
+        self._connect_thread.start()
 
     def _connect_with_retry(self) -> None:
         """Connect to Motilal WebSocket with retry logic"""
@@ -110,8 +121,10 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 self.ws_client.connect()
 
-                # Wait a bit for connection to establish
-                time.sleep(2)
+                # Wait a bit for connection to establish, but bail out
+                # immediately if disconnect() fires _stop_poll.
+                if self._stop_poll.wait(timeout=2):
+                    return
 
                 if self.ws_client.is_websocket_connected():
                     self.connected = True
@@ -133,7 +146,9 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
                 )
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                # Backoff sleep that exits early on shutdown.
+                if self._stop_poll.wait(timeout=delay):
+                    return
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
@@ -146,6 +161,22 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Stop data polling thread
         if self._data_poll_thread and self._data_poll_thread.is_alive():
             self._data_poll_thread.join(timeout=2)
+        self._data_poll_thread = None
+
+        # Join the adapter-level connect-with-retry thread. _stop_poll is set
+        # above, so any in-flight backoff exits immediately. Skip if we are
+        # being called from within that thread to avoid a self-join deadlock.
+        if (
+            self._connect_thread
+            and self._connect_thread.is_alive()
+            and self._connect_thread is not threading.current_thread()
+        ):
+            self._connect_thread.join(timeout=5)
+            if self._connect_thread.is_alive():
+                self.logger.warning(
+                    "Motilal adapter connect thread did not exit within 5s"
+                )
+        self._connect_thread = None
 
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.disconnect()
@@ -429,12 +460,16 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     except Exception as e:
                         self.logger.error(f"Error polling data for {correlation_id}: {e}")
 
-                # Sleep between polls (adjust based on performance needs)
-                time.sleep(0.5)  # Poll every 500ms
+                # Sleep between polls. Use _stop_poll.wait() so disconnect()
+                # interrupts the sleep immediately instead of dragging out the
+                # join by up to 500ms (or 1s in the error path).
+                if self._stop_poll.wait(timeout=0.5):
+                    break
 
             except Exception as e:
                 self.logger.error(f"Error in polling loop: {e}", exc_info=True)
-                time.sleep(1)
+                if self._stop_poll.wait(timeout=1):
+                    break
 
         self.logger.debug("Market data polling stopped")
 
