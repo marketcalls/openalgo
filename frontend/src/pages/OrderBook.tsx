@@ -12,6 +12,7 @@ import {
   TrendingDown,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { showToast } from '@/utils/toast'
 import { type QuotesData, tradingApi } from '@/api/trading'
 import {
@@ -224,9 +225,12 @@ export default function OrderBook() {
 
   useEffect(() => {
     fetchOrders()
-    const interval = setInterval(() => fetchOrders(), 10000)
-    return () => clearInterval(interval)
   }, [fetchOrders])
+
+  // Refresh on order events instead of polling
+  useOrderEventRefresh(fetchOrders, {
+    events: ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'],
+  })
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -578,14 +582,24 @@ export default function OrderBook() {
                       className="w-[120px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('symbol')}
                     >
-                      Symbol {sortConfig.key === 'symbol' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      <div className="flex items-center gap-1">
+                        Symbol
+                        {sortConfig.key === 'symbol' && (
+                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                        )}
+                      </div>
                     </TableHead>
                     <TableHead className="w-[80px]">Exchange</TableHead>
                     <TableHead 
                       className="w-[70px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('action')}
                     >
-                      Action {sortConfig.key === 'action' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      <div className="flex items-center gap-1">
+                        Action
+                        {sortConfig.key === 'action' && (
+                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                        )}
+                      </div>
                     </TableHead>
                     <TableHead className="w-[70px] text-right">Qty</TableHead>
                     <TableHead className="w-[100px] text-right">Price</TableHead>
@@ -597,13 +611,23 @@ export default function OrderBook() {
                       className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('order_status')}
                     >
-                      Status {sortConfig.key === 'order_status' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      <div className="flex items-center gap-1">
+                        Status
+                        {sortConfig.key === 'order_status' && (
+                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                        )}
+                      </div>
                     </TableHead>
                     <TableHead 
                       className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('timestamp')}
                     >
-                      Time {sortConfig.key === 'timestamp' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      <div className="flex items-center gap-1">
+                        Time
+                        {sortConfig.key === 'timestamp' && (
+                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                        )}
+                      </div>
                     </TableHead>
                     <TableHead className="w-[60px]">Cancel</TableHead>
                     <TableHead className="w-[60px]">Modify</TableHead>
