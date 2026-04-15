@@ -62,6 +62,9 @@ interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
+// Fixed: Defined outside component to prevent effect dependency churn and repeated socket re-subscriptions
+const ORDER_BOOK_EVENTS = ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'];
+
 /**
  * Helper to convert various broker timestamp formats into a sortable number.
  * Ensures chronological accuracy for non-ISO formats.
@@ -229,7 +232,7 @@ export default function OrderBook() {
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchOrders, {
-    events: ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'],
+    events: ORDER_BOOK_EVENTS,
   })
 
   // Listen for mode changes (live/analyze) and refresh data
