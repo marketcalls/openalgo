@@ -129,14 +129,16 @@ def standardize_index_symbols(df):
     """
     nse_idx_mask = df["exchange"] == "NSE_INDEX"
     if nse_idx_mask.any():
+        # Guard NaN — str(NaN) becomes "nan" and would normalize to the
+        # literal "NAN" symbol, polluting the SymToken table.
         df.loc[nse_idx_mask, "symbol"] = df.loc[nse_idx_mask, "symbol"].apply(
-            normalize_nse_index_symbol
+            lambda s: normalize_nse_index_symbol(s) if pd.notna(s) else s
         )
 
     bse_idx_mask = df["exchange"] == "BSE_INDEX"
     if bse_idx_mask.any():
         df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].apply(
-            normalize_bse_index_symbol
+            lambda s: normalize_bse_index_symbol(s) if pd.notna(s) else s
         )
 
     return df

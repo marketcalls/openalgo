@@ -106,6 +106,9 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.debug("Motilal adapter connect thread already running")
             return
 
+        # Clear _stop_poll so a fresh connect after a previous disconnect()
+        # doesn't short-circuit immediately on its first wait().
+        self._stop_poll.clear()
         self._connect_thread = threading.Thread(target=self._connect_with_retry, daemon=True)
         self._connect_thread.start()
 

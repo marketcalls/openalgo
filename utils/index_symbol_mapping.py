@@ -198,13 +198,20 @@ BSE_INDEX_ALIASES: dict[str, str] = {
     "BSE TELECOM": "BSETELECOM",
 }
 
-# Pre-built upper-cased alias view for BSE so callers can do a single
-# case-insensitive lookup without recomputing on every row.
-_BSE_INDEX_ALIASES_UPPER: dict[str, str] = {
-    k.upper(): v for k, v in BSE_INDEX_ALIASES.items()
-}
-
 _WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _collapse_ws(s: str) -> str:
+    """Upper-case + collapse runs of whitespace to a single space + strip."""
+    return _WHITESPACE_RE.sub(" ", s.upper()).strip()
+
+
+# Pre-built alias view for BSE keyed on upper-cased + whitespace-collapsed
+# names, so a broker that ships "BSE  CAPGOOD" or " bse capgood " still hits
+# the same canonical entry as "BSE CAPGOOD".
+_BSE_INDEX_ALIASES_UPPER: dict[str, str] = {
+    _collapse_ws(k): v for k, v in BSE_INDEX_ALIASES.items()
+}
 
 
 def normalize_nse_index_symbol(broker_symbol: str) -> str:
@@ -240,7 +247,7 @@ def normalize_bse_index_symbol(broker_symbol: str) -> str:
     if not broker_symbol:
         return broker_symbol
     raw = str(broker_symbol)
-    aliased = _BSE_INDEX_ALIASES_UPPER.get(raw.upper())
+    aliased = _BSE_INDEX_ALIASES_UPPER.get(_collapse_ws(raw))
     if aliased is not None:
         return aliased
     return _WHITESPACE_RE.sub("", raw.upper())
