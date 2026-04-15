@@ -1480,6 +1480,16 @@ def get_open_position(tradingsymbol, exchange, product, auth):
         else:
             positions_list = []
 
+        # Accept both OpenAlgo-standard exchange codes and the segment-suffixed
+        # variants stored by get_positions() (NSE_EQ/BSE_EQ for CASH, NSE_FO/BSE_FO for FNO).
+        exchange_variants = {
+            "NSE": {"NSE", "NSE_EQ"},
+            "BSE": {"BSE", "BSE_EQ"},
+            "NFO": {"NFO", "NSE_FO", "NSE"},
+            "BFO": {"BFO", "BSE_FO", "BSE"},
+        }
+        expected_exchanges = exchange_variants.get(exchange, {map_exchange_type(exchange), exchange})
+
         for position in positions_list:
             # Check for matching position - compare with both tradingsymbol and symbol fields
             symbol_match = (
@@ -1487,7 +1497,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 or position.get("symbol") == tradingsymbol
                 or position.get("trading_symbol") == tradingsymbol
             )
-            exchange_match = position.get("exchange") == map_exchange_type(exchange)
+            exchange_match = position.get("exchange") in expected_exchanges
             product_match = position.get("product") == product
 
             if symbol_match and exchange_match and product_match:
