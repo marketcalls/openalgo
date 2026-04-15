@@ -212,7 +212,7 @@ def get_quote_provider() -> QuoteProvider:
             session = get_replay_session()
             if session.get("enabled") and session.get("status") == "running":
                 return ReplayQuoteProvider(
-                    get_current_ts_fn=lambda: session.get("current_ts")
+                    get_current_ts_fn=lambda: get_replay_session().get("current_ts")
                 )
     except Exception as e:
         logger.debug(f"Error checking replay mode: {e}")

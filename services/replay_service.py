@@ -49,7 +49,7 @@ def configure_replay(
     Args:
         start_ts: Start timestamp (epoch seconds)
         end_ts: End timestamp (epoch seconds)
-        speed: Speed multiplier (e.g. 1.0 = real-time, 60 = 1 min/sec)
+        speed: Speed multiplier (1.0 = advance 1 min/sec, 60.0 = advance 1 hour/sec)
         universe_mode: 'all' or 'active'
     
     Returns:
@@ -103,6 +103,10 @@ def start_replay() -> tuple[bool, str, dict]:
         
         _replay_state["enabled"] = True
         _replay_state["status"] = "running"
+    
+    # Ensure previous thread has exited before starting a new one
+    if _replay_thread is not None and _replay_thread.is_alive():
+        _replay_thread.join(timeout=1.0)
     
     # Start background thread
     _stop_event.clear()
@@ -180,7 +184,7 @@ def _replay_clock_loop():
                 break
             
             # Advance by speed * 60 seconds per tick (1 tick = 1 real second)
-            # speed=1 means advance 60 seconds per real second (1 minute per second)
+            # speed=1.0 means advance 1 minute of market time per real second
             new_ts = current + int(speed * 60)
             
             if new_ts >= end:

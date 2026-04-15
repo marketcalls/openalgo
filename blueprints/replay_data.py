@@ -60,7 +60,7 @@ def upload_data():
         file = request.files["file"]
         result = process_upload(file, upload_type)
 
-        status_code = 200 if result.get("status") == "success" else 400 if result.get("status") == "error" else 200
+        status_code = 400 if result.get("status") == "error" else 200
         return jsonify(result), status_code
 
     except Exception as e:
