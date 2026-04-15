@@ -49,11 +49,13 @@ export const pythonStrategyApi = {
       start_time: string
       stop_time: string
       days: string[]
+      exchange?: string
     }
   ): Promise<ApiResponse<{ strategy_id: string }>> => {
     const formData = new FormData()
     formData.append('strategy_name', name)
     formData.append('strategy_file', file)
+    formData.append('exchange', schedule.exchange || 'NSE')
     // Add schedule fields
     formData.append('schedule_start', schedule.start_time)
     formData.append('schedule_stop', schedule.stop_time)

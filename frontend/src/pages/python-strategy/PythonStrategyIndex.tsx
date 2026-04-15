@@ -434,6 +434,11 @@ export default function PythonStrategyIndex() {
                       {' - '}
                       {strategy.schedule_stop_time || '16:00'}
                     </span>
+                    {strategy.exchange && (
+                      <span className="ml-auto px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-500/20 text-blue-700 dark:text-blue-300">
+                        {strategy.exchange}
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     {formatScheduleDays(strategy.schedule_days?.length ? strategy.schedule_days : ['mon', 'tue', 'wed', 'thu', 'fri'])}
