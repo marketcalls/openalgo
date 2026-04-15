@@ -383,8 +383,8 @@ def process_motilal_csv(df, exchange_name):
     # Convert lotsize to int
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(1).astype(int)
 
-    # Convert tick_size (Motilal sends in paisa, divide by 100)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce").fillna(0.05) / 100
+    # Motilal CSV already provides tick_size in rupees (e.g. 0.05), no conversion needed.
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce").fillna(0.05)
 
     # Convert token to string
     df["token"] = df["token"].astype(str)
