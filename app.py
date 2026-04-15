@@ -66,6 +66,7 @@ from blueprints.react_app import (  # Import React frontend blueprint
     react_bp,
     serve_react_app,
 )
+from blueprints.replay_data import replay_data_bp  # Import the replay data blueprint
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
@@ -255,6 +256,7 @@ def create_app():
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
     app.register_blueprint(security_bp)  # Register Security blueprint
     app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
+    app.register_blueprint(replay_data_bp)  # Register Replay data blueprint
     app.register_blueprint(playground_bp)  # Register API playground blueprint
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
