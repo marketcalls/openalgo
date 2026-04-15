@@ -11,6 +11,10 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
+from utils.index_symbol_mapping import (
+    normalize_bse_index_symbol,
+    normalize_nse_index_symbol,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -116,79 +120,24 @@ def download_csv_motilal_data(exchange_name):
         raise
 
 
-# NSE index special-case remapping (after uppercase + remove spaces)
-NSE_INDEX_REMAP = {
-    "NIFTY50": "NIFTY",
-    "NIFTYNEXT50": "NIFTYNXT50",
-    "NIFTYFINSERVICE": "FINNIFTY",
-    "NIFTYBANK": "BANKNIFTY",
-    "NIFTYMIDSELECT": "MIDCPNIFTY",
-    "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
-}
-
-# BSE index name to OpenAlgo symbol mapping
-BSE_INDEX_MAP = {
-    "BSE SENSEX": "SENSEX",
-    "BSE BANKEX": "BANKEX",
-    "SNSX50": "SENSEX50",
-    "BSE 100": "BSE100",
-    "BSE 150 MIDCAP": "BSE150MIDCAPINDEX",
-    "BSE 200": "BSE200",
-    "BSE 250 LARGEMIDCAP": "BSE250LARGEMIDCAPINDEX",
-    "BSE 400 MIDSMALLCAP": "BSE400MIDSMALLCAPINDEX",
-    "BSE 500": "BSE500",
-    "BSE AUTO": "BSEAUTO",
-    "BSE CAPGOOD": "BSECAPITALGOODS",
-    "BSE CARBON": "BSECARBONEX",
-    "BSE CONSDUR": "BSECONSUMERDURABLES",
-    "BSE CPSE": "BSECPSE",
-    "BSE DOLLEX 100": "BSEDOLLEX100",
-    "BSE DOLLEX 200": "BSEDOLLEX200",
-    "BSE DOLLEX 30": "BSEDOLLEX30",
-    "BSE ENERGY": "BSEENERGY",
-    "BSE FMCG": "BSEFASTMOVINGCONSUMERGOODS",
-    "BSE FINANCIAL SERVICES": "BSEFINANCIALSERVICES",
-    "BSE GREENEX": "BSEGREENEX",
-    "BSE HEALTHCARE": "BSEHEALTHCARE",
-    "BSE INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
-    "BSE INDUSTRIALS": "BSEINDUSTRIALS",
-    "BSE IT": "BSEINFORMATIONTECHNOLOGY",
-    "BSE IPO": "BSEIPO",
-    "BSE LARGECAP": "BSELARGECAP",
-    "BSE METAL": "BSEMETAL",
-    "BSE MIDCAP": "BSEMIDCAP",
-    "BSE MIDCAP SELECT": "BSEMIDCAPSELECTINDEX",
-    "BSE OIL&GAS": "BSEOIL&GAS",
-    "BSE POWER": "BSEPOWER",
-    "BSE PSU": "BSEPSU",
-    "BSE REALTY": "BSEREALTY",
-    "SNXT50": "BSESENSEXNEXT50",
-    "BSE SMALLCAP": "BSESMALLCAP",
-    "BSE SMALLCAP SELECT": "BSESMALLCAPSELECTINDEX",
-    "BSE SME IPO": "BSESMEIPO",
-    "BSE TECK": "BSETECK",
-    "BSE TELECOM": "BSETELECOM",
-}
-
-
 def standardize_index_symbols(df):
     """
-    Standardize NSE_INDEX and BSE_INDEX symbol names to OpenAlgo format.
-    NSE: uppercase + remove spaces + remap special cases.
-    BSE: explicit mapping (abbreviated codes can't be auto-derived).
+    Standardize NSE_INDEX and BSE_INDEX symbol names to the OpenAlgo canonical
+    form. The actual mapping lives in utils.index_symbol_mapping so every
+    broker uses the same alias table; this function is just the pandas glue.
+    Symbols not in the alias map pass through unchanged.
     """
-    # NSE_INDEX: uppercase and remove spaces handles most symbols
     nse_idx_mask = df["exchange"] == "NSE_INDEX"
     if nse_idx_mask.any():
-        df.loc[nse_idx_mask, "symbol"] = (
-            df.loc[nse_idx_mask, "symbol"].str.upper().str.replace(r"\s+", "", regex=True)
+        df.loc[nse_idx_mask, "symbol"] = df.loc[nse_idx_mask, "symbol"].apply(
+            normalize_nse_index_symbol
         )
-        df.loc[nse_idx_mask, "symbol"] = df.loc[nse_idx_mask, "symbol"].replace(NSE_INDEX_REMAP)
 
-    # BSE_INDEX: explicit mapping
     bse_idx_mask = df["exchange"] == "BSE_INDEX"
     if bse_idx_mask.any():
-        df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].replace(BSE_INDEX_MAP)
+        df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].apply(
+            normalize_bse_index_symbol
+        )
 
     return df
 
