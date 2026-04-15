@@ -11,11 +11,16 @@ import threading
 from datetime import datetime, timedelta
 import os
 
-# Get API key from openalgo portal
-api_key = os.getenv('OPENALGO_APIKEY')
+# Read API credentials and endpoints from environment.
+# When this strategy is launched via OpenAlgo's /python runner,
+# OPENALGO_API_KEY is injected by the platform and HOST_SERVER /
+# WEBSOCKET_URL are inherited from OpenAlgo's .env file.
+api_key = os.getenv('OPENALGO_API_KEY')
+host    = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+ws_url  = os.getenv('WEBSOCKET_URL', 'ws://127.0.0.1:8765')
 
 if not api_key:
-    print("Error: OPENALGO_APIKEY environment variable not set")
+    print("Error: OPENALGO_API_KEY environment variable not set")
     exit(1)
 
 
@@ -31,7 +36,7 @@ fast_period = 5
 slow_period = 10
 
 # Set the API Key
-client = api(api_key=api_key, host='http://127.0.0.1:5000')
+client = api(api_key=api_key, host=host, ws_url=ws_url)
 
 def calculate_ema_signals(df):
     """
