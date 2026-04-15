@@ -521,8 +521,9 @@ export default function TradeBook() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedAndFilteredTrades.map((trade, index) => (
-                    <TableRow key={`${trade.orderid}-${index}`}>
+                  {/* Fixed: Use stable keys based on data (orderid + timestamp) instead of array index */}
+                  {sortedAndFilteredTrades.map((trade) => (
+                    <TableRow key={`${trade.orderid}-${trade.timestamp}`}>
                       <TableCell className="font-medium">{trade.symbol}</TableCell>
                       <TableCell>
                         <Badge variant="outline">{trade.exchange}</Badge>
