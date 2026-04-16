@@ -25,6 +25,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/sandbox/mypnl': 'Sandbox P&L',
   '/analyzer': 'Analyzer',
   '/tools': 'Tools',
+  '/tools/strategy': 'Strategy Builder',
+  '/tools/strategy/portfolio': 'Strategy Portfolio',
   '/optionchain': 'Option Chain',
   '/ivchart': 'IV Chart',
   '/oitracker': 'OI Tracker',

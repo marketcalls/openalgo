@@ -35,6 +35,7 @@ from blueprints.broker_credentials import (
     broker_credentials_bp,  # Import the broker credentials blueprint
 )
 from blueprints.chartink import chartink_bp  # Import the chartink blueprint
+from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
 from blueprints.core import core_bp
 from blueprints.dashboard import dashboard_bp
 from blueprints.flow import flow_bp  # Import the flow blueprint
@@ -270,6 +271,7 @@ def create_app():
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
+    app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
@@ -494,6 +496,9 @@ def setup_environment(app):
             from database.chart_prefs_db import ensure_chart_prefs_tables_exists
             from database.market_calendar_db import ensure_market_calendar_tables_exists
             from database.qty_freeze_db import ensure_qty_freeze_tables_exists
+            from database.strategy_portfolio_db import (
+                ensure_strategy_portfolio_tables_exists,
+            )
 
             db_init_functions = [
                 ("Auth DB", ensure_auth_tables_exists),
@@ -514,6 +519,7 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
+                ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
             ]
 
             db_init_start = time.time()
@@ -707,6 +713,7 @@ def shutdown_database_sessions(exception=None):
         ("database.chartink_db", "db_session"),
         ("database.flow_db", "db_session"),
         ("database.leverage_db", "db_session"),
+        ("database.strategy_portfolio_db", "db_session"),
         ("database.market_calendar_db", "db_session"),
         ("database.telegram_db", "db_session"),
         ("database.symbol", "db_session"),

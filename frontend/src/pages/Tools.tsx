@@ -4,6 +4,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 
 const tools = [
   {
+    title: 'Strategy Builder',
+    description:
+      'Build multi-leg option strategies with live Greeks, payoff diagram and what-if simulators',
+    href: '/tools/strategy',
+    color: 'bg-fuchsia-500',
+  },
+  {
+    title: 'Strategy Portfolio',
+    description: 'Saved strategies across MyTrades and Simulation watchlists',
+    href: '/tools/strategy/portfolio',
+    color: 'bg-violet-500',
+  },
+  {
     title: 'Option Chain',
     description: 'Real-time option chain with live Greeks, OI data, and quick order placement',
     href: '/optionchain',
