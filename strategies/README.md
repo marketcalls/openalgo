@@ -79,8 +79,12 @@ EXCHANGE = os.getenv(
     os.getenv('EXCHANGE', 'NSE'),
 )
 API_KEY  = os.getenv('OPENALGO_API_KEY', '')
-API_HOST = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
-WS_URL   = os.getenv('WEBSOCKET_URL', 'ws://127.0.0.1:8765')
+# HOST_SERVER is the canonical name in OpenAlgo's .env (inherited).
+# OPENALGO_HOST is a fallback alias the platform setdefaults to 127.0.0.1:5000.
+API_HOST = os.getenv('HOST_SERVER') or os.getenv('OPENALGO_HOST', 'http://127.0.0.1:5000')
+WS_URL   = os.getenv('WEBSOCKET_URL') or (
+    f"ws://{os.getenv('WEBSOCKET_HOST', '127.0.0.1')}:{os.getenv('WEBSOCKET_PORT', '8765')}"
+)
 
 def main():
     print(f"Strategy started at {datetime.now()}")
@@ -114,24 +118,36 @@ if __name__ == "__main__":
 
 ### Injected by the platform
 
-These are set directly on each strategy subprocess:
+These are set directly on each strategy subprocess (only the ones below — the host does not inject host/port/websocket vars; see next section):
 
 - `STRATEGY_ID` — unique identifier for the strategy
 - `STRATEGY_NAME` — name of the strategy
 - `OPENALGO_STRATEGY_EXCHANGE` — the exchange picked at upload/edit time (`NSE` / `BSE` / `NFO` / `BFO` / `MCX` / `BCD` / `CDS` / `CRYPTO`). Read this in your script so its trading calls match the calendar the host is gating against
 - `OPENALGO_API_KEY` — decrypted API key for this user
-- `OPENALGO_HOST` — OpenAlgo host URL (defaults to `http://127.0.0.1:5000`; kept as a documented alias of `HOST_SERVER`)
+- `OPENALGO_HOST` — OpenAlgo host URL, **set with `setdefault` to `http://127.0.0.1:5000`**. If `OPENALGO_HOST` is already present in `.env` (it usually isn't — `.env` uses `HOST_SERVER`), that value is kept. Treat this as a convenience fallback only
 
 ### Inherited from `.env`
 
-Strategies also inherit every variable defined in OpenAlgo's `.env`, so the following can be read directly:
+Strategies are launched with `os.environ.copy()`, so they inherit **every** variable from OpenAlgo's `.env`. The relevant ones for connecting to OpenAlgo:
 
-- `HOST_SERVER` — e.g. `http://127.0.0.1:5000` (preferred over `OPENALGO_HOST`)
-- `WEBSOCKET_URL` — e.g. `ws://127.0.0.1:8765`
-- `WEBSOCKET_HOST` / `WEBSOCKET_PORT` — raw components if you prefer to build the URL yourself
-- Any other key in `.env`
+- `HOST_SERVER` — REST host, e.g. `http://127.0.0.1:5000` (this is the canonical name in `.env`; **prefer this in your scripts**)
+- `WEBSOCKET_URL` — full WS URL, e.g. `ws://127.0.0.1:8765`
+- `WEBSOCKET_HOST` — e.g. `127.0.0.1` (raw component)
+- `WEBSOCKET_PORT` — e.g. `8765` (raw component)
+- `FLASK_HOST_IP` / `FLASK_PORT` — also present if you need them
+- Any other key you've defined in `.env`
 
-Prefer `HOST_SERVER` and `WEBSOCKET_URL` in new strategies — they match the variable names used by OpenAlgo's own configuration, so the same `.env` drives both the server and your strategies.
+> **Recommended pattern in scripts:**
+> ```python
+> # REST: prefer HOST_SERVER (from .env), fall back to injected OPENALGO_HOST, then a literal
+> API_HOST = os.getenv("HOST_SERVER") or os.getenv("OPENALGO_HOST", "http://127.0.0.1:5000")
+> # WebSocket: WEBSOCKET_URL is canonical; build from HOST/PORT only if URL isn't set
+> WS_URL = os.getenv("WEBSOCKET_URL") or (
+>     f"ws://{os.getenv('WEBSOCKET_HOST', '127.0.0.1')}:{os.getenv('WEBSOCKET_PORT', '8765')}"
+> )
+> ```
+>
+> Note: there is **no `HOST_URL` variable** anywhere in OpenAlgo. Only `HOST_SERVER` (REST), `OPENALGO_HOST` (injected fallback alias), and `WEBSOCKET_URL` (WS).
 
 ### Per-strategy parameters
 
@@ -160,7 +176,8 @@ import requests
 
 class OpenAlgoAPI:
     def __init__(self, host=None, api_key=None):
-        self.host = host or os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+        # HOST_SERVER (from .env) wins; OPENALGO_HOST is the platform-injected fallback.
+        self.host = host or os.getenv('HOST_SERVER') or os.getenv('OPENALGO_HOST', 'http://127.0.0.1:5000')
         self.api_key = api_key or os.getenv('OPENALGO_API_KEY', '')
         self.headers = {'X-API-KEY': self.api_key}
 
