@@ -1,7 +1,8 @@
 import json
 import logging
 import os
-import traceback
+import threading
+import time
 
 import httpx
 
@@ -112,10 +113,7 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
         return response.json()
 
     except Exception as e:
-        logger.error(f"get_api_response - Exception occurred: {str(e)}")
-        import traceback
-
-        logger.error(f"get_api_response - Traceback: {traceback.format_exc()}")
+        logger.exception(f"get_api_response - Exception occurred: {str(e)}")
         raise
 
 
@@ -220,10 +218,7 @@ def get_order_book(auth):
             }
 
     except Exception as e:
-        logger.error(f"get_order_book - Exception occurred: {str(e)}")
-        import traceback
-
-        logger.error(f"get_order_book - Traceback: {traceback.format_exc()}")
+        logger.exception(f"get_order_book - Exception occurred: {str(e)}")
         raise
 
 
@@ -350,10 +345,7 @@ def get_trade_book(auth):
 
     except Exception as e:
         error_msg = f"Error fetching trade book: {str(e)}"
-        logger.error(error_msg)
-        import traceback
-
-        logger.error(f"get_trade_book - Traceback: {traceback.format_exc()}")
+        logger.exception(error_msg)
         # Return empty array - service layer will handle error formatting
         return []
 
@@ -655,6 +647,51 @@ def get_holdings(auth):
         }
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     """
     Get open position quantity for a specific symbol, exchange, and product type.
@@ -683,7 +720,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
             mapped_product = map_product_type(producttype)
 
         # Get positions from TradeJini API
-        positions_response = get_positions(auth)
+        positions_response = _get_cached_positions(auth)
         if not positions_response or not isinstance(positions_response, dict):
             logger.error(f"get_open_position - Invalid positions response: {positions_response}")
             return "0"
@@ -802,10 +839,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
                     return str(pos_qty)
 
             except Exception as e:
-                logger.error(f"get_open_position - Error processing position: {str(e)}")
-                import traceback
-
-                logger.error(f"get_open_position - Traceback: {traceback.format_exc()}")
+                logger.exception(f"get_open_position - Error processing position: {str(e)}")
                 continue
 
         logger.info(
@@ -814,10 +848,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         return "0"
 
     except Exception as e:
-        logger.error(f"get_open_position - Exception: {str(e)}")
-        import traceback
-
-        logger.error(f"get_open_position - Traceback: {traceback.format_exc()}")
+        logger.exception(f"get_open_position - Exception: {str(e)}")
         return "0"
 
 
@@ -862,8 +893,7 @@ def place_order_api(data, auth):
             logger.debug(f"place_order_api - Transformed data: {transformed_data}")
         except Exception as e:
             error_msg = f"Error transforming order data: {str(e)}"
-            logger.error(error_msg)
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(error_msg)
             return None, {"status": "error", "message": error_msg}, None
 
         # Convert transformed data to x-www-form-urlencoded format
@@ -960,14 +990,12 @@ def place_order_api(data, auth):
 
         except Exception as e:
             error_msg = f"Error placing order: {str(e)}"
-            logger.error(error_msg)
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(error_msg)
             return None, {"status": "error", "message": error_msg}, None
 
     except Exception as e:
         error_msg = f"Unexpected error in place_order_api: {str(e)}"
-        logger.error(error_msg)
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.exception(error_msg)
         return None, {"status": "error", "message": error_msg}, None
 
 
@@ -1000,171 +1028,176 @@ def place_smartorder_api(data, auth):
         exchange = data.get("exchange")
         product = data.get("product", "MIS")
 
-        # Target position size - this is the key parameter for SmartOrder
-        try:
-            position_size = int(float(data.get("position_size", "0")))
-        except (ValueError, TypeError):
-            return None, {"status": "error", "message": "Invalid position_size"}, None
+        # Per-symbol lock: serialize smart orders per symbol
+        symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        logger.info(
-            f"place_smartorder_api - Symbol: {symbol}, Exchange: {exchange}, Position Size: {position_size}"
-        )
-
-        # Use the working get_open_position function to get the current position
-        try:
-            # Get the position quantity as a string and convert to int
-            pos_qty_str = get_open_position(symbol, exchange, product, AUTH_TOKEN)
-            current_position = int(float(pos_qty_str)) if pos_qty_str else 0
+        with symbol_lock:
+            # Target position size - this is the key parameter for SmartOrder
+            try:
+                position_size = int(float(data.get("position_size", "0")))
+            except (ValueError, TypeError):
+                return None, {"status": "error", "message": "Invalid position_size"}, None
 
             logger.info(
-                f"place_smartorder_api - Current position for {symbol}: {current_position} "
-                f"(from get_open_position)"
+                f"place_smartorder_api - Symbol: {symbol}, Exchange: {exchange}, Position Size: {position_size}"
             )
 
-        except Exception as e:
-            logger.error(f"place_smartorder_api - Error getting position: {str(e)}")
-            import traceback
+            # Use the working get_open_position function to get the current position
+            try:
+                # Get the position quantity as a string and convert to int
+                pos_qty_str = get_open_position(symbol, exchange, product, AUTH_TOKEN)
+                current_position = int(float(pos_qty_str)) if pos_qty_str else 0
 
-            logger.error(f"place_smartorder_api - Traceback: {traceback.format_exc()}")
-            return None, {"status": "error", "message": f"Failed to get position: {str(e)}"}, ""
-        # Initialize action and quantity
-        final_action = None
-        final_quantity = 0
-
-        # --- MAIN LOGIC IMPLEMENTATION ---
-
-        # CASE 1: Position size is 0 - square off any existing position
-        if position_size == 0:
-            logger.info(
-                f"place_smartorder_api - SQUAREOFF MODE - current position: {current_position}"
-            )
-
-            if current_position > 0:
-                # We have a LONG position, need to SELL to square off
-                final_action = "SELL"
-                final_quantity = current_position
                 logger.info(
-                    f"place_smartorder_api - Will SELL {final_quantity} to square off LONG position"
+                    f"place_smartorder_api - Current position for {symbol}: {current_position} "
+                    f"(from get_open_position)"
                 )
 
-            elif current_position < 0:
-                # We have a SHORT position, need to BUY to square off
-                final_action = "BUY"
-                final_quantity = abs(current_position)
+            except Exception as e:
+                logger.exception(f"place_smartorder_api - Error getting position: {str(e)}")
+                return None, {"status": "error", "message": f"Failed to get position: {str(e)}"}, ""
+            # Initialize action and quantity
+            final_action = None
+            final_quantity = 0
+
+            # --- MAIN LOGIC IMPLEMENTATION ---
+
+            # CASE 1: Position size is 0 - square off any existing position
+            if position_size == 0:
                 logger.info(
-                    f"place_smartorder_api - Will BUY {final_quantity} to square off SHORT position"
+                    f"place_smartorder_api - SQUAREOFF MODE - current position: {current_position}"
                 )
 
-            else:
-                # No position to square off
-                logger.info("place_smartorder_api - No position found to square off")
-                return None, {"status": "success", "orderid": ""}, ""
-
-        # Case 2: No current position - create new position
-        elif current_position == 0:
-            if position_size > 0:
-                final_action = "BUY"
-                final_quantity = position_size
-                logger.info(
-                    f"place_smartorder_api - Creating new LONG position of {final_quantity} units"
-                )
-
-            elif position_size < 0:
-                final_action = "SELL"
-                final_quantity = abs(position_size)
-                logger.info(
-                    f"place_smartorder_api - Creating new SHORT position of {final_quantity} units"
-                )
-
-            else:  # position_size == 0 && current_position == 0
-                logger.info("place_smartorder_api - No position to create (position_size=0)")
-                return None, {"status": "success", "orderid": ""}, ""
-
-        # Case 3: Adjusting existing position - position_size is the ABSOLUTE target position
-        else:
-            # ABSOLUTE position mode - position_size is the exact final position we want
-            logger.info(
-                f"place_smartorder_api - ABSOLUTE POSITION MODE: Target={position_size}, Current={current_position}"
-            )
-
-            if position_size > current_position:
-                final_action = "BUY"
-                final_quantity = position_size - current_position
-                logger.info(
-                    f"place_smartorder_api - Will BUY {final_quantity} more units to reach target"
-                )
-
-            elif position_size < current_position:
-                final_action = "SELL"
-                final_quantity = current_position - position_size
-                logger.info(
-                    f"place_smartorder_api - Will SELL {final_quantity} units to reach target"
-                )
-
-            else:  # position_size == current_position
-                logger.info("place_smartorder_api - Current position already matches target")
-                return None, {"status": "success", "orderid": ""}, ""
-
-        # Safety check - if no action or zero quantity, don't proceed
-        if final_action is None or final_quantity <= 0:
-            logger.info("place_smartorder_api - No valid action determined")
-            return None, {"status": "error", "message": "No valid action determined"}, None
-
-        logger.info(
-            f"place_smartorder_api - Will place order: {final_action} {final_quantity} {symbol}"
-        )
-
-        # Prepare data for placing the order
-        order_data = data.copy()
-        order_data["action"] = final_action
-        order_data["quantity"] = str(final_quantity)
-
-        # Place the order
-        logger.info(f"place_smartorder_api - Placing order with data: {order_data}")
-        try:
-            res, response, orderid = place_order_api(order_data, auth)
-            logger.info(
-                f"place_smartorder_api - place_order_api response - res: {res}, response: {response}, orderid: {orderid}"
-            )
-
-            # Format response to match OpenAlgo's expected format
-            if (
-                response
-                and isinstance(response, dict)
-                and response.get("status") == "success"
-                and orderid
-            ):
-                wrapped_response = {"status": "success", "orderid": str(orderid)}
-                logger.info(f"place_smartorder_api - Order placed successfully: {wrapped_response}")
-                return res, wrapped_response, orderid
-            else:
-                error_msg = "Unknown error in order placement"
-                if isinstance(response, dict):
-                    error_msg = response.get(
-                        "message", "Order placement failed without error message"
+                if current_position > 0:
+                    # We have a LONG position, need to SELL to square off
+                    final_action = "SELL"
+                    final_quantity = current_position
+                    logger.info(
+                        f"place_smartorder_api - Will SELL {final_quantity} to square off LONG position"
                     )
-                    logger.error(
-                        f"place_smartorder_api - Order placement failed. Response: {response}"
+
+                elif current_position < 0:
+                    # We have a SHORT position, need to BUY to square off
+                    final_action = "BUY"
+                    final_quantity = abs(current_position)
+                    logger.info(
+                        f"place_smartorder_api - Will BUY {final_quantity} to square off SHORT position"
                     )
+
                 else:
-                    logger.error(
-                        f"place_smartorder_api - Invalid response format from place_order_api: {response}"
+                    # No position to square off — use action+qty from request
+                    original_qty = int(float(data.get("quantity", "0")))
+                    if original_qty != 0:
+                        original_action = data.get("action", "").upper()
+                        logger.info(f"place_smartorder_api - No position, pos_size=0: {original_action} {original_qty}")
+                        final_action = original_action
+                        final_quantity = original_qty
+                    else:
+                        logger.info("place_smartorder_api - No position found to square off")
+                        return None, {"status": "success", "orderid": ""}, ""
+
+            # Case 2: No current position - create new position
+            elif current_position == 0:
+                if position_size > 0:
+                    final_action = "BUY"
+                    final_quantity = position_size
+                    logger.info(
+                        f"place_smartorder_api - Creating new LONG position of {final_quantity} units"
                     )
 
-                return None, {"status": "error", "message": error_msg}, None
+                elif position_size < 0:
+                    final_action = "SELL"
+                    final_quantity = abs(position_size)
+                    logger.info(
+                        f"place_smartorder_api - Creating new SHORT position of {final_quantity} units"
+                    )
 
-        except Exception as e:
-            error_msg = f"Exception in place_order_api: {str(e)}"
-            logger.error(error_msg)
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return None, {"status": "error", "message": error_msg}, None
+                else:  # position_size == 0 && current_position == 0
+                    logger.info("place_smartorder_api - No position to create (position_size=0)")
+                    return None, {"status": "success", "orderid": ""}, ""
+
+            # Case 3: Adjusting existing position - position_size is the ABSOLUTE target position
+            else:
+                # ABSOLUTE position mode - position_size is the exact final position we want
+                logger.info(
+                    f"place_smartorder_api - ABSOLUTE POSITION MODE: Target={position_size}, Current={current_position}"
+                )
+
+                if position_size > current_position:
+                    final_action = "BUY"
+                    final_quantity = position_size - current_position
+                    logger.info(
+                        f"place_smartorder_api - Will BUY {final_quantity} more units to reach target"
+                    )
+
+                elif position_size < current_position:
+                    final_action = "SELL"
+                    final_quantity = current_position - position_size
+                    logger.info(
+                        f"place_smartorder_api - Will SELL {final_quantity} units to reach target"
+                    )
+
+                else:  # position_size == current_position
+                    logger.info("place_smartorder_api - Current position already matches target")
+                    return None, {"status": "success", "orderid": ""}, ""
+
+            # Safety check - if no action or zero quantity, don't proceed
+            if final_action is None or final_quantity <= 0:
+                logger.info("place_smartorder_api - No valid action determined")
+                return None, {"status": "error", "message": "No valid action determined"}, None
+
+            logger.info(
+                f"place_smartorder_api - Will place order: {final_action} {final_quantity} {symbol}"
+            )
+
+            # Prepare data for placing the order
+            order_data = data.copy()
+            order_data["action"] = final_action
+            order_data["quantity"] = str(final_quantity)
+
+            # Place the order
+            logger.info(f"place_smartorder_api - Placing order with data: {order_data}")
+            try:
+                res, response, orderid = place_order_api(order_data, auth)
+                _invalidate_position_cache(AUTH_TOKEN)
+                logger.info(
+                    f"place_smartorder_api - place_order_api response - res: {res}, response: {response}, orderid: {orderid}"
+                )
+
+                # Format response to match OpenAlgo's expected format
+                if (
+                    response
+                    and isinstance(response, dict)
+                    and response.get("status") == "success"
+                    and orderid
+                ):
+                    wrapped_response = {"status": "success", "orderid": str(orderid)}
+                    logger.info(f"place_smartorder_api - Order placed successfully: {wrapped_response}")
+                    return res, wrapped_response, orderid
+                else:
+                    error_msg = "Unknown error in order placement"
+                    if isinstance(response, dict):
+                        error_msg = response.get(
+                            "message", "Order placement failed without error message"
+                        )
+                        logger.error(
+                            f"place_smartorder_api - Order placement failed. Response: {response}"
+                        )
+                    else:
+                        logger.error(
+                            f"place_smartorder_api - Invalid response format from place_order_api: {response}"
+                        )
+
+                    return None, {"status": "error", "message": error_msg}, None
+
+            except Exception as e:
+                error_msg = f"Exception in place_order_api: {str(e)}"
+                logger.exception(error_msg)
+                return None, {"status": "error", "message": error_msg}, None
 
     except Exception as e:
         error_msg = f"Smart order placement failed: {str(e)}"
-        logger.error(f"place_smartorder_api - Exception occurred: {error_msg}")
-        import traceback
-
-        logger.error(f"place_smartorder_api - Traceback: {traceback.format_exc()}")
+        logger.exception(f"place_smartorder_api - Exception occurred: {error_msg}")
         return None, {"status": "error", "message": error_msg}, None
 
 
@@ -1292,10 +1325,7 @@ def close_all_positions(current_api_key, auth):
 
     except Exception as e:
         error_msg = f"Failed to close positions: {str(e)}"
-        logger.error(f"close_all_positions - {error_msg}")
-        import traceback
-
-        logger.error(f"close_all_positions - Traceback: {traceback.format_exc()}")
+        logger.exception(f"close_all_positions - {error_msg}")
         response_data = {"status": "error", "message": error_msg}
         return response_data, 500
 
@@ -1350,10 +1380,7 @@ def cancel_order(orderid, auth):
 
     except Exception as e:
         error_msg = f"Exception in cancel_order: {str(e)}"
-        logger.error(f"cancel_order - {error_msg}")
-        import traceback
-
-        logger.error(f"cancel_order - Traceback: {traceback.format_exc()}")
+        logger.exception(f"cancel_order - {error_msg}")
         return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500
 
 
@@ -1483,10 +1510,7 @@ def cancel_all_orders_api(data, auth):
 
     except Exception as e:
         error_msg = f"Exception in cancel_all_orders_api: {str(e)}"
-        logger.error(f"cancel_all_orders_api - {error_msg}")
-        import traceback
-
-        logger.error(f"cancel_all_orders_api - Traceback: {traceback.format_exc()}")
+        logger.exception(f"cancel_all_orders_api - {error_msg}")
         return [], []
 
 
@@ -1551,8 +1575,5 @@ def modify_order(data, auth):
 
     except Exception as e:
         error_msg = f"Exception in modify_order: {str(e)}"
-        logger.error(f"modify_order - {error_msg}")
-        import traceback
-
-        logger.error(f"modify_order - Traceback: {traceback.format_exc()}")
+        logger.exception(f"modify_order - {error_msg}")
         return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 500

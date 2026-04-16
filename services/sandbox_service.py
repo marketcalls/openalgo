@@ -38,7 +38,8 @@ def get_user_id_from_apikey(api_key: str) -> str | None:
 
 
 def sandbox_place_order(
-    order_data: dict[str, Any], api_key: str, original_data: dict[str, Any]
+    order_data: dict[str, Any], api_key: str, original_data: dict[str, Any],
+    prefetched_quote: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Place order in sandbox mode.
@@ -50,6 +51,8 @@ def sandbox_place_order(
         order_data: Validated order data
         api_key: OpenAlgo API key
         original_data: Original request data for logging
+        prefetched_quote: Pre-fetched quote from multiquotes batch call (optional).
+            When provided, skips per-order REST API quote fetch.
 
     Returns:
         Tuple containing:
@@ -81,7 +84,9 @@ def sandbox_place_order(
         }
 
         # Place order in sandbox
-        success, response, status_code = order_manager.place_order(sandbox_order_data)
+        success, response, status_code = order_manager.place_order(
+            sandbox_order_data, prefetched_quote=prefetched_quote
+        )
 
         return success, response, status_code
 

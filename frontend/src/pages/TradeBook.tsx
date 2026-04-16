@@ -1,5 +1,6 @@
 import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
 import { showToast } from '@/utils/toast'
@@ -146,9 +147,12 @@ export default function TradeBook() {
 
   useEffect(() => {
     fetchTrades()
-    const interval = setInterval(() => fetchTrades(), 10000)
-    return () => clearInterval(interval)
   }, [fetchTrades])
+
+  // Refresh on order events instead of polling
+  useOrderEventRefresh(fetchTrades, {
+    events: ['order_event', 'analyzer_update'],
+  })
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -247,6 +251,7 @@ export default function TradeBook() {
                 variant={hasActiveFilters ? 'default' : 'outline'}
                 size="sm"
                 className="relative"
+                aria-label="Open trade filters"
               >
                 <Settings2 className="h-4 w-4 mr-2" />
                 Filters
@@ -317,11 +322,12 @@ export default function TradeBook() {
             size="sm"
             onClick={() => fetchTrades(true)}
             disabled={isRefreshing}
+            aria-label="Refresh tradebook"
           >
             <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV}>
+          <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export tradebook to CSV">
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
@@ -364,6 +370,7 @@ export default function TradeBook() {
             size="sm"
             className="text-red-500 border-red-500/50 hover:bg-red-500/10"
             onClick={clearFilters}
+            aria-label="Clear active filters"
           >
             Clear All
           </Button>

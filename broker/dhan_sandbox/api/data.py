@@ -824,7 +824,8 @@ class BrokerData:
 
         try:
             from database.token_db_enhanced import fno_search_symbols
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to import fno_search_symbols: {e}")
             return None
 
         candidate_exchanges = ("NFO", "BFO", "MCX", "CDS")
@@ -838,7 +839,8 @@ class BrokerData:
                     instrumenttype="CE",
                     limit=300,
                 )
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error searching FNO symbols for {key} on {ex}: {e}")
                 rows = []
 
             for row in rows:

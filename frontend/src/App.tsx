@@ -5,6 +5,7 @@ import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
 import { Layout } from '@/components/layout/Layout'
 import { PageLoader } from '@/components/ui/page-loader'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { useBrokerStore } from '@/stores/brokerStore'
 
 // Lazy load all pages for code splitting
@@ -131,10 +132,16 @@ const TrafficDashboard = lazy(() => import('@/pages/monitoring/TrafficDashboard'
 const LatencyDashboard = lazy(() => import('@/pages/monitoring/LatencyDashboard'))
 const HealthMonitor = lazy(() => import('@/pages/HealthMonitor'))
 
+function PageTitleUpdater() {
+  usePageTitle()
+  return null
+}
+
 function App() {
   return (
     <Providers>
       <BrowserRouter>
+        <PageTitleUpdater />
         <AuthSync>
           <Suspense fallback={<PageLoader />}>
             <Routes>

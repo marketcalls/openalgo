@@ -267,10 +267,10 @@ def get_current_metrics():
             {
                 "timestamp": convert_to_ist(metric.timestamp).isoformat(),
                 "fd": {
-                    "count": metric.fd_count,
+                    "count": metric.fd_count or 0,
                     "limit": metric.fd_limit,
-                    "usage_percent": metric.fd_usage_percent,
-                    "status": metric.fd_status,
+                    "usage_percent": metric.fd_usage_percent if metric.fd_usage_percent is not None else 0.0,
+                    "status": metric.fd_status or "unknown",
                 },
                 "memory": {
                     "rss_mb": metric.memory_rss_mb,

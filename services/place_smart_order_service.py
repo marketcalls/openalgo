@@ -1,7 +1,5 @@
 import copy
 import importlib
-import time
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
@@ -25,8 +23,6 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-# Smart order delay
-SMART_ORDER_DELAY = "0.5"  # Default value, can be overridden by environment variable
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -114,7 +110,6 @@ def place_smart_order_with_auth(
     auth_token: str,
     broker: str,
     original_data: dict[str, Any],
-    smart_order_delay: str = SMART_ORDER_DELAY,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Place a smart order using provided auth token.
@@ -124,7 +119,6 @@ def place_smart_order_with_auth(
         auth_token: Authentication token for the broker API
         broker: Name of the broker
         original_data: Original request data for logging
-        smart_order_delay: Delay in seconds between order placement and response
 
     Returns:
         Tuple containing:
@@ -254,8 +248,7 @@ def place_smart_order_with_auth(
             ))
 
     except Exception as e:
-        logger.error(f"Error in broker_module.place_smartorder_api: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.place_smartorder_api: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to place smart order due to internal error",
@@ -266,13 +259,6 @@ def place_smart_order_with_auth(
             api_key=api_key, error_message=str(e),
         ))
         return False, error_response, 500
-
-    # Add delay if needed
-    try:
-        time.sleep(float(smart_order_delay))
-    except Exception:
-        logger.error(f"Invalid SMART_ORDER_DELAY value: {smart_order_delay}")
-        traceback.print_exc()
 
     if res and res.status == 200:
         return True, order_response_data, 200
@@ -297,7 +283,6 @@ def place_smart_order(
     api_key: str | None = None,
     auth_token: str | None = None,
     broker: str | None = None,
-    smart_order_delay: str | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Place a smart order.
@@ -308,7 +293,6 @@ def place_smart_order(
         api_key: OpenAlgo API key (for API-based calls)
         auth_token: Direct broker authentication token (for internal calls)
         broker: Direct broker name (for internal calls)
-        smart_order_delay: Delay in seconds between order placement and response
 
     Returns:
         Tuple containing:
@@ -319,10 +303,6 @@ def place_smart_order(
     original_data = copy.deepcopy(order_data)
     if api_key:
         original_data["apikey"] = api_key
-
-    # Use default delay if not provided
-    if smart_order_delay is None:
-        smart_order_delay = SMART_ORDER_DELAY
 
     # Add API key to order data if provided (needed for validation)
     if api_key:
@@ -343,13 +323,13 @@ def place_smart_order(
             return False, error_response, 403
 
         return place_smart_order_with_auth(
-            order_data, AUTH_TOKEN, broker_name, original_data, smart_order_delay
+            order_data, AUTH_TOKEN, broker_name, original_data
         )
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
         return place_smart_order_with_auth(
-            order_data, auth_token, broker, original_data, smart_order_delay
+            order_data, auth_token, broker, original_data
         )
 
     # Case 3: Invalid parameters

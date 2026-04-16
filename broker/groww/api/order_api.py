@@ -4,6 +4,8 @@ import os
 import re
 import uuid
 from datetime import datetime
+import threading
+import time
 
 from broker.groww.database.master_contract_db import (
     format_groww_to_openalgo_symbol,
@@ -726,10 +728,7 @@ def get_trade_book(auth):
                 else:
                     logger.warning(f"Unexpected format for trades result for order {order_id}")
             except Exception as e:
-                logger.error(f"Error fetching trades for order {order_id}: {e}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.exception(f"Error fetching trades for order {order_id}: {e}")
 
         # Log summary of trade fetching
         if all_trades:
@@ -1280,7 +1279,6 @@ def get_positions(auth):
 def get_holdings(auth):
     """
     Get holdings for the user using direct API calls
-    ...
 
     Args:
         auth (str): Authentication token
@@ -1403,6 +1401,51 @@ def get_holdings(auth):
         }, 500
 
 
+# --- Per-Symbol Smart Order Lock ---
+# Ensures only one smart order per symbol executes at a time.
+# Others queue and execute sequentially, each getting a fresh position book.
+_symbol_locks = {}          # {symbol_key: threading.Lock}
+_symbol_locks_lock = threading.Lock()
+
+# --- Position Book Cache ---
+# Caches get_positions() for 1 second. Invalidated after each smart order placement.
+_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
+_position_cache_lock = threading.Lock()
+_POSITION_CACHE_TTL = 1.0   # seconds
+
+
+def _get_symbol_lock(symbol, exchange, product):
+    """Get or create a per-symbol lock for serializing smart orders."""
+    key = f"{symbol}:{exchange}:{product}"
+    with _symbol_locks_lock:
+        if key not in _symbol_locks:
+            _symbol_locks[key] = threading.Lock()
+        return _symbol_locks[key]
+
+
+def _get_cached_positions(auth):
+    """Get positions from cache if fresh, otherwise fetch from broker API."""
+    with _position_cache_lock:
+        now = time.monotonic()
+        cached = _position_cache.get(auth)
+        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
+            return cached["data"]
+
+    # Cache miss or expired - fetch from broker
+    positions_data = get_positions(auth)
+
+    with _position_cache_lock:
+        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
+
+    return positions_data
+
+
+def _invalidate_position_cache(auth):
+    """Invalidate the position cache so the next queued order fetches fresh data."""
+    with _position_cache_lock:
+        _position_cache.pop(auth, None)
+
+
 def get_open_position(tradingsymbol, exchange, product, auth):
     """
     Get open position for a specific symbol
@@ -1418,7 +1461,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
-    positions_data = get_positions(auth)
+    positions_data = _get_cached_positions(auth)
     net_qty = "0"
 
     # Check if we received positions data in expected format
@@ -1437,6 +1480,16 @@ def get_open_position(tradingsymbol, exchange, product, auth):
         else:
             positions_list = []
 
+        # Accept both OpenAlgo-standard exchange codes and the segment-suffixed
+        # variants stored by get_positions() (NSE_EQ/BSE_EQ for CASH, NSE_FO/BSE_FO for FNO).
+        exchange_variants = {
+            "NSE": {"NSE", "NSE_EQ"},
+            "BSE": {"BSE", "BSE_EQ"},
+            "NFO": {"NFO", "NSE_FO", "NSE"},
+            "BFO": {"BFO", "BSE_FO", "BSE"},
+        }
+        expected_exchanges = exchange_variants.get(exchange, {map_exchange_type(exchange), exchange})
+
         for position in positions_list:
             # Check for matching position - compare with both tradingsymbol and symbol fields
             symbol_match = (
@@ -1444,7 +1497,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 or position.get("symbol") == tradingsymbol
                 or position.get("trading_symbol") == tradingsymbol
             )
-            exchange_match = position.get("exchange") == map_exchange_type(exchange)
+            exchange_match = position.get("exchange") in expected_exchanges
             product_match = position.get("product") == product
 
             if symbol_match and exchange_match and product_match:
@@ -1733,10 +1786,7 @@ def direct_place_order_api(data, auth):
             return res, response_data, None
 
     except Exception as e:
-        logger.error(f"Error placing order: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error placing order: {e}")
 
         class ResponseObject:
             def __init__(self, status_code):
@@ -1833,10 +1883,7 @@ def direct_place_order(
         return response
 
     except Exception as e:
-        logger.error(f"Direct order error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Direct order error: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -1872,173 +1919,176 @@ def place_smartorder_api(data, auth):
         logger.info(
             f"Raw position_size from request: '{raw_position_size}' (type: {type(raw_position_size)})"
         )
-        position_size = int(raw_position_size)
+        # Per-symbol lock: serialize smart orders per symbol
+        symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-        # Validate input data
-        if not symbol or not exchange or not product:
-            error_msg = "Invalid input: Missing symbol, exchange, or product"
-            logger.error(error_msg)
-            return None, {"status": "error", "message": error_msg}, None
+        with symbol_lock:
+            position_size = int(raw_position_size)
 
-        logger.info(
-            "Smart order details:\n"
-            + f"Symbol: {symbol}\n"
-            + f"Exchange: {exchange}\n"
-            + f"Product: {product}\n"
-            + f"Target Position Size: {position_size}"
-        )
-
-        # Try to look up broker symbol from database
-        try:
-            from database.token_db import get_br_symbol
-        except ImportError:
-            from openalgo.database.token_db import get_br_symbol
-
-        # Get current open position for the symbol
-        position_str = get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
-        logger.info(
-            f"Raw position from get_open_position: '{position_str}' (type: {type(position_str)})"
-        )
-
-        # Ensure proper conversion to integer
-        try:
-            current_position = (
-                int(float(position_str)) if position_str and position_str != "0" else 0
-            )
-        except (ValueError, TypeError) as e:
-            logger.error(f"Error converting position to int: {e}, using 0")
-            current_position = 0
-
-        logger.info(f"Current Position (converted to int): {current_position}")
-        logger.info(f"Target Position Size: {position_size} (type: {type(position_size)})")
-
-        # Determine action based on position_size and current_position
-        # This logic matches Angel's implementation exactly
-        action = None
-        quantity = 0
-
-        logger.info(
-            f"Smart Order Decision: Current Position={current_position}, Target Position={position_size}"
-        )
-
-        # If both position_size and current_position are 0, check if user wants to place a fresh order
-        if position_size == 0 and current_position == 0 and int(data.get("quantity", 0)) != 0:
-            action = data["action"]
-            quantity = data["quantity"]
-            logger.info(f"No position exists, placing fresh order: {action} {quantity}")
-            res, response, orderid = place_order_api(data, AUTH_TOKEN)
-            return res, response, orderid
-
-        elif position_size == current_position:
-            if int(data.get("quantity", 0)) == 0:
-                response = {
-                    "status": "success",
-                    "message": "No OpenPosition Found. Not placing Exit order.",
-                }
-            else:
-                response = {
-                    "status": "success",
-                    "message": "No action needed. Position size matches current position",
-                }
-            orderid = None
-            logger.info("Positions already matched. No order will be placed.")
-            return res, response, orderid  # res remains None as no API call was made
-
-        # Close long position
-        if position_size == 0 and current_position > 0:
-            action = "SELL"
-            quantity = abs(current_position)
-            logger.info(f"Closing long position: SELL {quantity} shares")
-        # Close short position
-        elif position_size == 0 and current_position < 0:
-            action = "BUY"
-            quantity = abs(current_position)
-            logger.info(f"Closing short position: BUY {quantity} shares")
-        # Open new position when no current position exists
-        elif current_position == 0:
-            action = "BUY" if position_size > 0 else "SELL"
-            quantity = abs(position_size)
-            logger.info(f"Opening new position: {action} {quantity} shares")
-        # Adjust existing position
-        else:
-            if position_size > current_position:
-                action = "BUY"
-                quantity = position_size - current_position
-                logger.info(
-                    f"Increasing position: BUY {quantity} shares (from {current_position} to {position_size})"
-                )
-            elif position_size < current_position:
-                action = "SELL"
-                quantity = current_position - position_size
-                logger.info(
-                    f"Reducing position: SELL {quantity} shares (from {current_position} to {position_size})"
-                )
-
-        if action:
-            # Double-check the calculation
-            logger.info("=== FINAL SMART ORDER DECISION ===")
-            logger.info(f"Current Position: {current_position}")
-            logger.info(f"Target Position: {position_size}")
-            logger.info(f"Action to take: {action}")
-            logger.info(f"Quantity to {action}: {quantity}")
-            logger.info(f"This will move position from {current_position} to {position_size}")
-
-            # Prepare data for placing the order
-            order_data = data.copy()
-            order_data["action"] = action
-            order_data["quantity"] = str(quantity)
-
-            # Place the order using direct API
-            logger.info(f"Final Order Data: {json.dumps(order_data, indent=2)}")
-            logger.info(f"Placing smart order: {action} {quantity} shares of {symbol}")
-
-            # Validate order data before placing
-            if (
-                not order_data.get("symbol")
-                or not order_data.get("action")
-                or not order_data.get("quantity")
-            ):
-                error_msg = "Invalid order data: Missing critical fields"
+            # Validate input data
+            if not symbol or not exchange or not product:
+                error_msg = "Invalid input: Missing symbol, exchange, or product"
                 logger.error(error_msg)
                 return None, {"status": "error", "message": error_msg}, None
 
-            res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
+            logger.info(
+                "Smart order details:\n"
+                + f"Symbol: {symbol}\n"
+                + f"Exchange: {exchange}\n"
+                + f"Product: {product}\n"
+                + f"Target Position Size: {position_size}"
+            )
 
-            # Create response in the format expected by the API endpoint
-            # Using SimpleNamespace to create an object with status attribute
-            # Handle different response types
-            is_success = False
-            if isinstance(res, dict):
-                is_success = res.get("status") == "success"
-            elif hasattr(res, "status"):
-                is_success = res.status == 200 or res.status == "SUCCESS"
+            # Try to look up broker symbol from database
+            try:
+                from database.token_db import get_br_symbol
+            except ImportError:
+                from openalgo.database.token_db import get_br_symbol
 
-            if is_success:
-                logger.info(f"Smart order placed successfully. Order ID: {orderid}")
-                from types import SimpleNamespace
+            # Get current open position for the symbol
+            position_str = get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+            logger.info(
+                f"Raw position from get_open_position: '{position_str}' (type: {type(position_str)})"
+            )
 
-                response_obj = SimpleNamespace()
-                response_obj.status = 200
-                return response_obj, response, orderid
-            else:
-                logger.error("Smart order placement failed")
-                logger.error(f"Response: {response}")
-                logger.error(f"Response Type: {type(response)}")
-                logger.error(f"Res Object: {res}")
+            # Ensure proper conversion to integer
+            try:
+                current_position = (
+                    int(float(position_str)) if position_str and position_str != "0" else 0
+                )
+            except (ValueError, TypeError) as e:
+                logger.error(f"Error converting position to int: {e}, using 0")
+                current_position = 0
+
+            logger.info(f"Current Position (converted to int): {current_position}")
+            logger.info(f"Target Position Size: {position_size} (type: {type(position_size)})")
+
+            # Determine action based on position_size and current_position
+            # This logic matches Angel's implementation exactly
+            action = None
+            quantity = 0
+
+            logger.info(
+                f"Smart Order Decision: Current Position={current_position}, Target Position={position_size}"
+            )
+
+            # If both position_size and current_position are 0, check if user wants to place a fresh order
+            if position_size == 0 and current_position == 0 and int(data.get("quantity", 0)) != 0:
+                action = data["action"]
+                quantity = data["quantity"]
+                logger.info(f"No position exists, placing fresh order: {action} {quantity}")
+                res, response, orderid = place_order_api(data, AUTH_TOKEN)
+                _invalidate_position_cache(AUTH_TOKEN)
                 return res, response, orderid
 
-        # Default return if no action was taken
-        response = {
-            "status": "success",
-            "message": "No order action needed. Position size matches current position",
-        }
-        return None, response, None
+            elif position_size == current_position:
+                if int(data.get("quantity", 0)) == 0:
+                    response = {
+                        "status": "success",
+                        "message": "No OpenPosition Found. Not placing Exit order.",
+                    }
+                else:
+                    response = {
+                        "status": "success",
+                        "message": "No action needed. Position size matches current position",
+                    }
+                orderid = None
+                logger.info("Positions already matched. No order will be placed.")
+                return res, response, orderid  # res remains None as no API call was made
+
+            # Close long position
+            if position_size == 0 and current_position > 0:
+                action = "SELL"
+                quantity = abs(current_position)
+                logger.info(f"Closing long position: SELL {quantity} shares")
+            # Close short position
+            elif position_size == 0 and current_position < 0:
+                action = "BUY"
+                quantity = abs(current_position)
+                logger.info(f"Closing short position: BUY {quantity} shares")
+            # Open new position when no current position exists
+            elif current_position == 0:
+                action = "BUY" if position_size > 0 else "SELL"
+                quantity = abs(position_size)
+                logger.info(f"Opening new position: {action} {quantity} shares")
+            # Adjust existing position
+            else:
+                if position_size > current_position:
+                    action = "BUY"
+                    quantity = position_size - current_position
+                    logger.info(
+                        f"Increasing position: BUY {quantity} shares (from {current_position} to {position_size})"
+                    )
+                elif position_size < current_position:
+                    action = "SELL"
+                    quantity = current_position - position_size
+                    logger.info(
+                        f"Reducing position: SELL {quantity} shares (from {current_position} to {position_size})"
+                    )
+
+            if action:
+                # Double-check the calculation
+                logger.info("=== FINAL SMART ORDER DECISION ===")
+                logger.info(f"Current Position: {current_position}")
+                logger.info(f"Target Position: {position_size}")
+                logger.info(f"Action to take: {action}")
+                logger.info(f"Quantity to {action}: {quantity}")
+                logger.info(f"This will move position from {current_position} to {position_size}")
+
+                # Prepare data for placing the order
+                order_data = data.copy()
+                order_data["action"] = action
+                order_data["quantity"] = str(quantity)
+
+                # Place the order using direct API
+                logger.info(f"Final Order Data: {json.dumps(order_data, indent=2)}")
+                logger.info(f"Placing smart order: {action} {quantity} shares of {symbol}")
+
+                # Validate order data before placing
+                if (
+                    not order_data.get("symbol")
+                    or not order_data.get("action")
+                    or not order_data.get("quantity")
+                ):
+                    error_msg = "Invalid order data: Missing critical fields"
+                    logger.error(error_msg)
+                    return None, {"status": "error", "message": error_msg}, None
+
+                res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
+                _invalidate_position_cache(AUTH_TOKEN)
+
+                # Create response in the format expected by the API endpoint
+                # Using SimpleNamespace to create an object with status attribute
+                # Handle different response types
+                is_success = False
+                if isinstance(res, dict):
+                    is_success = res.get("status") == "success"
+                elif hasattr(res, "status"):
+                    is_success = res.status == 200 or res.status == "SUCCESS"
+
+                if is_success:
+                    logger.info(f"Smart order placed successfully. Order ID: {orderid}")
+                    from types import SimpleNamespace
+
+                    response_obj = SimpleNamespace()
+                    response_obj.status = 200
+                    return response_obj, response, orderid
+                else:
+                    logger.error("Smart order placement failed")
+                    logger.error(f"Response: {response}")
+                    logger.error(f"Response Type: {type(response)}")
+                    logger.error(f"Res Object: {res}")
+                    return res, response, orderid
+
+            # Default return if no action was taken
+            response = {
+                "status": "success",
+                "message": "No order action needed. Position size matches current position",
+            }
+            return None, response, None
 
     except Exception as e:
-        logger.error(f"Error in smart order placement: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error in smart order placement: {e}")
         response = {"status": "error", "message": f"Smart order error: {str(e)}"}
         return None, response, None
 
@@ -2267,10 +2317,7 @@ def close_all_positions(token=None, auth=None):
                 detailed_results.append(result_entry)
 
             except Exception as e:
-                logger.error(f"Error processing position {position}: {str(e)}")
-                import traceback
-
-                logger.error(traceback.format_exc())
+                logger.exception(f"Error processing position {position}: {str(e)}")
                 failure_count += 1
                 detailed_results.append(
                     {"symbol": trading_symbol, "status": "error", "error_message": str(e)}
@@ -2282,20 +2329,11 @@ def close_all_positions(token=None, auth=None):
 
     except Exception as e:
         error_msg = f"Error in close_all_positions: {str(e)}"
-        logger.error(error_msg, exc_info=True)  # Log full traceback
+        logger.exception(error_msg)
 
         # Log additional context
         logger.error(f"Exception type: {type(e).__name__}")
         logger.error(f"Auth token length: {len(auth) if auth else 'None'}")
-
-        # Attempt to get more context about the error
-        try:
-            import traceback
-
-            error_details = traceback.format_exc()
-            logger.error(f"Detailed traceback: {error_details}")
-        except Exception as log_error:
-            logger.error(f"Could not log detailed traceback: {log_error}")
 
         return {
             "status": "error",
@@ -2551,14 +2589,7 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
         # Return the response with 200 status code as expected by the endpoint
         return response, 200
     except Exception as e:
-        logger.error(f"-------- ERROR CANCELLING ORDER {orderid} --------")
-        logger.error(f"Exception: {str(e)}")
-
-        # Get exception details for better debugging
-        import traceback
-
-        tb = traceback.format_exc()
-        logger.error(f"Traceback: {tb}")
+        logger.exception(f"-------- ERROR CANCELLING ORDER {orderid} --------")
 
         # Even if we got an exception, return success format for consistency
         # The order cancellation might actually be processing despite the error
@@ -2577,12 +2608,11 @@ def cancel_order(orderid, auth, segment=None, symbol=None, exchange=None):
                 "message": "Order cancellation request submitted with errors",
                 "details": str(e),
                 "exception_type": type(e).__name__,
-                "traceback": tb,
             }
 
             # Log the response we're returning for debugging
             logger.info(
-                f"Returning error response: {json.dumps({k: v for k, v in response.items() if k != 'traceback'}, indent=2)}"
+                f"Returning error response: {json.dumps(response, indent=2)}"
             )
 
         # Return the error response with 200 status code for consistency
@@ -2833,10 +2863,7 @@ def direct_modify_order(data, auth):
             return ResponseObject(200), response
 
     except Exception as e:
-        logger.error(f"Error in direct_modify_order: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error in direct_modify_order: {e}")
 
         # Create a response object to maintain compatibility with existing code
         class ResponseObject:
@@ -3389,13 +3416,7 @@ def get_order_trades(orderid, auth, segment=None):
             }, response_obj.status_code
 
     except Exception as e:
-        # Get exception details for better debugging
-        import traceback
-
-        tb = traceback.format_exc()
-        logger.error(f"-------- ERROR GETTING TRADES FOR ORDER {orderid} --------")
-        logger.error(f"Exception: {str(e)}")
-        logger.error(f"Traceback: {tb}")
+        logger.exception(f"-------- ERROR GETTING TRADES FOR ORDER {orderid} --------")
 
         return {
             "status": "error",
@@ -3404,5 +3425,4 @@ def get_order_trades(orderid, auth, segment=None):
             "segment": segment,
             "trades": [],
             "exception_details": str(e),
-            "traceback": tb,
         }, 500

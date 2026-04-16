@@ -1475,7 +1475,7 @@ def _process_download_job(job_id: str, api_key: str):
                 config = (
                     json.loads(job["config"]) if isinstance(job["config"], str) else job["config"]
                 )
-            except:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 config = {}
 
         incremental = config.get("incremental", False)

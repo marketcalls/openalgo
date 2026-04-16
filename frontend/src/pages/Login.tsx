@@ -120,8 +120,8 @@ export default function Login() {
           navigate(data.redirect)
         }
       } else {
-        // Set login state (broker will be set after broker selection)
-        setLogin(username, '')
+        // Set login state (broker from response if session was resumed, empty otherwise)
+        setLogin(username, data.broker || '')
         showToast.success('Login successful', 'system')
         // Use redirect from response if provided, otherwise go to broker
         navigate(data.redirect || '/broker')

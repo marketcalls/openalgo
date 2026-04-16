@@ -11,7 +11,6 @@ from datetime import datetime, time
 from time import time
 
 import pytz
-import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import (
     Blueprint,
@@ -111,10 +110,11 @@ def process_orders():
                     break
 
                 try:
-                    response = requests.post(
+                    from utils.httpx_client import get_httpx_client
+                    response = get_httpx_client().post(
                         f"{BASE_URL}/api/v1/placesmartorder", json=smart_order["payload"]
                     )
-                    if response.ok:
+                    if response.is_success:
                         logger.info(
                             f"Smart order placed for {smart_order['payload']['symbol']} in strategy {smart_order['payload']['strategy']}"
                         )
@@ -147,10 +147,11 @@ def process_orders():
                         break
 
                     try:
-                        response = requests.post(
+                        from utils.httpx_client import get_httpx_client
+                        response = get_httpx_client().post(
                             f"{BASE_URL}/api/v1/placeorder", json=regular_order["payload"]
                         )
-                        if response.ok:
+                        if response.is_success:
                             logger.info(
                                 f"Regular order placed for {regular_order['payload']['symbol']} in strategy {regular_order['payload']['strategy']}"
                             )

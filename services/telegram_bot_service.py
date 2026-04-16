@@ -109,6 +109,52 @@ class TelegramBotService:
             logger.exception(f"Error making SDK call: {e}")
             return None
 
+    def _render_plotly_png(self, fig) -> bytes:
+        """Render a Plotly figure to PNG bytes using Kaleido on a real OS thread.
+
+        Kaleido 1.x's fig.to_image() internally calls asyncio.run(), which
+        raises RuntimeError when invoked from a thread that already has a
+        running event loop — which is exactly our situation inside a PTB
+        command handler (self.bot_loop is a live asyncio loop on self.bot_thread).
+
+        Dispatching via asyncio's run_in_executor does NOT escape this under
+        gunicorn + eventlet: the default ThreadPoolExecutor spawns workers
+        through threading.Thread, which is monkey-patched by eventlet into
+        greenlets that still share the PTB loop's context. So Kaleido's
+        asyncio.run() still sees a running loop and still blows up.
+
+        The reliable escape hatch — the same one the bot itself uses to
+        isolate from eventlet — is original_threading.Thread, the real,
+        unpatched OS-level threading module. A brand-new OS thread has no
+        event loop of its own, so asyncio.run() inside Kaleido gets a clean
+        slate and can spawn Chromium (installed in the Docker image).
+
+        The caller blocks on t.join() for the duration of the render
+        (~1-3 s per chart). This briefly pauses the PTB event loop, which
+        is acceptable for personal / low-volume bot usage.
+        """
+        import queue as _queue
+
+        result_q: "_queue.Queue[tuple[str, object]]" = _queue.Queue()
+
+        def _worker() -> None:
+            try:
+                png = fig.to_image(format="png", engine="kaleido")
+                result_q.put(("ok", png))
+            except BaseException as exc:  # noqa: BLE001 - propagate across thread
+                result_q.put(("err", exc))
+
+        t = original_threading.Thread(
+            target=_worker, daemon=True, name="openalgo-kaleido-render"
+        )
+        t.start()
+        t.join()
+
+        status, payload = result_q.get_nowait()
+        if status == "err":
+            raise payload  # type: ignore[misc]
+        return payload  # type: ignore[return-value]
+
     async def _generate_intraday_chart(
         self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
     ) -> bytes | None:
@@ -271,8 +317,10 @@ class TelegramBotService:
             # Clean up axes
             fig.update_yaxes(title_text="")
 
-            # Convert to image bytes
-            img_bytes = fig.to_image(format="png", engine="kaleido")
+            # Convert to image bytes via a real OS thread — see
+            # self._render_plotly_png for why asyncio.run_in_executor is
+            # not usable here under gunicorn + eventlet + PTB.
+            img_bytes = self._render_plotly_png(fig)
             return img_bytes
 
         except Exception as e:
@@ -445,8 +493,10 @@ class TelegramBotService:
             # Clean up axes
             fig.update_yaxes(title_text="")
 
-            # Convert to image bytes
-            img_bytes = fig.to_image(format="png", engine="kaleido")
+            # Convert to image bytes via a real OS thread — see
+            # self._render_plotly_png for why asyncio.run_in_executor is
+            # not usable here under gunicorn + eventlet + PTB.
+            img_bytes = self._render_plotly_png(fig)
             return img_bytes
 
         except Exception as e:
@@ -493,11 +543,11 @@ class TelegramBotService:
         # Check if we're in eventlet environment
         if "eventlet" in sys.modules:
             logger.info("Using synchronous initialization for eventlet environment")
-            # Use synchronous requests to validate token
-            import requests
+            # Use synchronous httpx to validate token
+            from utils.httpx_client import get_httpx_client
 
             try:
-                response = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+                response = get_httpx_client().get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -651,6 +701,8 @@ class TelegramBotService:
                 self.application.add_handler(CommandHandler("pnl", self.cmd_pnl))
                 self.application.add_handler(CommandHandler("quote", self.cmd_quote))
                 self.application.add_handler(CommandHandler("chart", self.cmd_chart))
+                self.application.add_handler(CommandHandler("closeall", self.cmd_closeall))
+                self.application.add_handler(CommandHandler("mode", self.cmd_mode))
                 self.application.add_handler(CommandHandler("menu", self.cmd_menu))
 
                 # Add callback query handler for inline buttons
@@ -863,6 +915,10 @@ class TelegramBotService:
   • type: intraday or daily (default: both)
   • interval: 1m, 5m, 15m, 30m, 1h, D (default: 5m for intraday, D for daily)
   • days: number of days (default: 5 for intraday, 252 for daily)
+
+*Remote Actions:*
+/closeall - Close all open positions (with confirmation)
+/mode - View or toggle trading mode (Live / Analyze)
 
 *Navigation:*
 /menu - Show interactive menu
@@ -1981,6 +2037,75 @@ class TelegramBotService:
         pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
         return f"💹 *PROFIT & LOSS*\n━━━━━━━━━━━━━━━\n\n{pnl_emoji} *Day P&L*\n└ {cs}{total_pnl:,.2f}"
 
+    async def cmd_closeall(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /closeall command — close all open positions with confirmation"""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        from telegram.constants import ParseMode
+
+        user = update.effective_user
+        telegram_user = get_telegram_user(user.id)
+
+        if not telegram_user:
+            await update.message.reply_text("❌ Please link your account first using /link")
+            return
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Yes, close all", callback_data="confirm_closeall"),
+                InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            "⚠️ *Close All Positions*\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            "This will close ALL open positions across all strategies.\n\n"
+            "Are you sure?",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        log_command(user.id, "closeall", update.effective_chat.id)
+
+    async def cmd_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /mode command — view or toggle trading mode (Live / Analyze)"""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        from telegram.constants import ParseMode
+
+        user = update.effective_user
+        telegram_user = get_telegram_user(user.id)
+
+        if not telegram_user:
+            await update.message.reply_text("❌ Please link your account first using /link")
+            return
+
+        from database.settings_db import get_analyze_mode
+
+        loop = asyncio.get_event_loop()
+        is_analyze = await loop.run_in_executor(None, get_analyze_mode)
+
+        current = "🔬 Analyze Mode" if is_analyze else "🟢 Live Mode"
+        toggle_label = "Switch to Live" if is_analyze else "Switch to Analyze"
+        toggle_data = "mode_live" if is_analyze else "mode_analyze"
+
+        keyboard = [
+            [
+                InlineKeyboardButton(f"🔄 {toggle_label}", callback_data=toggle_data),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            f"⚙️ *Trading Mode*\n"
+            f"━━━━━━━━━━━━━━━\n\n"
+            f"Current: {current}\n\n"
+            f"• *Live Mode* — Orders execute with real broker\n"
+            f"• *Analyze Mode* — Sandbox mode (no real orders)\n",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        log_command(user.id, "mode", update.effective_chat.id)
+
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline button callbacks"""
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -1992,6 +2117,79 @@ class TelegramBotService:
         user = query.from_user
         chat_id = query.message.chat.id
         callback_data = query.data
+
+        # Handle cancel action
+        if callback_data == "cancel_action":
+            await query.edit_message_text("❌ Action cancelled.")
+            return
+
+        # Handle close all positions confirmation
+        if callback_data == "confirm_closeall":
+            telegram_user = get_telegram_user(user.id)
+            if not telegram_user:
+                await query.edit_message_text("❌ Please link your account first using /link")
+                return
+
+            client = self._get_sdk_client(user.id)
+            if not client:
+                await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+                return
+
+            await query.edit_message_text("⏳ Closing all positions...")
+
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(None, client.closeposition)
+
+                if response and response.get("status") == "success":
+                    msg = response.get("message", "All positions closed")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"✅ *Positions Closed*\n━━━━━━━━━━━━━━━\n\n{msg}",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                else:
+                    error = response.get("message", "Unknown error") if response else "No response"
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"❌ *Failed to close positions*\n\n{error}",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+            except Exception as e:
+                logger.exception(f"Error in closeall: {e}")
+                await context.bot.send_message(
+                    chat_id=chat_id, text="❌ Error closing positions. Check server logs."
+                )
+            log_command(user.id, "confirm_closeall", chat_id)
+            return
+
+        # Handle remote logout confirmation
+        # Handle mode toggle
+        if callback_data in ("mode_live", "mode_analyze"):
+            try:
+                from database.settings_db import set_analyze_mode, get_analyze_mode
+
+                new_mode = callback_data == "mode_analyze"
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, set_analyze_mode, new_mode)
+
+                # Sync mode to frontend via SocketIO
+                try:
+                    from extensions import socketio
+                    socketio.emit("app_mode_changed", {"analyze_mode": new_mode})
+                except Exception:
+                    pass
+
+                mode_label = "🔬 Analyze Mode" if new_mode else "🟢 Live Mode"
+                await query.edit_message_text(
+                    f"✅ *Mode Changed*\n━━━━━━━━━━━━━━━\n\nNow in: {mode_label}",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            except Exception as e:
+                logger.exception(f"Error toggling mode: {e}")
+                await query.edit_message_text("❌ Failed to change mode. Check server logs.")
+            log_command(user.id, callback_data, chat_id)
+            return
 
         # Handle menu refresh separately - edit the existing message
         if callback_data == "menu":

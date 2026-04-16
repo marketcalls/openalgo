@@ -131,11 +131,6 @@ export default function ActionCenterPage() {
 
   useEffect(() => {
     fetchData()
-    // Auto-refresh every 30 seconds for pending orders
-    if (activeFilter === 'pending') {
-      const interval = setInterval(fetchData, 30000)
-      return () => clearInterval(interval)
-    }
   }, [fetchData, activeFilter])
 
   // Socket connection for realtime order updates
