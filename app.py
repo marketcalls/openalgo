@@ -745,6 +745,35 @@ if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
 
+    # Refuse to run the Werkzeug debugger on a non-loopback interface.
+    # Werkzeug's interactive debugger is an RCE primitive — exposing it on a
+    # public or LAN address is a critical risk, and a surprisingly common
+    # misconfiguration (FLASK_DEBUG=True left on + FLASK_HOST_IP=0.0.0.0).
+    # Users who explicitly need debug on a trusted LAN can set
+    # FLASK_DEBUG_ALLOW_EXTERNAL=true to opt out of this guard.
+    _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+    _allow_external_debug = os.getenv("FLASK_DEBUG_ALLOW_EXTERNAL", "False").lower() in (
+        "true", "1", "t"
+    )
+    if debug and host_ip not in _LOOPBACK_HOSTS and not _allow_external_debug:
+        sys.stderr.write(
+            "\n"
+            "\033[91m\033[1m"
+            "REFUSING TO START: FLASK_DEBUG=True with FLASK_HOST_IP="
+            f"{host_ip!r}\033[0m\n"
+            "\033[91m"
+            "The Werkzeug interactive debugger is an RCE primitive and must\n"
+            "never be reachable from the network. Fix one of the following:\n"
+            "  1. Set FLASK_DEBUG=False in .env (recommended for anything\n"
+            "     beyond local development).\n"
+            "  2. Set FLASK_HOST_IP=127.0.0.1 in .env to bind to loopback.\n"
+            "  3. If you truly need debug on a trusted LAN, set\n"
+            "     FLASK_DEBUG_ALLOW_EXTERNAL=true in .env to override this\n"
+            "     guard. You are responsible for the consequences.\n"
+            "\033[0m\n"
+        )
+        sys.exit(1)
+
     # Start ngrok tunnel if enabled
     should_start_ngrok = True
     if debug:
