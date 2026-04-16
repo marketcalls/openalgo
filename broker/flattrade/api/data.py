@@ -13,8 +13,16 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
-# Toggle between async and threaded approach
-USE_ASYNC = True  # Set to True to use asyncio (better performance)
+# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
+# asyncio.run() cannot be called under eventlet's monkey-patched event loop
+def _is_eventlet_patched():
+    try:
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched("socket")
+    except (ImportError, AttributeError):
+        return False
+
+USE_ASYNC = not _is_eventlet_patched()
 
 logger = get_logger(__name__)
 
@@ -364,18 +372,14 @@ class BrokerData:
         # Step 2: Make concurrent API calls
         start_time = time.time()
 
-        # Determine if we should use async or threaded approach
-        # asyncio.run() fails when called from within a running event loop
-        # (e.g., Flask-SocketIO with eventlet in production)
+        # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
+        # if called from within an already-running event loop
         use_async = USE_ASYNC
         if use_async:
             try:
                 asyncio.get_running_loop()
-                # We're in an async context (e.g., eventlet) - must use threads
                 use_async = False
-                logger.debug("Detected running event loop, using threaded approach")
             except RuntimeError:
-                # No running loop - safe to use asyncio.run()
                 pass
 
         if use_async:
