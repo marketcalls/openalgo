@@ -595,11 +595,16 @@ export default function StrategyBuilder() {
       const newLegs: StrategyLeg[] = resolved.map((r) => {
         // Each leg keeps its own expiry — calendars / diagonals span two.
         const legExpiry = convertExpiryForSymbol(r.resolvedExpiry)
+        // Preserve the template's per-leg ratio (e.g. butterfly body = 2 lots,
+        // wings = 1 lot) and scale it by the user's chosen lot multiplier.
+        // Without this, all legs come in at `totalLots` and ratio spreads /
+        // butterflies / condors collapse into wrong shapes.
+        const legLots = Math.max(1, (r.lots ?? 1) * totalLots)
         return {
           id: uid(),
           segment: 'OPTION',
           side: r.side,
-          lots: totalLots,
+          lots: legLots,
           lotSize,
           expiry: legExpiry,
           strike: r.resolvedStrike,
