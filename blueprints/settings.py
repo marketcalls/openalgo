@@ -2,7 +2,12 @@
 
 from flask import Blueprint, jsonify, request
 
-from database.settings_db import get_analyze_mode, set_analyze_mode
+from database.settings_db import (
+    get_analyze_mode,
+    get_paper_price_source,
+    set_analyze_mode,
+    set_paper_price_source,
+)
 from sandbox.execution_thread import start_execution_engine, stop_execution_engine
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -57,3 +62,45 @@ def set_mode(mode):
     except Exception as e:
         logger.exception(f"Error setting analyze mode: {str(e)}")
         return jsonify({"error": "Failed to set analyze mode"}), 500
+
+
+@settings_bp.route("/paper-price-source", methods=["GET"])
+@check_session_validity
+def get_price_source():
+    """Get current paper trading price source (LIVE or REPLAY)"""
+    try:
+        return jsonify({"paper_price_source": get_paper_price_source()})
+    except Exception as e:
+        logger.exception(f"Error getting paper price source: {str(e)}")
+        return jsonify({"error": "Failed to get paper price source"}), 500
+
+
+@settings_bp.route("/paper-price-source", methods=["POST"])
+@check_session_validity
+def set_price_source():
+    """
+    Set paper trading price source.
+
+    JSON body:
+        {"source": "LIVE" | "REPLAY"}
+    """
+    try:
+        data = request.get_json()
+        if not data or "source" not in data:
+            return jsonify({"error": "JSON body with 'source' field required"}), 400
+
+        source = str(data["source"]).upper().strip()
+        set_paper_price_source(source)
+        logger.info(f"Paper price source set to: {source}")
+        return jsonify(
+            {
+                "success": True,
+                "paper_price_source": source,
+                "message": f"Paper price source set to {source}",
+            }
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception(f"Error setting paper price source: {str(e)}")
+        return jsonify({"error": "Failed to set paper price source"}), 500

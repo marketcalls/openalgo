@@ -57,6 +57,9 @@ class Settings(Base):
     security_api_ban_duration = Column(Integer, default=0)  # 0 = permanent ban
     security_repeat_offender_limit = Column(Integer, default=2)  # Bans before permanent ban
 
+    # Paper trading price source: LIVE = use live broker quotes, REPLAY = use DuckDB historical data
+    paper_price_source = Column(String(10), default="LIVE", nullable=False)
+
 
 def init_db():
     """Initialize the settings database"""
@@ -109,6 +112,60 @@ def set_analyze_mode(mode: bool):
     # Invalidate cache after update
     if "analyze_mode" in _settings_cache:
         del _settings_cache["analyze_mode"]
+
+
+VALID_PAPER_PRICE_SOURCES = {"LIVE", "REPLAY"}
+
+
+def get_paper_price_source() -> str:
+    """
+    Get the paper trading price source setting (cached for 1 hour).
+
+    Returns:
+        "LIVE"   — sandbox uses live broker quotes (WebSocket / REST)
+        "REPLAY" — sandbox uses DuckDB historical data at current replay timestamp
+    """
+    cache_key = "paper_price_source"
+
+    if cache_key in _settings_cache:
+        return _settings_cache[cache_key]
+
+    settings = Settings.query.first()
+    if not settings:
+        settings = Settings(analyze_mode=False, paper_price_source="LIVE")
+        db_session.add(settings)
+        db_session.commit()
+
+    source = settings.paper_price_source or "LIVE"
+    _settings_cache[cache_key] = source
+    return source
+
+
+def set_paper_price_source(source: str):
+    """
+    Set the paper trading price source.
+
+    Args:
+        source: "LIVE" or "REPLAY"
+
+    Raises:
+        ValueError: if source is not a valid value
+    """
+    source = source.upper().strip()
+    if source not in VALID_PAPER_PRICE_SOURCES:
+        raise ValueError(f"Invalid paper_price_source '{source}'. Must be one of: {sorted(VALID_PAPER_PRICE_SOURCES)}")
+
+    settings = Settings.query.first()
+    if not settings:
+        settings = Settings(analyze_mode=False, paper_price_source=source)
+        db_session.add(settings)
+    else:
+        settings.paper_price_source = source
+    db_session.commit()
+
+    # Invalidate cache after update
+    if "paper_price_source" in _settings_cache:
+        del _settings_cache["paper_price_source"]
 
 
 def _get_encryption_key():

@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Clock,
   Database,
   FastForward,
@@ -6,11 +7,13 @@ import {
   Loader2,
   Pause,
   Play,
+  Radio,
   Square,
   Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { showToast } from '@/utils/toast'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -22,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { type PaperPriceSource, useSandboxStore } from '@/stores/sandboxStore'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', { credentials: 'include' })
@@ -124,6 +128,10 @@ export default function ReplayData() {
   const [replayLoading, setReplayLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Paper price source
+  const { paperPriceSource, isFetchingSource, isSettingSource, fetchPaperPriceSource, setPaperPriceSource } =
+    useSandboxStore()
+
   // Fetch replay status
   const fetchReplayStatus = useCallback(async () => {
     try {
@@ -141,7 +149,8 @@ export default function ReplayData() {
 
   useEffect(() => {
     fetchReplayStatus()
-  }, [fetchReplayStatus])
+    fetchPaperPriceSource()
+  }, [fetchReplayStatus, fetchPaperPriceSource])
 
   // Poll when running
   useEffect(() => {
@@ -157,6 +166,17 @@ export default function ReplayData() {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [replay.status, fetchReplayStatus])
+
+  // Price source toggle
+  const handlePriceSourceToggle = async (newSource: PaperPriceSource) => {
+    const csrfToken = await fetchCSRFToken()
+    const result = await setPaperPriceSource(newSource, csrfToken)
+    if (result.success) {
+      showToast.success(result.message || `Price source set to ${newSource}`)
+    } else {
+      showToast.error(result.message || 'Failed to update price source')
+    }
+  }
 
   // Upload handler
   const handleUpload = async (uploadType: string) => {
@@ -249,6 +269,57 @@ export default function ReplayData() {
         <Database className="h-6 w-6" />
         <h1 className="text-2xl font-bold">Replay Data Manager</h1>
       </div>
+
+      {/* Paper Price Source Toggle */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Radio className="h-4 w-4" />
+            Paper Trading Price Source
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Controls which price feed the sandbox uses for order fills and MTM.
+            Switch to <strong>Replay</strong> to use uploaded historical data instead of live broker quotes.
+          </p>
+          <div className="flex gap-2">
+            {(['LIVE', 'REPLAY'] as PaperPriceSource[]).map((src) => (
+              <Button
+                key={src}
+                size="sm"
+                variant={paperPriceSource === src ? 'default' : 'outline'}
+                onClick={() => handlePriceSourceToggle(src)}
+                disabled={isFetchingSource || isSettingSource || paperPriceSource === src}
+              >
+                {isSettingSource && paperPriceSource !== src ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : null}
+                {src === 'LIVE' ? '📡 Live Quotes' : '🎞️ Replay Data'}
+              </Button>
+            ))}
+          </div>
+
+          {/* Warning: REPLAY selected but clock not running */}
+          {paperPriceSource === 'REPLAY' && replay.status !== 'running' && (
+            <Alert variant="destructive" className="py-2">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="text-xs">
+                Price source is set to <strong>Replay</strong> but the replay clock is{' '}
+                <strong>{replay.status}</strong>. Orders will remain pending until you configure
+                a date range and press <em>Start</em> below.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {paperPriceSource === 'REPLAY' && replay.status === 'running' && (
+            <div className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              Replay running — quotes sourced from DuckDB at {formatEpoch(replay.current_ts)}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Upload Section */}
       <div>

@@ -199,22 +199,33 @@ class ReplayQuoteProvider(QuoteProvider):
 def get_quote_provider() -> QuoteProvider:
     """
     Get the appropriate quote provider based on current mode.
-    
-    If analyzer mode is on AND replay is enabled => ReplayQuoteProvider
-    Otherwise => LiveQuoteProvider
+
+    Decision logic:
+    - If analyzer (paper) mode is OFF → LiveQuoteProvider always.
+    - If analyzer mode is ON:
+        - paper_price_source == "REPLAY" → ReplayQuoteProvider (uses DuckDB at current replay ts).
+          If replay clock is not running / not configured, the provider will return None for quotes
+          (orders remain pending) and a warning is logged.
+        - paper_price_source == "LIVE" (default) → LiveQuoteProvider.
     """
     try:
-        from database.settings_db import get_analyze_mode
+        from database.settings_db import get_analyze_mode, get_paper_price_source
 
         if get_analyze_mode():
-            from services.replay_service import get_replay_session
+            source = get_paper_price_source()
+            if source == "REPLAY":
+                from services.replay_service import get_replay_session
 
-            session = get_replay_session()
-            if session.get("enabled") and session.get("status") == "running":
+                session = get_replay_session()
+                if session.get("current_ts") is None:
+                    logger.warning(
+                        "paper_price_source=REPLAY but replay clock has no current_ts "
+                        "(not configured or not started). Quotes will be unavailable until replay is started."
+                    )
                 return ReplayQuoteProvider(
                     get_current_ts_fn=lambda: get_replay_session().get("current_ts")
                 )
     except Exception as e:
-        logger.debug(f"Error checking replay mode: {e}")
+        logger.debug(f"Error checking quote provider mode: {e}")
 
     return LiveQuoteProvider()
