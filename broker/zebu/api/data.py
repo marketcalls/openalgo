@@ -370,7 +370,17 @@ class BrokerData:
             return skipped_symbols
 
         # Step 2: Make concurrent API calls
-        if USE_ASYNC:
+        # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
+        # if called from within an already-running event loop
+        use_async = USE_ASYNC
+        if use_async:
+            try:
+                asyncio.get_running_loop()
+                use_async = False
+            except RuntimeError:
+                pass
+
+        if use_async:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
