@@ -12,7 +12,7 @@ import {
   TrendingDown,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { showToast } from '@/utils/toast'
 import { type QuotesData, tradingApi } from '@/api/trading'
 import {
@@ -63,7 +63,7 @@ interface SortConfig {
 }
 
 // Fixed: Defined outside component to prevent effect dependency churn and repeated socket re-subscriptions
-const ORDER_BOOK_EVENTS = ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'];
+const ORDER_BOOK_EVENTS: OrderEventType[] = ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'];
 
 /**
  * Helper to convert various broker timestamp formats into a sortable number.
@@ -232,7 +232,7 @@ export default function OrderBook() {
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchOrders, {
-    events: ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'],
+    events: ORDER_BOOK_EVENTS,
   })
 
   // Listen for mode changes (live/analyze) and refresh data
