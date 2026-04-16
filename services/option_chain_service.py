@@ -422,6 +422,13 @@ def get_option_chain(
                     elif "error" not in result:
                         quotes_map[symbol] = result
 
+        # Helper function to normalize zero values for JSON serialization
+        def normalize_zero(value):
+            """Convert 0.0 to 0 for consistent JSON serialization"""
+            if isinstance(value, float) and value == 0.0:
+                return 0
+            return value
+
         # Step 9: Build final chain response
         chain = []
         for item in chain_symbols:
@@ -434,15 +441,15 @@ def get_option_chain(
                 strike_data["ce"] = {
                     "symbol": ce_symbol,
                     "label": item["ce"]["label"],
-                    "ltp": ce_quote.get("ltp", 0),
-                    "bid": ce_quote.get("bid", 0),
-                    "ask": ce_quote.get("ask", 0),
-                    "open": ce_quote.get("open", 0),
-                    "high": ce_quote.get("high", 0),
-                    "low": ce_quote.get("low", 0),
-                    "prev_close": ce_quote.get("prev_close", 0),
-                    "volume": ce_quote.get("volume", 0),
-                    "oi": ce_quote.get("oi", 0),
+                    "ltp": normalize_zero(ce_quote.get("ltp", 0)),
+                    "bid": normalize_zero(ce_quote.get("bid", 0)),
+                    "ask": normalize_zero(ce_quote.get("ask", 0)),
+                    "open": normalize_zero(ce_quote.get("open", 0)),
+                    "high": normalize_zero(ce_quote.get("high", 0)),
+                    "low": normalize_zero(ce_quote.get("low", 0)),
+                    "prev_close": normalize_zero(ce_quote.get("prev_close", 0)),
+                    "volume": normalize_zero(ce_quote.get("volume", 0)),
+                    "oi": normalize_zero(ce_quote.get("oi", 0)),
                     "lotsize": item["ce"]["lotsize"],
                     "tick_size": item["ce"]["tick_size"],
                 }
@@ -456,15 +463,15 @@ def get_option_chain(
                 strike_data["pe"] = {
                     "symbol": pe_symbol,
                     "label": item["pe"]["label"],
-                    "ltp": pe_quote.get("ltp", 0),
-                    "bid": pe_quote.get("bid", 0),
-                    "ask": pe_quote.get("ask", 0),
-                    "open": pe_quote.get("open", 0),
-                    "high": pe_quote.get("high", 0),
-                    "low": pe_quote.get("low", 0),
-                    "prev_close": pe_quote.get("prev_close", 0),
-                    "volume": pe_quote.get("volume", 0),
-                    "oi": pe_quote.get("oi", 0),
+                    "ltp": normalize_zero(pe_quote.get("ltp", 0)),
+                    "bid": normalize_zero(pe_quote.get("bid", 0)),
+                    "ask": normalize_zero(pe_quote.get("ask", 0)),
+                    "open": normalize_zero(pe_quote.get("open", 0)),
+                    "high": normalize_zero(pe_quote.get("high", 0)),
+                    "low": normalize_zero(pe_quote.get("low", 0)),
+                    "prev_close": normalize_zero(pe_quote.get("prev_close", 0)),
+                    "volume": normalize_zero(pe_quote.get("volume", 0)),
+                    "oi": normalize_zero(pe_quote.get("oi", 0)),
                     "lotsize": item["pe"]["lotsize"],
                     "tick_size": item["pe"]["tick_size"],
                 }
