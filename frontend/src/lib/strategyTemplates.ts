@@ -398,16 +398,24 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
     name: 'Double Fly',
     direction: 'NON_DIRECTIONAL',
     description:
-      'Two call/put butterflies centred at different strikes. Two profit peaks — good when a move to either wing is likely.',
+      'Two iron butterflies — one centred below spot, one above. Eight legs total: short straddle at each body strike, long CE wing above and long PE wing below. Two profit peaks at the body strikes, defined risk on both ends.',
     legs: [
-      { side: 'BUY', optionType: 'PE', strikeOffset: -4, lots: 1 },
-      { side: 'SELL', optionType: 'PE', strikeOffset: -2, lots: 2 },
-      { side: 'BUY', optionType: 'PE', strikeOffset: 0, lots: 1 },
-      { side: 'BUY', optionType: 'CE', strikeOffset: 0, lots: 1 },
-      { side: 'SELL', optionType: 'CE', strikeOffset: 2, lots: 2 },
-      { side: 'BUY', optionType: 'CE', strikeOffset: 4, lots: 1 },
+      // ── CE legs (grouped first) ──
+      // Lower iron fly body @ ATM − 8, CE wing @ ATM − 4 (4 strikes above body)
+      { side: 'SELL', optionType: 'CE', strikeOffset: -8, lots: 1 },
+      { side: 'BUY', optionType: 'CE', strikeOffset: -4, lots: 1 },
+      // Upper iron fly body @ ATM + 8, CE wing @ ATM + 12 (4 strikes above body)
+      { side: 'SELL', optionType: 'CE', strikeOffset: 8, lots: 1 },
+      { side: 'BUY', optionType: 'CE', strikeOffset: 12, lots: 1 },
+      // ── PE legs ──
+      // Lower iron fly PE wing @ ATM − 12 (4 strikes below body), body @ ATM − 8
+      { side: 'BUY', optionType: 'PE', strikeOffset: -12, lots: 1 },
+      { side: 'SELL', optionType: 'PE', strikeOffset: -8, lots: 1 },
+      // Upper iron fly PE wing @ ATM + 4 (4 strikes below body), body @ ATM + 8
+      { side: 'BUY', optionType: 'PE', strikeOffset: 4, lots: 1 },
+      { side: 'SELL', optionType: 'PE', strikeOffset: 8, lots: 1 },
     ],
-    payoffPath: 'M0,30 L20,30 L30,8 L40,30 L60,30 L70,8 L80,30 L100,30',
+    payoffPath: 'M0,30 L10,30 L20,8 L35,30 L65,30 L80,8 L90,30 L100,30',
   },
   {
     id: 'long_iron_condor',

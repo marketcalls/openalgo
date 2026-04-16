@@ -138,14 +138,14 @@ export function TemplateDialog({
               <div key={idx} className="flex items-center gap-2 rounded-md border p-2 text-xs">
                 <span
                   className={cn(
-                    'inline-flex h-6 w-8 shrink-0 items-center justify-center rounded font-semibold',
+                    'inline-flex h-6 min-w-[2.25rem] shrink-0 items-center justify-center rounded px-1 font-semibold',
                     leg.side === 'BUY'
                       ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
                       : 'bg-rose-500/15 text-rose-700 dark:text-rose-400'
                   )}
                 >
                   {leg.side === 'BUY' ? '+' : '-'}
-                  {lots}x
+                  {(leg.lots ?? 1) * lots}x
                 </span>
                 <Select
                   value={String(leg.resolvedStrike)}
