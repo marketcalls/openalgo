@@ -404,6 +404,28 @@ class WebSocketProxy:
         path = getattr(websocket, "path", "/unknown")
         logger.info(f"Client connected: {client_id} from path: {path}")
 
+        # Unauthenticated grace window: drop connections that don't complete auth
+        # within WS_AUTH_GRACE_SECONDS to prevent idle/holding-pattern resource
+        # exhaustion from unauthenticated clients on a public-facing port.
+        auth_grace_seconds = int(os.getenv("WS_AUTH_GRACE_SECONDS", "15"))
+
+        async def _enforce_auth_deadline():
+            try:
+                await aio.sleep(auth_grace_seconds)
+                if client_id not in self.user_mapping:
+                    logger.warning(
+                        f"Client {client_id} failed to authenticate within "
+                        f"{auth_grace_seconds}s — closing connection"
+                    )
+                    try:
+                        await websocket.close(code=4401, reason="auth timeout")
+                    except Exception:
+                        pass
+            except aio.CancelledError:
+                pass
+
+        auth_deadline_task = aio.ensure_future(_enforce_auth_deadline())
+
         try:
             # Process messages from the client
             async for message in websocket:
@@ -423,6 +445,7 @@ class WebSocketProxy:
         except Exception as e:
             logger.exception(f"Unexpected error handling client {client_id}: {e}")
         finally:
+            auth_deadline_task.cancel()
             # Clean up when the client disconnects
             await self.cleanup_client(client_id)
 
