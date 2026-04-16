@@ -3531,10 +3531,6 @@ def get_replay_quotes_batch(symbols: list[tuple[str, str]], at_ts: int) -> dict:
             # For missing symbols, try daily data
             missing = [s for s in symbols if s not in quotes]
             if missing:
-                from datetime import datetime
-
-                import pytz
-
                 ist = pytz.timezone("Asia/Kolkata")
                 dt = datetime.fromtimestamp(at_ts, tz=ist)
                 day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
