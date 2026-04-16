@@ -6,6 +6,7 @@ This client handles authentication and provides a simple interface for services.
 import asyncio
 import json
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +17,16 @@ import websockets
 from dotenv import load_dotenv
 
 from utils.logging import get_logger
+
+# Import the original threading module to run the asyncio event loop in a real
+# OS thread, bypassing eventlet's monkey-patching which turns threading.Thread
+# into green threads where asyncio.new_event_loop() cannot work.
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _original_threading = eventlet.patcher.original("threading")
+else:
+    _original_threading = threading
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -77,7 +88,7 @@ class WebSocketClient:
             self.running = True
 
             # Start the asyncio event loop in a separate thread
-            self.thread = threading.Thread(target=self._run_event_loop)
+            self.thread = _original_threading.Thread(target=self._run_event_loop)
             self.thread.daemon = True
             self.thread.start()
 
