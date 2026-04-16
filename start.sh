@@ -73,12 +73,15 @@ FLASK_DEBUG = '${FLASK_DEBUG:-False}'
 FLASK_ENV = '${FLASK_ENV:-production}'
 
 # WebSocket Configuration
+# 0.0.0.0 is required on Railway/cloud so the platform proxy can reach the port.
 WEBSOCKET_HOST = '0.0.0.0'
 WEBSOCKET_PORT = '${WEBSOCKET_PORT:-8765}'
 WEBSOCKET_URL = '${WEBSOCKET_URL:-wss://${HOST_DOMAIN}/ws}'
 
 # ZeroMQ Configuration
-ZMQ_HOST = '0.0.0.0'
+# Internal message bus — always loopback. Broker adapters and the WS proxy run
+# in the same process; exposing ZMQ would leak the raw tick feed.
+ZMQ_HOST = '127.0.0.1'
 ZMQ_PORT = '${ZMQ_PORT:-5555}'
 
 # Logging Configuration

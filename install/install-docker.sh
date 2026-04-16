@@ -269,9 +269,15 @@ fi
 
 # Update WebSocket and host configurations
 $SUDO sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" .env
+# WEBSOCKET_HOST / FLASK_HOST_IP must be 0.0.0.0 *inside* the container so the
+# Docker port mapping (-p host:container) can route traffic. nginx on the host
+# reverse-proxies /ws and / onto these ports over the Docker bridge.
 $SUDO sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" .env
-$SUDO sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" .env
 $SUDO sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" .env
+# ZMQ_HOST is NOT rewritten: ZeroMQ is an internal message bus between broker
+# adapters and the WS proxy, both of which run in the same container. Keeping
+# it on loopback prevents the raw tick feed from being reachable via any port
+# that might be accidentally exposed.
 # CORS: Add domain if not already present (preserves custom domains)
 # NOTE: Flask-CORS expects comma-separated origins (see cors.py line 25)
 if ! grep "CORS_ALLOWED_ORIGINS" .env | grep -q "https://$DOMAIN"; then

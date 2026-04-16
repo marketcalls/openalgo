@@ -194,15 +194,18 @@ class BaseBrokerWebSocketAdapter(ABC):
         Find an available port and bind the socket to it.
         If binding fails, closes the socket to prevent FD leak.
         """
+        # Internal message bus — bind only to the configured ZMQ_HOST (loopback by default).
+        # Publishing on `tcp://*` would expose raw tick data to anyone who can reach the port.
+        bind_host = os.getenv("ZMQ_HOST", "127.0.0.1")
         with self._port_lock:
             # Try default port from environment first
             default_port = int(os.getenv("ZMQ_PORT", "5555"))
 
             if default_port not in self._bound_ports and is_port_available(default_port):
                 try:
-                    self.socket.bind(f"tcp://*:{default_port}")
+                    self.socket.bind(f"tcp://{bind_host}:{default_port}")
                     self._bound_ports.add(default_port)
-                    self.logger.info(f"Bound to default port {default_port}")
+                    self.logger.info(f"Bound to default port {default_port} on {bind_host}")
                     return default_port
                 except zmq.ZMQError as e:
                     self.logger.warning(f"Failed to bind to default port {default_port}: {e}")
@@ -216,9 +219,9 @@ class BaseBrokerWebSocketAdapter(ABC):
                     continue
 
                 try:
-                    self.socket.bind(f"tcp://*:{port}")
+                    self.socket.bind(f"tcp://{bind_host}:{port}")
                     self._bound_ports.add(port)
-                    self.logger.info(f"Successfully bound to port {port}")
+                    self.logger.info(f"Successfully bound to port {port} on {bind_host}")
                     return port
                 except zmq.ZMQError as e:
                     self.logger.warning(f"Failed to bind to port {port}: {e}")
