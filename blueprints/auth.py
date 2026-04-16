@@ -45,6 +45,14 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 @auth_bp.errorhandler(429)
 def ratelimit_handler(e):
+    """Handle rate limit exceeded errors for auth endpoints.
+
+    Args:
+        e: The exception object raised by Flask-Limiter.
+
+    Returns:
+        tuple: A JSON response containing an error message and a 429 HTTP status code.
+    """
     return jsonify(error="Rate limit exceeded"), 429
 
 
@@ -180,6 +188,18 @@ def _try_resume_broker_session(username):
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
+    """Handle user login for the web application and API.
+
+    Supports both form-based and JSON-based authentication methods.
+    Rate limited by IP address.
+
+    Methods:
+        GET: Redirects authenticated users or renders login/setup.
+        POST: Authenticates user credentials.
+
+    Returns:
+        Response: A redirect or JSON response depending on the request method and authentication state.
+    """
     # Handle POST requests first (for React SPA / AJAX login)
     if request.method == "POST":
         logger.info(f"[LOGIN] POST from IP={get_real_ip()}, UA={request.headers.get('User-Agent', '')[:80]}")
@@ -260,6 +280,16 @@ def login():
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_login():
+    """Handle routing to the broker selection/authentication page.
+
+    Rate limited by IP address. Requires a valid application session.
+
+    Methods:
+        GET: Redirects fully logged-in users to the dashboard, or unauthenticated users to the app login.
+
+    Returns:
+        Response: A redirect to the appropriate frontend route based on session state.
+    """
     if session.get("logged_in"):
         return redirect("/dashboard")
     if request.method == "GET":
@@ -273,6 +303,17 @@ def broker_login():
 @auth_bp.route("/reset-password", methods=["GET", "POST"])
 @limiter.limit(RESET_RATE_LIMIT)  # Password reset rate limit
 def reset_password():
+    """Handle user password reset via email verification or TOTP.
+
+    Rate limited by IP address to prevent brute-force attacks.
+
+    Methods:
+        GET: Redirects to the React frontend reset password page.
+        POST: Processes the current step in the reset flow.
+
+    Returns:
+        Response: A JSON response with the status of the requested reset step or a redirect.
+    """
     # GET requests are handled by React frontend - redirect there
     if request.method == "GET":
         return redirect("/reset-password")
@@ -406,7 +447,19 @@ def reset_password():
 
 @auth_bp.route("/reset-password-email/<token>", methods=["GET"])
 def reset_password_email(token):
-    """Handle password reset via email link - validates token and redirects to React"""
+    """Handle password reset via email link verification.
+
+    Validates the provided email token and prepares the session for secure password change.
+
+    Methods:
+        GET: Verifies the email token.
+
+    Args:
+        token (str): The URL-safe token generated during the password reset request.
+
+    Returns:
+        Response: A redirect to the React frontend password reset flow with verification state.
+    """
     try:
         # Validate the token format
         if not token or len(token) != 43:  # URL-safe base64 tokens are 43 chars for 32 bytes
@@ -440,6 +493,17 @@ def reset_password_email(token):
 @auth_bp.route("/change", methods=["GET", "POST"])
 @check_session_validity
 def change_password():
+    """Update the authenticated user's password.
+
+    Validates the current password and enforces strength requirements on the new password.
+
+    Methods:
+        GET: Redirects to the user profile page.
+        POST: Processes the password change request.
+
+    Returns:
+        Response: A JSON response indicating success or failure, or a redirect if unauthenticated.
+    """
     if "user" not in session:
         # If the user is not logged in, redirect to login page
         if request.is_json:
@@ -490,6 +554,14 @@ def change_password():
 @auth_bp.route("/smtp-config", methods=["POST"])
 @check_session_validity
 def configure_smtp():
+    """Update the application's SMTP configuration settings.
+
+    Methods:
+        POST: Saves new SMTP credentials and connection details securely.
+
+    Returns:
+        Response: A JSON response or redirect indicating the configuration was saved.
+    """
     if "user" not in session:
         # For AJAX requests, return JSON
         if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
@@ -555,6 +627,14 @@ def configure_smtp():
 @auth_bp.route("/test-smtp", methods=["POST"])
 @check_session_validity
 def test_smtp():
+    """Send a test email using the currently configured SMTP settings.
+
+    Methods:
+        POST: Dispatches a test message to the provided email address to verify functionality.
+
+    Returns:
+        Response: A JSON response indicating if the email was delivered successfully.
+    """
     if "user" not in session:
         return jsonify(
             {"success": False, "message": "You must be logged in to test SMTP settings."}
@@ -593,6 +673,14 @@ def test_smtp():
 @auth_bp.route("/debug-smtp", methods=["POST"])
 @check_session_validity
 def debug_smtp():
+    """Perform a diagnostic check of the SMTP connection and return detailed logs.
+
+    Methods:
+        POST: Initiates a debug connection to the configured SMTP server without sending an email.
+
+    Returns:
+        Response: A JSON response containing connection success status and diagnostic details.
+    """
     if "user" not in session:
         return jsonify(
             {"success": False, "message": "You must be logged in to debug SMTP settings."}
@@ -854,6 +942,17 @@ def get_dashboard_data():
 
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
+    """Terminate the current user session and revoke application and broker access.
+
+    Clears internal caches, removes Active Session tracking, and destroys the secure cookie.
+
+    Methods:
+        GET: Performs logout and redirects to the login screen.
+        POST: Performs logout and returns a JSON success message.
+
+    Returns:
+        Response: A JSON acknowledgment or a redirection depending on the request method.
+    """
     if session.get("logged_in"):
         username = session["user"]
 
