@@ -1064,6 +1064,10 @@ export default function StrategyBuilder() {
         optionExpiries={expiries}
         futureExpiries={futureExpiries}
         chain={chainData?.chain ?? null}
+        chainExpiry={selectedExpiry}
+        underlying={selectedUnderlying}
+        optionExchange={optionExchangeFor(selectedExchange)}
+        apiKey={apiKey ?? ''}
         onSave={saveEditedLeg}
         onDelete={removeLeg}
       />

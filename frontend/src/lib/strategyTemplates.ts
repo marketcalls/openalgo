@@ -355,16 +355,16 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
     name: 'Batman Strategy',
     direction: 'NON_DIRECTIONAL',
     description:
-      'Two-winged profile — a put butterfly below and a call butterfly above. Profits from a move either way that lands near one of the wing strikes.',
+      'Call ratio spread (1×2) above + Put ratio spread (1×2) below. Two-eared "Batman" profile — small profit peaks at the short strikes, with unlimited loss on both wings due to the extra short legs.',
     legs: [
-      { side: 'BUY', optionType: 'PE', strikeOffset: -4, lots: 1 },
-      { side: 'SELL', optionType: 'PE', strikeOffset: -2, lots: 2 },
-      { side: 'BUY', optionType: 'PE', strikeOffset: 0, lots: 1 },
-      { side: 'BUY', optionType: 'CE', strikeOffset: 0, lots: 1 },
-      { side: 'SELL', optionType: 'CE', strikeOffset: 2, lots: 2 },
-      { side: 'BUY', optionType: 'CE', strikeOffset: 4, lots: 1 },
+      // ── CE side: call ratio spread — long 1, short 2 ──
+      { side: 'BUY', optionType: 'CE', strikeOffset: 10, lots: 1 },
+      { side: 'SELL', optionType: 'CE', strikeOffset: 15, lots: 2 },
+      // ── PE side: put ratio spread — long 1, short 2 ──
+      { side: 'BUY', optionType: 'PE', strikeOffset: -10, lots: 1 },
+      { side: 'SELL', optionType: 'PE', strikeOffset: -15, lots: 2 },
     ],
-    payoffPath: 'M0,30 L20,30 L30,8 L45,22 L55,22 L70,8 L80,30 L100,30',
+    payoffPath: 'M0,38 L15,30 L30,12 L45,22 L55,22 L70,12 L85,30 L100,38',
   },
   {
     id: 'long_iron_fly',
