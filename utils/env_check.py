@@ -431,14 +431,20 @@ def load_and_check_env_variables() -> None:
         "WEBHOOK_RATE_LIMIT",
         "STRATEGY_RATE_LIMIT",
     ]
-    rate_limit_pattern = re.compile(r"^\d+\s+per\s+(second|minute|hour|day)$")
+    # Single: "10 per second"
+    # Compound (Flask-Limiter syntax): "10 per second;40 per minute"
+    single_limit = r"\d+\s+per\s+(second|minute|hour|day)"
+    rate_limit_pattern = re.compile(
+        rf"^{single_limit}(;{single_limit})*$"
+    )
 
     for var in rate_limit_vars:
         value = os.getenv(var, "")
         if not rate_limit_pattern.match(value):
             print(f"\nError: Invalid {var} format.")
             print("Format should be: 'number per timeunit'")
-            print("Example: '5 per minute', '10 per second'")
+            print("Compound limits use semicolons: 'number per timeunit;number per timeunit'")
+            print("Examples: '5 per minute', '10 per second', '10 per second;40 per minute'")
             sys.exit(1)
 
     # Validate SESSION_EXPIRY_TIME format (24-hour format)
