@@ -345,19 +345,43 @@ def get_available_strikes(
             )
             strikes = [r.strike for r in results if r.strike is not None and r.strike > 0]
         else:
-            # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
-            # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
+            # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard + CE/PE
+            # e.g., "NIFTY" + "18NOV25" + "%" + "CE" = "NIFTY18NOV25%CE"
             expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
             symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
 
+            # Determine correct instrumenttype based on exchange
+            # For equity/index options: OPTIDX (index) or OPTSTK (stock)
+            # For commodity options: OPTFUT
+            # For currency options: OPTCUR or OPTIRC
+            if exchange.upper() in ["NFO", "BFO"]:
+                # Check if it's an index or stock by querying one symbol
+                test_symbol = f"{base_symbol}{expiry_no_hyphen}%"
+                test_result = (
+                    db_session.query(SymToken.instrumenttype)
+                    .filter(
+                        SymToken.symbol.like(test_symbol),
+                        SymToken.expiry == expiry_formatted.upper(),
+                        SymToken.exchange == exchange.upper(),
+                    )
+                    .first()
+                )
+                instrumenttype = test_result.instrumenttype if test_result else "OPTIDX"
+            elif exchange.upper() == "MCX":
+                instrumenttype = "OPTFUT"
+            elif exchange.upper() in ["CDS", "BCD"]:
+                instrumenttype = "OPTCUR"
+            else:
+                instrumenttype = "OPTIDX"  # Default fallback
+
             # Query database for all strikes matching the criteria
-            # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
+            # Symbol pattern already includes CE/PE suffix, so we filter by correct instrumenttype
             results = (
                 db_session.query(SymToken.strike)
                 .filter(
                     SymToken.symbol.like(symbol_pattern),
                     SymToken.expiry == expiry_formatted.upper(),
-                    SymToken.instrumenttype == option_type.upper(),
+                    SymToken.instrumenttype == instrumenttype,
                     SymToken.exchange == exchange.upper(),
                 )
                 .distinct()
