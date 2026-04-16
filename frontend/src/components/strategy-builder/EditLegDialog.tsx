@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Minus, Plus, Trash2 } from 'lucide-react'
+import { apiClient } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -18,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { buildFutureSymbol, buildOptionSymbol } from '@/lib/strategyMath'
 import type { StrategyLeg } from '@/lib/strategyMath'
 import type { OptionStrike } from '@/types/option-chain'
 
@@ -28,6 +30,18 @@ export interface EditLegDialogProps {
   optionExpiries: string[]
   futureExpiries: string[]
   chain: OptionStrike[] | null
+  /**
+   * Expiry the `chain` corresponds to. If the user picks a different expiry
+   * in this dialog we fall back to a live /quotes fetch for the freshly-
+   * constructed option symbol.
+   */
+  chainExpiry: string
+  /** Underlying base symbol (e.g. "NIFTY"), used to rebuild option symbols. */
+  underlying: string
+  /** F&O exchange (NFO / BFO / MCX / CDS) for the /quotes call. */
+  optionExchange: string
+  /** OpenAlgo API key for /quotes. */
+  apiKey: string
   onSave: (updated: StrategyLeg) => void
   onDelete: (id: string) => void
 }
@@ -39,6 +53,10 @@ export function EditLegDialog({
   optionExpiries,
   futureExpiries,
   chain,
+  chainExpiry,
+  underlying,
+  optionExchange,
+  apiKey,
   onSave,
   onDelete,
 }: EditLegDialogProps) {
@@ -63,6 +81,75 @@ export function EditLegDialog({
       leg.exitPrice !== undefined && leg.exitPrice > 0 ? leg.exitPrice.toString() : ''
     )
   }, [leg])
+
+  const isClosed = exitPrice.trim() !== '' && Number(exitPrice) > 0
+
+  const [isPriceLoading, setIsPriceLoading] = useState(false)
+
+  /**
+   * Look up live LTP for the leg's current (strike, optionType, expiry) —
+   * or for futures, just (expiry) — and write it into the Entry Price field.
+   * Called explicitly from the Strike / Type / Expiry onChange handlers.
+   *
+   * Fast path: for option legs on the same expiry as the loaded chain, read
+   * LTP from chain (synchronous, no network).
+   * Slow path: for cross-expiry option legs OR any futures leg, build the
+   * symbol and fetch /quotes for it.
+   */
+  const syncEntryPriceFromChain = async (
+    nextStrike: number | undefined,
+    nextType: 'CE' | 'PE',
+    nextExpiry: string
+  ) => {
+    if (!leg || isClosed || !nextExpiry) return
+
+    // ── Options: try the chain first, fall back to /quotes ──
+    if (leg.segment === 'OPTION') {
+      if (nextStrike === undefined) return
+
+      if (chain && nextExpiry === chainExpiry) {
+        const row = chain.find((s) => s.strike === nextStrike)
+        const sideRow = nextType === 'CE' ? row?.ce : row?.pe
+        if (sideRow && sideRow.ltp > 0) {
+          setEntryPrice(sideRow.ltp.toString())
+        }
+        return
+      }
+
+      if (!apiKey || !underlying || !optionExchange) return
+      const symbol = buildOptionSymbol(underlying, nextExpiry, nextStrike, nextType)
+      await fetchAndSetLtp(symbol, optionExchange)
+      return
+    }
+
+    // ── Futures: only expiry matters ──
+    if (leg.segment === 'FUTURE') {
+      if (!apiKey || !underlying || !optionExchange) return
+      const symbol = buildFutureSymbol(underlying, nextExpiry)
+      await fetchAndSetLtp(symbol, optionExchange)
+    }
+  }
+
+  const fetchAndSetLtp = async (symbol: string, exchange: string) => {
+    setIsPriceLoading(true)
+    try {
+      const res = await apiClient.post<{
+        status: string
+        data?: { ltp?: number }
+      }>(
+        '/quotes',
+        { apikey: apiKey, symbol, exchange },
+        { validateStatus: () => true }
+      )
+      if (res.data.status === 'success' && res.data.data?.ltp) {
+        setEntryPrice(String(res.data.data.ltp))
+      }
+    } catch {
+      /* non-fatal — user can enter the price manually */
+    } finally {
+      setIsPriceLoading(false)
+    }
+  }
 
   const availableExpiries = useMemo(
     () => (leg?.segment === 'FUTURE' ? futureExpiries : optionExpiries),
@@ -89,8 +176,6 @@ export function EditLegDialog({
     onSave(updated)
   }
 
-  const isClosed = exitPrice.trim() !== '' && Number(exitPrice) > 0
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
@@ -105,7 +190,13 @@ export function EditLegDialog({
         <div className="space-y-4">
           {/* Expiry */}
           <div className="space-y-1">
-            <Select value={expiry} onValueChange={setExpiry}>
+            <Select
+              value={expiry}
+              onValueChange={(v) => {
+                setExpiry(v)
+                syncEntryPriceFromChain(strike, optionType, v)
+              }}
+            >
               <SelectTrigger className="h-10 text-sm font-semibold">
                 <SelectValue />
               </SelectTrigger>
@@ -126,7 +217,11 @@ export function EditLegDialog({
               <div className="space-y-1">
                 <Select
                   value={strike !== undefined ? String(strike) : ''}
-                  onValueChange={(v) => setStrike(Number(v))}
+                  onValueChange={(v) => {
+                    const nextStrike = Number(v)
+                    setStrike(nextStrike)
+                    syncEntryPriceFromChain(nextStrike, optionType, expiry)
+                  }}
                 >
                   <SelectTrigger className="h-10 text-sm font-semibold">
                     <SelectValue placeholder="Strike" />
@@ -142,7 +237,14 @@ export function EditLegDialog({
                 <p className="text-[11px] text-muted-foreground">Strike</p>
               </div>
               <div className="space-y-1">
-                <Select value={optionType} onValueChange={(v) => setOptionType(v as 'CE' | 'PE')}>
+                <Select
+                  value={optionType}
+                  onValueChange={(v) => {
+                    const nextType = v as 'CE' | 'PE'
+                    setOptionType(nextType)
+                    syncEntryPriceFromChain(strike, nextType, expiry)
+                  }}
+                >
                   <SelectTrigger className="h-10 text-sm font-semibold">
                     <SelectValue />
                   </SelectTrigger>
@@ -217,10 +319,13 @@ export function EditLegDialog({
               step="0.05"
               value={entryPrice}
               onChange={(e) => setEntryPrice(e.target.value)}
+              disabled={isPriceLoading}
               className="h-10 text-base font-semibold"
             />
             <p className="text-[11px] text-muted-foreground">
-              Modify {leg.segment === 'FUTURE' ? 'Futures' : 'Option'} Entry Price
+              {isPriceLoading
+                ? 'Fetching live LTP…'
+                : `Modify ${leg.segment === 'FUTURE' ? 'Futures' : 'Option'} Entry Price`}
             </p>
           </div>
 
