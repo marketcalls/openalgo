@@ -472,7 +472,10 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
       { side: 'SELL', optionType: 'CE', strikeOffset: 0, lots: 1, expiryOffset: 0 },
       { side: 'BUY', optionType: 'CE', strikeOffset: 0, lots: 1, expiryOffset: 1 },
     ],
-    payoffPath: 'M0,30 L35,20 L50,6 L65,20 L100,30',
+    // Asymmetric — steep left-side rise to a sharp peak, gentle fall off
+    // to the right (calls lose value as spot drops; the far leg retains
+    // value as spot rises so right-side decay is slower).
+    payoffPath: 'M0,32 L25,28 L42,6 L65,18 L100,28',
   },
   {
     id: 'put_calendar',
@@ -484,7 +487,10 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
       { side: 'SELL', optionType: 'PE', strikeOffset: 0, lots: 1, expiryOffset: 0 },
       { side: 'BUY', optionType: 'PE', strikeOffset: 0, lots: 1, expiryOffset: 1 },
     ],
-    payoffPath: 'M0,30 L35,20 L50,6 L65,20 L100,30',
+    // Mirror of the call calendar — gentle left-side rise, steep fall on
+    // the right (puts lose value as spot rises; the far leg retains value
+    // as spot falls).
+    payoffPath: 'M0,28 L35,18 L58,6 L75,28 L100,32',
   },
   {
     id: 'diagonal_calendar',
@@ -496,7 +502,9 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
       { side: 'SELL', optionType: 'CE', strikeOffset: 0, lots: 1, expiryOffset: 0 },
       { side: 'BUY', optionType: 'CE', strikeOffset: 2, lots: 1, expiryOffset: 1 },
     ],
-    payoffPath: 'M0,30 L35,22 L55,8 L72,14 L100,24',
+    // Diagonals show a widened peak — two small humps and a plateau
+    // between the near-leg strike and the far-leg strike.
+    payoffPath: 'M0,32 L20,28 L38,14 L50,10 L62,14 L78,22 L100,28',
   },
   {
     id: 'call_butterfly',
