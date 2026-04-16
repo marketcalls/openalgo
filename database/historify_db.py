@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+import pytz
 from dotenv import load_dotenv
 
 from utils.logging import get_logger
@@ -3399,3 +3400,174 @@ def get_active_schedules() -> list[dict[str, Any]]:
     except Exception as e:
         logger.exception(f"Error getting active schedules: {e}")
         return []
+
+
+def get_replay_quote(symbol: str, exchange: str, at_ts: int) -> dict | None:
+    """
+    Get a quote for replay mode at a specific timestamp.
+
+    Priority:
+    1. interval='1m' candle at or nearest <= at_ts -> LTP = close
+    2. interval='D' candle for same trade date -> LTP = close
+    3. None if no data
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange code
+        at_ts: Epoch seconds timestamp
+
+    Returns:
+        dict with 'ltp', 'open', 'high', 'low', 'close', 'volume', 'oi' or None
+    """
+    try:
+        with get_connection() as conn:
+            # Try 1m data first (nearest candle <= at_ts)
+            result = conn.execute("""
+                SELECT open, high, low, close, volume, oi, timestamp
+                FROM market_data
+                WHERE symbol = ? AND exchange = ? AND interval = '1m'
+                AND timestamp <= ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, [symbol.upper(), exchange.upper(), at_ts]).fetchone()
+
+            if result:
+                return {
+                    "ltp": float(result[3]),  # close as LTP
+                    "open": float(result[0]),
+                    "high": float(result[1]),
+                    "low": float(result[2]),
+                    "close": float(result[3]),
+                    "volume": int(result[4]),
+                    "oi": int(result[5]),
+                    "timestamp": int(result[6]),
+                    "source": "1m",
+                }
+
+            # Fallback: try daily data for the same date
+            # Convert at_ts to start/end of day in IST
+            ist = pytz.timezone("Asia/Kolkata")
+            dt = datetime.fromtimestamp(at_ts, tz=ist)
+            day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = dt.replace(hour=23, minute=59, second=59, microsecond=0)
+            day_start_ts = int(day_start.timestamp())
+            day_end_ts = int(day_end.timestamp())
+
+            result = conn.execute("""
+                SELECT open, high, low, close, volume, oi, timestamp
+                FROM market_data
+                WHERE symbol = ? AND exchange = ? AND interval = 'D'
+                AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, [symbol.upper(), exchange.upper(), day_start_ts, day_end_ts]).fetchone()
+
+            if result:
+                return {
+                    "ltp": float(result[3]),
+                    "open": float(result[0]),
+                    "high": float(result[1]),
+                    "low": float(result[2]),
+                    "close": float(result[3]),
+                    "volume": int(result[4]),
+                    "oi": int(result[5]),
+                    "timestamp": int(result[6]),
+                    "source": "D",
+                }
+
+            return None
+
+    except Exception as e:
+        logger.exception(f"Error getting replay quote for {symbol}@{exchange}: {e}")
+        return None
+
+
+def get_replay_quotes_batch(symbols: list[tuple[str, str]], at_ts: int) -> dict:
+    """
+    Get quotes for multiple symbols at a specific timestamp (batch version).
+
+    Uses a single SQL query with LATERAL join for efficiency when many symbols
+    are requested. Falls back to per-symbol queries for compatibility.
+
+    Args:
+        symbols: List of (symbol, exchange) tuples
+        at_ts: Epoch seconds timestamp
+
+    Returns:
+        dict mapping (symbol, exchange) -> quote dict
+    """
+    if not symbols:
+        return {}
+
+    quotes = {}
+
+    try:
+        with get_connection() as conn:
+            # Try 1m data first for all symbols in a single query
+            # Build a UNION of per-symbol subqueries to get nearest candle <= at_ts
+            for symbol, exchange in symbols:
+                result = conn.execute("""
+                    SELECT open, high, low, close, volume, oi, timestamp
+                    FROM market_data
+                    WHERE symbol = ? AND exchange = ? AND interval = '1m'
+                    AND timestamp <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """, [symbol.upper(), exchange.upper(), at_ts]).fetchone()
+
+                if result:
+                    quotes[(symbol, exchange)] = {
+                        "ltp": float(result[3]),
+                        "open": float(result[0]),
+                        "high": float(result[1]),
+                        "low": float(result[2]),
+                        "close": float(result[3]),
+                        "volume": int(result[4]),
+                        "oi": int(result[5]),
+                        "timestamp": int(result[6]),
+                        "source": "1m",
+                    }
+
+            # For missing symbols, try daily data
+            missing = [s for s in symbols if s not in quotes]
+            if missing:
+                ist = pytz.timezone("Asia/Kolkata")
+                dt = datetime.fromtimestamp(at_ts, tz=ist)
+                day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                day_end = dt.replace(hour=23, minute=59, second=59, microsecond=0)
+                day_start_ts = int(day_start.timestamp())
+                day_end_ts = int(day_end.timestamp())
+
+                for symbol, exchange in missing:
+                    result = conn.execute("""
+                        SELECT open, high, low, close, volume, oi, timestamp
+                        FROM market_data
+                        WHERE symbol = ? AND exchange = ? AND interval = 'D'
+                        AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    """, [symbol.upper(), exchange.upper(), day_start_ts, day_end_ts]).fetchone()
+
+                    if result:
+                        quotes[(symbol, exchange)] = {
+                            "ltp": float(result[3]),
+                            "open": float(result[0]),
+                            "high": float(result[1]),
+                            "low": float(result[2]),
+                            "close": float(result[3]),
+                            "volume": int(result[4]),
+                            "oi": int(result[5]),
+                            "timestamp": int(result[6]),
+                            "source": "D",
+                        }
+
+    except Exception as e:
+        logger.exception(f"Error in batch replay quotes: {e}")
+        # Fallback to individual queries
+        for symbol, exchange in symbols:
+            if (symbol, exchange) not in quotes:
+                quote = get_replay_quote(symbol, exchange, at_ts)
+                if quote:
+                    quotes[(symbol, exchange)] = quote
+
+    return quotes

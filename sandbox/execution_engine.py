@@ -65,14 +65,15 @@ class ExecutionEngine:
                     orders_by_symbol[key] = []
                 orders_by_symbol[key].append(order)
 
-            # Fetch quotes using multiquotes (more efficient - single API call)
-            # Falls back to individual quotes if multiquotes fails
+            # Fetch quotes using quote provider (supports live and replay modes)
             quote_cache = {}
             symbols_list = list(orders_by_symbol.keys())
 
-            # Fetch quotes using multiquotes only (no individual quote fallback to avoid rate limiting)
-            # WebSocket is the primary data source; multiquotes is the fallback
-            quote_cache = self._fetch_quotes_batch(symbols_list)
+            # Use quote provider abstraction (replay mode uses DuckDB, live mode uses WebSocket/API)
+            from sandbox.quote_provider import get_quote_provider
+
+            provider = get_quote_provider()
+            quote_cache = provider.get_quotes_batch(symbols_list)
 
             # Log symbols that couldn't be fetched (don't retry individually to avoid rate limits)
             failed_symbols = [

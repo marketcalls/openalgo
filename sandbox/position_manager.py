@@ -608,31 +608,11 @@ class PositionManager:
 
             symbols_list = list(symbols_to_fetch)
 
-            # Try WebSocket data first (from MarketDataService)
-            quote_cache = self._fetch_quotes_from_websocket(symbols_list)
-            ws_count = len(quote_cache)
+            # Use quote provider abstraction (replay mode uses DuckDB, live mode uses WebSocket/API)
+            from sandbox.quote_provider import get_quote_provider
 
-            # Find symbols that need fallback to multiquotes
-            missing_symbols = [
-                s for s in symbols_list if s not in quote_cache or quote_cache[s] is None
-            ]
-
-            if missing_symbols:
-                # Fallback to multiquotes for missing symbols (no individual quote fallback to avoid rate limiting)
-                logger.debug(
-                    f"Positions MTM: {ws_count} from WebSocket, {len(missing_symbols)} need multiquotes fallback"
-                )
-                multiquotes_cache = self._fetch_quotes_batch(missing_symbols)
-                quote_cache.update(multiquotes_cache)
-
-                # Log any symbols that couldn't be fetched (don't fall back to individual quotes)
-                still_missing = [
-                    s for s in missing_symbols if s not in quote_cache or quote_cache[s] is None
-                ]
-                if still_missing:
-                    logger.debug(f"{len(still_missing)} symbols not available via multiquotes, waiting for WebSocket data")
-            else:
-                logger.debug(f"Positions MTM: All {ws_count} symbols from WebSocket (no API calls)")
+            provider = get_quote_provider()
+            quote_cache = provider.get_quotes_batch(symbols_list)
 
             # Update MTM for each position
             for position in positions:
@@ -670,7 +650,7 @@ class PositionManager:
     def _update_single_position_mtm(self, position):
         """
         Update MTM for a single position.
-        Uses WebSocket data first, falls back to REST API if unavailable.
+        Uses quote provider abstraction (supports live and replay modes).
         """
         try:
             # Skip MTM update for closed positions (quantity = 0)
@@ -678,13 +658,11 @@ class PositionManager:
             if position.quantity == 0:
                 return
 
-            # Try WebSocket first
-            ws_quotes = self._fetch_quotes_from_websocket([(position.symbol, position.exchange)])
-            quote = ws_quotes.get((position.symbol, position.exchange))
+            # Use quote provider (replay mode uses DuckDB, live mode uses WebSocket/API)
+            from sandbox.quote_provider import get_quote_provider
 
-            # Fallback to REST API if WebSocket data not available
-            if not quote:
-                quote = self._fetch_quote(position.symbol, position.exchange)
+            provider = get_quote_provider()
+            quote = provider.get_quote(position.symbol, position.exchange)
 
             if quote:
                 ltp = Decimal(str(quote.get("ltp", 0)))
