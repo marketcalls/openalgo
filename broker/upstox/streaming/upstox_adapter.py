@@ -58,7 +58,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "on_close": self._on_close,
             }
 
-            self.logger.info("UpstoxWebSocketClient initialized successfully")
+            self.logger.debug("UpstoxWebSocketClient initialized successfully")
             return self._create_success_response("Initialized Upstox WebSocket adapter")
 
         except Exception as e:
@@ -120,7 +120,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         with self.lock:
             if correlation_id in self.subscriptions:
-                self.logger.info(f"Already subscribed to {symbol} on {exchange} with mode {mode}")
+                self.logger.debug(f"Already subscribed to {symbol} on {exchange} with mode {mode}")
                 return self._create_success_response(
                     f"Already subscribed to {symbol} on {exchange}"
                 )
@@ -136,7 +136,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         with self.lock:
             self.subscriptions[correlation_id] = subscription_info
-            self.logger.info(f"Stored subscription: {correlation_id} -> {subscription_info}")
+            self.logger.debug(f"Stored subscription: {correlation_id} -> {subscription_info}")
 
         if self.connected and self.ws_client:
             try:
@@ -186,7 +186,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             with self.lock:
                 if correlation_id not in self.subscriptions:
-                    self.logger.info(f"Not subscribed to {symbol} on {exchange} with mode {mode}")
+                    self.logger.debug(f"Not subscribed to {symbol} on {exchange} with mode {mode}")
                     return self._create_success_response(
                         f"Not subscribed to {symbol} on {exchange}"
                     )
@@ -381,7 +381,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 market_data = self._extract_market_data(feed_data, sub_info, current_ts)
 
                 if market_data:
-                    self.logger.info(f"Publishing {symbol}.{exchange} mode={mode} topic={topic} ltp={market_data.get('ltp', 'N/A')}")
+                    self.logger.debug(f"Publishing {symbol}.{exchange} mode={mode} topic={topic} ltp={market_data.get('ltp', 'N/A')}")
                     if mode == 3:  # Depth mode
                         depth_data = market_data.copy()
                         depth_levels = {

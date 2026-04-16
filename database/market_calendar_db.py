@@ -610,26 +610,6 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
     if cache_key in _timings_cache:
         return _timings_cache[cache_key]
 
-    # Check if it's a weekend first (doesn't require database)
-    # Crypto exchanges operate 24/7, so always include them
-    if query_date.weekday() >= 5:
-        midnight_ist = datetime.combine(query_date, datetime.min.time())
-        midnight_epoch = int(midnight_ist.timestamp() * 1000)
-        timing_offsets = _get_timing_offsets()
-        crypto_timings = []
-        for exch in CRYPTO_EXCHANGES:
-            timings = timing_offsets.get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
-            if timings:
-                crypto_timings.append(
-                    {
-                        "exchange": exch,
-                        "start_time": midnight_epoch + timings["start_offset"],
-                        "end_time": midnight_epoch + timings["end_offset"],
-                    }
-                )
-        _timings_cache[cache_key] = crypto_timings
-        return crypto_timings
-
     try:
         # Calculate midnight timestamp for the date in IST
         midnight_ist = datetime.combine(query_date, datetime.min.time())
@@ -691,11 +671,23 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
             _timings_cache[cache_key] = result
             return result
 
-        # No holiday entry found - check if it's a weekend (Saturday=5, Sunday=6)
-        # Weekend check is done AFTER holiday check so special sessions on weekends work
+        # No holiday entry found - on weekends only crypto trades.
+        # Weekend check is done AFTER holiday check so special sessions
+        # on weekends (e.g., Sunday Muhurat) are honored above.
         if query_date.weekday() >= 5:
-            _timings_cache[cache_key] = []
-            return []
+            crypto_only = []
+            for exch in CRYPTO_EXCHANGES:
+                timings = timing_offsets.get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
+                if timings:
+                    crypto_only.append(
+                        {
+                            "exchange": exch,
+                            "start_time": midnight_epoch + timings["start_offset"],
+                            "end_time": midnight_epoch + timings["end_offset"],
+                        }
+                    )
+            _timings_cache[cache_key] = crypto_only
+            return crypto_only
 
         # Normal trading day - return timings for all exchanges from DB
         result = []
@@ -716,6 +708,204 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
     except Exception as e:
         logger.exception(f"Error fetching market timings for {query_date}: {e}")
         return []
+
+
+def get_special_session(query_date: date, exchange: str) -> Optional[Dict[str, Any]]:
+    """
+    Return the SPECIAL_SESSION window for (date, exchange) if one exists and
+    the exchange is marked open. Returns None otherwise.
+
+    Used by /python's exchange-aware scheduler so a Sunday Muhurat (or any
+    weekend special session) overrides the standard weekend reject.
+
+    Returns:
+        {"start_ms": int, "end_ms": int, "description": str} or None
+    """
+    if not exchange:
+        return None
+    exch = exchange.upper()
+    if exch in CRYPTO_EXCHANGES:
+        return None  # Crypto has no special-session concept
+
+    cache_key = f"special_{query_date.isoformat()}_{exch}"
+    if cache_key in _timings_cache:
+        cached = _timings_cache[cache_key]
+        return cached if cached else None
+
+    try:
+        holiday = (
+            Holiday.query.filter(Holiday.holiday_date == query_date)
+            .filter(Holiday.holiday_type == "SPECIAL_SESSION")
+            .first()
+        )
+        if not holiday:
+            _timings_cache[cache_key] = None
+            return None
+
+        ex_row = HolidayExchange.query.filter(
+            HolidayExchange.holiday_id == holiday.id,
+            HolidayExchange.exchange_code == exch,
+            HolidayExchange.is_open == True,  # noqa: E712
+        ).first()
+
+        if not ex_row or ex_row.start_time is None or ex_row.end_time is None:
+            _timings_cache[cache_key] = None
+            return None
+
+        result = {
+            "start_ms": int(ex_row.start_time),
+            "end_ms": int(ex_row.end_time),
+            "description": holiday.description,
+        }
+        _timings_cache[cache_key] = result
+        return result
+    except Exception as e:
+        logger.debug(f"get_special_session failed for {query_date} {exch}: {e}")
+        return None
+
+
+def get_holiday_exchange_window(
+    query_date: date, exchange: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Return the open-window for (date, exchange) when a TRADING_HOLIDAY row
+    explicitly leaves this exchange open with custom timings (e.g., MCX
+    evening session 17:00-23:55 on an NSE/BSE holiday).
+
+    Returns None when:
+      - no holiday row for the date, or
+      - the row marks this exchange closed, or
+      - the row marks it open but supplies no start/end (treat as full day).
+
+    Returns:
+        {"start_ms": int, "end_ms": int} or None
+    """
+    if not exchange:
+        return None
+    exch = exchange.upper()
+    if exch in CRYPTO_EXCHANGES:
+        return None
+
+    cache_key = f"holopen_{query_date.isoformat()}_{exch}"
+    if cache_key in _timings_cache:
+        cached = _timings_cache[cache_key]
+        return cached if cached else None
+
+    try:
+        holiday = (
+            Holiday.query.filter(Holiday.holiday_date == query_date)
+            .filter(Holiday.holiday_type == "TRADING_HOLIDAY")
+            .first()
+        )
+        if not holiday:
+            _timings_cache[cache_key] = None
+            return None
+
+        ex_row = HolidayExchange.query.filter(
+            HolidayExchange.holiday_id == holiday.id,
+            HolidayExchange.exchange_code == exch,
+            HolidayExchange.is_open == True,  # noqa: E712
+        ).first()
+
+        if not ex_row or ex_row.start_time is None or ex_row.end_time is None:
+            _timings_cache[cache_key] = None
+            return None
+
+        result = {"start_ms": int(ex_row.start_time), "end_ms": int(ex_row.end_time)}
+        _timings_cache[cache_key] = result
+        return result
+    except Exception as e:
+        logger.debug(f"get_holiday_exchange_window failed for {query_date} {exch}: {e}")
+        return None
+
+
+def get_effective_session_window(
+    query_date: date, exchange: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Single source of truth for "what is the trading window for <exchange> on
+    <date>?".
+
+    Returns a dict with epoch-ms `start_ms` / `end_ms` (in IST midnight terms)
+    plus an `is_special` flag, or None if the exchange is closed that day.
+
+    Resolution order:
+      1. CRYPTO -> always 00:00-23:59:59 (24/7)
+      2. SPECIAL_SESSION row for (date, exchange) -> custom window
+      3. TRADING_HOLIDAY row with an explicit open window for this exchange
+         (e.g. MCX evening on NSE holiday) -> custom window
+      4. TRADING_HOLIDAY row with this exchange closed -> None
+      5. Weekend with no special session -> None
+      6. Otherwise -> default exchange timings from MarketTiming/DEFAULT_MARKET_TIMINGS
+    """
+    if not exchange:
+        return None
+    exch = exchange.upper()
+
+    # Compute IST-midnight epoch-ms anchor for this date so default-timing
+    # offsets can be expressed as absolute epoch-ms values too.
+    midnight_ist = IST.localize(datetime.combine(query_date, datetime.min.time()))
+    midnight_ms = int(midnight_ist.timestamp() * 1000)
+
+    # 1. CRYPTO is always open
+    if exch in CRYPTO_EXCHANGES:
+        timings = _get_timing_offsets().get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
+        if not timings:
+            return None
+        return {
+            "start_ms": midnight_ms + timings["start_offset"],
+            "end_ms": midnight_ms + timings["end_offset"],
+            "is_special": False,
+        }
+
+    try:
+        # 2. Special session
+        special = get_special_session(query_date, exch)
+        if special:
+            return {
+                "start_ms": special["start_ms"],
+                "end_ms": special["end_ms"],
+                "is_special": True,
+            }
+
+        # 3 & 4. Trading holiday with explicit open window or closed
+        holiday = (
+            Holiday.query.filter(Holiday.holiday_date == query_date)
+            .filter(Holiday.holiday_type == "TRADING_HOLIDAY")
+            .first()
+        )
+        if holiday:
+            ex_row = HolidayExchange.query.filter(
+                HolidayExchange.holiday_id == holiday.id,
+                HolidayExchange.exchange_code == exch,
+            ).first()
+            if ex_row:
+                if not ex_row.is_open:
+                    return None
+                if ex_row.start_time is not None and ex_row.end_time is not None:
+                    return {
+                        "start_ms": int(ex_row.start_time),
+                        "end_ms": int(ex_row.end_time),
+                        "is_special": True,
+                    }
+            # Exchange not listed on this holiday row -> treat as open with default timings
+
+        # 5. Weekend with no special session
+        if query_date.weekday() >= 5:
+            return None
+
+        # 6. Default timings
+        timings = _get_timing_offsets().get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
+        if not timings:
+            return None
+        return {
+            "start_ms": midnight_ms + timings["start_offset"],
+            "end_ms": midnight_ms + timings["end_offset"],
+            "is_special": False,
+        }
+    except Exception as e:
+        logger.debug(f"get_effective_session_window failed for {query_date} {exch}: {e}")
+        return None
 
 
 def is_market_holiday(query_date: date, exchange: str = None) -> bool:
@@ -1008,8 +1198,11 @@ def is_market_open(exchange: str = None) -> bool:
     """
     Check if market is currently open for an exchange.
 
+    Honors holiday-specific windows (e.g., MCX 17:00-23:55 evening session
+    on an NSE/BSE holiday) and SPECIAL_SESSION rows on weekends.
+
     Args:
-        exchange: Exchange code (NSE, BSE, NFO, BFO, MCX, BCD, CDS)
+        exchange: Exchange code (NSE, BSE, NFO, BFO, MCX, BCD, CDS, CRYPTO)
                   If None, checks if ANY exchange is open
 
     Returns:
@@ -1022,32 +1215,22 @@ def is_market_open(exchange: str = None) -> bool:
 
         now = datetime.now(IST)
         today = now.date()
-
-        # Get current time in milliseconds from midnight
-        current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
+        now_epoch_ms = int(now.timestamp() * 1000)
 
         if exchange:
-            # Check if it's a holiday/weekend for this specific exchange
-            if is_market_holiday(today, exchange):
+            window = get_effective_session_window(today, exchange)
+            if not window:
                 return False
-            # Check specific exchange
-            timing = get_market_timing(exchange)
-            if not timing:
-                return False
-            return timing["start_offset"] <= current_ms <= timing["end_offset"]
-        else:
-            # Check if ANY exchange is open (check each individually)
-            for exch in SUPPORTED_EXCHANGES:
-                # Crypto exchanges are always open
-                if exch in CRYPTO_EXCHANGES:
-                    return True
-                # Skip non-crypto exchanges on holidays/weekends
-                if is_market_holiday(today, exch):
-                    continue
-                timing = get_market_timing(exch)
-                if timing and timing["start_offset"] <= current_ms <= timing["end_offset"]:
-                    return True
-            return False
+            return window["start_ms"] <= now_epoch_ms <= window["end_ms"]
+
+        # Check if ANY exchange is open
+        for exch in SUPPORTED_EXCHANGES:
+            if exch in CRYPTO_EXCHANGES:
+                return True
+            window = get_effective_session_window(today, exch)
+            if window and window["start_ms"] <= now_epoch_ms <= window["end_ms"]:
+                return True
+        return False
 
     except Exception as e:
         logger.exception(f"Error checking if market is open: {e}")
@@ -1070,8 +1253,13 @@ def get_market_hours_status() -> dict[str, Any]:
         now = datetime.now(IST)
         today = now.date()
         current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
+        now_epoch_ms = int(now.timestamp() * 1000)
+        midnight_ist = IST.localize(datetime.combine(today, datetime.min.time()))
+        midnight_epoch_ms = int(midnight_ist.timestamp() * 1000)
 
-        is_trading = not is_market_holiday(today)
+        # is_trading_day reflects the most permissive view: any non-crypto
+        # exchange has a session today (regular, special, or partial holiday).
+        is_trading = False
 
         exchanges_status = {}
         any_open = False
@@ -1080,30 +1268,53 @@ def get_market_hours_status() -> dict[str, Any]:
 
         for exch in SUPPORTED_EXCHANGES:
             timing = get_market_timing(exch)
-            if timing:
-                # Crypto exchanges are always open (24/7)
-                if exch in CRYPTO_EXCHANGES:
-                    is_open = True
-                else:
-                    is_open = (
-                        is_trading and timing["start_offset"] <= current_ms <= timing["end_offset"]
-                    )
-                if is_open:
-                    any_open = True
+            window = get_effective_session_window(today, exch)
 
-                exchanges_status[exch] = {
-                    "is_open": is_open,
-                    "start_time": timing["start_time"],
-                    "end_time": timing["end_time"],
-                    "start_offset": timing["start_offset"],
-                    "end_offset": timing["end_offset"],
-                }
+            if exch in CRYPTO_EXCHANGES:
+                is_open = True
+                start_offset = timing["start_offset"] if timing else 0
+                end_offset = timing["end_offset"] if timing else 86399000
+                start_label = timing["start_time"] if timing else "00:00"
+                end_label = timing["end_time"] if timing else "23:59"
+            elif window:
+                is_open = window["start_ms"] <= now_epoch_ms <= window["end_ms"]
+                start_offset = window["start_ms"] - midnight_epoch_ms
+                end_offset = window["end_ms"] - midnight_epoch_ms
+                start_h = max(0, start_offset) // 3600000
+                start_m = (max(0, start_offset) % 3600000) // 60000
+                end_h = max(0, end_offset) // 3600000
+                end_m = (max(0, end_offset) % 3600000) // 60000
+                start_label = f"{start_h:02d}:{start_m:02d}"
+                end_label = f"{end_h:02d}:{end_m:02d}"
+                is_trading = True
+            else:
+                # Closed today
+                is_open = False
+                start_offset = timing["start_offset"] if timing else 0
+                end_offset = timing["end_offset"] if timing else 0
+                start_label = timing["start_time"] if timing else ""
+                end_label = timing["end_time"] if timing else ""
 
-                # Track earliest open and latest close
-                if earliest_open_ms is None or timing["start_offset"] < earliest_open_ms:
-                    earliest_open_ms = timing["start_offset"]
-                if latest_close_ms is None or timing["end_offset"] > latest_close_ms:
-                    latest_close_ms = timing["end_offset"]
+            if is_open and exch not in CRYPTO_EXCHANGES:
+                any_open = True
+            elif is_open and exch in CRYPTO_EXCHANGES:
+                any_open = True
+
+            exchanges_status[exch] = {
+                "is_open": is_open,
+                "is_special": bool(window and window.get("is_special")) if exch not in CRYPTO_EXCHANGES else False,
+                "start_time": start_label,
+                "end_time": end_label,
+                "start_offset": start_offset,
+                "end_offset": end_offset,
+            }
+
+            # Track earliest open and latest close across exchanges that have a session today
+            if window or exch in CRYPTO_EXCHANGES:
+                if earliest_open_ms is None or start_offset < earliest_open_ms:
+                    earliest_open_ms = start_offset
+                if latest_close_ms is None or end_offset > latest_close_ms:
+                    latest_close_ms = end_offset
 
         return {
             "is_trading_day": is_trading,
