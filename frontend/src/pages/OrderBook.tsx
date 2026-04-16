@@ -8,8 +8,8 @@ import {
   Settings2,
   X,
   XCircle,
-  TrendingUp,
-  TrendingDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
@@ -588,7 +588,7 @@ export default function OrderBook() {
                       <div className="flex items-center gap-1">
                         Symbol
                         {sortConfig.key === 'symbol' && (
-                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                         )}
                       </div>
                     </TableHead>
@@ -600,7 +600,7 @@ export default function OrderBook() {
                       <div className="flex items-center gap-1">
                         Action
                         {sortConfig.key === 'action' && (
-                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                         )}
                       </div>
                     </TableHead>
@@ -617,7 +617,7 @@ export default function OrderBook() {
                       <div className="flex items-center gap-1">
                         Status
                         {sortConfig.key === 'order_status' && (
-                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                         )}
                       </div>
                     </TableHead>
@@ -628,7 +628,7 @@ export default function OrderBook() {
                       <div className="flex items-center gap-1">
                         Time
                         {sortConfig.key === 'timestamp' && (
-                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                         )}
                       </div>
                     </TableHead>
