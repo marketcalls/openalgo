@@ -1,4 +1,4 @@
-import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
+import { ArrowDown, ArrowUp, Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { tradingApi } from '@/api/trading'
@@ -486,7 +486,7 @@ export default function TradeBook() {
                       <div className="flex items-center gap-1">
                         Symbol
                         {sortConfig.key === 'symbol' && (
-                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                         )}
                       </div>
                     </TableHead>
@@ -499,7 +499,7 @@ export default function TradeBook() {
                       <div className="flex items-center gap-1">
                         Action
                         {sortConfig.key === 'action' && (
-                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                         )}
                       </div>
                     </TableHead>
@@ -514,16 +514,15 @@ export default function TradeBook() {
                       <div className="flex items-center gap-1">
                         Time
                         {sortConfig.key === 'timestamp' && (
-                          sortConfig.direction === 'asc' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />
+                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                         )}
                       </div>
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {/* Fixed: Use stable keys based on data (orderid + timestamp) instead of array index */}
-                  {sortedAndFilteredTrades.map((trade) => (
-                    <TableRow key={`${trade.orderid}-${trade.timestamp}`}>
+                  {sortedAndFilteredTrades.map((trade, index) => (
+                    <TableRow key={`${trade.orderid}-${index}`}>
                       <TableCell className="font-medium">{trade.symbol}</TableCell>
                       <TableCell>
                         <Badge variant="outline">{trade.exchange}</Badge>
