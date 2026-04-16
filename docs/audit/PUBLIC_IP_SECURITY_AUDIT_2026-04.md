@@ -38,10 +38,13 @@ Phase-1 fixes (login rate reduction, webhook HMAC, WebSocket/ZMQ binding, sessio
   - `install/install-docker.sh`, `install/install-docker-multi-custom-ssl.sh`: kept `WEBSOCKET_HOST=0.0.0.0` (Docker port mapping requires it inside the container) but **removed the `ZMQ_HOST` rewrite** — the ZMQ bus is same-container, loopback only.
   - `start.sh` (Railway auto-generated `.env`): kept `WEBSOCKET_HOST=0.0.0.0` (platform proxy requirement); changed `ZMQ_HOST` to `127.0.0.1`.
 
-#### C2. Flask debug mode → Werkzeug console RCE
-- **Files:** `app.py:13`, `start.sh:72`
-- **Issue:** If a user sets `FLASK_DEBUG=True` in `.env`, the Werkzeug interactive debugger is reachable. With the PIN leaked (debug trace, predictable machine-id), this is **remote code execution**.
-- **Fix:** Hard-fail at startup if `FLASK_DEBUG` is truthy *and* the bind address is not loopback. Add a bold warning in `.sample.env`.
+#### C2. ~~Flask debug mode → Werkzeug console RCE~~ — **FIXED 2026-04-16**
+- **Files:** `app.py` (dev-server `__main__` guard), `.sample.env` (warning block above `FLASK_DEBUG`).
+- **Original issue:** If a user sets `FLASK_DEBUG=True` in `.env`, the Werkzeug interactive debugger is reachable. With the PIN leaked (debug trace, predictable machine-id), this is **remote code execution**.
+- **Fix applied:**
+  - `app.py`: Startup guard in the `if __name__ == "__main__"` block hard-refuses to start the dev server when `FLASK_DEBUG` is truthy *and* `FLASK_HOST_IP` is not in `{127.0.0.1, localhost, ::1}`. Prints a red, explicit error explaining the three ways to fix it and exits with status 1. The guard only runs on the dev-server path (`uv run app.py`) — Gunicorn production deployments are unaffected by design.
+  - An opt-out knob `FLASK_DEBUG_ALLOW_EXTERNAL=true` exists for users who genuinely need the debugger on a trusted LAN, so the guard is strict but not hostile.
+  - `.sample.env`: Loud SECURITY WARNING block above `FLASK_DEBUG` explains the RCE risk and the guard's behaviour.
 
 #### C3. API key acceptable as URL query parameter → leaks to access logs
 - **Files:** `restx_api/place_order.py:38`, most endpoints use `data.get("apikey")` from JSON but Flask-RESTX also reads from query args.
