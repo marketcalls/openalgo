@@ -13,8 +13,16 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
-# Toggle between async and threaded approach
-USE_ASYNC = True  # Set to True to use asyncio (better performance)
+# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
+# asyncio.run() cannot be called under eventlet's monkey-patched event loop
+def _is_eventlet_patched():
+    try:
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched("socket")
+    except (ImportError, AttributeError):
+        return False
+
+USE_ASYNC = not _is_eventlet_patched()
 
 logger = get_logger(__name__)
 
