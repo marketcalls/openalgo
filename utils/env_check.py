@@ -386,6 +386,23 @@ def load_and_check_env_variables() -> None:
         print("Example: http://127.0.0.1:5000/zerodha/callback")
         sys.exit(1)
 
+    # Validate data vendor configuration
+    # DATA_VENDOR must be 'broker' (use broker's data API) or a name listed in
+    # VALID_DATA_VENDORS (e.g. 'yfinance'). Only one vendor active at a time.
+    data_vendor = (os.getenv("DATA_VENDOR", "") or "").strip().lower()
+    valid_data_vendors_str = (os.getenv("VALID_DATA_VENDORS", "") or "").strip()
+    valid_data_vendors = {
+        v.strip().lower() for v in valid_data_vendors_str.split(",") if v.strip()
+    }
+    if data_vendor and data_vendor != "broker" and data_vendor not in valid_data_vendors:
+        print("\nError: Invalid DATA_VENDOR configuration.")
+        print(f"DATA_VENDOR = '{data_vendor}' is not in VALID_DATA_VENDORS.")
+        allowed = sorted({"broker"} | valid_data_vendors)
+        print(f"Allowed values: {', '.join(allowed)}")
+        print("\nSet DATA_VENDOR='broker' to use the connected broker's data feed,")
+        print("or add the vendor name to VALID_DATA_VENDORS in your .env.")
+        sys.exit(1)
+
     # Validate broker name
     valid_brokers_str = os.getenv("VALID_BROKERS", "")
     if not valid_brokers_str:

@@ -33,20 +33,57 @@ def register_adapter(broker_name: str, adapter_class: type[BaseBrokerWebSocketAd
 
 def _get_adapter_class(broker_name: str) -> type[BaseBrokerWebSocketAdapter]:
     """
-    Get the adapter class for a broker (without instantiating).
+    Get the adapter class for a broker, or for the configured data vendor when
+    DATA_VENDOR is set. Vendor-streaming adapters take precedence over broker
+    adapters when a vendor is active and exposes a streaming module.
 
     Args:
-        broker_name: Name of the broker
+        broker_name: Name of the broker (used as fallback when no vendor or the
+                     vendor lacks a streaming adapter)
 
     Returns:
         The adapter class
 
     Raises:
-        ValueError: If broker is not supported
+        ValueError: If neither a vendor nor a broker adapter can be loaded
     """
     broker_name = broker_name.lower()
 
-    # Check if adapter is registered
+    # Vendor-first path: if DATA_VENDOR is enabled and the vendor ships a
+    # streaming adapter, prefer it over the broker adapter. We deliberately do
+    # NOT register the vendor class under the broker name to keep the broker
+    # registry clean — Python's import cache makes the repeated lookup cheap.
+    try:
+        from vendors.vendor_factory import (
+            get_active_vendor_name,
+            is_vendor_enabled,
+        )
+
+        if is_vendor_enabled():
+            vendor_name = get_active_vendor_name()
+            module_name = f"vendors.{vendor_name}.streaming.{vendor_name}_adapter"
+            class_name = f"{vendor_name.capitalize()}WebSocketAdapter"
+            try:
+                module = importlib.import_module(module_name)
+                adapter_class = getattr(module, class_name)
+                logger.info(
+                    "Using vendor streaming adapter '%s' (broker arg='%s' ignored for streaming)",
+                    vendor_name,
+                    broker_name,
+                )
+                return adapter_class
+            except (ImportError, AttributeError) as exc:
+                logger.warning(
+                    "Vendor streaming adapter for '%s' not available (%s); "
+                    "falling back to broker adapter '%s'",
+                    vendor_name,
+                    exc,
+                    broker_name,
+                )
+    except ImportError:
+        pass  # vendor subsystem unavailable; continue with broker path
+
+    # Check if broker adapter is already registered
     if broker_name in BROKER_ADAPTERS:
         return BROKER_ADAPTERS[broker_name]
 

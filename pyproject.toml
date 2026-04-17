@@ -148,6 +148,7 @@ dependencies = [
   "wrapt==1.16.0",
   "wsproto==1.3.2",
   "WTForms==3.2.1",
+  "yfinance>=0.2.52",
   "zipp==3.23.0",
   "zmq==0.0.0",
 ]
@@ -189,7 +190,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["broker", "blueprints", "database", "services", "utils", "restx_api", "extensions", "limiter", "cors", "csp"]
+known-first-party = ["broker", "vendors", "blueprints", "database", "services", "utils", "restx_api", "extensions", "limiter", "cors", "csp"]
 
 # This is not a distributable Python package — tell setuptools not to discover packages
 [tool.setuptools]

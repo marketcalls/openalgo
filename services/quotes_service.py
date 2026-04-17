@@ -4,6 +4,13 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
 from utils.constants import VALID_EXCHANGES
+from utils.data_router import (
+    VendorCapabilityError,
+    VendorSymbolError,
+    build_data_handler,
+    is_vendor_enabled,
+    vendor_exchange_supported,
+)
 from utils.logging import get_logger
 
 # Initialize logger
@@ -118,38 +125,36 @@ def get_quotes_with_auth(
     if not is_valid:
         return False, {"status": "error", "message": error_msg}, 400
 
-    broker_module = import_broker_module(broker)
-    if broker_module is None:
-        return False, {"status": "error", "message": "Broker-specific module not found"}, 404
+    if is_vendor_enabled() and not vendor_exchange_supported(exchange):
+        return (
+            False,
+            {"status": "error", "message": f"Active data vendor does not support exchange '{exchange}'"},
+            400,
+        )
 
     try:
-        # Initialize broker's data handler based on broker's requirements
-        if hasattr(broker_module.BrokerData.__init__, "__code__"):
-            # Check number of parameters the broker's __init__ accepts
-            param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 2:  # More than self and auth_token
-                data_handler = broker_module.BrokerData(auth_token, feed_token)
-            else:
-                data_handler = broker_module.BrokerData(auth_token)
-        else:
-            # Fallback to just auth token if we can't inspect
-            data_handler = broker_module.BrokerData(auth_token)
+        data_handler, _kind, _name = build_data_handler(broker, auth_token, feed_token)
+    except Exception as e:
+        logger.exception(f"Failed to build data handler: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
 
+    try:
         quotes = data_handler.get_quotes(symbol, exchange)
 
         if quotes is None:
             return False, {"status": "error", "message": "Failed to fetch quotes"}, 500
 
         return True, {"status": "success", "data": quotes}, 200
+    except VendorSymbolError as e:
+        return False, {"status": "error", "message": str(e)}, 400
+    except VendorCapabilityError as e:
+        return False, {"status": "error", "message": str(e)}, 501
     except Exception as e:
-        # Check if this is a permission error
         error_msg = str(e)
         if "permission" in error_msg.lower() or "insufficient" in error_msg.lower():
-            # Log at debug level for permission errors (common with personal APIs)
             logger.debug(f"Quote fetch permission denied: {error_msg}")
         else:
-            # Log other errors normally
-            logger.exception(f"Error in broker_module.get_quotes: {e}")
+            logger.exception(f"Error fetching quotes: {e}")
 
         return False, {"status": "error", "message": str(e)}, 500
 
@@ -249,23 +254,13 @@ def get_multiquotes_with_auth(
             400,
         )
 
-    broker_module = import_broker_module(broker)
-    if broker_module is None:
-        return False, {"status": "error", "message": "Broker-specific module not found"}, 404
+    try:
+        data_handler, _kind, _name = build_data_handler(broker, auth_token, feed_token)
+    except Exception as e:
+        logger.exception(f"Failed to build data handler: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
 
     try:
-        # Initialize broker's data handler based on broker's requirements
-        if hasattr(broker_module.BrokerData.__init__, "__code__"):
-            # Check number of parameters the broker's __init__ accepts
-            param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 2:  # More than self and auth_token
-                data_handler = broker_module.BrokerData(auth_token, feed_token)
-            else:
-                data_handler = broker_module.BrokerData(auth_token)
-        else:
-            # Fallback to just auth token if we can't inspect
-            data_handler = broker_module.BrokerData(auth_token)
-
         # Build results list starting with invalid symbols (marked as errors)
         results = []
         for item in invalid_symbols:

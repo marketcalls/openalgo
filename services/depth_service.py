@@ -4,6 +4,14 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from database.auth_db import Auth, db_session, get_auth_token_broker, verify_api_key
 from database.token_db import get_token
 from utils.constants import VALID_EXCHANGES
+from utils.data_router import (
+    VendorCapabilityError,
+    VendorSymbolError,
+    build_data_handler,
+    is_vendor_enabled,
+    vendor_capability_enabled,
+    vendor_exchange_supported,
+)
 from utils.logging import get_logger
 
 # Initialize logger
@@ -86,33 +94,39 @@ def get_depth_with_auth(
     if not is_valid:
         return False, {"status": "error", "message": error_msg}, 400
 
-    broker_module = import_broker_module(broker)
-    if broker_module is None:
-        return False, {"status": "error", "message": "Broker-specific module not found"}, 404
+    if is_vendor_enabled():
+        if not vendor_exchange_supported(exchange):
+            return (
+                False,
+                {"status": "error", "message": f"Active data vendor does not support exchange '{exchange}'"},
+                400,
+            )
+        if not vendor_capability_enabled("depth"):
+            return (
+                False,
+                {"status": "error", "message": "Market depth is not supported by the active data vendor"},
+                501,
+            )
 
     try:
-        # Initialize broker's data handler based on broker's requirements
-        if hasattr(broker_module.BrokerData.__init__, "__code__"):
-            # Check number of parameters the broker's __init__ accepts
-            param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 3:  # More than self, auth_token, and feed_token
-                data_handler = broker_module.BrokerData(auth_token, feed_token, user_id)
-            elif param_count > 2:  # More than self and auth_token
-                data_handler = broker_module.BrokerData(auth_token, feed_token)
-            else:
-                data_handler = broker_module.BrokerData(auth_token)
-        else:
-            # Fallback to just auth token if we can't inspect
-            data_handler = broker_module.BrokerData(auth_token)
+        data_handler, _kind, _name = build_data_handler(broker, auth_token, feed_token, user_id)
+    except Exception as e:
+        logger.exception(f"Failed to build data handler: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
 
+    try:
         depth = data_handler.get_depth(symbol, exchange)
 
         if depth is None:
             return False, {"status": "error", "message": "Failed to fetch market depth"}, 500
 
         return True, {"status": "success", "data": depth}, 200
+    except VendorSymbolError as e:
+        return False, {"status": "error", "message": str(e)}, 400
+    except VendorCapabilityError as e:
+        return False, {"status": "error", "message": str(e)}, 501
     except Exception as e:
-        logger.exception(f"Error in broker_module.get_depth: {e}")
+        logger.exception(f"Error fetching depth: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 

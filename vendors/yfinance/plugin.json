@@ -1,0 +1,23 @@
+{
+    "Plugin Name": "yfinance",
+    "Plugin URI": "https://openalgo.in",
+    "Description": "Yahoo Finance market data vendor for OpenAlgo",
+    "Version": "1.0",
+    "Author": "OpenAlgo",
+    "Author URI": "https://openalgo.in",
+    "supported_exchanges": ["NSE", "BSE", "NSE_INDEX", "BSE_INDEX"],
+    "capabilities": {
+        "ltp": true,
+        "quote": true,
+        "multiquote": true,
+        "depth": false,
+        "history": true,
+        "websocket_ltp": true,
+        "websocket_quote": true,
+        "websocket_depth": false,
+        "intraday_history_days": 60,
+        "minute_1_history_days": 7,
+        "data_delay_minutes": 15
+    },
+    "requires_auth": false
+}
