@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from broker.mstock.api.mstockwebsocket import MstockWebSocket
+from broker.mstock.api.retry_handler import retry_with_backoff
+from broker.mstock.api.symbol_validator import validate_symbol
+from broker.mstock.api.data_normalizer import normalize_quote_data
 from broker.mstock.mapping.order_data import transform_holdings_data, transform_positions_data
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
@@ -14,8 +17,9 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+@retry_with_backoff(max_retries=3, initial_delay=1.0, backoff_factor=2.0, max_delay=10.0)
 def get_api_response(endpoint, auth_token, method="GET", payload=None):
-    """Helper function to make API calls to mstock"""
+    """Helper function to make API calls to mstock with retry logic"""
     api_key = os.getenv("BROKER_API_SECRET")
 
     # Get the shared httpx client with connection pooling
@@ -186,6 +190,11 @@ class BrokerData:
             dict: Quote data with required fields
         """
         try:
+            # Validate symbol before fetching token
+            is_valid, error_msg, suggestion = validate_symbol(symbol, exchange)
+            if not is_valid:
+                raise Exception(error_msg)
+
             # Get token for the symbol
             token = get_token(symbol, exchange)
 
@@ -227,8 +236,8 @@ class BrokerData:
 
             quote_data = fetched[0]
 
-            # Return in OpenAlgo standard format
-            return {
+            # Return in OpenAlgo standard format (matching Flattrade structure)
+            result = {
                 "bid": 0,  # Not provided in OHLC mode
                 "ask": 0,  # Not provided in OHLC mode
                 "open": float(quote_data.get("open", 0)),
@@ -238,7 +247,11 @@ class BrokerData:
                 "prev_close": float(quote_data.get("close", 0)),
                 "volume": int(quote_data.get("volume", 0)) if quote_data.get("volume") else 0,
                 "oi": 0,  # Not provided in OHLC mode
+                "tick_size": None,  # Not provided in OHLC mode
             }
+
+            # Normalize data (clean up 0.05 values for inactive strikes)
+            return normalize_quote_data(result)
 
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
@@ -396,25 +409,27 @@ class BrokerData:
                 info = symbol_map.get(token_str)
 
                 if info:
-                    results.append(
-                        {
-                            "symbol": info["symbol"],
-                            "exchange": info["exchange"],
-                            "data": {
-                                "bid": 0,  # Not provided in OHLC mode
-                                "ask": 0,  # Not provided in OHLC mode
-                                "open": float(quote_data.get("open", 0)),
-                                "high": float(quote_data.get("high", 0)),
-                                "low": float(quote_data.get("low", 0)),
-                                "ltp": float(quote_data.get("ltp", 0)),
-                                "prev_close": float(quote_data.get("close", 0)),
-                                "volume": int(quote_data.get("volume", 0))
-                                if quote_data.get("volume")
-                                else 0,
-                                "oi": 0,  # Not provided in OHLC mode
-                            },
-                        }
-                    )
+                    result = {
+                        "symbol": info["symbol"],
+                        "exchange": info["exchange"],
+                        "data": {
+                            "bid": 0,  # Not provided in OHLC mode
+                            "ask": 0,  # Not provided in OHLC mode
+                            "open": float(quote_data.get("open", 0)),
+                            "high": float(quote_data.get("high", 0)),
+                            "low": float(quote_data.get("low", 0)),
+                            "ltp": float(quote_data.get("ltp", 0)),
+                            "prev_close": float(quote_data.get("close", 0)),
+                            "volume": int(quote_data.get("volume", 0))
+                            if quote_data.get("volume")
+                            else 0,
+                            "oi": 0,  # Not provided in OHLC mode
+                            "tick_size": None,  # Not provided in OHLC mode
+                        },
+                    }
+                    # Normalize data (clean up 0.05 values for inactive strikes)
+                    result["data"] = normalize_quote_data(result["data"])
+                    results.append(result)
                     # Remove from symbol_map to track unfetched
                     del symbol_map[token_str]
 

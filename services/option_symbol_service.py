@@ -345,19 +345,19 @@ def get_available_strikes(
             )
             strikes = [r.strike for r in results if r.strike is not None and r.strike > 0]
         else:
-            # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
-            # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
+            # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard + CE/PE
+            # e.g., "NIFTY" + "21APR26" + "%" + "CE" = "NIFTY21APR26%CE"
             expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
             symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
 
             # Query database for all strikes matching the criteria
-            # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
+            # Note: We filter by symbol pattern (which ends with CE/PE) instead of instrumenttype
+            # This works for all brokers including MStock which uses OPTIDX/OPTSTK as instrumenttype
             results = (
                 db_session.query(SymToken.strike)
                 .filter(
                     SymToken.symbol.like(symbol_pattern),
                     SymToken.expiry == expiry_formatted.upper(),
-                    SymToken.instrumenttype == option_type.upper(),
                     SymToken.exchange == exchange.upper(),
                 )
                 .distinct()
