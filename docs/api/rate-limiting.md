@@ -98,6 +98,7 @@ These limits follow [Flask-Limiter syntax](https://flask-limiter.readthedocs.io/
 - `10 per second`
 - `100 per minute`
 - `1000 per day`
+- `10 per second;40 per minute` (compound — both limits enforced simultaneously)
 
 ## What Happens When Limits Are Exceeded
 

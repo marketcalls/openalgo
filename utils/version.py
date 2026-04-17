@@ -1,7 +1,7 @@
 # OpenAlgo Version Management
 # This file is the single source of truth for version information
 
-VERSION = "2.0.0.3"
+VERSION = "2.0.0.4"
 
 
 def get_version() -> str:

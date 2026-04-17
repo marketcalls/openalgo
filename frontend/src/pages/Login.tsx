@@ -113,9 +113,8 @@ export default function Login() {
 
       const data = await response.json()
 
-      if (data.status === 'error') {
+      if (!response.ok || data.status === 'error') {
         setError(data.message || 'Login failed. Please try again.')
-        // Handle redirect for setup
         if (data.redirect) {
           navigate(data.redirect)
         }

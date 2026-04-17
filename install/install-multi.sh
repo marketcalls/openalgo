@@ -340,9 +340,9 @@ for ((i=1; i<=INSTANCES; i++)); do
     # 4. Update WebSocket URL for production (secure WebSocket through nginx)
     sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
 
-    # 5. Update host bindings to allow external connections
-    sudo sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" "$ENV_FILE"
-    sudo sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
+    # 5. Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
+    #    nginx on this host reverse-proxies /ws -> 127.0.0.1:WEBSOCKET_PORT, and
+    #    ZMQ is an internal message bus that must never be exposed publicly.
 
     # 6. Update API credentials
     sudo sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
