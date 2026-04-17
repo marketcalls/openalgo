@@ -43,36 +43,39 @@ def validate_symbol(symbol: str, exchange: str) -> tuple[bool, Optional[str], Op
         - error_message: Error message if symbol not found
         - suggestion: Suggested symbol if close match found
     """
+    # Normalize symbol: uppercase and strip whitespace
+    normalized_symbol = symbol.strip().upper()
+
     # Check if token exists
-    token = get_token(symbol, exchange)
+    token = get_token(normalized_symbol, exchange)
 
     if token:
         return True, None, None
 
     # Symbol not found - try to suggest alternatives
     suggestion = None
-    error_msg = f"Symbol '{symbol}' not found for exchange '{exchange}'"
+    error_msg = f"Symbol '{normalized_symbol}' not found for exchange '{exchange}'"
 
     # For index exchanges, check against known indices
     if exchange in KNOWN_INDICES:
         known_symbols = KNOWN_INDICES[exchange]
-        close_matches = get_close_matches(symbol.upper(), known_symbols, n=1, cutoff=0.6)
+        close_matches = get_close_matches(normalized_symbol, known_symbols, n=1, cutoff=0.6)
 
         if close_matches:
             suggestion = close_matches[0]
             error_msg = (
-                f"Symbol '{symbol}' not found for exchange '{exchange}'. "
+                f"Symbol '{normalized_symbol}' not found for exchange '{exchange}'. "
                 f"Did you mean '{suggestion}'?"
             )
         else:
             valid_symbols = ", ".join(known_symbols)
             error_msg = (
-                f"Symbol '{symbol}' not found for exchange '{exchange}'. "
+                f"Symbol '{normalized_symbol}' not found for exchange '{exchange}'. "
                 f"Valid {exchange} symbols: {valid_symbols}"
             )
     else:
         error_msg = (
-            f"Symbol '{symbol}' not found for exchange '{exchange}'. "
+            f"Symbol '{normalized_symbol}' not found for exchange '{exchange}'. "
             f"Please verify the symbol name and ensure master contracts are downloaded."
         )
 
