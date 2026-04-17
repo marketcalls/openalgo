@@ -2,6 +2,7 @@ import { Briefcase, Save } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient } from '@/api/client'
+import { oiProfileApi } from '@/api/oi-profile'
 import { optionChainApi } from '@/api/option-chain'
 import {
   strategyPortfolioApi,
@@ -191,11 +192,35 @@ export default function StrategyBuilder() {
     )
   }, [defaultFnoExchange, fnoExchanges])
 
-  // Fetch underlyings + expiries on exchange / underlying change
+  // Populate the underlyings dropdown. The hard-coded `defaultUnderlyings`
+  // map only covers the major indices (NIFTY / BANKNIFTY / ...), so we mirror
+  // the Option Chain page and fetch the full F&O list from
+  // /search/api/underlyings — which includes every F&O stock (RELIANCE,
+  // TCS, HDFCBANK, etc.) in addition to indices. Defaults are shown
+  // immediately for fast paint, then replaced when the API resolves.
   useEffect(() => {
     const defaults = defaultUnderlyings[selectedExchange] || []
     setUnderlyings(defaults)
     setSelectedUnderlying((prev) => (defaults.includes(prev) ? prev : defaults[0] || ''))
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const response = await oiProfileApi.getUnderlyings(selectedExchange)
+        if (cancelled) return
+        if (response.status === 'success' && response.underlyings.length > 0) {
+          setUnderlyings(response.underlyings)
+          setSelectedUnderlying((prev) =>
+            response.underlyings.includes(prev) ? prev : response.underlyings[0]
+          )
+        }
+      } catch {
+        // Keep defaults on failure.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [selectedExchange, defaultUnderlyings])
 
   // Load expiries (options + futures — different calendars on MCX/CDS especially).
