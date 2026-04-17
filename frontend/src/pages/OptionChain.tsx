@@ -419,7 +419,11 @@ const OptionChainRow = React.memo(function OptionChainRow({
 
 export default function OptionChain() {
   const { apiKey } = useAuthStore()
-  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
+  const {
+    toolsFnoExchanges: fnoExchanges,
+    defaultToolsFnoExchange: defaultFnoExchange,
+    defaultUnderlyings,
+  } = useSupportedExchanges()
   const {
     visibleColumns,
     columnOrder,

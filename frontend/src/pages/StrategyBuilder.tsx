@@ -74,7 +74,11 @@ function uid(): string {
 
 export default function StrategyBuilder() {
   const { apiKey } = useAuthStore()
-  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
+  const {
+    toolsFnoExchanges: fnoExchanges,
+    defaultToolsFnoExchange: defaultFnoExchange,
+    defaultUnderlyings,
+  } = useSupportedExchanges()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
