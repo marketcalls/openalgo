@@ -415,6 +415,7 @@ export default function StrategyPortfolio() {
                           {/* Clickable summary row — plain div so the inner action
                               buttons (Open, Delete) remain real <button>s. Accessibility
                               handled via role/tabIndex/onKeyDown. */}
+                          {/* biome-ignore lint/a11y/useSemanticElements: row contains nested <button> actions (View, Delete), so it cannot itself be a <button>. Accessibility is provided via role/tabIndex/onKeyDown. */}
                           <div
                             role="button"
                             tabIndex={0}
