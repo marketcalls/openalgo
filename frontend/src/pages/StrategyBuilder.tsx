@@ -686,7 +686,12 @@ export default function StrategyBuilder() {
         zeroCrossings: [],
       }
     }
-    const range: [number, number] = [spotPrice * 0.82, spotPrice * 1.18]
+    // ±10% band around spot — tight enough to focus on the strategy's
+    // action zone and wide enough to contain the ±2σ shading for typical
+    // NIFTY/BANKNIFTY IV on weekly/monthly expiries. For very high-IV
+    // names or long-dated expiries the σ bands may extend beyond — the
+    // range can be widened later if needed.
+    const range: [number, number] = [spotPrice * 0.9, spotPrice * 1.1]
     // "At Expiry" curve → advance calendar time to the nearest leg's expiry;
     // far-dated legs (calendar / diagonal) keep their remaining time value.
     // "T+0" curve → advance by the simulator's days-forward value.
