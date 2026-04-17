@@ -250,7 +250,7 @@ export default function StrategyPortfolio() {
   }
 
   const openInBuilder = (entry: PortfolioEntry) => {
-    navigate(`/tools/strategy?load=${entry.id}`)
+    navigate(`/strategybuilder?load=${entry.id}`)
   }
 
   const toggleRow = useCallback((id: number) => {
@@ -303,7 +303,7 @@ export default function StrategyPortfolio() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => navigate('/tools/strategy')}
+            onClick={() => navigate('/strategybuilder')}
             className="mt-1"
           >
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
@@ -347,7 +347,7 @@ export default function StrategyPortfolio() {
                 <div className="flex h-40 flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed text-sm text-muted-foreground">
                   <cfg.icon className="h-6 w-6 opacity-40" />
                   <p>No strategies in {cfg.label} yet.</p>
-                  <Button variant="outline" size="sm" onClick={() => navigate('/tools/strategy')}>
+                  <Button variant="outline" size="sm" onClick={() => navigate('/strategybuilder')}>
                     Open Strategy Builder
                   </Button>
                 </div>
