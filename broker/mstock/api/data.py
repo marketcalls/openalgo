@@ -259,7 +259,7 @@ class BrokerData:
     def get_multiquotes(self, symbols: list) -> list:
         """
         Get real-time quotes for multiple symbols using REST API
-        mstock REST API supports fetching multiple instruments in one call
+        Uses REST API for all symbols including option chains for faster response
 
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
@@ -269,8 +269,9 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # mstock WebSocket creates new connection per request
-            # Using batch size of 100 for practical response times
+            # Use REST API for all quotes (faster than WebSocket)
+            # Note: OI data will be zero from REST API, but structure will be correct
+            # For regular quotes, use REST API (faster)
             BATCH_SIZE = 500
             RATE_LIMIT_DELAY = 1.0  # Delay between batches in seconds
 
