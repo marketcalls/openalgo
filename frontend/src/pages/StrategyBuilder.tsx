@@ -2,6 +2,7 @@ import { Briefcase, Save } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient } from '@/api/client'
+import { oiProfileApi } from '@/api/oi-profile'
 import { optionChainApi } from '@/api/option-chain'
 import {
   strategyPortfolioApi,
@@ -72,9 +73,40 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
+/**
+ * Serialize every broker-backed API call this page issues.
+ *
+ * The Strategy Builder fires roughly five requests in parallel on mount
+ * (two `/expiry` calls, `/optionchain`, `/syntheticfuture`, and the ATM
+ * `/optiongreeks` seed) plus more on leg edits. The backend's shared
+ * HTTP/2 httpx client occasionally races on stream reads when ~3+
+ * requests multiplex simultaneously, surfacing as
+ * ``[Errno 35] Resource temporarily unavailable``.
+ *
+ * A module-level promise chain is the smallest-possible fix scoped to
+ * this page: every call waits its turn, the backend sees one request at
+ * a time from this page, the race cannot occur. The extra latency
+ * (~150ms per serialized call × 5 = ~750ms on cold load) is acceptable
+ * since every call here is backed by a broker fetch that already takes
+ * ~150-250ms individually. Other pages keep their parallel behaviour.
+ */
+let strategyBuilderCallChain: Promise<unknown> = Promise.resolve()
+function queuedFetch<T>(fn: () => Promise<T>): Promise<T> {
+  const next = strategyBuilderCallChain.then(fn, fn)
+  // Swallow errors on the chain so one failure doesn't break the next
+  // caller — each caller still sees its own rejection via the returned
+  // promise.
+  strategyBuilderCallChain = next.catch(() => undefined)
+  return next
+}
+
 export default function StrategyBuilder() {
   const { apiKey } = useAuthStore()
-  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
+  const {
+    toolsFnoExchanges: fnoExchanges,
+    defaultToolsFnoExchange: defaultFnoExchange,
+    defaultUnderlyings,
+  } = useSupportedExchanges()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -120,6 +152,39 @@ export default function StrategyBuilder() {
 
   const requestIdRef = useRef(0)
 
+  // Reset all expiry- / chain-derived state in the same event handler as the
+  // underlying or exchange change so React batches them into a single render.
+  // Without this, dependent effects (`/optionchain`, `/syntheticfuture`, ...)
+  // get one frame where `selectedUnderlying` is new but `selectedExpiry` is
+  // still the previous underlying's, and fire an invalid pair at the broker.
+  // OptionChain uses the same pattern.
+  const resetExpiryAndChainState = useCallback(() => {
+    setExpiries([])
+    setFutureExpiries([])
+    setSelectedExpiry('')
+    setChainData(null)
+    setAtmIv(null)
+    setFuturesPrice(null)
+  }, [])
+
+  const handleUnderlyingChange = useCallback(
+    (next: string) => {
+      if (next === selectedUnderlying) return
+      setSelectedUnderlying(next)
+      resetExpiryAndChainState()
+    },
+    [selectedUnderlying, resetExpiryAndChainState]
+  )
+
+  const handleExchangeChange = useCallback(
+    (next: string) => {
+      if (next === selectedExchange) return
+      setSelectedExchange(next)
+      resetExpiryAndChainState()
+    },
+    [selectedExchange, resetExpiryAndChainState]
+  )
+
   // Re-sync exchange when broker capabilities load async
   useEffect(() => {
     setSelectedExchange((prev) =>
@@ -127,11 +192,35 @@ export default function StrategyBuilder() {
     )
   }, [defaultFnoExchange, fnoExchanges])
 
-  // Fetch underlyings + expiries on exchange / underlying change
+  // Populate the underlyings dropdown. The hard-coded `defaultUnderlyings`
+  // map only covers the major indices (NIFTY / BANKNIFTY / ...), so we mirror
+  // the Option Chain page and fetch the full F&O list from
+  // /search/api/underlyings — which includes every F&O stock (RELIANCE,
+  // TCS, HDFCBANK, etc.) in addition to indices. Defaults are shown
+  // immediately for fast paint, then replaced when the API resolves.
   useEffect(() => {
     const defaults = defaultUnderlyings[selectedExchange] || []
     setUnderlyings(defaults)
     setSelectedUnderlying((prev) => (defaults.includes(prev) ? prev : defaults[0] || ''))
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const response = await oiProfileApi.getUnderlyings(selectedExchange)
+        if (cancelled) return
+        if (response.status === 'success' && response.underlyings.length > 0) {
+          setUnderlyings(response.underlyings)
+          setSelectedUnderlying((prev) =>
+            response.underlyings.includes(prev) ? prev : response.underlyings[0]
+          )
+        }
+      } catch {
+        // Keep defaults on failure.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [selectedExchange, defaultUnderlyings])
 
   // Load expiries (options + futures — different calendars on MCX/CDS especially).
@@ -141,16 +230,34 @@ export default function StrategyBuilder() {
   // ("21APR26") against the raw API value ("21-APR-2026") and the field blanks.
   useEffect(() => {
     if (!apiKey || !selectedUnderlying) return
+    // IMPORTANT: clear expiries + selectedExpiry + chainData synchronously
+    // BEFORE the fetch starts. Otherwise downstream effects (/optionchain,
+    // /syntheticfuture, /optiongreeks) see the previous underlying's
+    // selectedExpiry (e.g. NIFTY's 21APR26) alongside the new
+    // selectedUnderlying (BANKNIFTY) and fire an invalid (underlying,
+    // expiry) request into the broker, which logs "No strikes found" until
+    // the fresh expiries finally arrive.
+    setExpiries([])
+    setFutureExpiries([])
+    setSelectedExpiry('')
+    setChainData(null)
+    setAtmIv(null)
+    setFuturesPrice(null)
     let cancelled = false
     ;(async () => {
       try {
         const optionExchange = optionExchangeFor(selectedExchange)
-        const [optsRes, futsRes] = await Promise.all([
-          optionChainApi.getExpiries(apiKey, selectedUnderlying, optionExchange, 'options'),
+        // Serialize the two `/expiry` calls through the page queue so they
+        // don't multiplex with each other or with the other mount-time
+        // fetches below.
+        const optsRes = await queuedFetch(() =>
+          optionChainApi.getExpiries(apiKey, selectedUnderlying, optionExchange, 'options')
+        )
+        const futsRes = await queuedFetch(() =>
           optionChainApi
             .getExpiries(apiKey, selectedUnderlying, optionExchange, 'futures')
-            .catch(() => ({ status: 'error' as const, data: [] as string[] })),
-        ])
+            .catch(() => ({ status: 'error' as const, data: [] as string[] }))
+        )
         if (cancelled) return
         const normaliseList = (list: string[]) =>
           // Preserve order but drop empties and de-dupe after normalisation.
@@ -186,17 +293,17 @@ export default function StrategyBuilder() {
   // Load option chain
   const loadOptionChain = useCallback(async () => {
     if (!apiKey || !selectedUnderlying || !selectedExpiry) return
+    // Skip while the expiries list hasn't refreshed for the current
+    // underlying yet — e.g. after switching NIFTY → BANKNIFTY, the
+    // previous expiry (21APR26) isn't valid for BANKNIFTY.
+    if (expiries.length > 0 && !expiries.includes(selectedExpiry)) return
     const reqId = ++requestIdRef.current
     setIsRefreshing(true)
     try {
       const exchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
       const expiryCode = convertExpiryForSymbol(selectedExpiry)
-      const data = await optionChainApi.getOptionChain(
-        apiKey,
-        selectedUnderlying,
-        exchange,
-        expiryCode,
-        20
+      const data = await queuedFetch(() =>
+        optionChainApi.getOptionChain(apiKey, selectedUnderlying, exchange, expiryCode, 20)
       )
       if (reqId !== requestIdRef.current) return
       if (data.status === 'success') {
@@ -211,7 +318,7 @@ export default function StrategyBuilder() {
     } finally {
       if (reqId === requestIdRef.current) setIsRefreshing(false)
     }
-  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry])
+  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry, expiries])
 
   useEffect(() => {
     loadOptionChain()
@@ -230,16 +337,18 @@ export default function StrategyBuilder() {
       try {
         const exchange = optionExchangeFor(selectedExchange)
         const underlyingExchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
-        const res = await apiClient.post<{
-          status: string
-          implied_volatility?: number
-        }>('/optiongreeks', {
-          apikey: apiKey,
-          symbol: atmSymbol,
-          exchange,
-          underlying_symbol: selectedUnderlying,
-          underlying_exchange: underlyingExchange,
-        })
+        const res = await queuedFetch(() =>
+          apiClient.post<{
+            status: string
+            implied_volatility?: number
+          }>('/optiongreeks', {
+            apikey: apiKey,
+            symbol: atmSymbol,
+            exchange,
+            underlying_symbol: selectedUnderlying,
+            underlying_exchange: underlyingExchange,
+          })
+        )
         if (cancelled) return
         if (
           res.data.status === 'success' &&
@@ -260,20 +369,28 @@ export default function StrategyBuilder() {
   // Load synthetic future for the selected expiry
   useEffect(() => {
     if (!apiKey || !selectedUnderlying || !selectedExpiry) return
+    // Double-check selectedExpiry is actually valid for the current
+    // underlying — the expiries-load effect clears selectedExpiry to ''
+    // at the start of an underlying switch, but if for any reason this
+    // effect runs before that clear propagates we skip rather than fire
+    // an invalid (underlying, expiry) pair at the broker.
+    if (expiries.length > 0 && !expiries.includes(selectedExpiry)) return
     let cancelled = false
     ;(async () => {
       try {
         const exchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
         const expiryCode = convertExpiryForSymbol(selectedExpiry)
-        const res = await apiClient.post<{
-          status: string
-          synthetic_future_price?: number
-        }>('/syntheticfuture', {
-          apikey: apiKey,
-          underlying: selectedUnderlying,
-          exchange,
-          expiry_date: expiryCode,
-        })
+        const res = await queuedFetch(() =>
+          apiClient.post<{
+            status: string
+            synthetic_future_price?: number
+          }>('/syntheticfuture', {
+            apikey: apiKey,
+            underlying: selectedUnderlying,
+            exchange,
+            expiry_date: expiryCode,
+          })
+        )
         if (cancelled) return
         if (res.data.status === 'success' && res.data.synthetic_future_price) {
           setFuturesPrice(res.data.synthetic_future_price)
@@ -287,7 +404,7 @@ export default function StrategyBuilder() {
     return () => {
       cancelled = true
     }
-  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry])
+  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry, expiries])
 
   // Derived: ATM strike, lot size, spot
   const spotPrice = chainData?.underlying_ltp ?? null
@@ -358,17 +475,19 @@ export default function StrategyBuilder() {
             underlying_exchange: underlyingExchange,
           }))
         if (symbols.length === 0) return
-        const res = await apiClient.post<{
-          status: string
-          data?: Array<{
-            symbol: string
-            implied_volatility?: number
-            greeks?: { delta?: number; gamma?: number; theta?: number; vega?: number }
-          }>
-        }>('/multioptiongreeks', {
-          apikey: apiKey,
-          symbols,
-        })
+        const res = await queuedFetch(() =>
+          apiClient.post<{
+            status: string
+            data?: Array<{
+              symbol: string
+              implied_volatility?: number
+              greeks?: { delta?: number; gamma?: number; theta?: number; vega?: number }
+            }>
+          }>('/multioptiongreeks', {
+            apikey: apiKey,
+            symbols,
+          })
+        )
         if (cancelled) return
         if (res.data.status === 'success' && res.data.data) {
           const map: Record<string, LegGreeks> = {}
@@ -457,19 +576,21 @@ export default function StrategyBuilder() {
           pricetype: l.price > 0 ? 'LIMIT' : 'MARKET',
           price: l.price > 0 ? String(l.price) : '0',
         }))
-        const res = await apiClient.post<{
-          status: string
-          data?: {
-            total_margin_required?: number
-            total_margin?: number
-            margin_required?: number
-          }
-          message?: string
-        }>(
-          '/margin',
-          { apikey: apiKey, positions },
-          // Let 4xx/5xx responses resolve instead of throw so we can inspect them.
-          { validateStatus: () => true }
+        const res = await queuedFetch(() =>
+          apiClient.post<{
+            status: string
+            data?: {
+              total_margin_required?: number
+              total_margin?: number
+              margin_required?: number
+            }
+            message?: string
+          }>(
+            '/margin',
+            { apikey: apiKey, positions },
+            // Let 4xx/5xx responses resolve instead of throw so we can inspect them.
+            { validateStatus: () => true }
+          )
         )
         // Response key varies slightly across brokers — accept any of the
         // three field names the service has been observed to return.
@@ -527,13 +648,15 @@ export default function StrategyBuilder() {
     let cancelled = false
     ;(async () => {
       try {
-        const res = await apiClient.post<{
-          status: string
-          results?: Array<{ symbol: string; exchange: string; data?: { ltp?: number } }>
-        }>('/multiquotes', {
-          apikey: apiKey,
-          symbols: needs.map((l) => ({ symbol: l.symbol, exchange })),
-        })
+        const res = await queuedFetch(() =>
+          apiClient.post<{
+            status: string
+            results?: Array<{ symbol: string; exchange: string; data?: { ltp?: number } }>
+          }>('/multiquotes', {
+            apikey: apiKey,
+            symbols: needs.map((l) => ({ symbol: l.symbol, exchange })),
+          })
+        )
         if (cancelled) return
         if (res.data.status === 'success' && res.data.results) {
           const priceBySymbol: Record<string, number> = {}
@@ -906,7 +1029,7 @@ export default function StrategyBuilder() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => navigate('/tools/strategy/portfolio')}
+            onClick={() => navigate('/strategybuilder/portfolio')}
           >
             <Briefcase className="mr-1.5 h-3.5 w-3.5" />
             Portfolio
@@ -927,10 +1050,10 @@ export default function StrategyBuilder() {
       <SymbolHeader
         exchanges={fnoExchanges}
         selectedExchange={selectedExchange}
-        onExchangeChange={setSelectedExchange}
+        onExchangeChange={handleExchangeChange}
         underlyings={underlyings}
         selectedUnderlying={selectedUnderlying}
-        onUnderlyingChange={setSelectedUnderlying}
+        onUnderlyingChange={handleUnderlyingChange}
         underlyingOpen={underlyingOpen}
         onUnderlyingOpenChange={setUnderlyingOpen}
         expiries={expiries}
