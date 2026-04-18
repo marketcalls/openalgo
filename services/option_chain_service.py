@@ -58,6 +58,7 @@ from services.option_symbol_service import (
     parse_underlying_symbol,
 )
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
+from services.option_chain_normalizer import normalize_option_chain_data
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
@@ -346,7 +347,15 @@ def get_option_chain(
         if atm_strike is None:
             return False, {"status": "error", "message": "Failed to determine ATM strike"}, 500
 
-        strikes_with_labels = get_strikes_with_labels(available_strikes, atm_strike, strike_count)
+        # For MStock, limit initial fetch to avoid timeout, then extend in normalization
+        auth_token, feed_token, broker = get_auth_token_broker(api_key, include_feed_token=True)
+        if broker and broker.lower() == "mstock" and strike_count is None:
+            # Limit to 50 strikes around ATM for initial fetch
+            logger.info("MStock detected: limiting initial fetch to 50 strikes around ATM")
+            strikes_with_labels = get_strikes_with_labels(available_strikes, atm_strike, 50)
+        else:
+            strikes_with_labels = get_strikes_with_labels(available_strikes, atm_strike, strike_count)
+
         logger.info(
             f"Selected {len(strikes_with_labels)} strikes (strike_count={'all' if strike_count is None else strike_count})"
         )
@@ -406,9 +415,18 @@ def get_option_chain(
                     500,
                 )
         else:
-            success, quotes_response, status_code = get_multiquotes(
-                symbols=symbols_to_fetch, api_key=api_key
-            )
+            # For MStock broker, skip WebSocket mode 3 to avoid timeout
+            # We'll use REST API and then normalize the data structure
+            if broker and broker.lower() == "mstock":
+                logger.info("Using MStock REST API for option chain quotes (faster)")
+                success, quotes_response, status_code = get_multiquotes(
+                    symbols=symbols_to_fetch, api_key=api_key
+                )
+            else:
+                # For all other brokers, use regular multiquotes
+                success, quotes_response, status_code = get_multiquotes(
+                    symbols=symbols_to_fetch, api_key=api_key
+                )
 
         # Build quote lookup map
         quotes_map = {}
@@ -473,17 +491,33 @@ def get_option_chain(
 
             chain.append(strike_data)
 
+        # Build response data
+        response_data = {
+            "status": "success",
+            "underlying": base_symbol,
+            "underlying_ltp": underlying_ltp,
+            "underlying_prev_close": underlying_prev_close,
+            "expiry_date": final_expiry,
+            "atm_strike": atm_strike,
+            "chain": chain,
+        }
+
+        # Apply normalization for MStock broker to match Kotak format
+        if broker and broker.lower() == "mstock":
+            logger.info("Applying Kotak normalization for MStock option chain")
+            try:
+                response_data = normalize_option_chain_data(
+                    response_data,
+                    extend_strike_range=True,
+                    recalculate_atm=True,
+                    fix_labels=True
+                )
+            except Exception as norm_error:
+                logger.error(f"Normalization failed: {norm_error}, returning original data")
+
         return (
             True,
-            {
-                "status": "success",
-                "underlying": base_symbol,
-                "underlying_ltp": underlying_ltp,
-                "underlying_prev_close": underlying_prev_close,
-                "expiry_date": final_expiry,
-                "atm_strike": atm_strike,
-                "chain": chain,
-            },
+            response_data,
             200,
         )
 
