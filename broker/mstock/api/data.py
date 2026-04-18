@@ -916,3 +916,121 @@ class BrokerData:
 
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
+
+    def get_option_chain_quotes(self, symbols: list) -> list:
+        """
+        Get quotes for option chain using WebSocket mode 3 (Snap Quote) to fetch OI data.
+        This method is specifically designed for option chain requests where OI data is critical.
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'NIFTY21APR2624000CE', 'exchange': 'NFO'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'NIFTY21APR2624000CE', 'exchange': 'NFO', 'data': {...}}, ...]
+        """
+        try:
+            results = []
+            skipped_symbols = []
+
+            # Process symbols in batches to avoid overwhelming WebSocket
+            BATCH_SIZE = 50
+            RATE_LIMIT_DELAY = 0.5  # Delay between batches in seconds
+
+            logger.info(f"Fetching option chain quotes for {len(symbols)} symbols using WebSocket mode 3")
+
+            for i in range(0, len(symbols), BATCH_SIZE):
+                batch = symbols[i : i + BATCH_SIZE]
+                logger.debug(f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}")
+
+                for item in batch:
+                    symbol = item.get("symbol")
+                    exchange = item.get("exchange")
+
+                    if not symbol or not exchange:
+                        logger.warning(f"Skipping entry due to missing symbol/exchange: {item}")
+                        skipped_symbols.append({
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "data": None,
+                            "error": "Missing required symbol or exchange",
+                        })
+                        continue
+
+                    try:
+                        # Get token and exchange type for WebSocket
+                        token = get_token(symbol, exchange)
+                        exchange_type = self.ws_exchange_map.get(exchange)
+
+                        if not token:
+                            logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                            skipped_symbols.append({
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "data": None,
+                                "error": "Could not resolve token",
+                            })
+                            continue
+
+                        if not exchange_type:
+                            logger.warning(f"Skipping symbol {symbol}: Exchange '{exchange}' not supported")
+                            skipped_symbols.append({
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "data": None,
+                                "error": f"Exchange '{exchange}' not supported",
+                            })
+                            continue
+
+                        # Fetch quote using WebSocket mode 3 (Snap Quote with OI data)
+                        quote_data = self.websocket.fetch_quote(token, exchange_type, mode=3)
+
+                        if not quote_data:
+                            logger.warning(f"No data received for {symbol}")
+                            results.append({
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "error": "No data received from WebSocket",
+                            })
+                            continue
+
+                        # Format response to match REST API format
+                        result = {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "data": {
+                                "bid": 0,  # Not using depth data for option chain
+                                "ask": 0,  # Not using depth data for option chain
+                                "open": float(quote_data.get("open", 0)),
+                                "high": float(quote_data.get("high", 0)),
+                                "low": float(quote_data.get("low", 0)),
+                                "ltp": float(quote_data.get("ltp", 0)),
+                                "prev_close": float(quote_data.get("close", 0)),
+                                "volume": int(quote_data.get("volume", 0)),
+                                "oi": int(quote_data.get("oi", 0)),  # OI data from WebSocket mode 3
+                                "tick_size": None,
+                            },
+                        }
+
+                        # Normalize data (clean up 0.05 values for inactive strikes)
+                        result["data"] = normalize_quote_data(result["data"])
+                        results.append(result)
+
+                    except Exception as e:
+                        logger.warning(f"Error fetching quote for {symbol} on {exchange}: {str(e)}")
+                        results.append({
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "error": str(e),
+                        })
+
+                # Rate limit delay between batches
+                if i + BATCH_SIZE < len(symbols):
+                    time.sleep(RATE_LIMIT_DELAY)
+
+            logger.info(f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbols)} symbols")
+            return skipped_symbols + results
+
+        except Exception as e:
+            logger.exception("Error fetching option chain quotes")
+            raise Exception(f"Error fetching option chain quotes: {e}")
