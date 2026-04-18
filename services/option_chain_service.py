@@ -502,18 +502,14 @@ def get_option_chain(
             "chain": chain,
         }
 
-        # Apply normalization for MStock broker to match Kotak format
+        # Apply Kotak formatting for MStock broker
         if broker and broker.lower() == "mstock":
-            logger.info("Applying Kotak normalization for MStock option chain")
+            logger.info("Applying Kotak formatting for MStock option chain")
             try:
-                response_data = normalize_option_chain_data(
-                    response_data,
-                    extend_strike_range=True,
-                    recalculate_atm=True,
-                    fix_labels=True
-                )
-            except Exception as norm_error:
-                logger.error(f"Normalization failed: {norm_error}, returning original data")
+                from broker.mstock.mapping.option_chain_formatter import format_option_chain_to_kotak
+                response_data = format_option_chain_to_kotak(response_data)
+            except Exception as format_error:
+                logger.error(f"Kotak formatting failed: {format_error}, returning original data")
 
         return (
             True,
