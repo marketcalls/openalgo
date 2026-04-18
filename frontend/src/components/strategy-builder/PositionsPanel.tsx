@@ -31,6 +31,10 @@ export interface PositionsPanelProps {
 }
 
 function formatCurrency(v: number): string {
+  // Unlimited-profit / unlimited-loss strategies report ±Infinity from
+  // computePayoff. Surface that clearly instead of a generic dash.
+  if (v === Infinity) return 'Unlimited'
+  if (v === -Infinity) return 'Unlimited'
   if (!isFinite(v)) return '-'
   const abs = Math.abs(v)
   const sign = v < 0 ? '-' : v > 0 ? '+' : ''
@@ -82,10 +86,13 @@ export function PositionsPanel({
     },
     {
       label: 'Risk:Reward',
+      // R:R is meaningful only when both ends are finite and on opposite
+      // sides of zero. Unlimited-profit or unlimited-loss strategies have
+      // no defined ratio — show NA to match Opstra / Sensibull conventions.
       value:
-        maxProfit > 0 && maxLoss < 0
+        isFinite(maxProfit) && isFinite(maxLoss) && maxProfit > 0 && maxLoss < 0
           ? `1 : ${(Math.abs(maxProfit) / Math.abs(maxLoss)).toFixed(2)}`
-          : '-',
+          : 'NA',
     },
     {
       label: 'Breakevens',

@@ -81,7 +81,11 @@ function formatINR(value: number): string {
 
 export default function CustomStraddle() {
   const { mode, appMode } = useThemeStore()
-  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
+  const {
+    toolsFnoExchanges: fnoExchanges,
+    defaultToolsFnoExchange: defaultFnoExchange,
+    defaultUnderlyings,
+  } = useSupportedExchanges()
   const isDarkMode = mode === 'dark'
   const isAnalyzer = appMode === 'analyzer'
 

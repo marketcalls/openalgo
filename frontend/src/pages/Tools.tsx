@@ -7,13 +7,13 @@ const tools = [
     title: 'Strategy Builder',
     description:
       'Build multi-leg option strategies with live Greeks, payoff diagram and what-if simulators',
-    href: '/tools/strategy',
+    href: '/strategybuilder',
     color: 'bg-fuchsia-500',
   },
   {
     title: 'Strategy Portfolio',
     description: 'Saved strategies across MyTrades and Simulation watchlists',
-    href: '/tools/strategy/portfolio',
+    href: '/strategybuilder/portfolio',
     color: 'bg-violet-500',
   },
   {
