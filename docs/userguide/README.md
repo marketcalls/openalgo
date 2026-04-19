@@ -28,6 +28,7 @@ This guide takes you from zero to automated trading, covering everything from ba
 - [13 - Basket Orders](./13-basket-orders/README.md)
 - [14 - Positions & Holdings](./14-positions-holdings/README.md)
 - [15 - Analyzer Mode (Sandbox Testing)](./15-analyzer-mode/README.md)
+- [31 - Replay Mode (Historical Paper Trading)](./31-replay-mode/README.md)
 
 ### Reference
 - [Symbol Format Guide](./symbol-format/README.md) - Essential reference for symbol naming conventions
@@ -64,6 +65,7 @@ This guide takes you from zero to automated trading, covering everything from ba
 | Connect my broker | [Module 06](./06-broker-connection/README.md) |
 | Place my first order | [Module 10](./10-placing-first-order/README.md) |
 | Test without real money | [Module 15](./15-analyzer-mode/README.md) |
+| Replay historical NSE data | [Module 31](./31-replay-mode/README.md) |
 | Understand symbol formats | [Symbol Format Guide](./symbol-format/README.md) |
 | Connect TradingView | [Module 16](./16-tradingview-integration/README.md) |
 | Build visual strategies | [Module 21](./21-flow-visual-builder/README.md) |

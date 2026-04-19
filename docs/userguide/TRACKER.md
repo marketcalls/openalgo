@@ -27,6 +27,7 @@ This comprehensive user guide is designed for **traders of all levels** - from c
 | 13 | Basket Orders | ✅ Complete | Intermediate |
 | 14 | Positions & Holdings | ✅ Complete | Beginner |
 | 15 | Analyzer Mode (Sandbox Testing) | ✅ Complete | Beginner |
+| 31 | Replay Mode (Historical Paper Trading) | ✅ Complete | Intermediate |
 | -- | **Symbol Format Guide** | ✅ Complete | All Levels |
 | 16 | TradingView Integration | ✅ Complete | Intermediate |
 | 17 | Amibroker Integration | ✅ Complete | Intermediate |

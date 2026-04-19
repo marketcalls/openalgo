@@ -371,3 +371,27 @@ View sandbox-specific logs:
 **Previous**: [14 - Positions & Holdings](../14-positions-holdings/README.md)
 
 **Next**: [16 - TradingView Integration](../16-tradingview-integration/README.md)
+
+---
+
+## Replay Mode — Paper Trading with Historical Data
+
+Analyzer Mode can run against **uploaded historical market data** instead of live
+broker prices. This is called **Replay Mode**.
+
+With Replay Mode you can:
+- Backtest strategies on real NSE bhavcopy or 1-minute data
+- Simulate specific date ranges (e.g. a volatile expiry week)
+- Practice without a live broker connection
+
+### Quick start
+
+1. Navigate to **Sandbox → Replay Data Manager** (`/sandbox/replay`)
+2. Upload NSE bhavcopy ZIP files for your target dates
+3. Configure date range and playback speed in the Replay Controller
+4. Set **Paper Trading Price Source → 🎞️ Replay Data**
+5. Keep Analyzer Mode ON (this page)
+6. Press **▶ Start** — orders and MTM will now use the uploaded historical data
+
+See the complete guide: **[Module 31 — Replay Mode](../31-replay-mode/README.md)**
+
