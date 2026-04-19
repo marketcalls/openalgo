@@ -106,6 +106,26 @@ Sandbox/analyzer mode for testing.
 | [AnalyzerStatus](./analyzer-services/analyzerstatus.md) | Get analyzer mode status |
 | [AnalyzerToggle](./analyzer-services/analyzertoggle.md) | Toggle analyzer mode on/off |
 
+### Replay Services
+Upload historical data and control the replay clock for sandbox paper trading.
+
+| Endpoint | Description |
+|----------|-------------|
+| [Upload Market Data](./replay/README.md#post-replayapiupload) | Upload NSE bhavcopy or 1m OHLCV ZIP |
+| [Replay Status](./replay/README.md#get-replayapireplaystatus) | Get current replay session state |
+| [Replay Config](./replay/README.md#post-replayapiplaybackconfig) | Set date range, speed, universe mode |
+| [Replay Start](./replay/README.md#post-replayapireplaystart) | Start or resume replay clock |
+| [Replay Pause](./replay/README.md#post-replayapireplaypause) | Pause replay clock |
+| [Replay Seek](./replay/README.md#post-replayapireplayseek) | Jump to a specific timestamp |
+| [Replay Stop](./replay/README.md#post-replayapireplaystop) | Stop replay and reset |
+
+### Settings Services
+Application settings for paper trading behaviour.
+
+| Endpoint | Description |
+|----------|-------------|
+| [PaperPriceSource](./settings/paper-price-source.md) | Get/set paper trading price source (LIVE or REPLAY) |
+
 ### WebSocket Streaming
 Real-time market data streaming.
 
