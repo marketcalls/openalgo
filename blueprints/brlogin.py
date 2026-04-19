@@ -3,8 +3,6 @@ import hashlib
 import http.client
 import json
 import os
-
-import jwt
 from flask import Blueprint, jsonify, make_response, redirect, request, session, url_for
 from flask import current_app as app
 
@@ -55,10 +53,9 @@ def broker_callback(broker, para=None):
             logger.warning(f"User not in session for {broker} callback, redirecting to login")
             return redirect(url_for("auth.login"))
 
-    if session.get("logged_in"):
-        # Store broker in session and g
-        session["broker"] = broker
-        return redirect(url_for("dashboard_bp.dashboard"))
+    # Continue processing broker callback even if the user is already logged in.
+    # The callback should still establish broker authentication and not redirect
+    # immediately back to the dashboard.
 
     broker_auth_functions = app.broker_auth_functions
     auth_function = broker_auth_functions.get(f"{broker}_auth")
@@ -488,8 +485,50 @@ def broker_callback(broker, para=None):
         forward_url = "broker.html"
 
     elif broker == "dhan_sandbox":
-        code = "dhan_sandbox"
-        logger.debug(f"Dhan Sandbox broker - The code is {code}")
+        # Dhan sandbox callback can provide a tokenId/code that should be consumed.
+        # Support query params, form fields, JSON body, and raw URL-encoded body.
+        code = None
+        for key in ("tokenId", "token_id", "token", "code", "access_token", "auth_token"):
+            if request.args.get(key):
+                code = request.args.get(key)
+                break
+            if request.form.get(key):
+                code = request.form.get(key)
+                break
+
+        if not code and request.is_json:
+            payload = request.get_json(silent=True) or {}
+            for key in ("tokenId", "token_id", "token", "code", "access_token", "auth_token"):
+                if payload.get(key):
+                    code = payload.get(key)
+                    break
+
+        if not code:
+            raw_body = request.get_data(as_text=True).strip()
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                    for key in ("tokenId", "token_id", "token", "code", "access_token", "auth_token"):
+                        if payload.get(key):
+                            code = payload.get(key)
+                            break
+                except ValueError:
+                    from urllib.parse import parse_qs
+
+                    parsed = parse_qs(raw_body)
+                    for key in ("tokenId", "token_id", "token", "code", "access_token", "auth_token"):
+                        if parsed.get(key):
+                            code = parsed.get(key)[0]
+                            break
+
+        if code:
+            logger.debug(f"Dhan Sandbox broker - received callback token: {code}")
+        else:
+            code = "dhan_sandbox"
+            logger.debug(
+                "Dhan Sandbox broker - no callback token found, falling back to BROKER_API_SECRET"
+            )
+
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
@@ -870,6 +909,7 @@ def broker_callback(broker, para=None):
 
 
 @brlogin_bp.route("/dhan/initiate-oauth", methods=["GET", "POST"])
+@brlogin_bp.route("/dhan_sandbox/initiate-oauth", methods=["GET", "POST"])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def dhan_initiate_oauth():

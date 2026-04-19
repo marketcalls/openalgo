@@ -412,6 +412,10 @@ def get_direct_access_token(access_token):
     if not access_token:
         return None, "No access token provided"
 
+    access_token = access_token.strip().strip("'\"")
+    if not access_token:
+        return None, "No access token provided"
+
     if len(access_token) < 50:
         return None, "Invalid access token format"
 
