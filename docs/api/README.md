@@ -113,7 +113,7 @@ Upload historical data and control the replay clock for sandbox paper trading.
 |----------|-------------|
 | [Upload Market Data](./replay/README.md#post-replayapiupload) | Upload NSE bhavcopy or 1m OHLCV ZIP |
 | [Replay Status](./replay/README.md#get-replayapireplaystatus) | Get current replay session state |
-| [Replay Config](./replay/README.md#post-replayapiplaybackconfig) | Set date range, speed, universe mode |
+| [Replay Config](./replay/README.md#configure-replay) | Set date range, speed, universe mode |
 | [Replay Start](./replay/README.md#post-replayapireplaystart) | Start or resume replay clock |
 | [Replay Pause](./replay/README.md#post-replayapireplaypause) | Pause replay clock |
 | [Replay Seek](./replay/README.md#post-replayapireplayseek) | Jump to a specific timestamp |
