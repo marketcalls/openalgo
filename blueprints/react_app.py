@@ -273,6 +273,12 @@ def react_sandbox_mypnl():
     return serve_react_app()
 
 
+# Sandbox Replay Data (multi-day replay paper trading)
+@react_bp.route("/sandbox/replay")
+def react_sandbox_replay():
+    return serve_react_app()
+
+
 # API Request Analyzer
 @react_bp.route("/analyzer")
 def react_analyzer():
