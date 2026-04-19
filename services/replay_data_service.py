@@ -130,12 +130,14 @@ def _parse_nse_date(date_str: str) -> datetime:
 
     # Try common NSE date formats
     formats = [
-        "%d-%b-%Y",    # 01-Jan-2024
+        "%d-%b-%Y",    # 01-Jan-2024  (FO bhavcopy expiry column)
         "%d-%B-%Y",    # 01-January-2024
         "%Y-%m-%d",    # 2024-01-01
         "%d/%m/%Y",    # 01/01/2024
         "%d-%m-%Y",    # 01-01-2024
         "%Y%m%d",      # 20240101
+        "%d%b%Y",      # 01JAN2024  (NSE CM bhav filename: cm01JAN2024bhav.csv)
+        "%d%b%y",      # 01JAN24
     ]
 
     for fmt in formats:
@@ -160,6 +162,81 @@ def _format_strike_price(strike) -> str:
     if strike_val == int(strike_val):
         return str(int(strike_val))
     return str(strike_val)
+
+
+def _extract_date_from_filename(basename: str) -> int | None:
+    """
+    Extract a date epoch from an NSE filename using multiple date patterns.
+
+    Tries (in order):
+    1. DDMonYYYY  – e.g. 01JAN2024  (classic NSE bhav naming)
+    2. DDMMYYYY   – e.g. 17042026   (newer NSE CM package, pr*.csv)
+    3. DDMMYY     – e.g. 170426     (newer NSE FO package, fo*.csv)
+
+    Returns epoch seconds (IST 15:30) or None if no pattern matched.
+    """
+    # 1. DDMonYYYY  (e.g. 01JAN2024)
+    match = re.search(r'(\d{2}[A-Za-z]{3}\d{4})', basename)
+    if match:
+        try:
+            dt = _parse_nse_date(match.group(1).upper())
+            return _date_to_epoch(dt)
+        except ValueError:
+            pass
+
+    # 2. DDMMYYYY  (e.g. 17042026)
+    match = re.search(r'(\d{8})', basename)
+    if match:
+        try:
+            dt = datetime.strptime(match.group(1), '%d%m%Y')
+            return _date_to_epoch(dt)
+        except ValueError:
+            pass
+
+    # 3. DDMMYY  (e.g. 170426)
+    match = re.search(r'(\d{6})', basename)
+    if match:
+        try:
+            dt = datetime.strptime(match.group(1), '%d%m%y')
+            return _date_to_epoch(dt)
+        except ValueError:
+            pass
+
+    return None
+
+
+def _parse_contract_descriptor(contract_d: str) -> tuple:
+    """
+    Parse an NSE FO contract descriptor (CONTRACT_D column).
+
+    Examples:
+    - 'FUTSTK SBIN 27-APR-2025'
+    - 'FUTIDX NIFTY 27-APR-2025'
+    - 'OPTSTK SBIN 27-APR-2025 500.00 CE'
+    - 'OPTIDX NIFTY 27-APR-2025 22000.00 CE'
+
+    Returns:
+        (instrument, symbol, expiry_str, strike_str, option_type)
+        All elements are strings; empty string when not applicable.
+    """
+    try:
+        parts = str(contract_d).strip().split()
+        if len(parts) < 3:
+            return ('', '', '', '', '')
+
+        instrument = parts[0].upper()
+        symbol = parts[1].upper()
+        expiry = parts[2]
+        strike = ''
+        opt_type = ''
+
+        if len(parts) >= 5:
+            strike = parts[3]
+            opt_type = parts[4].upper()
+
+        return (instrument, symbol, expiry, strike, opt_type)
+    except Exception:
+        return ('', '', '', '', '')
 
 
 def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
@@ -199,6 +276,9 @@ def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
 
         for csv_path in csv_files:
             try:
+                basename = os.path.basename(csv_path)
+                _, ext = os.path.splitext(basename.lower())
+
                 # Try reading with different encodings
                 for encoding in ['utf-8', 'latin-1', 'cp1252']:
                     try:
@@ -207,43 +287,51 @@ def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     except UnicodeDecodeError:
                         continue
                 else:
-                    stats["errors"].append(f"Cannot read {os.path.basename(csv_path)}: encoding error")
+                    stats["errors"].append(f"Cannot read {basename}: encoding error")
                     continue
 
                 # Normalize column names (strip whitespace, uppercase)
                 df.columns = df.columns.str.strip().str.upper()
 
-                # Detect CM bhavcopy format
+                # Detect CM bhavcopy format — try alternative column names first
                 required_cols = {'SYMBOL', 'OPEN', 'HIGH', 'LOW', 'CLOSE'}
+                col_map = {}
+                for col in df.columns:
+                    col_lower = col.lower().strip()
+                    if 'symbol' in col_lower or 'tckr' in col_lower or 'tkr' in col_lower:
+                        col_map[col] = 'SYMBOL'
+                    elif col_lower in ('open', 'open_price', 'openprc', 'open price'):
+                        col_map[col] = 'OPEN'
+                    elif col_lower in ('high', 'high_price', 'highprc', 'high price'):
+                        col_map[col] = 'HIGH'
+                    elif col_lower in ('low', 'low_price', 'lowprc', 'low price'):
+                        col_map[col] = 'LOW'
+                    elif col_lower in ('close', 'close_price', 'closeprc', 'close price'):
+                        col_map[col] = 'CLOSE'
+                    elif col_lower in ('volume', 'tottrdqty', 'ttl_trd_qnty',
+                                       'net_trdqty', 'net traded qty'):
+                        col_map[col] = 'VOLUME'
+                    elif col_lower in ('timestamp', 'trade_date', 'trd_dt', 'date',
+                                       'trade date'):
+                        col_map[col] = 'DATE'
+
+                if col_map:
+                    df = df.rename(columns=col_map)
+
+                # Fallback: 'SECURITY' → SYMBOL for NSE CM pr*.csv format
+                if 'SYMBOL' not in df.columns and 'SECURITY' in df.columns:
+                    df = df.rename(columns={'SECURITY': 'SYMBOL'})
+
                 if not required_cols.issubset(set(df.columns)):
-                    # Try alternative column names
-                    col_map = {}
-                    for col in df.columns:
-                        col_lower = col.lower().strip()
-                        if 'symbol' in col_lower or 'tckr' in col_lower or 'tkr' in col_lower:
-                            col_map[col] = 'SYMBOL'
-                        elif col_lower in ('open', 'open_price', 'openprc'):
-                            col_map[col] = 'OPEN'
-                        elif col_lower in ('high', 'high_price', 'highprc'):
-                            col_map[col] = 'HIGH'
-                        elif col_lower in ('low', 'low_price', 'lowprc'):
-                            col_map[col] = 'LOW'
-                        elif col_lower in ('close', 'close_price', 'closeprc'):
-                            col_map[col] = 'CLOSE'
-                        elif col_lower in ('volume', 'tottrdqty', 'ttl_trd_qnty'):
-                            col_map[col] = 'VOLUME'
-                        elif col_lower in ('timestamp', 'trade_date', 'trd_dt', 'date'):
-                            col_map[col] = 'DATE'
-
-                    if col_map:
-                        df = df.rename(columns=col_map)
-
-                    if not required_cols.issubset(set(df.columns)):
+                    # Only warn when the file has some OHLCV-like columns; otherwise
+                    # skip silently (e.g. bcXX.csv, hlXX.csv, readme.txt, etc.)
+                    ohlcv_hint = {'OPEN', 'HIGH', 'LOW', 'CLOSE'}
+                    if ohlcv_hint.intersection(set(df.columns)):
                         stats["errors"].append(
-                            f"File {os.path.basename(csv_path)}: Missing required columns. "
+                            f"File {basename}: Missing required columns. "
                             f"Found: {list(df.columns)}"
                         )
-                        continue
+                    continue
 
                 # Filter for EQ series if SERIES column exists
                 if 'SERIES' in df.columns:
@@ -262,20 +350,19 @@ def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                 if date_col:
                     df['timestamp'] = df[date_col].apply(lambda x: _date_to_epoch(_parse_nse_date(x)))
                 else:
-                    # Try to extract date from filename (e.g., cm01JAN2024bhav.csv)
-                    basename = os.path.basename(csv_path)
-                    match = re.search(r'(\d{2}[A-Za-z]{3}\d{4})', basename)
-                    if match:
-                        dt = _parse_nse_date(match.group(1).upper())
-                        epoch = _date_to_epoch(dt)
+                    # Try to extract date from filename
+                    # Supports DDMonYYYY (cm01JAN2024), DDMMYYYY (pr17042026), DDMMYY (fo170426)
+                    epoch = _extract_date_from_filename(basename)
+                    if epoch is not None:
                         df['timestamp'] = epoch
                     else:
-                        stats["errors"].append(f"File {os.path.basename(csv_path)}: No date column found")
+                        stats["errors"].append(f"File {basename}: No date column found")
                         continue
 
                 # Map volume
                 if 'VOLUME' not in df.columns:
-                    for vol_col in ['TOTTRDQTY', 'TTL_TRD_QNTY', 'TOTAL_TRADED_QUANTITY']:
+                    for vol_col in ['TOTTRDQTY', 'TTL_TRD_QNTY', 'TOTAL_TRADED_QUANTITY',
+                                    'NET_TRDQTY', 'NET TRADED QTY']:
                         if vol_col in df.columns:
                             df['VOLUME'] = df[vol_col]
                             break
@@ -302,7 +389,14 @@ def import_cm_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     stats["files_processed"] += 1
 
             except Exception as e:
-                stats["errors"].append(f"Error processing {os.path.basename(csv_path)}: {str(e)}")
+                _basename = os.path.basename(csv_path)
+                _, _ext = os.path.splitext(_basename.lower())
+                # Silently skip non-CSV files and bare parse/tokenization errors
+                # (e.g. readme.txt, an*.txt, bm*.txt found in NSE CM package ZIPs)
+                if _ext != '.csv' or isinstance(e, pd.errors.ParserError):
+                    logger.debug(f"Skipping non-data file {_basename}: {e}")
+                else:
+                    stats["errors"].append(f"Error processing {_basename}: {str(e)}")
 
         if all_rows:
             combined = pd.concat(all_rows, ignore_index=True)
@@ -367,6 +461,9 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
 
         for csv_path in csv_files:
             try:
+                basename = os.path.basename(csv_path)
+                _, ext = os.path.splitext(basename.lower())
+
                 for encoding in ['utf-8', 'latin-1', 'cp1252']:
                     try:
                         df = pd.read_csv(csv_path, encoding=encoding)
@@ -374,10 +471,30 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     except UnicodeDecodeError:
                         continue
                 else:
-                    stats["errors"].append(f"Cannot read {os.path.basename(csv_path)}: encoding error")
+                    stats["errors"].append(f"Cannot read {basename}: encoding error")
                     continue
 
                 df.columns = df.columns.str.strip().str.upper()
+
+                # --- New NSE FO format: CONTRACT_D descriptor column ---
+                # Newer NSE FO bhav ZIPs export from DBF/SHX with 10-char field names.
+                # CONTRACT_D = full contract descriptor, e.g.:
+                #   'FUTSTK SBIN 27-APR-2025'
+                #   'OPTIDX NIFTY 27-APR-2025 22000.00 CE'
+                if 'CONTRACT_D' in df.columns:
+                    parsed = df['CONTRACT_D'].apply(_parse_contract_descriptor)
+                    df['INSTRUMENT'] = parsed.apply(lambda x: x[0])
+                    df['SYMBOL'] = parsed.apply(lambda x: x[1])
+                    df['EXPIRY_DT'] = parsed.apply(lambda x: x[2])
+                    df['STRIKE_PR'] = parsed.apply(lambda x: x[3])
+                    df['OPTION_TYP'] = parsed.apply(lambda x: x[4])
+                    # Rename truncated column names produced by the DBF export
+                    _cd_rename = {
+                        'CLOSE_PRIC': 'CLOSE',    # CLOSE_PRICE → 10 chars
+                        'OI_NO_CON': 'OI',         # OI_NO_OF_CONTRACTS
+                        'TRADED_QUA': 'VOLUME',    # TRADED_QUANTITY
+                    }
+                    df = df.rename(columns={k: v for k, v in _cd_rename.items() if k in df.columns})
 
                 # FO bhavcopy required columns
                 required_cols = {'SYMBOL', 'OPEN', 'HIGH', 'LOW', 'CLOSE'}
@@ -415,10 +532,14 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     df = df.rename(columns=col_map)
 
                 if not required_cols.issubset(set(df.columns)):
-                    stats["errors"].append(
-                        f"File {os.path.basename(csv_path)}: Missing required columns. "
-                        f"Found: {list(df.columns)}"
-                    )
+                    # Only warn when the file has OHLCV-like or CONTRACT_D columns;
+                    # silently skip unrelated files inside the ZIP.
+                    ohlcv_hint = {'OPEN', 'HIGH', 'LOW', 'CLOSE', 'CONTRACT_D'}
+                    if ohlcv_hint.intersection(set(df.columns)):
+                        stats["errors"].append(
+                            f"File {basename}: Missing required columns. "
+                            f"Found: {list(df.columns)}"
+                        )
                     continue
 
                 if df.empty:
@@ -433,14 +554,14 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     opt_type = str(row.get('OPTION_TYP', '')).strip().upper()
                     instrument = str(row.get('INSTRUMENT', '')).strip().upper()
 
-                    if expiry and expiry != 'nan':
+                    if expiry and expiry not in ('nan', ''):
                         try:
                             exp_dt = _parse_nse_date(expiry)
-                            exp_str = exp_dt.strftime('%d%b%y').upper()  # e.g., 28mar24 -> 28MAR24
+                            exp_str = exp_dt.strftime('%d%b%y').upper()  # e.g., 28MAR24
                         except ValueError:
                             exp_str = expiry.replace('-', '')
 
-                        if instrument in ('FUTIDX', 'FUTSTK') or opt_type in ('XX', '', 'nan'):
+                        if instrument in ('FUTIDX', 'FUTSTK') or opt_type in ('XX', '', 'nan', 'NONE'):
                             return f"{base}{exp_str}FUT"
                         elif opt_type in ('CE', 'PE'):
                             strike_str = _format_strike_price(strike)
@@ -460,14 +581,14 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                 if date_col:
                     df['timestamp'] = df[date_col].apply(lambda x: _date_to_epoch(_parse_nse_date(x)))
                 else:
-                    basename = os.path.basename(csv_path)
-                    match = re.search(r'(\d{2}[A-Za-z]{3}\d{4})', basename)
-                    if match:
-                        dt = _parse_nse_date(match.group(1).upper())
-                        epoch = _date_to_epoch(dt)
+                    # Try to extract date from filename
+                    # Supports DDMonYYYY (fo01JAN2024), DDMMYYYY (fo17042026),
+                    # and DDMMYY (fo170426 — newer NSE FO package format)
+                    epoch = _extract_date_from_filename(basename)
+                    if epoch is not None:
                         df['timestamp'] = epoch
                     else:
-                        stats["errors"].append(f"File {os.path.basename(csv_path)}: No date column found")
+                        stats["errors"].append(f"File {basename}: No date column found")
                         continue
 
                 # Volume
@@ -506,7 +627,13 @@ def import_fo_bhavcopy_zip(zip_path: str) -> dict[str, Any]:
                     stats["files_processed"] += 1
 
             except Exception as e:
-                stats["errors"].append(f"Error processing {os.path.basename(csv_path)}: {str(e)}")
+                _basename = os.path.basename(csv_path)
+                _, _ext = os.path.splitext(_basename.lower())
+                # Silently skip non-CSV files and bare parse/tokenization errors
+                if _ext != '.csv' or isinstance(e, pd.errors.ParserError):
+                    logger.debug(f"Skipping non-data file {_basename}: {e}")
+                else:
+                    stats["errors"].append(f"Error processing {_basename}: {str(e)}")
 
         if all_rows:
             combined = pd.concat(all_rows, ignore_index=True)

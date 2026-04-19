@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   type LucideIcon,
   MessageSquare,
+  Play,
   Search,
   Settings,
   TrendingUp,
@@ -70,6 +71,7 @@ export const profileMenuItems: NavItem[] = [
   { href: '/historify', label: 'Historify', icon: Database },
   { href: '/search/token', label: 'Search', icon: Search },
   { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },
+  { href: '/sandbox/replay', label: 'Replay Data', icon: Play },
   { href: '/leverage', label: 'Leverage', icon: Gauge },
   { href: '/admin', label: 'Admin', icon: Settings },
 ]
