@@ -1,4 +1,4 @@
-import { BarChart3, Database, RotateCcw, Save, Settings } from 'lucide-react'
+import { BarChart3, Play, RotateCcw, Save, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
@@ -385,7 +385,7 @@ export default function Sandbox() {
           </Button>
           <Button asChild variant="outline">
             <Link to="/sandbox/replay">
-              <Database className="h-4 w-4 mr-2" />
+              <Play className="h-4 w-4 mr-2" />
               Replay Data
             </Link>
           </Button>
