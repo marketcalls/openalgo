@@ -956,9 +956,7 @@ class BrokerData:
                     )
                     logger.error(f"Chunk error type: {type(chunk_error).__name__}")
                     logger.error(f"Chunk error details: {repr(chunk_error)}")
-                    import traceback
-
-                    logger.error(f"Full traceback: {traceback.format_exc()}")
+                    logger.exception("Full traceback for chunk error")
                     continue
 
             logger.info(f"Total candles collected from all chunks: {len(all_candles)}")

@@ -10,6 +10,16 @@ from utils.logging import get_logger, highlight_url
 
 from .server import main as websocket_main
 
+# Import the original threading module to run the asyncio event loop in a real
+# OS thread, bypassing eventlet's monkey-patching which turns threading.Thread
+# into green threads where asyncio.new_event_loop() cannot work.
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _original_threading = eventlet.patcher.original("threading")
+else:
+    _original_threading = threading
+
 # Set the correct event loop policy for Windows to avoid ZeroMQ warnings
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -181,7 +191,7 @@ def start_websocket_server():
                     logger.warning(f"Error closing event loop: {loop_err}")
 
     # Start the WebSocket server in a daemon thread
-    _websocket_thread = threading.Thread(
+    _websocket_thread = _original_threading.Thread(
         target=run_websocket_server,
         daemon=False,  # Changed to False so we can properly clean up
     )

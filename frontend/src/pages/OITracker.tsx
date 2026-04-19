@@ -46,7 +46,11 @@ function formatNumber(num: number): string {
 
 export default function OITracker() {
   const { mode, appMode } = useThemeStore()
-  const { fnoExchanges, defaultFnoExchange, defaultUnderlyings } = useSupportedExchanges()
+  const {
+    toolsFnoExchanges: fnoExchanges,
+    defaultToolsFnoExchange: defaultFnoExchange,
+    defaultUnderlyings,
+  } = useSupportedExchanges()
   const isAnalyzer = appMode === 'analyzer'
   const isDark = mode === 'dark' || isAnalyzer
 

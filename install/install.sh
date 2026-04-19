@@ -759,9 +759,11 @@ fi
 # Update WebSocket URL for production
 sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
 
-# Update host bindings to allow external connections
-sudo sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" $OPENALGO_PATH/.env
-sudo sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" $OPENALGO_PATH/.env
+# Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
+# - nginx on this host reverse-proxies /ws -> 127.0.0.1:WEBSOCKET_PORT, so the
+#   WebSocket server does not need to listen on all interfaces.
+# - ZMQ is an internal message bus between broker adapters and the WS proxy;
+#   binding it to 0.0.0.0 would expose the raw tick feed to the public IP.
 
 check_status "Failed to configure environment file"
 
@@ -1039,6 +1041,10 @@ After=network.target
 User=$WEB_USER
 Group=$WEB_GROUP
 WorkingDirectory=$OPENALGO_PATH
+# Set HOME so Kaleido/choreographer can write temp files for Telegram /chart.
+# Kaleido 1.x creates temp dirs in Path.home() (not TMPDIR); the default
+# www-data home /var/www/ is typically root-owned and not writable.
+Environment="HOME=$OPENALGO_PATH/tmp"
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$OPENALGO_PATH/tmp"
 Environment="NUMBA_CACHE_DIR=$OPENALGO_PATH/tmp/numba_cache"

@@ -58,9 +58,19 @@ export function useSupportedExchanges() {
       .filter((e) => FNO_CODES.has(e))
       .map((e) => ({ value: e, label: e }))
 
+    // Exchanges shown inside /tools pages (Strategy Builder, Option Chain,
+    // OI Tracker, Straddle Chart, Custom Straddle etc.). MCX and CDS are
+    // temporarily excluded — the option chain + quotes plumbing doesn't
+    // fully support them yet. CRYPTO is retained for crypto-only brokers.
+    const toolsFnoExchanges: ExchangeOption[] = fnoExchanges.filter(
+      (e) => e.value !== 'MCX' && e.value !== 'CDS'
+    )
+
     // Defaults
     const defaultExchange = tradingExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NSE')
     const defaultFnoExchange = fnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
+    const defaultToolsFnoExchange =
+      toolsFnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
 
     // Underlyings filtered to only supported FNO exchanges
     const defaultUnderlyings: Record<string, string[]> = {}
@@ -75,12 +85,19 @@ export function useSupportedExchanges() {
       allExchanges,
       /** Trading exchanges (no _INDEX) — for TradingView, GoCharting, Search */
       tradingExchanges,
-      /** F&O exchanges (NFO, BFO, CRYPTO) — for Tools pages */
+      /** Broker-reported F&O exchanges (NFO, BFO, MCX, CDS, CRYPTO). */
       fnoExchanges,
+      /**
+       * F&O exchanges allowed in /tools pages today — NFO, BFO, CRYPTO only.
+       * Prefer this over `fnoExchanges` in every route under /tools/* .
+       */
+      toolsFnoExchanges,
       /** First trading exchange */
       defaultExchange,
       /** First F&O exchange */
       defaultFnoExchange,
+      /** First tools-supported F&O exchange */
+      defaultToolsFnoExchange,
       /** Underlyings map filtered to supported F&O exchanges */
       defaultUnderlyings,
       /** Quick check: is this a crypto broker? */

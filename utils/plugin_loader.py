@@ -50,7 +50,7 @@ def load_broker_capabilities(broker_directory="broker"):
             logger.error(f"Error reading plugin.json for {broker_name}: {e}")
 
     _broker_capabilities = capabilities
-    logger.info(f"Loaded capabilities for {len(capabilities)} brokers")
+    logger.debug(f"Loaded capabilities for {len(capabilities)} brokers")
     return capabilities
 
 

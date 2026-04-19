@@ -65,6 +65,8 @@ const VolSurface = lazy(() => import('@/pages/VolSurface'))
 const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
 const IVSmile = lazy(() => import('@/pages/IVSmile'))
 const OIProfile = lazy(() => import('@/pages/OIProfile'))
+const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
+const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -194,6 +196,17 @@ function App() {
                 <Route path="/gex" element={<GEXDashboard />} />
                 <Route path="/ivsmile" element={<IVSmile />} />
                 <Route path="/oiprofile" element={<OIProfile />} />
+                <Route path="/strategybuilder" element={<StrategyBuilder />} />
+                <Route path="/strategybuilder/portfolio" element={<StrategyPortfolio />} />
+                {/* Legacy /tools/strategy paths — redirect to the new route. */}
+                <Route
+                  path="/tools/strategy"
+                  element={<Navigate to="/strategybuilder" replace />}
+                />
+                <Route
+                  path="/tools/strategy/portfolio"
+                  element={<Navigate to="/strategybuilder/portfolio" replace />}
+                />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />

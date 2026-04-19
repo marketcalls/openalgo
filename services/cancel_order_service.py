@@ -1,6 +1,5 @@
 import copy
 import importlib
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
@@ -135,8 +134,7 @@ def cancel_order_with_auth(
         # Use the dynamically imported module's function to cancel the order
         response_message, status_code = broker_module.cancel_order(orderid, auth_token)
     except Exception as e:
-        logger.error(f"Error in broker_module.cancel_order: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.cancel_order: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to cancel order due to internal error",
