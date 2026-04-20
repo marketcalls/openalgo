@@ -614,37 +614,20 @@ def setup_environment(app):
             try:
                 import sys
 
-                bot_config = get_bot_config()
-                if bot_config.get("is_active") and bot_config.get("bot_token"):
-                    logger.debug("Auto-starting Telegram bot (background)...")
+                debug = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
+                is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
 
-                    if "eventlet" in sys.modules:
-                        success, message = telegram_bot_service.initialize_bot_sync(
-                            token=bot_config["bot_token"]
-                        )
-                        if success:
-                            success, message = telegram_bot_service.start_bot()
-                            if success:
-                                logger.debug(f"Telegram bot auto-started successfully: {message}")
-                            else:
-                                logger.error(f"Failed to auto-start Telegram bot: {message}")
-                        else:
-                            logger.error(f"Failed to initialize Telegram bot: {message}")
-                    else:
-                        import asyncio
+                if debug and not is_reloader_child:
+                    logger.debug("Skipping Telegram auto-start in Werkzeug reloader parent process")
+                else:
+                    bot_config = get_bot_config()
+                    if bot_config.get("is_active") and bot_config.get("bot_token"):
+                        logger.debug("Auto-starting Telegram bot (background)...")
 
-                        try:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                success, message = loop.run_until_complete(
-                                    telegram_bot_service.initialize_bot(
-                                        token=bot_config["bot_token"]
-                                    )
-                                )
-                            finally:
-                                loop.close()
-
+                        if "eventlet" in sys.modules:
+                            success, message = telegram_bot_service.initialize_bot_sync(
+                                token=bot_config["bot_token"]
+                            )
                             if success:
                                 success, message = telegram_bot_service.start_bot()
                                 if success:
@@ -653,8 +636,31 @@ def setup_environment(app):
                                     logger.error(f"Failed to auto-start Telegram bot: {message}")
                             else:
                                 logger.error(f"Failed to initialize Telegram bot: {message}")
-                        except Exception as e:
-                            logger.error(f"Error in Telegram bot startup: {e}")
+                        else:
+                            import asyncio
+
+                            try:
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    success, message = loop.run_until_complete(
+                                        telegram_bot_service.initialize_bot(
+                                            token=bot_config["bot_token"]
+                                        )
+                                    )
+                                finally:
+                                    loop.close()
+
+                                if success:
+                                    success, message = telegram_bot_service.start_bot()
+                                    if success:
+                                        logger.debug(f"Telegram bot auto-started successfully: {message}")
+                                    else:
+                                        logger.error(f"Failed to auto-start Telegram bot: {message}")
+                                else:
+                                    logger.error(f"Failed to initialize Telegram bot: {message}")
+                            except Exception as e:
+                                logger.error(f"Error in Telegram bot startup: {e}")
             except Exception as e:
                 logger.error(f"Error auto-starting Telegram bot: {e}")
 

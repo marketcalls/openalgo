@@ -651,6 +651,11 @@ class TelegramBotService:
         elif isinstance(error, telegram.error.Conflict):
             logger.error("Another instance of the bot is running! Please stop other instances.")
             self.is_running = False
+            self._stop_event.set()
+            try:
+                update_bot_config({"is_active": False})
+            except Exception as e:
+                logger.debug(f"Failed to update telegram bot active state after conflict: {e}")
         elif isinstance(error, telegram.error.TimedOut):
             logger.warning("Request to Telegram timed out. Will retry automatically.")
         elif isinstance(error, telegram.error.BadRequest):
@@ -790,10 +795,17 @@ class TelegramBotService:
             except Exception as e:
                 logger.debug(f"Error stopping updater: {e}")
 
+        # Ensure the stored bot state is accurate after shutdown
+        if not self.is_running:
+            try:
+                update_bot_config({"is_active": False})
+            except Exception as e:
+                logger.debug(f"Failed to update telegram bot active state during cleanup: {e}")
+
     def start_bot(self) -> tuple[bool, str]:
         """Start the bot in a separate thread"""
         try:
-            if self.is_running:
+            if self.is_running or (self.bot_thread and self.bot_thread.is_alive()):
                 return False, "Bot is already running"
 
             config = get_bot_config()
@@ -828,7 +840,7 @@ class TelegramBotService:
     def stop_bot(self) -> tuple[bool, str]:
         """Stop the bot"""
         try:
-            if not self.is_running:
+            if not self.is_running and not (self.bot_thread and self.bot_thread.is_alive()):
                 return False, "Bot is not running"
 
             logger.debug("Stopping Telegram bot...")
