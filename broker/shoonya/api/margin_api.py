@@ -10,21 +10,21 @@ logger = get_logger(__name__)
 
 def calculate_margin_api(positions, auth):
     """
-    Calculate margin requirement for a basket of positions using Shoonya Span Calculator API.
+    Calculate basket margin via Shoonya's GetBasketMargin endpoint.
 
-    Args:
-        positions: List of positions in OpenAlgo format
-        auth: Authentication token (jKey) for Shoonya
-
-    Returns:
-        Tuple of (response, response_data)
+    Applies MPP (Market Price Protection): MARKET/SL-M are converted to
+    LMT/SL-LMT with a protected price — Shoonya blocks MKT and SL-MKT on
+    API orders. See broker/shoonya/mapping/transform_data.py for the same
+    conversion used on order placement.
     """
     AUTH_TOKEN = auth
 
-    # Get account ID from BROKER_API_KEY
     api_key = os.getenv("BROKER_API_KEY")
-    if not api_key:
-        error_response = {"status": "error", "message": "BROKER_API_KEY not configured"}
+    if not api_key or ":::" not in api_key:
+        error_response = {
+            "status": "error",
+            "message": "BROKER_API_KEY not configured or invalid format",
+        }
 
         class MockResponse:
             status_code = 500
@@ -32,13 +32,11 @@ def calculate_margin_api(positions, auth):
 
         return MockResponse(), error_response
 
-    # BROKER_API_KEY format: userid:::client_id
-    account_id = api_key.split(":::")[0]  # Trading user ID
+    userid = api_key.split(":::")[0]
 
-    # Transform positions to Shoonya format
-    margin_data = transform_margin_positions(positions, account_id)
+    margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
 
-    if not margin_data.get("pos") or len(margin_data["pos"]) == 0:
+    if "tsym" not in margin_data:
         error_response = {
             "status": "error",
             "message": "No valid positions to calculate margin. Check if symbols are valid.",
@@ -50,31 +48,28 @@ def calculate_margin_api(positions, auth):
 
         return MockResponse(), error_response
 
-    # Prepare headers with Bearer token authentication
     headers = {
         "Content-Type": "text/plain",
         "Authorization": f"Bearer {AUTH_TOKEN}",
     }
 
-    # Prepare payload in Shoonya format
     jdata = json.dumps(margin_data)
     payload = f"jData={jdata}"
 
-    logger.info(f"Shoonya margin calculation payload: {payload}")
+    safe_payload = {k: v for k, v in margin_data.items() if k not in ("uid", "actid")}
+    logger.info(f"Shoonya basket margin payload: {safe_payload}")
 
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     try:
-        # Make the request to Shoonya Span Calculator API
         response = client.post(
-            "https://api.shoonya.com/NorenWClientAPI/SpanCalc", headers=headers, content=payload
+            "https://api.shoonya.com/NorenWClientAPI/GetBasketMargin",
+            headers=headers,
+            content=payload,
         )
 
-        # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
 
-        # Parse the JSON response
         try:
             response_data = response.json()
         except json.JSONDecodeError:
@@ -82,18 +77,15 @@ def calculate_margin_api(positions, auth):
             error_response = {"status": "error", "message": "Invalid response from broker API"}
             return response, error_response
 
-        logger.info(f"Shoonya margin response: {response_data}")
+        logger.info(f"Shoonya basket margin response: {response_data}")
 
-        # Parse and standardize the response
         standardized_response = parse_margin_response(response_data)
-
         return response, standardized_response
 
     except Exception as e:
-        logger.error(f"Error calling Shoonya margin API: {e}")
+        logger.error(f"Error calling Shoonya GetBasketMargin API: {e}")
         error_response = {"status": "error", "message": f"Failed to calculate margin: {str(e)}"}
 
-        # Create a mock response object
         class MockResponse:
             status_code = 500
             status = 500
