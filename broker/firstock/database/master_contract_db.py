@@ -71,12 +71,12 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
-# Firstock URLs for downloading symbol files
+# Firstock V1 URLs for downloading symbol files
 firstock_urls = {
-    "NSE": "https://openapi.thefirstock.com/NSESymbolDownload?ref=wikiconnect.thefirstock.com",
-    "BSE": "https://openapi.thefirstock.com/BSESymbolDownload?ref=wikiconnect.thefirstock.com",
-    "NFO": "https://openapi.thefirstock.com/NFOSymbolDownload?ref=wikiconnect.thefirstock.com",
-    "BFO": "https://openapi.thefirstock.com/BFOSymbolDownload?ref=wikiconnect.thefirstock.com",
+    "NSE": "https://api.firstock.in/V1/symbols/NSE?ref=firstock.in",
+    "BSE": "https://api.firstock.in/V1/symbols/BSE?ref=firstock.in",
+    "NFO": "https://api.firstock.in/V1/symbols/NFO?ref=firstock.in",
+    "BFO": "https://api.firstock.in/V1/symbols/BFO?ref=firstock.in",
 }
 
 
@@ -178,20 +178,20 @@ def process_firstock_nse_data(output_path):
         else:
             return broker_symbol
 
-    # Update the symbol column
+    # Update the symbol column (non-index rows get -EQ/-BE stripped)
     df["symbol"] = df["brsymbol"].apply(get_openalgo_symbol)
 
-    # Map index symbols to OpenAlgo standard format
-    index_symbol_mapping = {
-        "Nifty 50": "NIFTY",
-        "Nifty Fin Service": "FINNIFTY",
-        "Nifty Bank": "BANKNIFTY",
-        "NIFTY MID SELECT": "MIDCPNIFTY",
-        "INDIAVIX": "INDIAVIX",
-    }
-
-    # Apply index symbol mapping
-    df["symbol"] = df["symbol"].replace(index_symbol_mapping)
+    # For index rows, normalize to OpenAlgo-standard symbol using the
+    # comprehensive mapping (symbol_Openalgo.md). Unlisted indices fall
+    # through unchanged.
+    index_mask = df["is_index"]
+    if index_mask.any():
+        df.loc[index_mask, "symbol"] = df.loc[index_mask].apply(
+            lambda r: map_to_openalgo_index_symbol(
+                r["brsymbol"], r.get("name", ""), "NSE"
+            ),
+            axis=1,
+        )
 
     # Set instrument type based on is_index flag and trading symbol
     def get_instrument_type(row):
@@ -218,7 +218,7 @@ def process_firstock_nse_data(output_path):
 
     # Handle missing or invalid numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")
 
     # Reorder the columns to match the database structure
     columns_to_keep = [
@@ -319,7 +319,7 @@ def process_firstock_nfo_data(output_path):
 
     # Handle numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")
 
     # Reorder columns
     columns_to_keep = [
@@ -343,13 +343,23 @@ def process_firstock_nfo_data(output_path):
 def process_firstock_bse_data(output_path):
     """
     Processes the Firstock BSE data (BSE_symbols.csv) to generate OpenAlgo symbols.
-    Ensures that the instrument type is always 'EQ'.
+
+    Indices (SENSEX, SENSEX50, etc.) are identified by empty ISIN + zero
+    TickSize + zero FreezeQty (same heuristic as NSE) and routed to
+    exchange='BSE_INDEX' with OpenAlgo-standard symbol normalization.
+    All other BSE rows are treated as equity (instrumenttype='EQ').
     """
     logger.info("Processing Firstock BSE Data")
     file_path = f"{output_path}/BSE_symbols.csv"
 
     # Read the BSE symbols file
     df = pd.read_csv(file_path)
+
+    # Identify index rows (BSE /V1/indexList does not return BSE indices,
+    # so SENSEX/BANKEX/etc. must be picked out of the BSE CSV here).
+    df["is_index"] = (
+        (df["ISIN"].isna() | df["ISIN"].eq("")) & df["TickSize"].eq(0.0) & df["FreezeQty"].eq(0.0)
+    )
 
     # Rename columns to match schema
     column_mapping = {
@@ -362,30 +372,33 @@ def process_firstock_bse_data(output_path):
     }
     df = df.rename(columns=column_mapping)
 
-    # Initialize symbol with brsymbol
+    # Initialize symbol with brsymbol (BSE equity symbols need no
+    # transformation — no -EQ/-BE suffix like NSE).
     df["symbol"] = df["brsymbol"]
 
-    # Apply transformation for OpenAlgo symbols (no special logic needed for BSE)
-    def get_openalgo_symbol(broker_symbol):
-        return broker_symbol
+    # For index rows, normalize to OpenAlgo-standard symbol (e.g. SENSEX,
+    # SENSEX50, BANKEX). Unlisted indices fall through unchanged.
+    index_mask = df["is_index"]
+    if index_mask.any():
+        df.loc[index_mask, "symbol"] = df.loc[index_mask].apply(
+            lambda r: map_to_openalgo_index_symbol(
+                r["brsymbol"], r.get("name", ""), "BSE"
+            ),
+            axis=1,
+        )
 
-    # Update the symbol column
-    df["symbol"] = df["brsymbol"].apply(get_openalgo_symbol)
-
-    # Set Exchange: 'BSE' for all rows
-    df["exchange"] = "BSE"
-    df["brexchange"] = df["exchange"]
+    # Exchange + instrument type conditional on is_index.
+    df["instrumenttype"] = df["is_index"].apply(lambda x: "INDEX" if x else "EQ")
+    df["exchange"] = df["is_index"].apply(lambda x: "BSE_INDEX" if x else "BSE")
+    df["brexchange"] = "BSE"
 
     # Set empty columns for expiry and strike
     df["expiry"] = ""
     df["strike"] = -1
 
-    # Set instrument type to 'EQ' for all rows
-    df["instrumenttype"] = "EQ"
-
     # Handle missing or invalid numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")
 
     # Reorder the columns to match the database structure
     columns_to_keep = [
@@ -486,7 +499,7 @@ def process_firstock_bfo_data(output_path):
 
     # Handle numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")
 
     # Reorder columns
     columns_to_keep = [
@@ -505,6 +518,248 @@ def process_firstock_bfo_data(output_path):
     df_filtered = df[columns_to_keep]
 
     return df_filtered
+
+
+# OpenAlgo standard index symbols per symbol_Openalgo.md.
+# Matching any fetched idxname/tradingSymbol against these (case- and
+# whitespace-insensitive) normalizes to the OpenAlgo format; unmatched
+# indices pass through unchanged so new/custom indices still get stored.
+OPENALGO_NSE_INDICES = {
+    "NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX",
+    "HANGSENGBEESNAV",
+    "NIFTY100", "NIFTY200", "NIFTY500",
+    "NIFTYALPHA50", "NIFTYAUTO", "NIFTYCOMMODITIES", "NIFTYCONSUMPTION",
+    "NIFTYCPSE", "NIFTYDIVOPPS50", "NIFTYENERGY", "NIFTYFMCG",
+    "NIFTYGROWSECT15", "NIFTYGS10YR", "NIFTYGS10YRCLN", "NIFTYGS1115YR",
+    "NIFTYGS15YRPLUS", "NIFTYGS48YR", "NIFTYGS813YR", "NIFTYGSCOMPSITE",
+    "NIFTYINFRA", "NIFTYIT", "NIFTYMEDIA", "NIFTYMETAL",
+    "NIFTYMIDLIQ15", "NIFTYMIDCAP100", "NIFTYMIDCAP150", "NIFTYMIDCAP50",
+    "NIFTYMIDSML400", "NIFTYMNC", "NIFTYPHARMA", "NIFTYPSE",
+    "NIFTYPSUBANK", "NIFTYPVTBANK", "NIFTYREALTY", "NIFTYSERVSECTOR",
+    "NIFTYSMLCAP100", "NIFTYSMLCAP250", "NIFTYSMLCAP50",
+    "NIFTY100EQLWGT", "NIFTY100LIQ15", "NIFTY100LOWVOL30", "NIFTY100QUALTY30",
+    "NIFTY200QUALTY30", "NIFTY50DIVPOINT", "NIFTY50EQLWGT",
+    "NIFTY50PR1XINV", "NIFTY50PR2XLEV", "NIFTY50TR1XINV", "NIFTY50TR2XLEV",
+    "NIFTY50VALUE20",
+}
+
+OPENALGO_BSE_INDICES = {
+    "SENSEX", "BANKEX", "SENSEX50",
+    "BSE100", "BSE150MIDCAPINDEX", "BSE200", "BSE250LARGEMIDCAPINDEX",
+    "BSE400MIDSMALLCAPINDEX", "BSE500",
+    "BSEAUTO", "BSECAPITALGOODS", "BSECARBONEX", "BSECONSUMERDURABLES",
+    "BSECPSE", "BSEDOLLEX100", "BSEDOLLEX200", "BSEDOLLEX30", "BSEENERGY",
+    "BSEFASTMOVINGCONSUMERGOODS", "BSEFINANCIALSERVICES", "BSEGREENEX",
+    "BSEHEALTHCARE", "BSEINDIAINFRASTRUCTUREINDEX", "BSEINDUSTRIALS",
+    "BSEINFORMATIONTECHNOLOGY", "BSEIPO", "BSELARGECAP", "BSEMETAL",
+    "BSEMIDCAP", "BSEMIDCAPSELECTINDEX", "BSEOIL&GAS", "BSEPOWER",
+    "BSEPSU", "BSEREALTY", "BSESENSEXNEXT50", "BSESMALLCAP",
+    "BSESMALLCAPSELECTINDEX", "BSESMEIPO", "BSETECK", "BSETELECOM",
+}
+
+# Explicit aliases for broker/exchange names that diverge from the OpenAlgo
+# symbol even after whitespace/punctuation normalization (abbreviations,
+# reordered words, etc.). Keys are normalized (see _normalize_index_key).
+INDEX_NAME_ALIASES = {
+    # NSE
+    "NIFTY50": "NIFTY",
+    "NIFTYNEXT50": "NIFTYNXT50",
+    "NIFTYFINSERVICE": "FINNIFTY",
+    "NIFTYFINSERV": "FINNIFTY",
+    "NIFTYFINANCIALSERVICES": "FINNIFTY",
+    "NIFTYMIDSELECT": "MIDCPNIFTY",
+    # NSE - abbreviation expansions (broker uses long form, docs use short)
+    "NIFTYSMALLCAP50": "NIFTYSMLCAP50",
+    "NIFTYSMALLCAP100": "NIFTYSMLCAP100",
+    "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+    "NIFTYINFRASTRUCTURE": "NIFTYINFRA",
+    # BSE - prefix variations
+    "SPBSESENSEX": "SENSEX",
+    "BSESENSEX": "SENSEX",
+    "SPBSEBANKEX": "BANKEX",
+    "SPBSESENSEX50": "SENSEX50",
+    "BSESENSEX50": "SENSEX50",
+    # BSE - abbreviation expansions (broker uses short form, docs use long)
+    "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+    "BSEFMCG": "BSEFASTMOVINGCONSUMERGOODS",
+    "BSECDGS": "BSECONSUMERDURABLES",
+    "BSECG": "BSECAPITALGOODS",
+}
+
+
+def _normalize_index_key(value):
+    """
+    Normalize an index name/symbol for tolerant matching.
+
+    Strips spaces, hyphens, underscores, ampersands, and the word "AND"
+    so that "BSEOIL&GAS" and "BSEOILANDGAS" collapse to the same key.
+    """
+    if not value:
+        return ""
+    return (
+        value.upper()
+        .replace(" ", "")
+        .replace("-", "")
+        .replace("_", "")
+        .replace("&", "")
+        .replace("AND", "")
+    )
+
+
+# Pre-computed normalized lookup dicts: normalized_key -> canonical OpenAlgo symbol.
+# Built once at module load so tolerant matching is a single dict lookup.
+_NSE_INDEX_NORMALIZED_LOOKUP = {
+    _normalize_index_key(s): s for s in OPENALGO_NSE_INDICES
+}
+_BSE_INDEX_NORMALIZED_LOOKUP = {
+    _normalize_index_key(s): s for s in OPENALGO_BSE_INDICES
+}
+
+
+def _basic_index_cleanup(value):
+    """
+    Minimal format cleanup for unlisted indices: uppercase, strip spaces and
+    hyphens. Preserves identity (no name/alias transformation) while ensuring
+    the stored symbol is a valid OpenAlgo-format token.
+    """
+    if not value:
+        return ""
+    return value.upper().replace(" ", "").replace("-", "")
+
+
+def map_to_openalgo_index_symbol(trading_symbol, idxname, br_exchange):
+    """
+    Resolve the OpenAlgo-standard index symbol for a fetched Firstock index.
+
+    Match order:
+      1. tradingSymbol is already an OpenAlgo canonical (NIFTY, SENSEX, ...)
+      2. tradingSymbol/idxname normalizes to an explicit alias (e.g. BSEIT)
+      3. tradingSymbol/idxname normalizes to a canonical OpenAlgo symbol
+
+    Unlisted indices fall through with basic cleanup only (uppercase + strip
+    spaces/hyphens) so identity is preserved but the stored symbol remains a
+    valid OpenAlgo-format token.
+    """
+    if br_exchange == "NSE":
+        normalized_lookup = _NSE_INDEX_NORMALIZED_LOOKUP
+        openalgo_set = OPENALGO_NSE_INDICES
+    elif br_exchange == "BSE":
+        normalized_lookup = _BSE_INDEX_NORMALIZED_LOOKUP
+        openalgo_set = OPENALGO_BSE_INDICES
+    else:
+        return _basic_index_cleanup(trading_symbol)
+
+    # Direct tradingSymbol hit (e.g. "NIFTY", "BANKNIFTY", "SENSEX").
+    if trading_symbol in openalgo_set:
+        return trading_symbol
+
+    ts_norm = _normalize_index_key(trading_symbol)
+    idx_norm = _normalize_index_key(idxname)
+
+    for key in (ts_norm, idx_norm):
+        if not key:
+            continue
+        if key in INDEX_NAME_ALIASES:
+            return INDEX_NAME_ALIASES[key]
+        if key in normalized_lookup:
+            return normalized_lookup[key]
+
+    return _basic_index_cleanup(trading_symbol)
+
+
+def fetch_firstock_indices():
+    """
+    Fetch NSE/BSE indices from Firstock V1 /indexList API.
+
+    In V1, indices (NIFTY, BANKNIFTY, SENSEX, etc.) are no longer included
+    in the symbol download CSVs — they must be fetched via authenticated
+    POST /V1/indexList using the logged-in user's jKey (susertoken).
+
+    Returns a DataFrame matching the SymToken schema, or empty DataFrame
+    on failure.
+    """
+    logger.info("Fetching Firstock indices from /V1/indexList")
+
+    from database.auth_db import Auth, decrypt_token
+
+    try:
+        auth_obj = Auth.query.filter_by(broker="firstock", is_revoked=False).first()
+        if not auth_obj:
+            logger.warning("No active Firstock auth session found; skipping index list fetch")
+            return pd.DataFrame()
+
+        jkey = decrypt_token(auth_obj.auth)
+
+        # Firstock userId = BROKER_API_KEY (vendorCode) minus the "_API" suffix,
+        # matching the convention in order_api.py and firstock_adapter.py.
+        user_id = os.getenv("BROKER_API_KEY", "").replace("_API", "")
+        if not user_id:
+            logger.error("BROKER_API_KEY not set; cannot fetch Firstock indices")
+            return pd.DataFrame()
+
+        client = get_httpx_client()
+        url = "https://api.firstock.in/V1/indexList"
+        payload = {"userId": user_id, "jKey": jkey}
+        headers = {"Content-Type": "application/json"}
+
+        response = client.post(url, json=payload, headers=headers, timeout=30)
+        response.status = response.status_code
+
+        if response.status_code != 200:
+            logger.error(
+                f"Failed to fetch Firstock indices. Status code: {response.status_code}"
+            )
+            return pd.DataFrame()
+
+        data = response.json()
+        if data.get("status") != "success":
+            logger.error(f"Firstock indexList returned error: {data.get('message')}")
+            return pd.DataFrame()
+
+        indices = data.get("data", []) or []
+        if not indices:
+            logger.warning("Firstock indexList returned empty data")
+            return pd.DataFrame()
+
+        rows = []
+        for item in indices:
+            br_exchange = item.get("exchange", "")
+            trading_symbol = item.get("tradingSymbol", "")
+            idxname = item.get("idxname", "")
+            token = str(item.get("token", ""))
+
+            if not token or not trading_symbol:
+                continue
+
+            openalgo_symbol = map_to_openalgo_index_symbol(
+                trading_symbol, idxname, br_exchange
+            )
+            oa_exchange = (
+                f"{br_exchange}_INDEX" if br_exchange in ("NSE", "BSE") else br_exchange
+            )
+
+            rows.append(
+                {
+                    "symbol": openalgo_symbol,
+                    "brsymbol": trading_symbol,
+                    "name": idxname,
+                    "exchange": oa_exchange,
+                    "brexchange": br_exchange,
+                    "token": token,
+                    "expiry": "",
+                    "strike": -1,
+                    "lotsize": 0,
+                    "instrumenttype": "INDEX",
+                    "tick_size": 0.0,
+                }
+            )
+
+        logger.info(f"Fetched {len(rows)} Firstock indices from /V1/indexList")
+        return pd.DataFrame(rows)
+
+    except Exception as e:
+        logger.exception(f"Error fetching Firstock indices: {e}")
+        return pd.DataFrame()
 
 
 def delete_firstock_temp_data(output_path):
@@ -548,6 +803,11 @@ def master_contract_download():
             if "BFO_symbols.csv" in downloaded_files:
                 token_df = process_firstock_bfo_data(output_path)
                 copy_from_dataframe(token_df)
+
+            # V1 API: indices are no longer in CSVs — fetch via authenticated endpoint
+            index_df = fetch_firstock_indices()
+            if not index_df.empty:
+                copy_from_dataframe(index_df)
 
             # Clean up temporary files
             delete_firstock_temp_data(output_path)
