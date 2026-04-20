@@ -970,18 +970,42 @@ server {
     location /ws/ {
         proxy_pass http://127.0.0.1:8765/;
         proxy_http_version 1.1;
-        
+
         # Extended timeouts for long-running connections (up to 24 hours)
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
-        
+
         # Disable proxy buffering for real-time data
         proxy_buffering off;
-        
+
         # WebSocket headers
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        
+
+        # Other headers
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+
+    # Socket.IO (Flask-SocketIO real-time events)
+    location /socket.io/ {
+        proxy_pass http://unix:$SOCKET_FILE;
+        proxy_http_version 1.1;
+
+        # Extended timeouts for long-lived Socket.IO sessions
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+
+        # Disable proxy buffering for real-time events
+        proxy_buffering off;
+
+        # WebSocket upgrade headers (required for Socket.IO WebSocket transport)
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+
         # Other headers
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;

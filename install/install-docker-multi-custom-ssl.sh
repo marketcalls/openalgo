@@ -968,6 +968,21 @@ server {
         proxy_read_timeout 86400s;
     }
 
+    # Logic: Socket.IO (Flask-SocketIO real-time events)
+    location /socket.io/ {
+        proxy_pass http://openalgo_flask_${SANITIZED_NAME}/socket.io/;
+        proxy_http_version 1.1;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
     # Logic: Main App
     location / {
         proxy_pass http://openalgo_flask_${SANITIZED_NAME};
