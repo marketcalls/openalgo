@@ -10,7 +10,16 @@ logger = get_logger(__name__)
 
 
 def _apply_mpp(position, auth_token):
-    """Convert MARKET/SL-M to LMT/SL-LMT with a protected price. Mirrors transform_data.py."""
+    """
+    Convert MARKET/SL-M to LMT/SL-LMT with a protected price for basket margin.
+
+    GetBasketMargin rejects MKT/SL-MKT price types, so for MARKET/SL-M inputs we
+    always return a converted order type (LMT or SL-LMT) even when MPP can't
+    fetch an LTP. Fallback price:
+      - MARKET -> position.price (user-supplied limit, may be 0)
+      - SL-M   -> position.trigger_price (at trigger, SL-LMT becomes a LIMIT
+                  at this level)
+    """
     pricetype = position.get("pricetype", "MARKET")
     action = position["action"].upper()
     price = str(position.get("price", 0) or 0)
@@ -20,6 +29,13 @@ def _apply_mpp(position, auth_token):
         return order_type, price
 
     original_type = pricetype
+    converted_order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
+    fallback_price = (
+        str(position.get("price", 0) or 0)
+        if original_type == "MARKET"
+        else str(position.get("trigger_price", 0) or 0)
+    )
+
     logger.info(
         f"Margin MPP: {original_type} detected Symbol={position['symbol']}, "
         f"Exchange={position['exchange']}, Action={action}"
@@ -28,9 +44,9 @@ def _apply_mpp(position, auth_token):
         if not auth_token:
             logger.warning(
                 f"Margin MPP: no auth token for Symbol={position['symbol']}; "
-                f"cannot fetch quote — sending {original_type} unchanged"
+                f"converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
             )
-            return order_type, price
+            return converted_order_type, fallback_price
 
         from broker.flattrade.api.data import BrokerData
 
@@ -53,24 +69,24 @@ def _apply_mpp(position, auth_token):
                 instrument_type=instrument_type,
                 tick_size=tick_size,
             )
-            price = str(protected)
-            order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
             logger.info(
-                f"Margin MPP Converted: {original_type}->{order_type}, "
+                f"Margin MPP Converted: {original_type}->{converted_order_type}, "
                 f"FinalPrice={protected}"
             )
-        else:
-            logger.warning(
-                f"Margin MPP: LTP<=0 for Symbol={position['symbol']}; "
-                f"sending {original_type} unchanged"
-            )
+            return converted_order_type, str(protected)
+
+        logger.warning(
+            f"Margin MPP: LTP<=0 for Symbol={position['symbol']}; "
+            f"converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
+        )
+        return converted_order_type, fallback_price
+
     except Exception as e:
         logger.error(
             f"Margin MPP Error: Symbol={position['symbol']}, Error={e}. "
-            f"Sending {original_type} unchanged"
+            f"Converting {original_type}->{converted_order_type} at supplied price={fallback_price}"
         )
-
-    return order_type, price
+        return converted_order_type, fallback_price
 
 
 def _build_order(position, auth_token):
