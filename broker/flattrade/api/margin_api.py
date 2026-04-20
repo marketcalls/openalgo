@@ -10,21 +10,22 @@ logger = get_logger(__name__)
 
 def calculate_margin_api(positions, auth):
     """
-    Calculate margin requirement for a basket of positions using Flattrade Span Calculator API.
+    Calculate basket margin via Flattrade's GetBasketMargin endpoint.
 
-    Args:
-        positions: List of positions in OpenAlgo format
-        auth: Authentication token (jKey) for Flattrade
-
-    Returns:
-        Tuple of (response, response_data)
+    Applies MPP (Market Price Protection): MARKET/SL-M are converted to
+    LMT/SL-LMT with a protected price — Flattrade's basket margin accepts
+    only LMT/SL-LMT and requires a non-zero price. See
+    broker/flattrade/mapping/transform_data.py for the equivalent order
+    placement conversion.
     """
     AUTH_TOKEN = auth
 
-    # Get account ID from BROKER_API_KEY
     full_api_key = os.getenv("BROKER_API_KEY")
-    if not full_api_key:
-        error_response = {"status": "error", "message": "BROKER_API_KEY not configured"}
+    if not full_api_key or ":::" not in full_api_key:
+        error_response = {
+            "status": "error",
+            "message": "BROKER_API_KEY not configured or invalid format",
+        }
 
         class MockResponse:
             status_code = 500
@@ -32,13 +33,11 @@ def calculate_margin_api(positions, auth):
 
         return MockResponse(), error_response
 
-    # Extract account ID (first part before :::)
-    account_id = full_api_key.split(":::")[0]
+    userid = full_api_key.split(":::")[0]
 
-    # Transform positions to Flattrade format
-    margin_data = transform_margin_positions(positions, account_id)
+    margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
 
-    if not margin_data.get("pos") or len(margin_data["pos"]) == 0:
+    if "tsym" not in margin_data:
         error_response = {
             "status": "error",
             "message": "No valid positions to calculate margin. Check if symbols are valid.",
@@ -50,28 +49,25 @@ def calculate_margin_api(positions, auth):
 
         return MockResponse(), error_response
 
-    # Prepare headers
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-    # Prepare payload in Flattrade format: jData={...}&jKey={token}
     jdata = json.dumps(margin_data)
     payload = f"jData={jdata}&jKey={AUTH_TOKEN}"
 
-    logger.info(f"Flattrade margin calculation payload: {payload}")
+    safe_payload = {k: v for k, v in margin_data.items() if k not in ("uid", "actid")}
+    logger.info(f"Flattrade basket margin payload: {safe_payload}")
 
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     try:
-        # Make the request to Flattrade Span Calculator API
         response = client.post(
-            "https://piconnect.flattrade.in/PiConnectAPI/SpanCalc", headers=headers, content=payload
+            "https://piconnect.flattrade.in/PiConnectAPI/GetBasketMargin",
+            headers=headers,
+            content=payload,
         )
 
-        # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
 
-        # Parse the JSON response
         try:
             response_data = response.json()
         except json.JSONDecodeError:
@@ -79,18 +75,15 @@ def calculate_margin_api(positions, auth):
             error_response = {"status": "error", "message": "Invalid response from broker API"}
             return response, error_response
 
-        logger.info(f"Flattrade margin response: {response_data}")
+        logger.info(f"Flattrade basket margin response: {response_data}")
 
-        # Parse and standardize the response
         standardized_response = parse_margin_response(response_data)
-
         return response, standardized_response
 
     except Exception as e:
-        logger.error(f"Error calling Flattrade margin API: {e}")
+        logger.error(f"Error calling Flattrade GetBasketMargin API: {e}")
         error_response = {"status": "error", "message": f"Failed to calculate margin: {str(e)}"}
 
-        # Create a mock response object
         class MockResponse:
             status_code = 500
             status = 500
