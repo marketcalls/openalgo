@@ -208,10 +208,11 @@ export function PositionsPanel({
                     title={
                       isClosed
                         ? 'Closed position'
-                        : `Click to flip to ${leg.side === 'BUY' ? 'SELL' : 'BUY'}`
+                        : `${leg.side === 'BUY' ? 'Buy' : 'Sell'} — click to flip to ${leg.side === 'BUY' ? 'Sell' : 'Buy'}`
                     }
+                    aria-label={leg.side === 'BUY' ? 'Buy' : 'Sell'}
                     className={cn(
-                      'inline-flex h-5 w-9 shrink-0 items-center justify-center rounded-md text-[9px] font-bold uppercase tracking-wider transition',
+                      'inline-flex h-5 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-bold uppercase tracking-wider transition',
                       isClosed
                         ? 'cursor-not-allowed bg-rose-500/15 text-rose-700 dark:text-rose-400'
                         : leg.side === 'BUY'
@@ -219,7 +220,7 @@ export function PositionsPanel({
                           : 'cursor-pointer bg-rose-500/15 text-rose-700 ring-1 ring-inset ring-rose-500/20 hover:bg-rose-500/25 dark:text-rose-400'
                     )}
                   >
-                    {leg.side === 'BUY' ? 'Buy' : 'Sell'}
+                    {leg.side === 'BUY' ? 'B' : 'S'}
                   </button>
 
                   <div
