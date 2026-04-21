@@ -33,6 +33,7 @@ tmp/
 *.egg-info/
 *.db
 *.duckdb
+*.duckdb.wal
 *.sqlite
 *.log
 *.jsonl
