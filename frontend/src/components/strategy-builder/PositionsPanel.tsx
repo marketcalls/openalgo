@@ -1,4 +1,4 @@
-import { Check, Layers, Minus, Pencil, RotateCw, Trash2 } from 'lucide-react'
+import { Briefcase, Check, Layers, Minus, Pencil, RotateCw, Save, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { strikeMoneyness, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
@@ -11,6 +11,12 @@ export interface PositionsPanelProps {
   onRemoveLeg: (id: string) => void
   onToggleAll: (active: boolean) => void
   onReset: () => void
+  /** Save/update current strategy to the portfolio. */
+  onSaveStrategy?: () => void
+  /** Label on the save button — "Save Strategy" or "Update Strategy". */
+  saveLabel?: string
+  /** Navigate to the portfolio listing page. */
+  onOpenPortfolio?: () => void
 
   probOfProfit: number
   maxProfit: number
@@ -91,6 +97,9 @@ export function PositionsPanel({
   onRemoveLeg,
   onToggleAll,
   onReset,
+  onSaveStrategy,
+  saveLabel = 'Save Strategy',
+  onOpenPortfolio,
   probOfProfit,
   maxProfit,
   maxLoss,
@@ -131,16 +140,46 @@ export function PositionsPanel({
             </p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onReset}
-          className="h-7 text-[11px] text-muted-foreground hover:text-foreground"
-          disabled={legs.length === 0}
-        >
-          <RotateCw className="mr-1 h-3 w-3" />
-          Reset
-        </Button>
+        {/* Contextual action cluster — Save + Portfolio + Reset, always in
+            view while working on legs so the user doesn't scroll back to
+            the page header. */}
+        <div className="flex items-center gap-1">
+          {onSaveStrategy && (
+            <Button
+              size="sm"
+              onClick={onSaveStrategy}
+              disabled={legs.length === 0}
+              title={legs.length === 0 ? 'Add at least one leg to save' : saveLabel}
+              className="h-7 gap-1 px-2.5 text-[11px] font-semibold"
+            >
+              <Save className="h-3 w-3" />
+              Save
+            </Button>
+          )}
+          {onOpenPortfolio && (
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={onOpenPortfolio}
+              title="Open Portfolio"
+              aria-label="Open Portfolio"
+              className="h-7 w-7"
+            >
+              <Briefcase className="h-3 w-3" />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onReset}
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            disabled={legs.length === 0}
+            title="Reset all legs"
+            aria-label="Reset all legs"
+          >
+            <RotateCw className="h-3 w-3" />
+          </Button>
+        </div>
       </div>
 
       {/* Select-all row — checked legs are included in payoff/greeks/pnl,

@@ -1155,6 +1155,9 @@ export default function StrategyBuilder() {
               onRemoveLeg={removeLeg}
               onToggleAll={toggleAll}
               onReset={resetLegs}
+              onSaveStrategy={() => setSaveDialogOpen(true)}
+              saveLabel={loadedEntry ? 'Update Strategy' : 'Save Strategy'}
+              onOpenPortfolio={() => navigate('/strategybuilder/portfolio')}
               probOfProfit={pop}
               maxProfit={payoff.maxProfit}
               maxLoss={payoff.maxLoss}
