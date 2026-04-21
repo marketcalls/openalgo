@@ -56,6 +56,7 @@ Access real-time and historical market data.
 | [Depth](./market-data/depth.md) | Get market depth (Level 2) data |
 | [History](./market-data/history.md) | Get historical OHLCV data |
 | [Intervals](./market-data/intervals.md) | Get available time intervals |
+| [Sentiment](./market-data/sentiment.md) | Get optional Adanos sentiment snapshots for stock tickers |
 
 ### Symbol Services
 Symbol lookup, search, and instrument data.

@@ -78,6 +78,7 @@ A single, standardized API across all brokers with 30+ endpoints:
 - **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing
 - **Portfolio**: Get positions, holdings, order book, trade book, funds
 - **Market Data**: Real-time quotes, historical data, market depth (Level 5), symbol search
+- **External Context**: Optional Adanos market sentiment snapshots for stock tickers
 - **Advanced**: Option Greeks calculator, margin calculator, synthetic futures, auto-split orders
 
 ### Real-Time WebSocket Streaming

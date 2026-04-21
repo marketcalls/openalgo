@@ -26,6 +26,7 @@ from .instruments import api as instruments_ns
 from .intervals import api as intervals_ns
 from .margin import api as margin_ns
 from .market_holidays import api as market_holidays_ns
+from .market_sentiment import api as market_sentiment_ns
 from .market_timings import api as market_timings_ns
 from .modify_order import api as modify_order_ns
 from .multi_option_greeks import api as multi_option_greeks_ns
@@ -92,4 +93,5 @@ api.add_namespace(instruments_ns, path="/instruments")
 api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
 api.add_namespace(market_timings_ns, path="/market/timings")
+api.add_namespace(market_sentiment_ns, path="/market/sentiment")
 api.add_namespace(pnl_symbols_ns, path="/pnl")

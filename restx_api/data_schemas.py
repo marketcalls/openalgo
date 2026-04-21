@@ -55,6 +55,26 @@ class MultiQuotesSchema(Schema):
     )
 
 
+class MarketSentimentSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    tickers = fields.List(
+        fields.Str(validate=validate.Length(min=1, max=16)),
+        required=True,
+        validate=validate.Length(min=1, max=10),
+    )
+    source = fields.Str(
+        required=False,
+        load_default="all",
+        validate=validate.OneOf(["all", "reddit", "x", "news", "polymarket"]),
+    )
+    days = fields.Int(
+        required=False,
+        allow_none=True,
+        load_default=None,
+        validate=validate.Range(min=1, max=30),
+    )
+
+
 class HistorySchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     symbol = fields.Str(required=True)
