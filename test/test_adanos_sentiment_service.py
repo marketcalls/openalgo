@@ -132,6 +132,47 @@ def test_get_market_sentiment_fetches_and_normalizes_compare_rows(monkeypatch):
     assert "reddit: TSLA (Tesla, Inc.): sentiment=0.31, buzz=71.2, mentions=140, trend=rising" in response["data"]["summary"]
 
 
+def test_get_market_sentiment_rejects_invalid_source(monkeypatch):
+    monkeypatch.setattr(sentiment_service, "verify_api_key", lambda _: "demo-user")
+
+    success, response, status_code = sentiment_service.get_market_sentiment(
+        api_key="valid-openalgo-key",
+        tickers=["TSLA"],
+        source="finviz",
+    )
+
+    assert success is False
+    assert status_code == 400
+    assert "Invalid source" in response["message"]
+
+
+def test_get_market_sentiment_clamps_days_for_internal_callers(monkeypatch):
+    monkeypatch.setattr(sentiment_service, "verify_api_key", lambda _: "demo-user")
+    monkeypatch.setenv("ADANOS_API_KEY", "adanos-test-key")
+    monkeypatch.setenv("ADANOS_API_BASE_URL", "https://api.adanos.org")
+
+    calls = []
+
+    class FakeClient:
+        def get(self, url, headers=None, params=None, timeout=None):
+            calls.append(params)
+            return httpx.Response(200, json={"stocks": []})
+
+    monkeypatch.setattr(sentiment_service, "get_httpx_client", lambda: FakeClient())
+
+    success, response, status_code = sentiment_service.get_market_sentiment(
+        api_key="valid-openalgo-key",
+        tickers=["TSLA"],
+        source="reddit",
+        days=99,
+    )
+
+    assert success is True
+    assert status_code == 200
+    assert response["data"]["days"] == 30
+    assert calls[0] == {"tickers": "TSLA", "days": 30}
+
+
 def test_market_sentiment_endpoint_rejects_non_json_requests(market_sentiment_client):
     response = market_sentiment_client.post(
         "/api/v1/market/sentiment/",

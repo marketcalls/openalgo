@@ -169,6 +169,23 @@ def _get_default_days() -> int:
     return min(max(parsed_days, 1), 30)
 
 
+def _normalize_source(source: str | None) -> str:
+    normalized_source = str(source or "all").strip().lower()
+    if normalized_source == "all":
+        return "all"
+    if normalized_source in ADANOS_SUPPORTED_SOURCES:
+        return normalized_source
+    raise ValueError(
+        f"Invalid source '{source}'. Must be one of: all, reddit, x, news, polymarket."
+    )
+
+
+def _normalize_days(days: int | None) -> int:
+    if days is None:
+        return _get_default_days()
+    return min(max(int(days), 1), 30)
+
+
 def _fetch_source_snapshot(
     client: httpx.Client,
     base_url: str,
@@ -256,9 +273,14 @@ def get_market_sentiment(
             400,
         )
 
+    try:
+        normalized_source = _normalize_source(source)
+    except ValueError as exc:
+        return False, {"status": "error", "message": str(exc)}, 400
+
     adanos_api_key = os.getenv("ADANOS_API_KEY", "").strip()
     base_url = _get_adanos_base_url()
-    lookback_days = days or _get_default_days()
+    lookback_days = _normalize_days(days)
     timeout_seconds = _get_adanos_timeout_seconds()
 
     if not adanos_api_key:
@@ -270,7 +292,7 @@ def get_market_sentiment(
                     "enabled": False,
                     "provider": "adanos",
                     "tickers": normalized_tickers,
-                    "source": source,
+                    "source": normalized_source,
                     "days": lookback_days,
                     "snapshots": [],
                     "summary": "Adanos market sentiment is disabled because ADANOS_API_KEY is not configured.",
@@ -280,7 +302,7 @@ def get_market_sentiment(
             200,
         )
 
-    sources = list(ADANOS_SUPPORTED_SOURCES) if source == "all" else [source]
+    sources = list(ADANOS_SUPPORTED_SOURCES) if normalized_source == "all" else [normalized_source]
     client = get_httpx_client()
     snapshots = [
         _fetch_source_snapshot(
@@ -300,7 +322,7 @@ def get_market_sentiment(
         "enabled": True,
         "provider": "adanos",
         "tickers": normalized_tickers,
-        "source": source,
+        "source": normalized_source,
         "days": lookback_days,
         "snapshots": snapshots,
         "summary": build_summary(snapshots),
@@ -313,7 +335,7 @@ def get_market_sentiment(
     logger.info(
         "[AdanosSentiment] user=%s source=%s tickers=%s has_rows=%s",
         user_id,
-        source,
+        normalized_source,
         ",".join(normalized_tickers),
         has_rows,
     )
