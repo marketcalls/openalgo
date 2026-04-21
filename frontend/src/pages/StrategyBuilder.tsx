@@ -1017,47 +1017,26 @@ export default function StrategyBuilder() {
 
   return (
     <div className="space-y-5 py-6">
-      {/* Page header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            <Sparkles className="h-3 w-3" />
-            Tools / Strategy Builder
-          </div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-bold tracking-tight">Strategy Builder</h1>
-            {loadedEntry && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-violet-700 dark:text-violet-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-                {loadedEntry.name}
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Design and analyse multi-leg options strategies with live Greeks and payoff.
-          </p>
+      {/* Page header — Save/Portfolio actions moved down next to the Payoff
+          tabs where the user is actually working, so no scrolling back to
+          the top is needed. */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          <Sparkles className="h-3 w-3" />
+          Tools / Strategy Builder
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate('/strategybuilder/portfolio')}
-            className="h-9"
-          >
-            <Briefcase className="mr-1.5 h-3.5 w-3.5" />
-            Portfolio
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => setSaveDialogOpen(true)}
-            disabled={legs.length === 0}
-            title={legs.length === 0 ? 'Add at least one leg to save' : ''}
-            className="h-9"
-          >
-            <Save className="mr-1.5 h-3.5 w-3.5" />
-            {loadedEntry ? 'Update Strategy' : 'Save Strategy'}
-          </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-3xl font-bold tracking-tight">Strategy Builder</h1>
+          {loadedEntry && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-violet-700 dark:text-violet-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+              {loadedEntry.name}
+            </span>
+          )}
         </div>
+        <p className="text-sm text-muted-foreground">
+          Design and analyse multi-leg options strategies with live Greeks and payoff.
+        </p>
       </div>
 
       {/* Symbol header */}
@@ -1173,29 +1152,55 @@ export default function StrategyBuilder() {
           {/* Right column: tabs + simulators */}
           <div className="min-w-0 space-y-5">
             <Tabs defaultValue="payoff" className="w-full">
-              <TabsList className="inline-flex h-10 w-full gap-1 rounded-xl border bg-card p-1 shadow-sm sm:w-auto">
-                <TabsTrigger
-                  value="payoff"
-                  className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                >
-                  <LineChart className="mr-1.5 h-3.5 w-3.5" />
-                  Payoff
-                </TabsTrigger>
-                <TabsTrigger
-                  value="greeks"
-                  className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                >
-                  <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                  Greeks
-                </TabsTrigger>
-                <TabsTrigger
-                  value="pnl"
-                  className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                >
-                  <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
-                  P&amp;L
-                </TabsTrigger>
-              </TabsList>
+              {/* Tabs on the left, Save/Portfolio actions aligned to the right
+                  so they're always visible directly above the Payoff graph —
+                  no scrolling back to the page header. */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <TabsList className="inline-flex h-10 gap-1 rounded-xl border bg-card p-1 shadow-sm">
+                  <TabsTrigger
+                    value="payoff"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <LineChart className="mr-1.5 h-3.5 w-3.5" />
+                    Payoff
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="greeks"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                    Greeks
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="pnl"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
+                    P&amp;L
+                  </TabsTrigger>
+                </TabsList>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate('/strategybuilder/portfolio')}
+                    className="h-10 gap-1.5 px-4 text-xs font-semibold"
+                  >
+                    <Briefcase className="h-3.5 w-3.5" />
+                    Portfolio
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => setSaveDialogOpen(true)}
+                    disabled={legs.length === 0}
+                    title={legs.length === 0 ? 'Add at least one leg to save' : ''}
+                    className="h-10 gap-1.5 px-4 text-xs font-semibold"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {loadedEntry ? 'Update Strategy' : 'Save Strategy'}
+                  </Button>
+                </div>
+              </div>
               <TabsContent value="payoff" className="pt-4">
                 <div className="overflow-hidden rounded-xl border bg-card p-2 shadow-sm">
                   {spotPrice ? (

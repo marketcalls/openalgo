@@ -91,10 +91,22 @@ function PnlCell({ value }: { value: number }) {
 }
 
 export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
-  // Build the subscription list from open legs only (active, not closed,
-  // has a symbol). Deduplicated on (exchange, symbol). The memo ensures:
+  // Only active (user-included) legs are considered "open" for this tab.
+  // Excluded legs don't appear in the table, don't contribute to the total,
+  // and don't consume a WebSocket subscription.
+  const openLegs = useMemo(
+    () =>
+      legs.filter(
+        (l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0) && l.symbol
+      ),
+    [legs]
+  )
+
+  // Build the subscription list from open legs only. Deduplicated on
+  // (exchange, symbol). The memo ensures:
   //   • adding a new leg subscribes its symbol,
-  //   • setting an exitPrice on a leg unsubscribes that leg's symbol,
+  //   • excluding a leg (uncheck) unsubscribes its symbol,
+  //   • setting an exitPrice on a leg unsubscribes its symbol,
   //   • deleting a leg unsubscribes its symbol,
   //   • when no open legs remain, the hook is disabled and no WS traffic
   //     flows for this page (MarketDataManager ref-counts, so shared
@@ -102,16 +114,14 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
   const legSubscriptions = useMemo(() => {
     const seen = new Set<string>()
     const out: Array<{ symbol: string; exchange: string }> = []
-    for (const leg of legs) {
-      if (!leg.symbol) continue
-      if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
+    for (const leg of openLegs) {
       const key = `${fnoExchange}:${leg.symbol}`
       if (seen.has(key)) continue
       seen.add(key)
       out.push({ symbol: leg.symbol, exchange: fnoExchange })
     }
     return out
-  }, [legs, fnoExchange])
+  }, [openLegs, fnoExchange])
 
   const {
     data: marketData,
@@ -124,36 +134,44 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
     enabled: legSubscriptions.length > 0,
   })
 
-  // Resolve each leg's "current price" with a clear priority order:
-  // 1) Live WebSocket LTP (true real-time),
-  // 2) Option-chain snapshot (fallback until first tick),
-  // 3) Leg entry price (last resort).
+  // Rows to display: included legs only. Closed legs stay (so user can see
+  // their realised P&L) until they're explicitly excluded via the Positions
+  // panel checkbox. Excluded legs disappear entirely.
+  //
+  // Price resolution per row:
+  //   1) Live WebSocket LTP (true real-time),
+  //   2) Option-chain snapshot (fallback until first tick),
+  //   3) Leg entry price (last resort).
   // Closed legs don't need a current price — realised P&L is computed
   // directly from exitPrice vs entry.
   const rows = useMemo(() => {
-    return legs.map((leg) => {
-      const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
-      let current: number | undefined
-      if (!isClosed && leg.symbol) {
-        const ws = marketData.get(`${fnoExchange}:${leg.symbol}`)
-        if (ws?.data?.ltp !== undefined && ws.data.ltp > 0) {
-          current = ws.data.ltp
-        } else if (fallbackPrices[leg.id] !== undefined) {
-          current = fallbackPrices[leg.id]
-        } else {
-          current = leg.price
+    return legs
+      .filter((leg) => leg.active)
+      .map((leg) => {
+        const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
+        let current: number | undefined
+        if (!isClosed && leg.symbol) {
+          const ws = marketData.get(`${fnoExchange}:${leg.symbol}`)
+          if (ws?.data?.ltp !== undefined && ws.data.ltp > 0) {
+            current = ws.data.ltp
+          } else if (fallbackPrices[leg.id] !== undefined) {
+            current = fallbackPrices[leg.id]
+          } else {
+            current = leg.price
+          }
         }
-      }
-      const qty = leg.lots * leg.lotSize
-      const sign = leg.side === 'BUY' ? 1 : -1
-      const effective = isClosed ? (leg.exitPrice ?? leg.price) : (current ?? leg.price)
-      const pnl = sign * (effective - leg.price) * qty
-      return { leg, current, pnl, isClosed }
-    })
+        const qty = leg.lots * leg.lotSize
+        const sign = leg.side === 'BUY' ? 1 : -1
+        const effective = isClosed ? (leg.exitPrice ?? leg.price) : (current ?? leg.price)
+        const pnl = sign * (effective - leg.price) * qty
+        return { leg, current, pnl, isClosed }
+      })
   }, [legs, marketData, fnoExchange, fallbackPrices])
 
   const total = useMemo(() => rows.reduce((acc, r) => acc + r.pnl, 0), [rows])
   const openCount = rows.filter((r) => !r.isClosed).length
+  const closedCount = rows.filter((r) => r.isClosed).length
+  const excludedCount = legs.length - rows.length
   const hasOpen = openCount > 0
 
   const streamingState: 'streaming' | 'paused' | 'fallback' | 'connecting' | 'idle' = !hasOpen
@@ -208,26 +226,38 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
           )}
         </div>
         <span className="text-[10px] tabular-nums text-muted-foreground">
-          {openCount} open · {legs.length - openCount} closed
+          {openCount} open · {closedCount} closed
+          {excludedCount > 0 && ` · ${excludedCount} excluded`}
         </span>
       </div>
 
-      <Table>
+      {/* table-fixed + explicit column widths prevent layout jitter when
+          streaming ticks change the character-length of Current/P&L cells
+          (e.g. ₹29.20 → ₹29.5 → ₹129.00). Each numeric column reserves
+          enough space for realistic maximum values and right-aligns content
+          within; the Position column is the only fluid one. */}
+      <Table className="table-fixed">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
+            <TableHead className="w-[72px] text-center text-[10px] font-semibold uppercase tracking-wider">
+              Action
+            </TableHead>
+            <TableHead className="w-[56px] text-right text-[10px] font-semibold uppercase tracking-wider">
+              Lots
+            </TableHead>
             <TableHead className="text-[10px] font-semibold uppercase tracking-wider">
               Position
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[96px] text-right text-[10px] font-semibold uppercase tracking-wider">
               Entry
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[112px] text-right text-[10px] font-semibold uppercase tracking-wider">
               Current
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[96px] text-right text-[10px] font-semibold uppercase tracking-wider">
               Exit
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[128px] text-right text-[10px] font-semibold uppercase tracking-wider">
               P&amp;L
             </TableHead>
           </TableRow>
@@ -235,8 +265,10 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
         <TableBody>
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
-                No legs yet.
+              <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-foreground">
+                {legs.length === 0
+                  ? 'No legs yet.'
+                  : 'All legs are excluded. Re-include at least one from the Positions panel.'}
               </TableCell>
             </TableRow>
           )}
@@ -245,23 +277,28 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
               key={leg.id}
               className={cn(!leg.active && 'opacity-50', isClosed && 'bg-rose-500/5')}
             >
-              <TableCell className="text-xs font-medium">
-                <span className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'inline-flex h-4 min-w-[22px] items-center justify-center rounded px-1 text-[9px] font-bold uppercase tracking-wider',
-                      leg.side === 'BUY'
-                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                        : 'bg-rose-500/15 text-rose-700 dark:text-rose-400'
-                    )}
-                  >
-                    {leg.side === 'BUY' ? '+' : '-'}
-                    {leg.lots}x
-                  </span>
-                  <span className="tabular-nums text-muted-foreground">{leg.expiry}</span>
+              <TableCell className="text-center">
+                <span
+                  className={cn(
+                    'inline-flex h-5 w-9 items-center justify-center rounded-md text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset',
+                    leg.side === 'BUY'
+                      ? 'bg-emerald-500/15 text-emerald-700 ring-emerald-500/20 dark:text-emerald-400'
+                      : 'bg-rose-500/15 text-rose-700 ring-rose-500/20 dark:text-rose-400'
+                  )}
+                  title={leg.side === 'BUY' ? 'Buy' : 'Sell'}
+                >
+                  {leg.side === 'BUY' ? 'B' : 'S'}
+                </span>
+              </TableCell>
+              <TableCell className="text-right text-xs font-semibold tabular-nums">
+                {leg.lots}
+              </TableCell>
+              <TableCell className="min-w-0 text-xs font-medium">
+                <span className="flex min-w-0 items-center gap-2 truncate">
                   <span className="font-semibold">
                     {leg.segment === 'OPTION' ? `${leg.strike}${leg.optionType}` : 'FUT'}
                   </span>
+                  <span className="tabular-nums text-muted-foreground">{leg.expiry}</span>
                   {isClosed && (
                     <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
                       Closed
@@ -269,20 +306,20 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
                   )}
                 </span>
               </TableCell>
-              <TableCell className="text-right text-xs tabular-nums">
+              <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
                 ₹{leg.price.toFixed(2)}
               </TableCell>
-              <TableCell className="text-right text-xs">
+              <TableCell className="whitespace-nowrap text-right text-xs">
                 <PriceCell value={current} isClosed={isClosed} />
               </TableCell>
-              <TableCell className="text-right text-xs tabular-nums">
+              <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
                 {isClosed ? (
                   <span className="font-semibold">₹{(leg.exitPrice ?? 0).toFixed(2)}</span>
                 ) : (
                   <span className="text-muted-foreground">—</span>
                 )}
               </TableCell>
-              <TableCell className="text-right text-xs">
+              <TableCell className="whitespace-nowrap text-right text-xs">
                 <PnlCell value={pnl} />
               </TableCell>
             </TableRow>
@@ -292,12 +329,12 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
           <TableFooter>
             <TableRow>
               <TableCell
-                colSpan={4}
+                colSpan={6}
                 className="text-[10px] font-semibold uppercase tracking-wider"
               >
                 Total P&amp;L
               </TableCell>
-              <TableCell className="text-right text-sm">
+              <TableCell className="whitespace-nowrap text-right text-sm">
                 <PnlCell value={total} />
               </TableCell>
             </TableRow>

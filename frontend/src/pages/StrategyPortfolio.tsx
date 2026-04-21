@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -6,10 +6,14 @@ import {
   ChevronDown,
   FlaskConical,
   Play,
+  Radio,
   Trash2,
+  Wifi,
+  WifiOff,
 } from 'lucide-react'
 import { apiClient } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
+import { useMarketData } from '@/hooks/useMarketData'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -109,6 +113,74 @@ function describeLeg(leg: PortfolioEntry['legs'][number]): string {
   return `${sign}${leg.lots}× ${leg.expiry} ${desc}`
 }
 
+/**
+ * Briefly highlight a cell whenever its numeric value changes (WS tick).
+ * Returns 'up' | 'down' | null — the caller maps that to a background tint
+ * for ~450ms. Same pattern used in the Strategy Builder's P&L tab.
+ */
+function useFlashOnChange(value: number | undefined): 'up' | 'down' | null {
+  const prev = useRef<number | undefined>(value)
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null)
+
+  useEffect(() => {
+    if (value === undefined || prev.current === undefined) {
+      prev.current = value
+      return
+    }
+    if (value !== prev.current) {
+      setFlash(value > prev.current ? 'up' : 'down')
+      prev.current = value
+      const t = setTimeout(() => setFlash(null), 450)
+      return () => clearTimeout(t)
+    }
+  }, [value])
+
+  return flash
+}
+
+function PriceCell({ value }: { value: number | undefined }) {
+  const flash = useFlashOnChange(value)
+  if (value === undefined) {
+    return <span className="text-muted-foreground">—</span>
+  }
+  return (
+    <span
+      className={cn(
+        'inline-block rounded px-1.5 py-0.5 tabular-nums transition-colors duration-300',
+        flash === 'up' && 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300',
+        flash === 'down' && 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
+      )}
+    >
+      ₹{value.toFixed(2)}
+    </span>
+  )
+}
+
+function PnlCell({
+  value,
+  showDash,
+}: {
+  value: number
+  /** True when the P&L is unknown (no price + no exit) — shows dash. */
+  showDash?: boolean
+}) {
+  const flash = useFlashOnChange(showDash ? undefined : value)
+  if (showDash) return <span className="text-muted-foreground">—</span>
+  return (
+    <span
+      className={cn(
+        'inline-block rounded px-1.5 py-0.5 font-semibold tabular-nums transition-colors duration-300',
+        value > 0 && 'text-emerald-600 dark:text-emerald-400',
+        value < 0 && 'text-rose-600 dark:text-rose-400',
+        flash === 'up' && 'bg-emerald-500/20',
+        flash === 'down' && 'bg-rose-500/20'
+      )}
+    >
+      {`${value >= 0 ? '+' : '-'}₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+    </span>
+  )
+}
+
 function legCount(entry: PortfolioEntry): { long: number; short: number } {
   let long = 0
   let short = 0
@@ -129,8 +201,10 @@ export default function StrategyPortfolio() {
   // Entries are collapsed by default — only ids in this set are expanded.
   // Keyed by entry id for both watchlists; ids are unique across the table.
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
-  // Live LTP cache for all open legs across both watchlists.
-  const [pricesBySymbol, setPricesBySymbol] = useState<Record<string, number>>({})
+  // REST-seeded LTP snapshot — populated once on load so the page doesn't
+  // show "—" while waiting for the first WebSocket tick. Overridden by
+  // WS ticks the moment they arrive.
+  const [seedPrices, setSeedPrices] = useState<Record<string, number>>({})
   // Delete confirmation dialog state. null = closed.
   const [pendingDelete, setPendingDelete] = useState<PortfolioEntry | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -153,28 +227,54 @@ export default function StrategyPortfolio() {
     load()
   }, [load])
 
-  // Fetch live LTPs for all open legs across both watchlists via /multiquotes.
-  // One request for the whole page; closed legs are skipped since their P&L
-  // is already locked in.
-  useEffect(() => {
-    if (!apiKey) return
-    // Expired contracts are no longer in the master contract — calling the
-    // broker for their LTP returns 404 / errors. Skip them entirely; their
-    // row will show "—" for Current Price and the last-known entry → exit
-    // still drives P&L for closed legs.
+  // Build the unique (symbol, exchange) subscription list across both
+  // watchlists. Closed and expired legs are excluded: closed legs have
+  // realised P&L locked in (no streaming needed), and expired contracts
+  // are no longer in the master contract (broker returns 404).
+  //
+  // Dedupe key = "exchange:symbol". MarketDataManager ref-counts at the
+  // manager level too, so rapid add/delete of entries doesn't thrash the
+  // underlying WebSocket.
+  const symbolsToStream = useMemo(() => {
     const now = new Date()
-    const pairs = new Map<string, { symbol: string; exchange: string }>()
+    const seen = new Set<string>()
+    const out: Array<{ symbol: string; exchange: string }> = []
     for (const entry of [...myTrades, ...simulation]) {
       const ex = optionExchangeFor(entry.exchange)
       for (const leg of entry.legs) {
-        if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
         if (!leg.symbol) continue
+        if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
         if (isExpired(leg, now)) continue
-        pairs.set(leg.symbol, { symbol: leg.symbol, exchange: ex })
+        const key = `${ex}:${leg.symbol}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ symbol: leg.symbol, exchange: ex })
       }
     }
-    if (pairs.size === 0) {
-      setPricesBySymbol({})
+    return out
+  }, [myTrades, simulation])
+
+  // Real-time LTP streaming for every open leg across the portfolio.
+  // useMarketData diffs the symbols array on every render (via a stable
+  // sorted key) so adding/deleting entries or closing legs automatically
+  // subscribes/unsubscribes the affected symbols.
+  const {
+    data: marketData,
+    isConnected: wsConnected,
+    isPaused: wsPaused,
+    isFallbackMode: wsFallback,
+  } = useMarketData({
+    symbols: symbolsToStream,
+    mode: 'LTP',
+    enabled: symbolsToStream.length > 0,
+  })
+
+  // REST seed — one /multiquotes call to paint an initial snapshot of
+  // current prices while the WebSocket is still handshaking or waiting
+  // for its first tick. WS values take precedence once they arrive.
+  useEffect(() => {
+    if (!apiKey || symbolsToStream.length === 0) {
+      setSeedPrices({})
       return
     }
     let cancelled = false
@@ -185,7 +285,7 @@ export default function StrategyPortfolio() {
           results?: Array<{ symbol: string; data?: { ltp?: number } }>
         }>(
           '/multiquotes',
-          { apikey: apiKey, symbols: Array.from(pairs.values()) },
+          { apikey: apiKey, symbols: symbolsToStream },
           { validateStatus: () => true }
         )
         if (cancelled) return
@@ -196,16 +296,44 @@ export default function StrategyPortfolio() {
               map[r.symbol] = r.data.ltp
             }
           }
-          setPricesBySymbol(map)
+          setSeedPrices(map)
         }
       } catch {
-        /* non-fatal — card falls back to "—" for Current P&L */
+        /* non-fatal — rows fall back to "—" until the WS tick arrives */
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [apiKey, myTrades, simulation])
+  }, [apiKey, symbolsToStream])
+
+  // Merged price map: WebSocket LTP takes priority; falls back to the
+  // REST seed for the ~200–500ms before the first tick lands.
+  const pricesBySymbol = useMemo(() => {
+    const m: Record<string, number> = { ...seedPrices }
+    for (const entry of [...myTrades, ...simulation]) {
+      const ex = optionExchangeFor(entry.exchange)
+      for (const leg of entry.legs) {
+        if (!leg.symbol) continue
+        const ws = marketData.get(`${ex}:${leg.symbol}`)
+        if (ws?.data?.ltp !== undefined && ws.data.ltp > 0) {
+          m[leg.symbol] = ws.data.ltp
+        }
+      }
+    }
+    return m
+  }, [marketData, seedPrices, myTrades, simulation])
+
+  const streamingState: 'streaming' | 'paused' | 'fallback' | 'connecting' | 'idle' =
+    symbolsToStream.length === 0
+      ? 'idle'
+      : wsConnected
+        ? 'streaming'
+        : wsPaused
+          ? 'paused'
+          : wsFallback
+            ? 'fallback'
+            : 'connecting'
 
   /**
    * Current P&L + open/closed status for a strategy.
@@ -298,7 +426,7 @@ export default function StrategyPortfolio() {
 
   return (
     <div className="space-y-4 py-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex items-start gap-3">
           <Button
             variant="ghost"
@@ -310,7 +438,36 @@ export default function StrategyPortfolio() {
             Back
           </Button>
           <div>
-            <h1 className="text-2xl font-bold">Strategy Portfolio</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold">Strategy Portfolio</h1>
+              {streamingState === 'streaming' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  </span>
+                  Live
+                </span>
+              )}
+              {streamingState === 'paused' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                  <Radio className="h-2.5 w-2.5" />
+                  Paused
+                </span>
+              )}
+              {streamingState === 'fallback' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-400">
+                  <Wifi className="h-2.5 w-2.5" />
+                  Polling
+                </span>
+              )}
+              {streamingState === 'connecting' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <WifiOff className="h-2.5 w-2.5" />
+                  Connecting
+                </span>
+              )}
+            </div>
             <p className="text-sm text-muted-foreground">
               Saved strategies across your two watchlists.
             </p>
@@ -579,31 +736,23 @@ export default function StrategyPortfolio() {
                                         <td className="px-3 py-2 text-right tabular-nums">
                                           ₹{leg.price.toFixed(2)}
                                         </td>
-                                        <td className="px-3 py-2 text-right tabular-nums">
-                                          {isClosed
-                                            ? '—'
-                                            : currentLtp !== undefined
-                                              ? `₹${currentLtp.toFixed(2)}`
-                                              : '—'}
+                                        <td className="px-3 py-2 text-right">
+                                          {isClosed ? (
+                                            <span className="text-muted-foreground">—</span>
+                                          ) : (
+                                            <PriceCell value={currentLtp} />
+                                          )}
                                         </td>
                                         <td className="px-3 py-2 text-right tabular-nums">
                                           {isClosed
                                             ? `₹${(leg.exitPrice ?? 0).toFixed(2)}`
                                             : '—'}
                                         </td>
-                                        <td
-                                          className={cn(
-                                            'px-3 py-2 text-right font-semibold tabular-nums',
-                                            pnl > 0 && 'text-emerald-600 dark:text-emerald-400',
-                                            pnl < 0 && 'text-rose-600 dark:text-rose-400'
-                                          )}
-                                        >
-                                          {pnl === 0 && !isClosed && currentLtp === undefined
-                                            ? '—'
-                                            : `${pnl >= 0 ? '+' : '-'}₹${Math.abs(pnl).toLocaleString(
-                                                'en-IN',
-                                                { maximumFractionDigits: 0 }
-                                              )}`}
+                                        <td className="px-3 py-2 text-right">
+                                          <PnlCell
+                                            value={pnl}
+                                            showDash={pnl === 0 && !isClosed && currentLtp === undefined}
+                                          />
                                         </td>
                                         <td className="px-3 py-2 text-center">
                                           <span
