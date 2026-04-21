@@ -73,14 +73,18 @@ export function GreeksTab({ legs, greeksByLeg }: GreeksTabProps) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {legs.length === 0 && (
+          {legs.filter((l) => l.active).length === 0 && (
             <TableRow>
               <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
-                No legs yet.
+                {legs.length === 0
+                  ? 'No legs yet.'
+                  : 'All legs are excluded. Re-include at least one from the Positions panel.'}
               </TableCell>
             </TableRow>
           )}
-          {legs.map((leg) => {
+          {legs
+            .filter((leg) => leg.active)
+            .map((leg) => {
             const grk = greeksByLeg[leg.id]
             const sign = leg.side === 'BUY' ? 1 : -1
             const qty = leg.lots * leg.lotSize
@@ -90,7 +94,7 @@ export function GreeksTab({ legs, greeksByLeg }: GreeksTabProps) {
                 ? `${leg.strike}${leg.optionType}`
                 : 'FUT'
             return (
-              <TableRow key={leg.id} className={leg.active ? '' : 'opacity-50'}>
+              <TableRow key={leg.id}>
                 <TableCell className="text-xs font-medium">
                   {sign > 0 ? '+' : '-'}
                   {leg.lots}x {leg.expiry} {descriptor}
