@@ -212,22 +212,33 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
         </span>
       </div>
 
-      <Table>
+      {/* table-fixed + explicit column widths prevent layout jitter when
+          streaming ticks change the character-length of Current/P&L cells
+          (e.g. ₹29.20 → ₹29.5 → ₹129.00). Each numeric column reserves
+          enough space for realistic maximum values and right-aligns content
+          within; the Position column is the only fluid one. */}
+      <Table className="table-fixed">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
+            <TableHead className="w-[72px] text-center text-[10px] font-semibold uppercase tracking-wider">
+              Action
+            </TableHead>
+            <TableHead className="w-[56px] text-right text-[10px] font-semibold uppercase tracking-wider">
+              Lots
+            </TableHead>
             <TableHead className="text-[10px] font-semibold uppercase tracking-wider">
               Position
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[96px] text-right text-[10px] font-semibold uppercase tracking-wider">
               Entry
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[112px] text-right text-[10px] font-semibold uppercase tracking-wider">
               Current
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[96px] text-right text-[10px] font-semibold uppercase tracking-wider">
               Exit
             </TableHead>
-            <TableHead className="text-right text-[10px] font-semibold uppercase tracking-wider">
+            <TableHead className="w-[128px] text-right text-[10px] font-semibold uppercase tracking-wider">
               P&amp;L
             </TableHead>
           </TableRow>
@@ -235,7 +246,7 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
         <TableBody>
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+              <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-foreground">
                 No legs yet.
               </TableCell>
             </TableRow>
@@ -245,23 +256,28 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
               key={leg.id}
               className={cn(!leg.active && 'opacity-50', isClosed && 'bg-rose-500/5')}
             >
-              <TableCell className="text-xs font-medium">
-                <span className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'inline-flex h-4 min-w-[22px] items-center justify-center rounded px-1 text-[9px] font-bold uppercase tracking-wider',
-                      leg.side === 'BUY'
-                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                        : 'bg-rose-500/15 text-rose-700 dark:text-rose-400'
-                    )}
-                  >
-                    {leg.side === 'BUY' ? '+' : '-'}
-                    {leg.lots}x
-                  </span>
-                  <span className="tabular-nums text-muted-foreground">{leg.expiry}</span>
+              <TableCell className="text-center">
+                <span
+                  className={cn(
+                    'inline-flex h-5 w-9 items-center justify-center rounded-md text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset',
+                    leg.side === 'BUY'
+                      ? 'bg-emerald-500/15 text-emerald-700 ring-emerald-500/20 dark:text-emerald-400'
+                      : 'bg-rose-500/15 text-rose-700 ring-rose-500/20 dark:text-rose-400'
+                  )}
+                  title={leg.side === 'BUY' ? 'Buy' : 'Sell'}
+                >
+                  {leg.side === 'BUY' ? 'B' : 'S'}
+                </span>
+              </TableCell>
+              <TableCell className="text-right text-xs font-semibold tabular-nums">
+                {leg.lots}
+              </TableCell>
+              <TableCell className="min-w-0 text-xs font-medium">
+                <span className="flex min-w-0 items-center gap-2 truncate">
                   <span className="font-semibold">
                     {leg.segment === 'OPTION' ? `${leg.strike}${leg.optionType}` : 'FUT'}
                   </span>
+                  <span className="tabular-nums text-muted-foreground">{leg.expiry}</span>
                   {isClosed && (
                     <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
                       Closed
@@ -269,20 +285,20 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
                   )}
                 </span>
               </TableCell>
-              <TableCell className="text-right text-xs tabular-nums">
+              <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
                 ₹{leg.price.toFixed(2)}
               </TableCell>
-              <TableCell className="text-right text-xs">
+              <TableCell className="whitespace-nowrap text-right text-xs">
                 <PriceCell value={current} isClosed={isClosed} />
               </TableCell>
-              <TableCell className="text-right text-xs tabular-nums">
+              <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
                 {isClosed ? (
                   <span className="font-semibold">₹{(leg.exitPrice ?? 0).toFixed(2)}</span>
                 ) : (
                   <span className="text-muted-foreground">—</span>
                 )}
               </TableCell>
-              <TableCell className="text-right text-xs">
+              <TableCell className="whitespace-nowrap text-right text-xs">
                 <PnlCell value={pnl} />
               </TableCell>
             </TableRow>
@@ -292,12 +308,12 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
           <TableFooter>
             <TableRow>
               <TableCell
-                colSpan={4}
+                colSpan={6}
                 className="text-[10px] font-semibold uppercase tracking-wider"
               >
                 Total P&amp;L
               </TableCell>
-              <TableCell className="text-right text-sm">
+              <TableCell className="whitespace-nowrap text-right text-sm">
                 <PnlCell value={total} />
               </TableCell>
             </TableRow>
