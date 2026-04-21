@@ -77,7 +77,7 @@ def copy_from_dataframe(df):
         else:
             logger.info("No new records to insert.")
     except Exception as e:
-        logger.error(f"Error during bulk insert: {e}")
+        logger.exception(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 
@@ -408,7 +408,7 @@ def master_contract_download():
         )
 
     except Exception as e:
-        logger.info(f"{str(e)}")
+        logger.exception(f"Failed Master contract download: {str(e)}")
         return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
 
 
