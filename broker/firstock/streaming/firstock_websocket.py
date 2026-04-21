@@ -16,7 +16,7 @@ class FirstockWebSocket:
     Firstock WebSocket Client for real-time market data
     """
 
-    ROOT_URI = "wss://socket.firstock.in/ws"
+    ROOT_URI = "wss://socket.firstock.in/V2/ws"
     HEART_BEAT_INTERVAL = 30  # Send ping every 30 seconds
     HEART_BEAT_MESSAGE = "ping"
 
@@ -322,9 +322,8 @@ class FirstockWebSocket:
                                 self.wsapp.close()
                         return
 
-                    # Handle market data
+                    # Handle V1-style market data (tick fields at top level)
                     if "c_symbol" in data:
-                        # This is market data - call the data callback
                         self.logger.info(
                             f"Received market data for symbol: {data.get('c_symbol')} on exchange: {data.get('c_exch_seg')}"
                         )
@@ -332,8 +331,54 @@ class FirstockWebSocket:
                             self.on_data(wsapp, data)
                         return
 
-                    # Log any other message types we receive
-                    self.logger.info(f"Received other message type: {list(data.keys())}")
+                    # Handle V2-style market data: payload is {"EX:TOKEN": {...tick...}}
+                    # (possibly batched for multiple symbols). Unwrap each and
+                    # inject c_symbol/c_exch_seg so the existing adapter handler
+                    # continues to work unchanged.
+                    v2_tick_keys = [
+                        k for k in data.keys()
+                        if isinstance(k, str) and ":" in k and isinstance(data[k], dict)
+                    ]
+                    if v2_tick_keys:
+                        if not getattr(self, "_v2_sample_logged", False):
+                            self.logger.info(
+                                f"V2 tick sample payload for {v2_tick_keys[0]}: "
+                                f"{json.dumps(data[v2_tick_keys[0]])[:500]}"
+                            )
+                            self._v2_sample_logged = True
+                        for key in v2_tick_keys:
+                            tick = data[key]
+                            exch, _, token = key.partition(":")
+                            tick.setdefault("c_symbol", token)
+                            tick.setdefault("c_exch_seg", exch)
+                            if self.on_data:
+                                self.on_data(wsapp, tick)
+                        return
+
+                    # Log any other message types we receive. Also dump a
+                    # bounded preview of the first value (first few messages
+                    # only) to help diagnose unexpected V2 payload formats.
+                    first_key = next(iter(data.keys()), None)
+                    if first_key is not None and not getattr(
+                        self, "_unknown_payload_samples_logged", 0
+                    ) >= 5:
+                        val = data[first_key]
+                        try:
+                            val_preview = json.dumps(val)[:500]
+                        except Exception:
+                            val_preview = repr(val)[:500]
+                        self.logger.info(
+                            f"Received other message type: keys={list(data.keys())} "
+                            f"first_val_type={type(val).__name__} "
+                            f"first_val_preview={val_preview}"
+                        )
+                        self._unknown_payload_samples_logged = (
+                            getattr(self, "_unknown_payload_samples_logged", 0) + 1
+                        )
+                    else:
+                        self.logger.info(
+                            f"Received other message type: {list(data.keys())}"
+                        )
 
                     # Handle other message types
                     if self.on_message:
