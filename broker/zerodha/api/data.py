@@ -441,11 +441,11 @@ class BrokerData:
             # Initialize empty list to store DataFrames
             dfs = []
 
-            # Process data in 60-day chunks
+            # Kite per-request limits: 2000 days for `day`, 60 days for everything else.
+            chunk_days = 2000 if resolution == "day" else 60
             current_start = start_date
             while current_start <= end_date:
-                # Calculate chunk end date (60 days or remaining period)
-                current_end = min(current_start + timedelta(days=59), end_date)
+                current_end = min(current_start + timedelta(days=chunk_days - 1), end_date)
 
                 # Format dates for API call
                 from_str = current_start.strftime("%Y-%m-%d+00:00:00")
