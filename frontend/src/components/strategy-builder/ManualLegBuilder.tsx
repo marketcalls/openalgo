@@ -1,4 +1,4 @@
-import { Minus, Plus, PlusCircle } from 'lucide-react'
+import { ListPlus, Minus, Plus, PlusCircle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { strikeMoneyness } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 import type { OptionStrike } from '@/types/option-chain'
 
@@ -32,7 +33,17 @@ export interface ManualLegBuilderProps {
   chain: OptionStrike[] | null
   selectedExpiry: string
   atmStrike: number | null
+  /** Common strike increment (e.g. 50 for NIFTY) — drives moneyness step labels. */
+  strikeStep?: number
   onAdd: (draft: LegDraft) => void
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+      {children}
+    </span>
+  )
 }
 
 export function ManualLegBuilder({
@@ -41,6 +52,7 @@ export function ManualLegBuilder({
   chain,
   selectedExpiry,
   atmStrike,
+  strikeStep = 0,
   onAdd,
 }: ManualLegBuilderProps) {
   const [segment, setSegment] = useState<LegDraftSegment>('OPTION')
@@ -50,9 +62,6 @@ export function ManualLegBuilder({
   const [strike, setStrike] = useState<number | undefined>(undefined)
   const [lots, setLots] = useState(1)
 
-  // Default the strike to the live ATM whenever the chain loads a new ATM —
-  // either on first render, or when the user switches underlying/expiry so the
-  // previously-selected strike is no longer in the fresh chain.
   useEffect(() => {
     if (atmStrike === null || !chain) return
     const strikeInChain =
@@ -60,10 +69,8 @@ export function ManualLegBuilder({
     if (!strikeInChain) setStrike(atmStrike)
   }, [atmStrike, chain, strike])
 
-  // Which expiry list to present depends on the selected segment.
   const availableExpiries = segment === 'FUTURE' ? futureExpiries : expiries
 
-  // Keep expiry sane when segment switches.
   useEffect(() => {
     if (availableExpiries.length === 0) {
       setExpiry('')
@@ -74,7 +81,6 @@ export function ManualLegBuilder({
     }
   }, [availableExpiries, expiry])
 
-  // Pull strike list and LTP for the chosen strike from the live chain
   const strikeOptions = useMemo(() => {
     if (!chain) return []
     return chain.map((s) => s.strike)
@@ -84,9 +90,9 @@ export function ManualLegBuilder({
     if (segment !== 'OPTION' || !chain || strike === undefined) return null
     const row = chain.find((s) => s.strike === strike)
     if (!row) return null
-    const side = optionType === 'CE' ? row.ce : row.pe
-    if (!side) return null
-    return { price: side.ltp, symbol: side.symbol }
+    const rowSide = optionType === 'CE' ? row.ce : row.pe
+    if (!rowSide) return null
+    return { price: rowSide.ltp, symbol: rowSide.symbol }
   }, [chain, strike, optionType, segment])
 
   const canAdd =
@@ -108,41 +114,43 @@ export function ManualLegBuilder({
     })
   }
 
+  const currentMoneyness = strikeMoneyness(strike, atmStrike, strikeStep, optionType)
+
   return (
-    <div className="rounded-lg border bg-card p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Add Position</h3>
-        <div className="flex overflow-hidden rounded-md border">
-          <button
-            onClick={() => setSide('BUY')}
-            className={cn(
-              'px-3 py-1 text-xs font-semibold transition',
-              side === 'BUY'
-                ? 'bg-emerald-500 text-white'
-                : 'bg-transparent text-muted-foreground hover:bg-muted'
-            )}
-          >
-            Buy
-          </button>
-          <button
-            onClick={() => setSide('SELL')}
-            className={cn(
-              'px-3 py-1 text-xs font-semibold transition',
-              side === 'SELL'
-                ? 'bg-rose-500 text-white'
-                : 'bg-transparent text-muted-foreground hover:bg-muted'
-            )}
-          >
-            Sell
-          </button>
+    <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      {/* Header — icon + title only. Buy/Sell moved down next to Add. */}
+      <div className="flex items-center justify-between border-b bg-gradient-to-r from-muted/30 to-transparent px-4 py-3">
+        <div className="flex items-center gap-2">
+          <div className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-emerald-500/15 to-blue-500/15 text-emerald-600 dark:text-emerald-400">
+            <ListPlus className="h-3.5 w-3.5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold leading-none">Add a Position</h3>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Build legs manually with custom strike, expiry and side
+            </p>
+          </div>
         </div>
+        {liveLeg && (
+          <div className="hidden items-center gap-2 text-[11px] sm:flex">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+              LTP
+              <span className="font-bold tabular-nums text-foreground">
+                ₹{liveLeg.price.toFixed(2)}
+              </span>
+            </span>
+          </div>
+        )}
       </div>
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex min-w-[140px] flex-col gap-1">
-          <label className="text-[11px] font-medium text-muted-foreground">Segment</label>
+      {/* Action row — everything inline so mouse travel is minimal. */}
+      <div className="flex flex-wrap items-end gap-3 px-4 py-4">
+        {/* Segment */}
+        <div className="flex min-w-[120px] flex-col gap-1.5">
+          <FieldLabel>Segment</FieldLabel>
           <Select value={segment} onValueChange={(v) => setSegment(v as LegDraftSegment)}>
-            <SelectTrigger className="h-9 text-xs">
+            <SelectTrigger className="h-9 text-xs font-medium">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -152,10 +160,11 @@ export function ManualLegBuilder({
           </Select>
         </div>
 
-        <div className="flex min-w-[170px] flex-col gap-1">
-          <label className="text-[11px] font-medium text-muted-foreground">Expiry</label>
+        {/* Expiry */}
+        <div className="flex min-w-[140px] flex-col gap-1.5">
+          <FieldLabel>Expiry</FieldLabel>
           <Select value={expiry} onValueChange={setExpiry}>
-            <SelectTrigger className="h-9 text-xs">
+            <SelectTrigger className="h-9 text-xs font-medium">
               <SelectValue placeholder={availableExpiries.length === 0 ? 'None' : 'Select'} />
             </SelectTrigger>
             <SelectContent>
@@ -170,47 +179,132 @@ export function ManualLegBuilder({
 
         {segment === 'OPTION' && (
           <>
-            <div className="flex min-w-[140px] flex-col gap-1">
-              <label className="text-[11px] font-medium text-muted-foreground">Strike</label>
+            {/* Strike + inline moneyness */}
+            <div className="flex min-w-[140px] flex-col gap-1.5">
+              <FieldLabel>
+                <span className="inline-flex items-center gap-1.5">
+                  Strike
+                  {currentMoneyness && (
+                    <span
+                      className={cn(
+                        'rounded px-1 py-px text-[9px] font-bold uppercase tracking-wider normal-case',
+                        currentMoneyness.kind === 'ATM' &&
+                          'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+                        currentMoneyness.kind === 'ITM' &&
+                          'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+                        currentMoneyness.kind === 'OTM' &&
+                          'bg-muted text-muted-foreground'
+                      )}
+                    >
+                      {currentMoneyness.label}
+                    </span>
+                  )}
+                </span>
+              </FieldLabel>
               <Select
                 value={strike !== undefined ? String(strike) : ''}
                 onValueChange={(v) => setStrike(Number(v))}
               >
-                <SelectTrigger className="h-9 text-xs">
+                <SelectTrigger className="h-9 text-xs font-medium tabular-nums">
                   <SelectValue placeholder="Select" />
                 </SelectTrigger>
                 <SelectContent>
-                  {strikeOptions.map((s) => (
-                    <SelectItem key={s} value={String(s)}>
-                      {s}
-                    </SelectItem>
-                  ))}
+                  {strikeOptions.map((s) => {
+                    const m = strikeMoneyness(s, atmStrike, strikeStep, optionType)
+                    return (
+                      <SelectItem key={s} value={String(s)}>
+                        <span className="tabular-nums">{s}</span>
+                        {m && (
+                          <span
+                            className={cn(
+                              'ml-2 text-[9px] font-semibold uppercase tracking-wider',
+                              m.kind === 'ATM' && 'text-amber-600 dark:text-amber-400',
+                              m.kind === 'ITM' && 'text-sky-600 dark:text-sky-400',
+                              m.kind === 'OTM' && 'text-muted-foreground'
+                            )}
+                          >
+                            {m.label}
+                          </span>
+                        )}
+                      </SelectItem>
+                    )
+                  })}
                 </SelectContent>
               </Select>
             </div>
 
-            <div className="flex min-w-[90px] flex-col gap-1">
-              <label className="text-[11px] font-medium text-muted-foreground">Type</label>
-              <Select value={optionType} onValueChange={(v) => setOptionType(v as LegDraftType)}>
-                <SelectTrigger className="h-9 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="CE">CE</SelectItem>
-                  <SelectItem value="PE">PE</SelectItem>
-                </SelectContent>
-              </Select>
+            {/* CE / PE */}
+            <div className="flex flex-col gap-1.5">
+              <FieldLabel>Type</FieldLabel>
+              <div className="inline-flex h-9 overflow-hidden rounded-md border bg-background p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setOptionType('CE')}
+                  className={cn(
+                    'rounded-sm px-3 text-[11px] font-bold transition',
+                    optionType === 'CE'
+                      ? 'bg-foreground text-background'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  CE
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOptionType('PE')}
+                  className={cn(
+                    'rounded-sm px-3 text-[11px] font-bold transition',
+                    optionType === 'PE'
+                      ? 'bg-foreground text-background'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  PE
+                </button>
+              </div>
             </div>
           </>
         )}
 
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-medium text-muted-foreground">Lot Qty</label>
-          <div className="inline-flex h-9 w-[112px] items-center overflow-hidden rounded-md border">
+        {/* Buy / Sell — now inline, right where mouse already is. */}
+        <div className="flex flex-col gap-1.5">
+          <FieldLabel>Side</FieldLabel>
+          <div className="inline-flex h-9 overflow-hidden rounded-md border bg-background p-0.5">
+            <button
+              type="button"
+              onClick={() => setSide('BUY')}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-sm px-3 text-[11px] font-bold uppercase tracking-wider transition',
+                side === 'BUY'
+                  ? 'bg-emerald-500 text-white shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Buy
+            </button>
+            <button
+              type="button"
+              onClick={() => setSide('SELL')}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-sm px-3 text-[11px] font-bold uppercase tracking-wider transition',
+                side === 'SELL'
+                  ? 'bg-rose-500 text-white shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Sell
+            </button>
+          </div>
+        </div>
+
+        {/* Lot Qty */}
+        <div className="flex flex-col gap-1.5">
+          <FieldLabel>Lot Qty</FieldLabel>
+          <div className="inline-flex h-9 w-[120px] items-center overflow-hidden rounded-md border bg-background">
             <button
               type="button"
               onClick={() => setLots(Math.max(1, lots - 1))}
-              className="flex h-full w-8 items-center justify-center text-muted-foreground hover:bg-muted"
+              className="flex h-full w-9 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
               aria-label="Decrease lots"
             >
               <Minus className="h-3.5 w-3.5" />
@@ -220,37 +314,56 @@ export function ManualLegBuilder({
               min={1}
               value={lots}
               onChange={(e) => setLots(Math.max(1, Number(e.target.value) || 1))}
-              className="h-full w-12 border-x bg-transparent text-center text-xs font-semibold tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              className="h-full w-full border-x bg-transparent text-center text-xs font-bold tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
             <button
               type="button"
               onClick={() => setLots(lots + 1)}
-              className="flex h-full w-8 items-center justify-center text-muted-foreground hover:bg-muted"
+              className="flex h-full w-9 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
               aria-label="Increase lots"
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
+
+        {/* Context-aware Add button — color + label mirror the selected side,
+            so the visual intent matches what will be added. */}
+        <div className="ml-auto flex flex-col gap-1.5">
+          <FieldLabel>&nbsp;</FieldLabel>
+          <Button
+            size="sm"
+            onClick={handleAdd}
+            disabled={!canAdd}
+            className={cn(
+              'h-9 gap-1.5 px-4 text-xs font-bold uppercase tracking-wider transition',
+              side === 'BUY'
+                ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                : 'bg-rose-500 text-white hover:bg-rose-600'
+            )}
+          >
+            <PlusCircle className="h-3.5 w-3.5" />
+            {side === 'BUY' ? 'Add Buy' : 'Add Sell'}{' '}
+            <span className="rounded bg-white/20 px-1.5 py-px text-[10px] font-bold tabular-nums">
+              {side === 'BUY' ? '+' : '-'}
+              {lots}x
+            </span>
+          </Button>
+        </div>
       </div>
 
-      <div className="mt-3 flex items-center justify-between">
-        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-          {liveLeg && (
-            <>
-              <span>
-                LTP:{' '}
-                <span className="font-semibold text-foreground">₹{liveLeg.price.toFixed(2)}</span>
-              </span>
-              <span className="font-mono text-[11px]">{liveLeg.symbol}</span>
-            </>
-          )}
+      {/* Live symbol footer (LTP was moved to header; keep symbol here). */}
+      {liveLeg && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/20 px-4 py-2">
+          <span className="text-[10px] text-muted-foreground sm:hidden">
+            LTP
+            <span className="ml-1 font-bold tabular-nums text-foreground">
+              ₹{liveLeg.price.toFixed(2)}
+            </span>
+          </span>
+          <span className="font-mono text-[10px] text-muted-foreground">{liveLeg.symbol}</span>
         </div>
-        <Button size="sm" onClick={handleAdd} disabled={!canAdd} className="h-8 text-xs">
-          <PlusCircle className="mr-1.5 h-3.5 w-3.5" />
-          Add Position
-        </Button>
-      </div>
+      )}
     </div>
   )
 }

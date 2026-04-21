@@ -43,28 +43,38 @@ export interface SymbolHeaderProps {
   isRefreshing: boolean
 }
 
-function Metric({
-  label,
-  value,
-  tone = 'neutral',
-}: {
+interface MetricCellProps {
   label: string
   value: string
-  tone?: 'profit' | 'loss' | 'warn' | 'info' | 'neutral'
-}) {
+  sub?: string
+  tone?: 'primary' | 'profit' | 'warn' | 'muted'
+  accent?: boolean
+}
+
+function MetricCell({ label, value, sub, tone = 'muted', accent = false }: MetricCellProps) {
   return (
     <div
       className={cn(
-        'rounded-md px-2.5 py-1.5 text-xs font-medium',
-        tone === 'profit' && 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-        tone === 'loss' && 'bg-rose-500/10 text-rose-700 dark:text-rose-300',
-        tone === 'warn' && 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
-        tone === 'info' && 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
-        tone === 'neutral' && 'bg-muted text-foreground'
+        'relative flex flex-col justify-center gap-1 px-4 py-3 transition',
+        accent && 'bg-gradient-to-b from-background to-muted/20'
       )}
     >
-      <span className="mr-1 text-muted-foreground">{label}:</span>
-      <span className="font-semibold tabular-nums">{value}</span>
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </span>
+      <span
+        className={cn(
+          'font-semibold tabular-nums leading-none',
+          accent ? 'text-2xl tracking-tight' : 'text-base',
+          tone === 'primary' && 'text-foreground',
+          tone === 'profit' && 'text-emerald-600 dark:text-emerald-400',
+          tone === 'warn' && 'text-amber-600 dark:text-amber-400',
+          tone === 'muted' && 'text-foreground'
+        )}
+      >
+        {value}
+      </span>
+      {sub && <span className="text-[10px] font-medium text-muted-foreground">{sub}</span>}
     </div>
   )
 }
@@ -89,14 +99,20 @@ export function SymbolHeader({
   onRefresh,
   isRefreshing,
 }: SymbolHeaderProps) {
+  const hasData = spotPrice !== null
+
   return (
-    <div className="space-y-3 rounded-lg border bg-card p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        {/* Exchange */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-medium text-muted-foreground">Exchange</label>
+    <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      {/* Top bar — breadcrumb-style selectors + live status */}
+      <div className="flex flex-wrap items-center gap-3 border-b bg-gradient-to-r from-muted/40 via-background to-background px-4 py-2.5">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Analyzing
+        </span>
+
+        <div className="inline-flex items-stretch overflow-hidden rounded-lg border bg-background divide-x">
+          {/* Exchange */}
           <Select value={selectedExchange} onValueChange={onExchangeChange}>
-            <SelectTrigger className="h-9 w-28 text-xs">
+            <SelectTrigger className="h-9 w-[92px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -107,28 +123,25 @@ export function SymbolHeader({
               ))}
             </SelectContent>
           </Select>
-        </div>
 
-        {/* Underlying (searchable) */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-medium text-muted-foreground">Index / Stock</label>
+          {/* Underlying */}
           <Popover open={underlyingOpen} onOpenChange={onUnderlyingOpenChange}>
             <PopoverTrigger asChild>
               <Button
-                variant="outline"
+                variant="ghost"
                 role="combobox"
                 aria-expanded={underlyingOpen}
-                className="h-9 w-48 justify-between text-xs font-semibold"
+                className="h-9 w-[168px] justify-between rounded-none border-0 bg-transparent px-3 text-xs font-bold tracking-wide hover:bg-muted/40"
               >
                 {selectedUnderlying || 'Select'}
                 <ChevronsUpDown className="ml-2 h-3.5 w-3.5 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-48 p-0">
+            <PopoverContent className="w-56 p-0">
               <Command>
-                <CommandInput placeholder="Search..." className="h-9 text-xs" />
+                <CommandInput placeholder="Search symbol..." className="h-9 text-xs" />
                 <CommandList>
-                  <CommandEmpty>None found.</CommandEmpty>
+                  <CommandEmpty>No symbol found.</CommandEmpty>
                   <CommandGroup>
                     {underlyings.map((u) => (
                       <CommandItem
@@ -138,7 +151,7 @@ export function SymbolHeader({
                           onUnderlyingChange(u)
                           onUnderlyingOpenChange(false)
                         }}
-                        className="text-xs"
+                        className="text-xs font-medium"
                       >
                         <Check
                           className={cn(
@@ -154,14 +167,11 @@ export function SymbolHeader({
               </Command>
             </PopoverContent>
           </Popover>
-        </div>
 
-        {/* Expiry */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-medium text-muted-foreground">Expiry</label>
+          {/* Expiry */}
           <Select value={selectedExpiry} onValueChange={onExpiryChange}>
-            <SelectTrigger className="h-9 w-36 text-xs">
-              <SelectValue placeholder="Select" />
+            <SelectTrigger className="h-9 w-[128px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0">
+              <SelectValue placeholder="Expiry" />
             </SelectTrigger>
             <SelectContent>
               {expiries.map((ex) => (
@@ -173,35 +183,71 @@ export function SymbolHeader({
           </Select>
         </div>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          {/* Live indicator */}
+          <div className="hidden items-center gap-1.5 sm:flex">
+            <span className="relative flex h-2 w-2">
+              <span
+                className={cn(
+                  'absolute inline-flex h-full w-full rounded-full opacity-75',
+                  hasData ? 'animate-ping bg-emerald-400' : 'bg-muted-foreground/40'
+                )}
+              />
+              <span
+                className={cn(
+                  'relative inline-flex h-2 w-2 rounded-full',
+                  hasData ? 'bg-emerald-500' : 'bg-muted-foreground/60'
+                )}
+              />
+            </span>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              {hasData ? 'Live' : 'Idle'}
+            </span>
+          </div>
+
           <Button
             variant="outline"
             size="sm"
             onClick={onRefresh}
             disabled={isRefreshing}
-            className="h-9 text-xs"
+            className="h-8 gap-1.5 text-xs"
           >
-            <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', isRefreshing && 'animate-spin')} />
+            <RefreshCw className={cn('h-3.5 w-3.5', isRefreshing && 'animate-spin')} />
             Refresh
           </Button>
         </div>
       </div>
 
-      {/* Metadata strip */}
-      <div className="flex flex-wrap gap-2">
-        <Metric label="Spot" value={spotPrice !== null ? spotPrice.toFixed(2) : '—'} tone="info" />
-        <Metric
+      {/* Metrics grid — hairline divisions, big primary numbers */}
+      <div className="grid grid-cols-2 divide-x divide-y sm:grid-cols-3 sm:divide-y-0 lg:grid-cols-5">
+        <MetricCell
+          label="Spot"
+          value={spotPrice !== null ? spotPrice.toFixed(2) : '—'}
+          tone="primary"
+          accent
+        />
+        <MetricCell
           label="Futures"
           value={futuresPrice !== null ? futuresPrice.toFixed(2) : '—'}
+          sub={
+            spotPrice !== null && futuresPrice !== null
+              ? `${futuresPrice > spotPrice ? '+' : ''}${(futuresPrice - spotPrice).toFixed(2)}`
+              : undefined
+          }
           tone="profit"
+          accent
         />
-        <Metric label="Lot Size" value={lotSize !== null ? String(lotSize) : '—'} tone="neutral" />
-        <Metric label="ATM IV" value={atmIv !== null ? `${atmIv.toFixed(2)}%` : '—'} tone="warn" />
-        <Metric
+        <MetricCell
+          label="ATM IV"
+          value={atmIv !== null ? `${atmIv.toFixed(2)}%` : '—'}
+          tone="warn"
+        />
+        <MetricCell
           label="DTE"
-          value={daysToExpiry !== null ? `${daysToExpiry.toFixed(0)}d` : '—'}
-          tone="loss"
+          value={daysToExpiry !== null ? `${daysToExpiry.toFixed(0)}` : '—'}
+          sub={daysToExpiry !== null ? 'days to expiry' : undefined}
         />
+        <MetricCell label="Lot Size" value={lotSize !== null ? String(lotSize) : '—'} />
       </div>
     </div>
   )
