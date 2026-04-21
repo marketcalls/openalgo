@@ -11,6 +11,34 @@ export type OptionType = 'CE' | 'PE'
 export type Side = 'BUY' | 'SELL'
 export type Segment = 'OPTION' | 'FUTURE'
 
+/**
+ * Classify a strike's moneyness relative to the ATM strike.
+ *
+ * Returns a short label like "ATM", "ITM1", "ITM2", "OTM1", "OTM3" where the
+ * number is how many strike-steps away from ATM the strike is.
+ *
+ * Call (CE):  strike < ATM → ITM    ·    strike > ATM → OTM
+ * Put (PE):   strike > ATM → ITM    ·    strike < ATM → OTM
+ *
+ * Returns null when inputs are insufficient (missing ATM, non-positive step).
+ */
+export function strikeMoneyness(
+  strike: number | undefined,
+  atmStrike: number | null,
+  strikeStep: number,
+  optionType: OptionType | undefined
+): { label: string; kind: 'ATM' | 'ITM' | 'OTM'; steps: number } | null {
+  if (strike === undefined || atmStrike === null || !optionType) return null
+  if (!isFinite(strikeStep) || strikeStep <= 0) return null
+  const rawSteps = (strike - atmStrike) / strikeStep
+  const steps = Math.round(rawSteps)
+  if (steps === 0) return { label: 'ATM', kind: 'ATM', steps: 0 }
+  const isCallITM = optionType === 'CE' && steps < 0
+  const isPutITM = optionType === 'PE' && steps > 0
+  const kind: 'ITM' | 'OTM' = isCallITM || isPutITM ? 'ITM' : 'OTM'
+  return { label: `${kind}${Math.abs(steps)}`, kind, steps }
+}
+
 export interface StrategyLeg {
   id: string
   segment: Segment

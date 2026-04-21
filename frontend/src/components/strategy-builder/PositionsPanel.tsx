@@ -1,7 +1,7 @@
-import { Pencil, RotateCw, Trash2 } from 'lucide-react'
+import { Layers, Pencil, RotateCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import type { StrategyLeg } from '@/lib/strategyMath'
+import { strikeMoneyness, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 
 export interface PositionsPanelProps {
@@ -28,6 +28,10 @@ export interface PositionsPanelProps {
    * entirely so we don't show a dash for a feature the broker can't provide.
    */
   marginSupported?: boolean | null
+  /** ATM strike from the live chain — used to compute per-leg moneyness. */
+  atmStrike?: number | null
+  /** Common strike increment (e.g. 50 for NIFTY) — drives moneyness step count. */
+  strikeStep?: number
 }
 
 function formatCurrency(v: number): string {
@@ -35,15 +39,49 @@ function formatCurrency(v: number): string {
   // computePayoff. Surface that clearly instead of a generic dash.
   if (v === Infinity) return 'Unlimited'
   if (v === -Infinity) return 'Unlimited'
-  if (!isFinite(v)) return '-'
+  if (!isFinite(v)) return '—'
   const abs = Math.abs(v)
   const sign = v < 0 ? '-' : v > 0 ? '+' : ''
   return `${sign}₹${abs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 }
 
 function formatPct(v: number): string {
-  if (!isFinite(v)) return '-'
+  if (!isFinite(v)) return '—'
   return `${v.toFixed(2)}%`
+}
+
+interface MetricTileProps {
+  label: string
+  value: string
+  tone?: 'profit' | 'loss' | 'neutral'
+  span?: 1 | 2
+  emphasize?: boolean
+}
+
+function MetricTile({ label, value, tone = 'neutral', span = 1, emphasize = false }: MetricTileProps) {
+  return (
+    <div
+      className={cn(
+        'flex flex-col justify-center gap-1 px-3.5 py-2.5',
+        span === 2 && 'col-span-2',
+        emphasize && 'bg-gradient-to-br from-muted/40 to-transparent'
+      )}
+    >
+      <dt className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        {label}
+      </dt>
+      <dd
+        className={cn(
+          'font-semibold tabular-nums leading-tight',
+          emphasize ? 'text-base' : 'text-sm',
+          tone === 'profit' && 'text-emerald-600 dark:text-emerald-400',
+          tone === 'loss' && 'text-rose-600 dark:text-rose-400'
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  )
 }
 
 export function PositionsPanel({
@@ -64,99 +102,77 @@ export function PositionsPanel({
   marginRequired,
   isMarginLoading,
   marginSupported,
+  atmStrike = null,
+  strikeStep = 0,
 }: PositionsPanelProps) {
   const allSelected = legs.length > 0 && legs.every((l) => l.active)
   const activeCount = legs.filter((l) => l.active).length
 
-  const metrics: Array<{ label: string; value: string; tone?: 'profit' | 'loss' | 'neutral' }> = [
-    {
-      label: 'Prob. of Profit',
-      value: probOfProfit > 0 ? formatPct(probOfProfit * 100) : '-',
-      tone: 'neutral',
-    },
-    {
-      label: 'Max. Profit',
-      value: formatCurrency(maxProfit),
-      tone: 'profit',
-    },
-    {
-      label: 'Max. Loss',
-      value: formatCurrency(maxLoss),
-      tone: 'loss',
-    },
-    {
-      label: 'Risk:Reward',
-      // R:R is meaningful only when both ends are finite and on opposite
-      // sides of zero. Unlimited-profit or unlimited-loss strategies have
-      // no defined ratio — show NA to match Opstra / Sensibull conventions.
-      value:
-        isFinite(maxProfit) && isFinite(maxLoss) && maxProfit > 0 && maxLoss < 0
-          ? `1 : ${(Math.abs(maxProfit) / Math.abs(maxLoss)).toFixed(2)}`
-          : 'NA',
-    },
-    {
-      label: 'Breakevens',
-      value: breakevens.length === 0 ? '-' : breakevens.map((b) => b.toFixed(0)).join(', '),
-    },
-    {
-      label: 'Total P&L',
-      value: formatCurrency(totalPnl),
-      tone: totalPnl > 0 ? 'profit' : totalPnl < 0 ? 'loss' : 'neutral',
-    },
-    {
-      label: 'Net Credit',
-      value: formatCurrency(netCredit),
-      tone: netCredit > 0 ? 'profit' : netCredit < 0 ? 'loss' : 'neutral',
-    },
-    {
-      label: 'Est. Premium',
-      value: `₹${Math.abs(estPremium).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
-    },
-  ]
-
-  // Only show the Margin metric when the broker supports /margin.
-  // Probing state (null) suppresses the row until we know — otherwise a
-  // dash flashes briefly for unsupported brokers.
-  if (marginSupported === true) {
-    metrics.push({
-      label: 'Margin Required',
-      value: isMarginLoading
-        ? 'Calculating…'
-        : marginRequired !== null && marginRequired !== undefined
-          ? `₹${marginRequired.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
-          : '—',
-    })
-  }
+  // Risk / Reward — meaningful only when both ends are finite and on opposite
+  // sides of zero. Unlimited strategies have no defined ratio.
+  const riskReward =
+    isFinite(maxProfit) && isFinite(maxLoss) && maxProfit > 0 && maxLoss < 0
+      ? `1 : ${(Math.abs(maxProfit) / Math.abs(maxLoss)).toFixed(2)}`
+      : 'NA'
 
   return (
-    <div className="flex h-full flex-col rounded-lg border bg-card">
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <h3 className="text-sm font-semibold">Strategy Positions</h3>
-        <Button variant="outline" size="sm" onClick={onReset} className="h-7 text-xs">
-          <RotateCw className="mr-1.5 h-3 w-3" />
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b bg-gradient-to-r from-muted/30 to-transparent px-4 py-3">
+        <div className="flex items-center gap-2">
+          <div className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-blue-500/15 to-violet-500/15 text-blue-600 dark:text-blue-400">
+            <Layers className="h-3.5 w-3.5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold leading-none">Positions</h3>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {legs.length > 0
+                ? `${activeCount}/${legs.length} active`
+                : 'No legs added yet'}
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onReset}
+          className="h-7 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={legs.length === 0}
+        >
+          <RotateCw className="mr-1 h-3 w-3" />
           Reset
         </Button>
       </div>
 
-      <div className="flex items-center gap-3 border-b px-4 py-2">
-        <Checkbox
-          checked={allSelected}
-          onCheckedChange={(v) => onToggleAll(Boolean(v))}
-          disabled={legs.length === 0}
-        />
-        <label className="text-xs font-medium text-muted-foreground">
-          Select All {legs.length > 0 ? `(${activeCount}/${legs.length})` : ''}
-        </label>
-      </div>
+      {/* Select-all row */}
+      {legs.length > 0 && (
+        <div className="flex items-center gap-2.5 border-b px-4 py-2">
+          <Checkbox
+            checked={allSelected}
+            onCheckedChange={(v) => onToggleAll(Boolean(v))}
+            className="h-3.5 w-3.5"
+          />
+          <label className="text-[11px] font-medium text-muted-foreground">
+            Select All
+          </label>
+          <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
+            {activeCount}/{legs.length}
+          </span>
+        </div>
+      )}
 
-      <div className="max-h-[260px] flex-1 overflow-y-auto">
+      {/* Legs list */}
+      <div className="max-h-[280px] flex-1 overflow-y-auto">
         {legs.length === 0 ? (
-          <div className="flex h-full items-center justify-center p-8 text-center text-xs text-muted-foreground">
-            No legs yet. Pick a template or add a leg manually.
+          <div className="flex h-full flex-col items-center justify-center gap-1 p-8 text-center">
+            <p className="text-xs font-medium text-muted-foreground">No legs yet</p>
+            <p className="text-[11px] text-muted-foreground/80">
+              Pick a template or add manually
+            </p>
           </div>
         ) : (
-          <ul className="divide-y">
-            {legs.map((leg) => {
+          <ul>
+            {legs.map((leg, idx) => {
               const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
               const sign = leg.side === 'BUY' ? 1 : -1
               const qty = leg.lots * leg.lotSize
@@ -171,50 +187,91 @@ export function PositionsPanel({
                 <li
                   key={leg.id}
                   className={cn(
-                    'flex items-center gap-2 px-4 py-2.5 text-xs',
+                    'group flex items-center gap-2 border-b border-border/60 px-3 py-2.5 transition last:border-b-0',
+                    'hover:bg-muted/40',
                     isClosed && 'bg-rose-500/5'
                   )}
                 >
+                  <span className="w-4 shrink-0 text-center text-[10px] font-semibold tabular-nums text-muted-foreground">
+                    {idx + 1}
+                  </span>
                   <Checkbox
                     checked={leg.active}
                     onCheckedChange={() => onToggleLeg(leg.id)}
                     disabled={isClosed}
+                    className="h-3.5 w-3.5"
                   />
                   <button
                     type="button"
                     onClick={() => !isClosed && onToggleSide(leg.id)}
                     disabled={isClosed}
-                    title={isClosed ? 'Closed position' : `Click to flip to ${leg.side === 'BUY' ? 'SELL' : 'BUY'}`}
-                    className={cn(
-                      'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-bold transition',
+                    title={
                       isClosed
-                        ? 'cursor-not-allowed bg-rose-500/20 text-rose-700 dark:text-rose-400'
+                        ? 'Closed position'
+                        : `Click to flip to ${leg.side === 'BUY' ? 'SELL' : 'BUY'}`
+                    }
+                    className={cn(
+                      'inline-flex h-5 w-9 shrink-0 items-center justify-center rounded-md text-[9px] font-bold uppercase tracking-wider transition',
+                      isClosed
+                        ? 'cursor-not-allowed bg-rose-500/15 text-rose-700 dark:text-rose-400'
                         : leg.side === 'BUY'
-                          ? 'cursor-pointer bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-400'
-                          : 'cursor-pointer bg-rose-500/15 text-rose-700 hover:bg-rose-500/25 dark:text-rose-400'
+                          ? 'cursor-pointer bg-emerald-500/15 text-emerald-700 ring-1 ring-inset ring-emerald-500/20 hover:bg-emerald-500/25 dark:text-emerald-400'
+                          : 'cursor-pointer bg-rose-500/15 text-rose-700 ring-1 ring-inset ring-rose-500/20 hover:bg-rose-500/25 dark:text-rose-400'
                     )}
                   >
-                    {leg.side === 'BUY' ? 'B' : 'S'}
+                    {leg.side === 'BUY' ? 'Buy' : 'Sell'}
                   </button>
 
-                  {/* Compact, single-line descriptor so narrow columns don't wrap. */}
-                  <span
+                  <div
                     className={cn(
-                      'min-w-0 flex-1 truncate whitespace-nowrap font-medium',
+                      'min-w-0 flex-1',
                       isClosed && 'text-rose-700/80 line-through dark:text-rose-400/80'
                     )}
-                    title={`${leg.lots}× ${leg.expiry} ${descriptor}`}
                   >
-                    <span className="tabular-nums">{leg.lots}×</span>{' '}
-                    <span>{leg.expiry}</span>{' '}
-                    <span className="font-semibold">{descriptor}</span>
-                  </span>
+                    <div className="flex items-center gap-1.5 truncate text-xs">
+                      <span className="font-semibold tabular-nums">{leg.lots}×</span>
+                      <span className="font-semibold">{descriptor}</span>
+                      {(() => {
+                        const m = strikeMoneyness(
+                          leg.strike,
+                          atmStrike,
+                          strikeStep,
+                          leg.optionType
+                        )
+                        if (!m) return null
+                        return (
+                          <span
+                            className={cn(
+                              'shrink-0 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wider',
+                              m.kind === 'ATM' &&
+                                'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+                              m.kind === 'ITM' &&
+                                'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+                              m.kind === 'OTM' && 'bg-muted text-muted-foreground'
+                            )}
+                            title={
+                              m.kind === 'ATM'
+                                ? 'At the Money'
+                                : m.kind === 'ITM'
+                                  ? `In the Money · ${Math.abs(m.steps)} ${Math.abs(m.steps) === 1 ? 'strike' : 'strikes'} from ATM`
+                                  : `Out of the Money · ${Math.abs(m.steps)} ${Math.abs(m.steps) === 1 ? 'strike' : 'strikes'} from ATM`
+                            }
+                          >
+                            {m.label}
+                          </span>
+                        )
+                      })()}
+                    </div>
+                    <div className="truncate text-[10px] text-muted-foreground tabular-nums">
+                      {leg.expiry}
+                    </div>
+                  </div>
 
-                  {/* Price block: realised P&L for closed; entry price otherwise. */}
+                  {/* Price / realised P&L */}
                   {isClosed ? (
                     <span
                       className={cn(
-                        'shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums',
+                        'shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums',
                         realisedPnl >= 0
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                           : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
@@ -222,32 +279,36 @@ export function PositionsPanel({
                       title={`Entry ₹${leg.price.toFixed(2)} → Exit ₹${(leg.exitPrice ?? 0).toFixed(2)}`}
                     >
                       {realisedPnl >= 0 ? '+' : '-'}₹
-                      {Math.abs(realisedPnl).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      {Math.abs(realisedPnl).toLocaleString('en-IN', {
+                        maximumFractionDigits: 0,
+                      })}
                     </span>
                   ) : (
-                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                       ₹{leg.price.toFixed(2)}
                     </span>
                   )}
 
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0"
-                    onClick={() => onEditLeg(leg.id)}
-                    aria-label="Edit position"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0"
-                    onClick={() => onRemoveLeg(leg.id)}
-                    aria-label="Remove position"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <div className="flex shrink-0 items-center opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => onEditLeg(leg.id)}
+                      aria-label="Edit position"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 hover:text-rose-600"
+                      onClick={() => onRemoveLeg(leg.id)}
+                      aria-label="Remove position"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </li>
               )
             })}
@@ -255,23 +316,70 @@ export function PositionsPanel({
         )}
       </div>
 
+      {/* Metrics — 2-col grid with hairline dividers */}
       <div className="border-t">
-        <dl className="grid grid-cols-1 divide-y text-xs">
-          {metrics.map((m) => (
-            <div key={m.label} className="flex items-center justify-between px-4 py-2">
-              <dt className="font-medium text-muted-foreground">{m.label}</dt>
-              <dd
-                className={cn(
-                  'font-semibold tabular-nums',
-                  m.tone === 'profit' && 'text-emerald-600 dark:text-emerald-400',
-                  m.tone === 'loss' && 'text-rose-600 dark:text-rose-400'
-                )}
-              >
-                {m.value}
-              </dd>
-            </div>
-          ))}
+        <dl className="grid grid-cols-2 divide-x divide-y">
+          <MetricTile
+            label="Max Profit"
+            value={formatCurrency(maxProfit)}
+            tone="profit"
+            emphasize
+          />
+          <MetricTile
+            label="Max Loss"
+            value={formatCurrency(maxLoss)}
+            tone="loss"
+            emphasize
+          />
+          <MetricTile
+            label="Prob. of Profit"
+            value={probOfProfit > 0 ? formatPct(probOfProfit * 100) : '—'}
+          />
+          <MetricTile label="Risk : Reward" value={riskReward} />
+          <MetricTile
+            label="Total P&L"
+            value={formatCurrency(totalPnl)}
+            tone={totalPnl > 0 ? 'profit' : totalPnl < 0 ? 'loss' : 'neutral'}
+          />
+          <MetricTile
+            label="Net Credit"
+            value={formatCurrency(netCredit)}
+            tone={netCredit > 0 ? 'profit' : netCredit < 0 ? 'loss' : 'neutral'}
+          />
+          <MetricTile
+            label="Est. Premium"
+            value={`₹${Math.abs(estPremium).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+          />
+          {marginSupported === true && (
+            <MetricTile
+              label="Margin Req."
+              value={
+                isMarginLoading
+                  ? 'Calculating…'
+                  : marginRequired !== null && marginRequired !== undefined
+                    ? `₹${marginRequired.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                    : '—'
+              }
+            />
+          )}
         </dl>
+
+        {/* Breakevens — full width chip row */}
+        {breakevens.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t bg-muted/20 px-3.5 py-2.5">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Breakevens
+            </span>
+            {breakevens.map((b, i) => (
+              <span
+                key={i}
+                className="rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-foreground"
+              >
+                {b.toFixed(0)}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
