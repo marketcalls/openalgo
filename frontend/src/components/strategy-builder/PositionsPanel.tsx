@@ -1,4 +1,4 @@
-import { Briefcase, Check, Layers, Minus, Pencil, RotateCw, Save, Trash2 } from 'lucide-react'
+import { Check, Layers, Minus, Pencil, RotateCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { strikeMoneyness, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
@@ -11,12 +11,6 @@ export interface PositionsPanelProps {
   onRemoveLeg: (id: string) => void
   onToggleAll: (active: boolean) => void
   onReset: () => void
-  /** Save/update current strategy to the portfolio. */
-  onSaveStrategy?: () => void
-  /** Label on the save button — "Save Strategy" or "Update Strategy". */
-  saveLabel?: string
-  /** Navigate to the portfolio listing page. */
-  onOpenPortfolio?: () => void
 
   probOfProfit: number
   maxProfit: number
@@ -97,9 +91,6 @@ export function PositionsPanel({
   onRemoveLeg,
   onToggleAll,
   onReset,
-  onSaveStrategy,
-  saveLabel = 'Save Strategy',
-  onOpenPortfolio,
   probOfProfit,
   maxProfit,
   maxLoss,
@@ -125,61 +116,33 @@ export function PositionsPanel({
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b bg-gradient-to-r from-muted/30 to-transparent px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-blue-500/15 to-violet-500/15 text-blue-600 dark:text-blue-400">
+      {/* Header — title + action cluster. flex-wrap lets the actions drop
+          to a second row when the panel column is narrow (360px on lg),
+          while staying inline on wider screens. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b bg-gradient-to-r from-muted/30 to-transparent px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-blue-500/15 to-violet-500/15 text-blue-600 dark:text-blue-400">
             <Layers className="h-3.5 w-3.5" />
           </div>
-          <div>
-            <h3 className="text-sm font-semibold leading-none">Positions</h3>
-            <p className="mt-1 text-[10px] text-muted-foreground">
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold leading-none">Positions</h3>
+            <p className="mt-1 truncate text-[10px] text-muted-foreground">
               {legs.length > 0
                 ? `${activeCount}/${legs.length} active`
                 : 'No legs added yet'}
             </p>
           </div>
         </div>
-        {/* Contextual action cluster — Save + Portfolio + Reset, always in
-            view while working on legs so the user doesn't scroll back to
-            the page header. */}
-        <div className="flex items-center gap-1">
-          {onSaveStrategy && (
-            <Button
-              size="sm"
-              onClick={onSaveStrategy}
-              disabled={legs.length === 0}
-              title={legs.length === 0 ? 'Add at least one leg to save' : saveLabel}
-              className="h-7 gap-1 px-2.5 text-[11px] font-semibold"
-            >
-              <Save className="h-3 w-3" />
-              Save
-            </Button>
-          )}
-          {onOpenPortfolio && (
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={onOpenPortfolio}
-              title="Open Portfolio"
-              aria-label="Open Portfolio"
-              className="h-7 w-7"
-            >
-              <Briefcase className="h-3 w-3" />
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onReset}
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            disabled={legs.length === 0}
-            title="Reset all legs"
-            aria-label="Reset all legs"
-          >
-            <RotateCw className="h-3 w-3" />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onReset}
+          className="h-7 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={legs.length === 0}
+        >
+          <RotateCw className="mr-1 h-3 w-3" />
+          Reset
+        </Button>
       </div>
 
       {/* Select-all row — checked legs are included in payoff/greeks/pnl,
