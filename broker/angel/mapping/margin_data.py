@@ -1,5 +1,13 @@
-# Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Angel Broking Margin API https://smartapi.angelbroking.com/docs/Margin
+"""Angel One broker margin data mapping module.
+
+Transforms margin calculation requests between OpenAlgo's format and
+Angel One's batch margin calculator API format. Also parses margin
+responses to extract span, exposure, and total margin values.
+
+See:
+    - OpenAlgo API docs: https://openalgo.in/docs
+    - Angel SmartAPI docs: https://smartapi.angelbroking.com/docs/Margin
+"""
 
 from database.token_db import get_token
 from utils.logging import get_logger

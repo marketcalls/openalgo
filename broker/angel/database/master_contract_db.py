@@ -1,3 +1,10 @@
+"""Angel One broker master contract database module.
+
+Manages the download, processing, and storage of Angel One's instrument
+master contract data. Handles symbol normalization, exchange mapping,
+and bulk database insertion for efficient symbol resolution.
+"""
+
 # database/master_contract_db.py
 
 import gzip
@@ -45,17 +52,36 @@ class SymToken(Base):
 
 
 def init_db():
+    """Initialize the master contract database tables.
+
+    Creates the symtoken table and associated indices if they
+    do not already exist.
+    """
     logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 
 def delete_symtoken_table():
+    """Delete all records from the symtoken table.
+
+    Clears existing instrument data to prepare for a fresh
+    master contract download.
+    """
     logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 
 def copy_from_dataframe(df):
+    """Bulk insert instrument records from a DataFrame into the database.
+
+    Filters out records with tokens that already exist in the database
+    to avoid duplicates, then performs a bulk insert of new records.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing instrument data with columns
+            matching the SymToken model fields.
+    """
     logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
@@ -81,9 +107,13 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
-def download_json_angel_data(url, output_path):
+def download_json_angel_data(url: str, output_path: str):
     """
     Downloads a JSON file from the specified URL and saves it to the specified path.
+
+    Args:
+        url (str): The URL to download the JSON from.
+        output_path (str): The file path to save the JSON to.
     """
     logger.info("Downloading JSON data")
     response = requests.get(url, timeout=10)  # timeout after 10 seconds
@@ -96,6 +126,18 @@ def download_json_angel_data(url, output_path):
 
 
 def reformat_symbol(row):
+    """Reformat a trading symbol based on its instrument type.
+
+    Rearranges symbol components for FUT and CE/PE instrument types
+    to match Angel One's expected symbol format.
+
+    Args:
+        row (pd.Series): A DataFrame row containing 'symbol' and
+            'instrumenttype' columns.
+
+    Returns:
+        str: The reformatted symbol string.
+    """
     symbol = row["symbol"]
     instrument_type = row["instrumenttype"]
 
@@ -116,6 +158,17 @@ def reformat_symbol(row):
 
 
 def convert_date(date_str):
+    """Convert a date string from Angel One format to standard format.
+
+    Converts from '19MAR2024' to '19-MAR-24' format used internally.
+
+    Args:
+        date_str (str): Date string in 'DDMMMYYYY' format.
+
+    Returns:
+        str: Date string in 'DD-MMM-YY' format, or the original string
+            if parsing fails.
+    """
     # Convert from '19MAR2024' to '19-MAR-24'
     try:
         return datetime.strptime(date_str, "%d%b%Y").strftime("%d-%b-%y")
@@ -124,14 +177,15 @@ def convert_date(date_str):
         return date_str
 
 
-def process_angel_json(path):
+def process_angel_json(path: str) -> pd.DataFrame:
     """
     Processes the Angel JSON file to fit the existing database schema.
+    
     Args:
-    path (str): The file path of the downloaded JSON data.
+        path (str): The file path of the downloaded JSON data.
 
     Returns:
-    DataFrame: The processed DataFrame ready to be inserted into the database.
+        pd.DataFrame: The processed DataFrame ready to be inserted into the database.
     """
     # Read JSON data into a DataFrame
     df = pd.read_json(path)
@@ -376,6 +430,11 @@ def process_angel_json(path):
 
 
 def delete_angel_temp_data(output_path):
+    """Delete the temporary master contract data file.
+
+    Args:
+        output_path (str): Path to the temporary file to delete.
+    """
     try:
         # Check if the file exists
         if os.path.exists(output_path):
@@ -389,6 +448,16 @@ def delete_angel_temp_data(output_path):
 
 
 def master_contract_download():
+    """Download and process the full Angel One master contract.
+
+    Downloads the instrument JSON from Angel One's API, processes and
+    normalizes the data (symbol formats, exchange names, expiry dates),
+    replaces the existing symtoken table, and emits a SocketIO event
+    on completion.
+
+    Returns:
+        SocketIO emission with status 'success' or 'error'.
+    """
     logger.info("Downloading Master Contract")
     url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     output_path = "tmp/angel.json"
@@ -413,6 +482,15 @@ def master_contract_download():
 
 
 def search_symbols(symbol, exchange):
+    """Search for symbols matching a pattern in the master contract database.
+
+    Args:
+        symbol (str): Symbol pattern to search for (supports SQL LIKE wildcards).
+        exchange (str): Exact exchange segment to filter by.
+
+    Returns:
+        list[SymToken]: List of matching SymToken records.
+    """
     return SymToken.query.filter(
         SymToken.symbol.like(f"%{symbol}%"), SymToken.exchange == exchange
     ).all()

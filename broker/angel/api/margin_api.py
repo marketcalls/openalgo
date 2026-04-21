@@ -1,3 +1,10 @@
+"""Angel One broker margin calculation module.
+
+Provides the margin calculation API integration for computing span margin,
+exposure margin, and total margin requirements for F&O positions through
+the Angel One batch margin calculator endpoint.
+"""
+
 import json
 import os
 
