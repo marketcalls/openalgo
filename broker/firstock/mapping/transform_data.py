@@ -136,83 +136,114 @@ def transform_modify_order_data(data, token, auth_token=None):
     """
     Transform modify order data to Firstock's V1 /modifyOrder format.
 
-    V1.7 extended server-side MPP to modifyOrder too; we apply the same
-    client-side MARKET -> LMT / SL-M -> SL-LMT conversion here so the price
-    is fully owned by OpenAlgo instead of depending on broker defaults.
+    V1.7 extended server-side MPP to modifyOrder too; for MARKET/SL-M we
+    attempt the same client-side MARKET -> LMT / SL-M -> SL-LMT conversion
+    used by transform_data so the price is owned by OpenAlgo. When we can't
+    safely determine direction (action missing — modify requests often omit
+    it) we skip client-side MPP and let Firstock's server-side MPP handle it
+    using the original order's direction (which the broker knows).
+
+    Expects data["symbol"] to be in OpenAlgo format; the broker symbol is
+    derived locally via get_br_symbol.
     """
-    # Handle special characters in symbol
-    symbol = data["symbol"]
-    if "&" in symbol:
-        symbol = symbol.replace("&", "%26")
+    oa_symbol = data["symbol"]
+    exchange = data["exchange"]
+
+    # Derive broker symbol for the outbound payload; handle & escaping.
+    broker_symbol = get_br_symbol(oa_symbol, exchange) or oa_symbol
+    if broker_symbol and "&" in broker_symbol:
+        broker_symbol = broker_symbol.replace("&", "%26")
 
     price = str(data.get("price", "0"))
     order_type = map_order_type(data["pricetype"])
-    action = data.get("action", "BUY").upper()
+
+    # Do NOT default action — modify orders often omit it, and guessing
+    # BUY would apply the wrong MPP direction to SELL modifications.
+    action_raw = data.get("action")
+    action = action_raw.upper() if action_raw else None
+
+    # mkt_protection defaults to "0" for priced orders (LMT/SL-LMT). If the
+    # order lands as MKT/SL-MKT (either because MPP was skipped or fell back),
+    # V1.7 requires mkt_protection > 0 — set it to "1" (1%) in that branch.
+    mkt_protection = "0"
 
     if data["pricetype"] in ("MARKET", "SL-M"):
         original_type = data["pricetype"]
         logger.info(
-            f"Modify MPP: {original_type} order detected for Symbol={data['symbol']}, "
-            f"Exchange={data['exchange']}"
+            f"Modify MPP: {original_type} detected for Symbol={oa_symbol}, "
+            f"Exchange={exchange}, Action={action_raw!r}"
         )
-        try:
-            if auth_token:
-                from broker.firstock.api.data import BrokerData
 
-                broker_data = BrokerData(auth_token)
-                quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
-                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+        if not action:
+            # Can't safely pick MPP direction without action. Let Firstock's
+            # server-side MPP (V1.7+) handle it using the order's true side.
+            logger.info(
+                f"Modify MPP: action missing for {oa_symbol}; deferring to "
+                f"server-side MPP with mkt_protection=1"
+            )
+            mkt_protection = "1"
+        else:
+            try:
+                if auth_token:
+                    from broker.firstock.api.data import BrokerData
 
-                # Firstock's /getQuote response omits tick size, so fetch it
-                # from the local master contract DB (same pattern as kotak).
-                tick_size = quote_data.get("tick_size")
-                if not tick_size:
-                    symbol_info = get_symbol_info(data["symbol"], data["exchange"])
-                    if symbol_info and symbol_info.tick_size:
-                        tick_size = symbol_info.tick_size
+                    broker_data = BrokerData(auth_token)
+                    quote_data = broker_data.get_quotes(oa_symbol, exchange)
+                    instrument_type = get_instrument_type_from_symbol(oa_symbol)
 
-                ltp = float(quote_data.get("ltp", 0))
+                    # Firstock's /getQuote response omits tick size, so fetch
+                    # it from the local master contract DB (kotak pattern).
+                    tick_size = quote_data.get("tick_size")
+                    if not tick_size:
+                        symbol_info = get_symbol_info(oa_symbol, exchange)
+                        if symbol_info and symbol_info.tick_size:
+                            tick_size = symbol_info.tick_size
 
-                if ltp > 0:
-                    protected_price = calculate_protected_price(
-                        price=ltp,
-                        action=action,
-                        symbol=data["symbol"],
-                        instrument_type=instrument_type,
-                        tick_size=tick_size,
-                    )
-                    price = str(protected_price)
-                    order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
-                    logger.info(
-                        f"Modify MPP Conversion Complete: {original_type}->{order_type}, "
-                        f"FinalPrice={protected_price}"
-                    )
+                    ltp = float(quote_data.get("ltp", 0))
+
+                    if ltp > 0:
+                        protected_price = calculate_protected_price(
+                            price=ltp,
+                            action=action,
+                            symbol=oa_symbol,
+                            instrument_type=instrument_type,
+                            tick_size=tick_size,
+                        )
+                        price = str(protected_price)
+                        order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
+                        logger.info(
+                            f"Modify MPP Conversion Complete: {original_type}->"
+                            f"{order_type}, FinalPrice={protected_price}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Modify MPP Warning: LTP<=0 for Symbol={oa_symbol}; "
+                            f"sending {original_type} with mkt_protection=1"
+                        )
+                        mkt_protection = "1"
                 else:
                     logger.warning(
-                        f"Modify MPP Warning: LTP<=0 for Symbol={data['symbol']}; "
-                        f"sending {original_type} unchanged"
+                        f"Modify MPP Warning: No auth token for Symbol={oa_symbol}; "
+                        f"sending {original_type} with mkt_protection=1"
                     )
-            else:
-                logger.warning(
-                    f"Modify MPP Warning: No auth token for Symbol={data['symbol']}; "
-                    f"sending {original_type} unchanged"
+                    mkt_protection = "1"
+            except Exception as e:
+                logger.error(
+                    f"Modify MPP Error: Symbol={oa_symbol}, Error={str(e)}. "
+                    f"Sending {original_type} with mkt_protection=1"
                 )
-        except Exception as e:
-            logger.error(
-                f"Modify MPP Error: Symbol={data['symbol']}, Error={str(e)}. "
-                f"Sending {original_type} unchanged"
-            )
+                mkt_protection = "1"
 
     result = {
-        "exchange": data["exchange"],
+        "exchange": exchange,
         "orderNumber": data["orderid"],
         "priceType": order_type,
         "price": price,
         "quantity": str(data["quantity"]),
-        "tradingSymbol": symbol,
+        "tradingSymbol": broker_symbol,
         "triggerPrice": str(data.get("trigger_price", "0")),
         "retention": "DAY",
-        "mkt_protection": "0",
+        "mkt_protection": mkt_protection,
     }
 
     # product is optional on modify but included when supplied so V1 accepts

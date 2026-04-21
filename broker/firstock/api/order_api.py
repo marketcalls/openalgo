@@ -551,9 +551,12 @@ def modify_order(data, auth):
     api_key = os.getenv("BROKER_API_KEY")
     api_key = api_key[:-4]  # Remove last 4 characters
 
-    # Get token and transform symbol
+    # Get token. Do NOT mutate data["symbol"] to the broker symbol — MPP
+    # inside transform_modify_order_data needs the OpenAlgo symbol for
+    # get_quotes / get_instrument_type_from_symbol / get_symbol_info
+    # lookups. transform_modify_order_data computes the broker symbol
+    # itself via get_br_symbol, matching the transform_data pattern.
     token = get_token(data["symbol"], data["exchange"])
-    data["symbol"] = get_br_symbol(data["symbol"], data["exchange"])
 
     # Transform the data to Firstock format (auth passed for MPP quote fetch)
     transformed_data = transform_modify_order_data(data, token, auth)
