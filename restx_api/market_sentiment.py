@@ -23,7 +23,30 @@ class MarketSentiment(Resource):
     def post(self):
         """Get optional Adanos market sentiment snapshots for stock tickers"""
         try:
-            sentiment_data = market_sentiment_schema.load(request.json)
+            if not request.is_json:
+                return make_response(
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "Content-Type must be application/json",
+                        }
+                    ),
+                    415,
+                )
+
+            payload = request.get_json(silent=True)
+            if payload is None:
+                return make_response(
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "Invalid or malformed JSON payload",
+                        }
+                    ),
+                    400,
+                )
+
+            sentiment_data = market_sentiment_schema.load(payload)
 
             success, response_data, status_code = get_market_sentiment(
                 api_key=sentiment_data["apikey"],

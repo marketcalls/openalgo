@@ -3,6 +3,9 @@ import sys
 from unittest.mock import Mock
 
 import httpx
+import pytest
+from flask import Blueprint, Flask
+from flask_restx import Api
 
 os.environ.setdefault("API_KEY_PEPPER", "a" * 64)
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
@@ -12,6 +15,24 @@ os.environ["LOG_COLORS"] = "False"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import adanos_sentiment_service as sentiment_service
+
+
+@pytest.fixture()
+def market_sentiment_client():
+    from limiter import limiter
+    from restx_api.market_sentiment import api as market_sentiment_ns
+
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+
+    limiter.init_app(app)
+
+    blueprint = Blueprint("test_api_v1", __name__, url_prefix="/api/v1")
+    api = Api(blueprint, doc=False)
+    api.add_namespace(market_sentiment_ns, path="/market/sentiment")
+    app.register_blueprint(blueprint)
+
+    return app.test_client()
 
 
 def test_normalize_tickers_deduplicates_and_filters_invalid_values():
@@ -109,3 +130,25 @@ def test_get_market_sentiment_fetches_and_normalizes_compare_rows(monkeypatch):
     assert response["data"]["tickers"] == ["TSLA"]
     assert response["data"]["snapshots"][0]["stocks"][0]["buzz_score"] == 71.2
     assert "reddit: TSLA (Tesla, Inc.): sentiment=0.31, buzz=71.2, mentions=140, trend=rising" in response["data"]["summary"]
+
+
+def test_market_sentiment_endpoint_rejects_non_json_requests(market_sentiment_client):
+    response = market_sentiment_client.post(
+        "/api/v1/market/sentiment/",
+        data="apikey=test",
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 415
+    assert response.get_json()["message"] == "Content-Type must be application/json"
+
+
+def test_market_sentiment_endpoint_rejects_malformed_json_requests(market_sentiment_client):
+    response = market_sentiment_client.post(
+        "/api/v1/market/sentiment/",
+        data='{"apikey":',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "Invalid or malformed JSON payload"
