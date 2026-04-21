@@ -25,6 +25,23 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/placeorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/placeorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "Python",
+  "symbol": "NHPC",
+  "action": "BUY",
+  "exchange": "NSE",
+  "pricetype": "MARKET",
+  "product": "MIS",
+  "quantity": "1"
+}'
+```
+
 ## Sample API Response
 
 ```json

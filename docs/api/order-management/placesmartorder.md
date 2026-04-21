@@ -29,6 +29,27 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/placesmartorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/placesmartorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "Test Strategy",
+  "exchange": "NSE",
+  "symbol": "IDEA",
+  "action": "BUY",
+  "product": "MIS",
+  "pricetype": "MARKET",
+  "quantity": "1",
+  "position_size": "5",
+  "price": "0",
+  "trigger_price": "0",
+  "disclosed_quantity": "0"
+}'
+```
+
 ## Sample API Response
 
 ```json

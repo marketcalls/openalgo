@@ -29,6 +29,27 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/optionsorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "python",
+  "underlying": "NIFTY",
+  "exchange": "NSE_INDEX",
+  "expiry_date": "28OCT25",
+  "offset": "ATM",
+  "option_type": "CE",
+  "action": "BUY",
+  "quantity": "65",
+  "pricetype": "MARKET",
+  "product": "NRML",
+  "splitsize": "0"
+}'
+```
+
 ## Sample API Response (ATM Option)
 
 ```json
