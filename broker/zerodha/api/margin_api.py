@@ -1,3 +1,9 @@
+"""Zerodha (Kite) broker margin calculation module.
+
+Provides basket and single-order margin calculation using the Kite Connect
+API. Supports spread benefit calculation for multi-leg positions.
+"""
+
 import json
 
 from broker.zerodha.mapping.margin_data import parse_margin_response, transform_margin_positions

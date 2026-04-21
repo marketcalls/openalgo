@@ -1,3 +1,10 @@
+"""Zerodha (Kite) broker authentication module.
+
+Handles the OAuth2-based authentication flow with Zerodha's Kite Connect
+API. Exchanges a request token for an access token using SHA-256 checksum
+verification.
+"""
+
 import hashlib
 import json
 import os
@@ -6,6 +13,21 @@ from utils.httpx_client import get_httpx_client
 
 
 def authenticate_broker(request_token):
+    """Authenticate with Zerodha Kite and obtain an access token.
+
+    Exchanges a request token (received via OAuth redirect) for a
+    persistent access token by computing a SHA-256 checksum of the
+    API key, request token, and API secret.
+
+    Args:
+        request_token (str): The one-time request token received from
+            Zerodha's OAuth login redirect.
+
+    Returns:
+        tuple: A 2-tuple of (access_token, error):
+            - access_token (str or None): The Kite API access token.
+            - error (str or None): Error message if authentication failed.
+    """
     try:
         # Fetching the necessary credentials from environment variables
         BROKER_API_KEY = os.getenv("BROKER_API_KEY")

@@ -1,5 +1,14 @@
-# Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Zerodha Margin API https://kite.trade/docs/connect/v3/margins/
+"""Zerodha (Kite) broker margin data mapping module.
+
+Transforms margin calculation requests between OpenAlgo's format and
+Zerodha's Kite Connect basket/order margin API format. Also parses
+margin responses to extract span, exposure, and total margin values
+with spread benefit calculations.
+
+See:
+    - OpenAlgo API docs: https://openalgo.in/docs
+    - Kite Connect Margin docs: https://kite.trade/docs/connect/v3/margins/
+"""
 
 from database.token_db import get_br_symbol
 from utils.logging import get_logger

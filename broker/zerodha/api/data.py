@@ -1,3 +1,10 @@
+"""Zerodha (Kite) broker market data module.
+
+Provides the BrokerData class for fetching real-time quotes, multi-symbol
+quotes, historical OHLCV candlestick data, open interest, and market depth
+from the Zerodha Kite Connect REST API.
+"""
+
 import json
 import os
 import time
