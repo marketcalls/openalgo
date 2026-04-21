@@ -91,10 +91,22 @@ function PnlCell({ value }: { value: number }) {
 }
 
 export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
-  // Build the subscription list from open legs only (active, not closed,
-  // has a symbol). Deduplicated on (exchange, symbol). The memo ensures:
+  // Only active (user-included) legs are considered "open" for this tab.
+  // Excluded legs don't appear in the table, don't contribute to the total,
+  // and don't consume a WebSocket subscription.
+  const openLegs = useMemo(
+    () =>
+      legs.filter(
+        (l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0) && l.symbol
+      ),
+    [legs]
+  )
+
+  // Build the subscription list from open legs only. Deduplicated on
+  // (exchange, symbol). The memo ensures:
   //   • adding a new leg subscribes its symbol,
-  //   • setting an exitPrice on a leg unsubscribes that leg's symbol,
+  //   • excluding a leg (uncheck) unsubscribes its symbol,
+  //   • setting an exitPrice on a leg unsubscribes its symbol,
   //   • deleting a leg unsubscribes its symbol,
   //   • when no open legs remain, the hook is disabled and no WS traffic
   //     flows for this page (MarketDataManager ref-counts, so shared
@@ -102,16 +114,14 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
   const legSubscriptions = useMemo(() => {
     const seen = new Set<string>()
     const out: Array<{ symbol: string; exchange: string }> = []
-    for (const leg of legs) {
-      if (!leg.symbol) continue
-      if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
+    for (const leg of openLegs) {
       const key = `${fnoExchange}:${leg.symbol}`
       if (seen.has(key)) continue
       seen.add(key)
       out.push({ symbol: leg.symbol, exchange: fnoExchange })
     }
     return out
-  }, [legs, fnoExchange])
+  }, [openLegs, fnoExchange])
 
   const {
     data: marketData,
@@ -124,36 +134,44 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
     enabled: legSubscriptions.length > 0,
   })
 
-  // Resolve each leg's "current price" with a clear priority order:
-  // 1) Live WebSocket LTP (true real-time),
-  // 2) Option-chain snapshot (fallback until first tick),
-  // 3) Leg entry price (last resort).
+  // Rows to display: included legs only. Closed legs stay (so user can see
+  // their realised P&L) until they're explicitly excluded via the Positions
+  // panel checkbox. Excluded legs disappear entirely.
+  //
+  // Price resolution per row:
+  //   1) Live WebSocket LTP (true real-time),
+  //   2) Option-chain snapshot (fallback until first tick),
+  //   3) Leg entry price (last resort).
   // Closed legs don't need a current price — realised P&L is computed
   // directly from exitPrice vs entry.
   const rows = useMemo(() => {
-    return legs.map((leg) => {
-      const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
-      let current: number | undefined
-      if (!isClosed && leg.symbol) {
-        const ws = marketData.get(`${fnoExchange}:${leg.symbol}`)
-        if (ws?.data?.ltp !== undefined && ws.data.ltp > 0) {
-          current = ws.data.ltp
-        } else if (fallbackPrices[leg.id] !== undefined) {
-          current = fallbackPrices[leg.id]
-        } else {
-          current = leg.price
+    return legs
+      .filter((leg) => leg.active)
+      .map((leg) => {
+        const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
+        let current: number | undefined
+        if (!isClosed && leg.symbol) {
+          const ws = marketData.get(`${fnoExchange}:${leg.symbol}`)
+          if (ws?.data?.ltp !== undefined && ws.data.ltp > 0) {
+            current = ws.data.ltp
+          } else if (fallbackPrices[leg.id] !== undefined) {
+            current = fallbackPrices[leg.id]
+          } else {
+            current = leg.price
+          }
         }
-      }
-      const qty = leg.lots * leg.lotSize
-      const sign = leg.side === 'BUY' ? 1 : -1
-      const effective = isClosed ? (leg.exitPrice ?? leg.price) : (current ?? leg.price)
-      const pnl = sign * (effective - leg.price) * qty
-      return { leg, current, pnl, isClosed }
-    })
+        const qty = leg.lots * leg.lotSize
+        const sign = leg.side === 'BUY' ? 1 : -1
+        const effective = isClosed ? (leg.exitPrice ?? leg.price) : (current ?? leg.price)
+        const pnl = sign * (effective - leg.price) * qty
+        return { leg, current, pnl, isClosed }
+      })
   }, [legs, marketData, fnoExchange, fallbackPrices])
 
   const total = useMemo(() => rows.reduce((acc, r) => acc + r.pnl, 0), [rows])
   const openCount = rows.filter((r) => !r.isClosed).length
+  const closedCount = rows.filter((r) => r.isClosed).length
+  const excludedCount = legs.length - rows.length
   const hasOpen = openCount > 0
 
   const streamingState: 'streaming' | 'paused' | 'fallback' | 'connecting' | 'idle' = !hasOpen
@@ -208,7 +226,8 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
           )}
         </div>
         <span className="text-[10px] tabular-nums text-muted-foreground">
-          {openCount} open · {legs.length - openCount} closed
+          {openCount} open · {closedCount} closed
+          {excludedCount > 0 && ` · ${excludedCount} excluded`}
         </span>
       </div>
 
@@ -247,7 +266,9 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
           {rows.length === 0 && (
             <TableRow>
               <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-foreground">
-                No legs yet.
+                {legs.length === 0
+                  ? 'No legs yet.'
+                  : 'All legs are excluded. Re-include at least one from the Positions panel.'}
               </TableCell>
             </TableRow>
           )}

@@ -1,6 +1,5 @@
-import { Layers, Pencil, RotateCw, Trash2 } from 'lucide-react'
+import { Check, Layers, Minus, Pencil, RotateCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { strikeMoneyness, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 
@@ -144,17 +143,32 @@ export function PositionsPanel({
         </Button>
       </div>
 
-      {/* Select-all row */}
+      {/* Select-all row — checked legs are included in payoff/greeks/pnl,
+          unchecked legs are excluded from all analysis outputs. */}
       {legs.length > 0 && (
         <div className="flex items-center gap-2.5 border-b px-4 py-2">
-          <Checkbox
-            checked={allSelected}
-            onCheckedChange={(v) => onToggleAll(Boolean(v))}
-            className="h-3.5 w-3.5"
-          />
-          <label className="text-[11px] font-medium text-muted-foreground">
-            Select All
-          </label>
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={allSelected ? 'true' : activeCount > 0 ? 'mixed' : 'false'}
+            onClick={() => onToggleAll(!allSelected)}
+            className={cn(
+              'flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition',
+              allSelected
+                ? 'border-emerald-500 bg-emerald-500 text-white'
+                : activeCount > 0
+                  ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-600'
+                  : 'border-border bg-background hover:border-foreground/40'
+            )}
+            title={allSelected ? 'Exclude all legs' : 'Include all legs'}
+          >
+            {allSelected ? (
+              <Check className="h-3 w-3" strokeWidth={3} />
+            ) : activeCount > 0 ? (
+              <Minus className="h-3 w-3" strokeWidth={3} />
+            ) : null}
+          </button>
+          <label className="text-[11px] font-medium text-muted-foreground">Select all</label>
           <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
             {activeCount}/{legs.length}
           </span>
@@ -189,18 +203,38 @@ export function PositionsPanel({
                   className={cn(
                     'group flex items-center gap-2 border-b border-border/60 px-3 py-2.5 transition last:border-b-0',
                     'hover:bg-muted/40',
-                    isClosed && 'bg-rose-500/5'
+                    isClosed && 'bg-rose-500/5',
+                    !leg.active && !isClosed && 'bg-muted/30'
                   )}
                 >
                   <span className="w-4 shrink-0 text-center text-[10px] font-semibold tabular-nums text-muted-foreground">
                     {idx + 1}
                   </span>
-                  <Checkbox
-                    checked={leg.active}
-                    onCheckedChange={() => onToggleLeg(leg.id)}
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={leg.active}
+                    onClick={() => !isClosed && onToggleLeg(leg.id)}
                     disabled={isClosed}
-                    className="h-3.5 w-3.5"
-                  />
+                    title={
+                      isClosed
+                        ? 'Closed position'
+                        : leg.active
+                          ? 'Included in analysis — click to exclude'
+                          : 'Excluded from analysis — click to include'
+                    }
+                    aria-label={leg.active ? 'Exclude leg' : 'Include leg'}
+                    className={cn(
+                      'flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition',
+                      isClosed && 'cursor-not-allowed opacity-40',
+                      !isClosed &&
+                        (leg.active
+                          ? 'border-emerald-500 bg-emerald-500 text-white hover:bg-emerald-600'
+                          : 'border-border bg-background hover:border-foreground/40')
+                    )}
+                  >
+                    {leg.active && <Check className="h-3 w-3" strokeWidth={3} />}
+                  </button>
                   <button
                     type="button"
                     onClick={() => !isClosed && onToggleSide(leg.id)}
@@ -226,7 +260,8 @@ export function PositionsPanel({
                   <div
                     className={cn(
                       'min-w-0 flex-1',
-                      isClosed && 'text-rose-700/80 line-through dark:text-rose-400/80'
+                      isClosed && 'text-rose-700/80 line-through dark:text-rose-400/80',
+                      !leg.active && !isClosed && 'text-muted-foreground line-through'
                     )}
                   >
                     <div className="flex items-center gap-1.5 truncate text-xs">
