@@ -137,7 +137,6 @@ export default function StrategyBuilder() {
   const [daysElapsed, setDaysElapsed] = useState(0)
 
   const [greeksByLeg, setGreeksByLeg] = useState<Record<string, LegGreeks>>({})
-  const [livePricesByLeg, setLivePricesByLeg] = useState<Record<string, number>>({})
 
   const [editLegId, setEditLegId] = useState<string | null>(null)
   const [marginRequired, setMarginRequired] = useState<number | null>(null)
@@ -683,17 +682,25 @@ export default function StrategyBuilder() {
     }
   }, [apiKey, legs, selectedExchange])
 
-  // Refresh live prices from chain whenever chain updates
-  useEffect(() => {
-    if (!chainData) return
-    const byId: Record<string, number> = {}
+  // F&O exchange for all leg symbols (used for WebSocket subscription).
+  const fnoExchange = useMemo(
+    () => optionExchangeFor(selectedExchange),
+    [selectedExchange]
+  )
+
+  // Chain-derived fallback prices (used until the first WS tick arrives).
+  // PnLTab itself handles real-time streaming internally to scope tick-
+  // driven re-renders (so ticks don't cascade into PayoffChart/Greeks/etc).
+  const fallbackPricesByLeg = useMemo(() => {
+    const map: Record<string, number> = {}
+    if (!chainData) return map
     for (const leg of legs) {
       if (leg.segment !== 'OPTION' || leg.strike === undefined || !leg.optionType) continue
       const row = chainData.chain.find((s) => s.strike === leg.strike)
       const side = leg.optionType === 'CE' ? row?.ce : row?.pe
-      if (side?.ltp !== undefined) byId[leg.id] = side.ltp
+      if (side?.ltp !== undefined) map[leg.id] = side.ltp
     }
-    setLivePricesByLeg(byId)
+    return map
   }, [chainData, legs])
 
   // Add legs from a template
@@ -1210,7 +1217,11 @@ export default function StrategyBuilder() {
                 <GreeksTab legs={legs} greeksByLeg={greeksByLeg} />
               </TabsContent>
               <TabsContent value="pnl" className="pt-4">
-                <PnLTab legs={legs} currentPrices={livePricesByLeg} />
+                <PnLTab
+                  legs={legs}
+                  fnoExchange={fnoExchange}
+                  fallbackPrices={fallbackPricesByLeg}
+                />
               </TabsContent>
             </Tabs>
 
