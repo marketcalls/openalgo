@@ -487,7 +487,9 @@ class FirstockWebSocket:
 
                     # Handle V1-style market data (tick fields at top level)
                     if "c_symbol" in data:
-                        self.logger.info(
+                        # Per-tick — keep at debug; steady-state market feed
+                        # would otherwise flood the log.
+                        self.logger.debug(
                             f"Received market data for symbol: {data.get('c_symbol')} on exchange: {data.get('c_exch_seg')}"
                         )
                         if self.on_data:
@@ -539,7 +541,9 @@ class FirstockWebSocket:
                             getattr(self, "_unknown_payload_samples_logged", 0) + 1
                         )
                     else:
-                        self.logger.info(
+                        # Steady-state unknown-type log — demote to debug so
+                        # a misrouted feed can't flood the log at info.
+                        self.logger.debug(
                             f"Received other message type: {list(data.keys())}"
                         )
 
@@ -553,8 +557,8 @@ class FirstockWebSocket:
                     if self.on_message:
                         self.on_message(wsapp, message)
             else:
-                # Handle binary messages (if any)
-                self.logger.info(
+                # Handle binary messages (if any) — per-message, keep at debug
+                self.logger.debug(
                     f"Received binary message of length: {len(message) if hasattr(message, '__len__') else 'unknown'}"
                 )
                 if self.on_data:
