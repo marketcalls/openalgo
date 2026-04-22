@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import type * as PlotlyTypes from 'plotly.js'
-import Plot from 'react-plotly.js'
+import Plot from '@/lib/Plot3D'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useThemeStore } from '@/stores/themeStore'
 import { oiProfileApi } from '@/api/oi-profile'

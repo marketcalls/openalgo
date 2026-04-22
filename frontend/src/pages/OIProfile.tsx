@@ -28,7 +28,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { showToast } from '@/utils/toast'
-import Plot from 'react-plotly.js'
+import Plot from '@/lib/Plot2D'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
