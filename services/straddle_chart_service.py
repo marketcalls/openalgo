@@ -15,6 +15,10 @@ import pytz
 
 from services.history_service import get_history
 from services.option_greeks_service import parse_option_symbol
+from services.strategy_chart_service import (
+    _cap_last_n_trading_dates,
+    _resolve_trading_window,
+)
 from services.option_symbol_service import (
     construct_crypto_option_symbol,
     construct_option_symbol,
@@ -123,15 +127,10 @@ def get_straddle_chart_data(
     """
     try:
         ist = pytz.timezone("Asia/Kolkata")
-        today = datetime.now(ist).date()
-        # Skip weekends
-        weekday = today.weekday()
-        if weekday == 5:  # Saturday
-            today = today - timedelta(days=1)
-        elif weekday == 6:  # Sunday
-            today = today - timedelta(days=2)
-        end_date_str = today.strftime("%Y-%m-%d")
-        start_date_str = (today - timedelta(days=max(1, days) - 1)).strftime("%Y-%m-%d")
+        # Generous calendar window; the returned series is post-filtered to
+        # the last N distinct trading dates that actually have data. Works
+        # even at 02:16 IST when today has no candles yet.
+        start_date_str, end_date_str = _resolve_trading_window(days, ist)
 
         # Step 1: Determine exchanges
         base_symbol = underlying.upper()
@@ -299,6 +298,12 @@ def get_straddle_chart_data(
                 {"status": "error", "message": "No straddle data available (option history may be missing)"},
                 404,
             )
+
+        # Trim to the last N distinct trading dates that actually returned
+        # candles. Market-agnostic: counts real data, not hardcoded session
+        # times, so late-night / pre-market / holiday queries still yield
+        # exactly N days when data is available.
+        series = _cap_last_n_trading_dates(series, days, ist)
 
         # Get current LTP for display
         success_q, quote_resp, _ = get_quotes(
