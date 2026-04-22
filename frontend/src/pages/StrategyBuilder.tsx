@@ -1,4 +1,4 @@
-import { BarChart3, Briefcase, LineChart, Save, Sparkles, TrendingUp } from 'lucide-react'
+import { Activity, BarChart3, Briefcase, Layers, LineChart, Save, Sparkles, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient } from '@/api/client'
@@ -17,6 +17,8 @@ import { PnLTab } from '@/components/strategy-builder/PnLTab'
 import { PositionsPanel } from '@/components/strategy-builder/PositionsPanel'
 import { SaveStrategyDialog } from '@/components/strategy-builder/SaveStrategyDialog'
 import { Simulators } from '@/components/strategy-builder/Simulators'
+import StrategyChartTab from '@/components/strategy-builder/StrategyChartTab'
+import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
 
 import { SymbolHeader } from '@/components/strategy-builder/SymbolHeader'
 import {
@@ -1178,6 +1180,20 @@ export default function StrategyBuilder() {
                     <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
                     P&amp;L
                   </TabsTrigger>
+                  <TabsTrigger
+                    value="strategychart"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <Activity className="mr-1.5 h-3.5 w-3.5" />
+                    Strategy Chart
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="multistrikeoi"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <Layers className="mr-1.5 h-3.5 w-3.5" />
+                    Multi Strike OI
+                  </TabsTrigger>
                 </TabsList>
                 <div className="flex items-center gap-2">
                   <Button
@@ -1226,6 +1242,22 @@ export default function StrategyBuilder() {
                   legs={legs}
                   fnoExchange={fnoExchange}
                   fallbackPrices={fallbackPricesByLeg}
+                />
+              </TabsContent>
+              <TabsContent value="strategychart" className="pt-4">
+                <StrategyChartTab
+                  underlying={selectedUnderlying}
+                  exchange={selectedExchange}
+                  legs={legs}
+                  optionExchange={fnoExchange}
+                />
+              </TabsContent>
+              <TabsContent value="multistrikeoi" className="pt-4">
+                <MultiStrikeOITab
+                  underlying={selectedUnderlying}
+                  exchange={selectedExchange}
+                  legs={legs}
+                  optionExchange={fnoExchange}
                 />
               </TabsContent>
             </Tabs>
