@@ -32,6 +32,10 @@ from services.straddle_chart_service import (
     _convert_timestamp_to_ist,
     _calculate_days_to_expiry,
 )
+from services.strategy_chart_service import (
+    _cap_last_n_trading_dates,
+    _resolve_trading_window,
+)
 from database.token_db_enhanced import fno_search_symbols
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
@@ -58,15 +62,9 @@ def get_custom_straddle_simulation(
     """
     try:
         ist = pytz.timezone("Asia/Kolkata")
-        today = datetime.now(ist).date()
-        weekday = today.weekday()
-        if weekday == 5:
-            today -= timedelta(days=1)
-        elif weekday == 6:
-            today -= timedelta(days=2)
-
-        end_date_str = today.strftime("%Y-%m-%d")
-        start_date_str = (today - timedelta(days=max(1, days) - 1)).strftime("%Y-%m-%d")
+        # Generous calendar window; pnl_series is post-filtered to the last
+        # N distinct trading dates that actually returned candles.
+        start_date_str, end_date_str = _resolve_trading_window(days, ist)
 
         quantity = lot_size * lots
         base_symbol = underlying.upper()
@@ -177,7 +175,14 @@ def get_custom_straddle_simulation(
         pnl_series = []
         trades = []
 
-        for day in sorted(daily_candles.keys()):
+        # Simulate only the last N distinct trading days that actually have
+        # data. At 02:16 IST with today empty, "days=3" correctly yields the
+        # three most recent real trading days instead of 2 days + an empty
+        # today. Keeps cumulative P&L, trade log, and summary consistent
+        # with the chart range.
+        all_trading_days = sorted(daily_candles.keys())
+        trading_days = all_trading_days[-max(1, days):]
+        for day in trading_days:
             candles = daily_candles[day]
 
             entry_strike = None
