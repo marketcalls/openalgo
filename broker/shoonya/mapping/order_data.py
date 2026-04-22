@@ -8,21 +8,18 @@ logger = get_logger(__name__)
 
 def map_order_data(order_data):
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
+    Processes and modifies a list of order dictionaries based on specific conditions to map to OpenAlgo standard structure.
 
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    Args:
+        order_data (list or dict): A list of dictionaries, where each dictionary represents an order from Shoonya.
 
     Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+        list: The modified order_data with updated 'tsym' and 'prd' fields to match OpenAlgo standards. Returns empty list if no valid data.
     """
     # Check if 'data' is None
     if order_data is None or (
         isinstance(order_data, dict) and (order_data.get("stat") == "Not_Ok")
     ):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
         order_data = []  # Return empty list for consistency with expected format
     else:
@@ -69,13 +66,13 @@ def map_order_data(order_data):
 def calculate_order_statistics(order_data):
     """
     Calculates statistics from order data, including totals for buy orders, sell orders,
-    completed orders, open orders, and rejected orders.
+    completed orders, open orders, and rejected orders based on OpenAlgo standard statuses.
 
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    Args:
+        order_data (list): A list of dictionaries, where each dictionary represents an order.
 
     Returns:
-    - A dictionary containing counts of different types of orders.
+        dict: A dictionary containing counts of different types of orders ('total_buy_orders', 'total_sell_orders', 'total_completed_orders', 'total_open_orders', 'total_rejected_orders').
     """
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
@@ -111,6 +108,15 @@ def calculate_order_statistics(order_data):
 
 
 def transform_order_data(orders):
+    """
+    Transforms Shoonya specific order data into the standard OpenAlgo order details object structure.
+
+    Args:
+        orders (list): List of order dictionaries as processed by map_order_data.
+
+    Returns:
+        list: List of dictionaries matching the OpenAlgo standard order attributes containing symbols, statuses, types, execution prices, etc.
+    """
     transformed_orders = []
 
     for order in orders:
@@ -155,21 +161,18 @@ def transform_order_data(orders):
 
 def map_trade_data(trade_data):
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
+    Processes and modifies a list of order execution (trade) dictionaries from Shoonya to match OpenAlgo expectations.
 
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    Args:
+        trade_data (list or dict): A list of dictionaries, where each dictionary represents an executed trade from Shoonya API.
 
     Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+        list: The modified trade_data with updated 'tsym', 'prd' and 'trantype' fields aligned to OpenAlgo naming conventions.
     """
     # Check if 'data' is None
     if trade_data is None or (
         isinstance(trade_data, dict) and (trade_data.get("stat") == "Not_Ok")
     ):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
         trade_data = []  # Return empty list for consistency with expected format
     else:
@@ -210,6 +213,15 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """
+    Transforms Shoonya tradebook data into standard OpenAlgo tradebook response format.
+
+    Args:
+        tradebook_data (list): List of modified tradebook records returned from map_trade_data.
+
+    Returns:
+        list: List of dictionaries matching the OpenAlgo standard trade format, including timestamp sanitization.
+    """
     transformed_data = []
     for trade in tradebook_data:
         # Parse the timestamp from Shoonya format "HH:MM:SS DD-MM-YYYY" to just "HH:MM:SS"
@@ -234,12 +246,18 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
+    """
+    Modifies Shoonya position dictionaries to populate standard OpenAlgo mapping configurations for Products.
+
+    Args:
+        position_data (list or dict): Shoonya position structure or Not_Ok failure string containing nested positions.
+
+    Returns:
+        list: Mapped position models ready to be formatted directly containing corrected exchange mapped details like CNC/MIS.
+    """
     if position_data is None or (
         isinstance(position_data, dict) and (position_data.get("stat") == "Not_Ok")
     ):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
         position_data = []  # Return empty list for consistency with expected format
     else:
@@ -275,6 +293,15 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    """
+    Converts internal mapped Shoonya position objects into OpenAlgo REST response objects and calculates running profit logic based on netted quantities and last traded prices.
+
+    Args:
+        positions_data (list): Mapped positions objects list with correct symbols and products setup.
+
+    Returns:
+        list: Standardized List containing computed profit/loss objects. Returns keys defined by OpenAlgo standards (pnl, average_price, ltp) calculated reliably depending on trade direction.
+    """
     transformed_data = []
     for position in positions_data:
         # Get position values
@@ -320,14 +347,13 @@ def transform_positions_data(positions_data):
 
 def map_portfolio_data(portfolio_data):
     """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions and
-    ensures both holdings and totalholding parts are transmitted in a single response.
+    Processes and modifies a list of Portfolio dictionaries retrieving proper symbol translation matching the Open Algo standard database records. Ensures array format structure consistency.
 
-    Parameters:
-    - portfolio_data: A list of dictionaries, where each dictionary represents portfolio information.
+    Args:
+        portfolio_data (list): Shoonya portfolio nested collection structure.
 
     Returns:
-    - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
+        list: Safely managed portfolio structure reflecting reliable db symbol lookup logic.
     """
     # Check if 'portfolio_data' is a list
     if not portfolio_data or not isinstance(portfolio_data, list):
@@ -359,7 +385,13 @@ def map_portfolio_data(portfolio_data):
 
 def calculate_portfolio_statistics(holdings_data):
     """
-    Calculates portfolio statistics according to Shoonya API specifications.
+    Aggregates overall financial details computed through iterating nested Shoonya structure objects representing long term investment equity value in total.
+
+    Args:
+        holdings_data (list): Safe Holdings iteration logic parsing `upldprc` value components over available holding balances.
+
+    Returns:
+        dict: Standard computed dictionary keys comprising numerical totals matching the Open Algo dashboard requirement summary table formats (`totalholdingvalue`, `totalinvvalue`, `totalprofitandloss`, `totalpnlpercentage`).
     """
     totalholdingvalue = 0
     totalinvvalue = 0
@@ -424,7 +456,13 @@ def calculate_portfolio_statistics(holdings_data):
 
 def transform_holdings_data(holdings_data):
     """
-    Transforms holdings data according to Shoonya API specifications.
+    Aggregates details through parsing nested Shoonya holdings components over available balances into structured single list representation for the user endpoint consumption.
+
+    Args:
+        holdings_data (list): Safe Holdings iteration collection items mapping nested equity balances into simpler product formats ready to be served.
+
+    Returns:
+        list: Normalized collection mapped directly to standard user view matching object representation with calculated safe quantites combined intelligently avoiding overlapping API limitations accurately representation portfolio holdings structurally.
     """
     transformed_data = []
     if isinstance(holdings_data, list):

@@ -29,7 +29,19 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Common function to make API calls to Shoonya using httpx with connection pooling
+    Common function to make API calls to Shoonya using httpx with connection pooling.
+
+    Args:
+        endpoint (str): The Shoonya API endpoint to hit (e.g., '/NorenWClientTP/GetQuotes').
+        auth (str): Authentication token (jKey).
+        method (str, optional): The HTTP method to use (default: 'POST').
+        payload (dict, optional): Payload dictionary. If None, default payload with actid is used.
+
+    Returns:
+        dict: The parsed JSON response from the broker.
+
+    Raises:
+        json.JSONDecodeError: If the server returns something that's not JSON.
     """
     AUTH_TOKEN = auth
     # BROKER_API_KEY format: userid:::client_id
@@ -113,7 +125,12 @@ def get_chart_api_response(endpoint, auth, method="POST", payload=None):
 
 class BrokerData:
     def __init__(self, auth_token):
-        """Initialize Shoonya data handler with authentication token"""
+        """
+        Initialize Shoonya data handler with authentication token.
+        
+        Args:
+            auth_token (str): The token received after successful authentication.
+        """
         self.auth_token = auth_token
         # Map common timeframe format to Shoonya resolutions
         # Note: Weekly and Monthly intervals are not supported
@@ -226,7 +243,17 @@ class BrokerData:
         self, symbol: str, exchange: str, api_exchange: str, token: str, api_key: str
     ) -> dict:
         """
-        Fetch quote for a single symbol synchronously (for ThreadPoolExecutor)
+        Fetch quote for a single symbol synchronously (for ThreadPoolExecutor).
+
+        Args:
+            symbol (str): Target trading symbol.
+            exchange (str): Original exchange label.
+            api_exchange (str): Shoonya specific exchange identifier (NSE, BSE, etc).
+            token (str): Token ID from DB.
+            api_key (str): The Shoonya API uid (minus the padding logic).
+
+        Returns:
+            dict: Object containing exact nested data attributes matching OpenAlgo standardized spec.
         """
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
@@ -278,7 +305,18 @@ class BrokerData:
         api_key: str,
     ) -> dict:
         """
-        Fetch quote for a single symbol asynchronously
+        Fetch quote for a single symbol asynchronously wrapper.
+
+        Args:
+            client (httpx.AsyncClient): Reused connection-pooling async httpx client.
+            symbol (str): Trading Symbol string.
+            exchange (str): OpenAlgo spec exchange code.
+            api_exchange (str): Cleaned mapped internal provider exchange code.
+            token (str): OpenAlgo recognized string ID mapping internal token mappings.
+            api_key (str): Authorized validated Shoonya id.
+
+        Returns:
+            dict: Converted internal data dict or errors natively dict mapping wrapped explicitly internally to symbol references securely matched upstream.
         """
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
@@ -321,7 +359,14 @@ class BrokerData:
 
     async def _process_quotes_batch_async(self, symbols: list, api_key: str) -> list:
         """
-        Process a batch of symbols using async httpx
+        Process a batch of symbols using async httpx to utilize maximum networking limits efficiently without GIL freezing up.
+
+        Args:
+            symbols (list): The list mapping exactly the payloads matching OpenAlgo inputs internally.
+            api_key (str): Extracted authenticated credentials matched internally through dot env or DB configs natively resolving successfully.
+
+        Returns:
+            list: Parsed JSON array returned successfully combined concurrently and merged smoothly mapping error objects where fetching unexpectedly failed upstream seamlessly.
         """
         results = []
 
