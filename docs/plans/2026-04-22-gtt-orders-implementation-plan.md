@@ -33,10 +33,11 @@ Phases ship independently. Each phase ends in a mergeable state; nothing half-bu
 | 0.2 | OCO margin mode in sandbox | `max` (block margin for the larger leg only). Make configurable via `SandboxConfig.gtt_oco_margin_mode = max \| sum`. |
 | 0.3 | Semi-auto (Action Center) routing | Allow **place** queue; disallow **modify/cancel** queue (stale queued actions + triggered GTTs cause anomalies). |
 | 0.4 | Default expiry | 365 days from placement (Zerodha parity). Accept optional `expires_at` in request. |
-| 0.5 | Sandbox GTT out-of-market-hours behaviour | Skip evaluation outside market hours (mirrors existing `execution_engine` behaviour). Still counts toward expiry. |
+| 0.5 | Sandbox GTT out-of-market-hours behaviour | No market-hours gate in the GTT monitor. Evaluation runs whenever the sandbox engine runs, and catch-up fires on startup regardless of session state. Rationale: `sandbox/execution_engine.py` and `sandbox/websocket_execution_engine.py` do **not** call `is_market_open()` today (only `position_manager.py:1138` does, for square-off). Adding a gate here would silently delay catch-up until the next session and diverge from regular-order semantics. Expiry clock is wall-clock, not session-based. |
 | 0.6 | Live-mode GTT cache | None. Every `gttorderbook` call hits the broker, same as live `orderbook`. |
 | 0.7 | API naming | `placegttorder`, `modifygttorder`, `cancelgttorder`, `gttorderbook` (lowercase, no separators — matches existing style). |
 | 0.8 | ID naming | OpenAlgo uses `trigger_id` in JSON (broker-neutral); sandbox table column `gtt_id` (internal). |
+| 0.9 | Sandbox trigger-evaluation concurrency | **Atomic leg-level claim.** Three paths (polling engine, WebSocket engine, startup catch-up) can all observe the same crossed trigger. The existing `_process_order` duplicate guard (`execution_engine.py:217`) only dedupes after a trade row exists for a given `orderid` — it cannot catch the case where each path independently calls `order_manager.place_order()` and each generates a different `orderid`. All three paths must instead funnel through a single `gtt_manager.try_claim_trigger(leg_id)` helper that performs a **conditional UPDATE** on `sandbox_gtt_legs.leg_status` from `pending → triggering` (broker-agnostic CAS; works on SQLite + Postgres + MySQL). Only the path whose UPDATE returns `rowcount == 1` calls `place_order()`; others back off silently. |
 
 ### Exit
 
@@ -56,7 +57,9 @@ Phases ship independently. Each phase ends in a mergeable state; nothing half-bu
 
 1. **DB schema**
    - (N) `database/gtt_db.py` — SQLAlchemy ORM models `SandboxGTT`, `SandboxGTTLeg` (schema per design doc §5.1).
-   - Indexes: `(user_id, gtt_status)`, `(symbol, exchange)`, `gtt_id` unique, FK `legs.gtt_id → gtt.gtt_id`.
+   - `SandboxGTT.gtt_status` enum: `active`, `triggering`, `triggered`, `cancelled`, `expired`, `rejected`.
+   - `SandboxGTTLeg.leg_status` enum: `pending`, `triggering`, `triggered`, `cancelled`. The `triggering` state is the atomic-claim target (Phase 0.9); no other state transition may write to a row already in `triggering`.
+   - Indexes: `(user_id, gtt_status)`, `(symbol, exchange)`, `gtt_id` unique, FK `legs.gtt_id → gtt.gtt_id`, and `(leg_status)` on legs to keep the active-trigger scan cheap.
 
 2. **Hand-rolled migration**
    - (N) `upgrade/migrate_gtt.py` — idempotent `CREATE TABLE IF NOT EXISTS` pair + default row in `SandboxConfig` for `gtt_oco_margin_mode=max`.
@@ -168,6 +171,8 @@ Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from 
      - `modify_gtt(trigger_id, gtt_data, user_id)` — under `FundManager._lock`: release old margin, revalidate, block new margin, update rows.
      - `cancel_gtt(trigger_id, user_id)` — release margin, mark `cancelled`.
      - `list_gtts(user_id, status_filter=None)` — read rows.
+     - **`try_claim_trigger(leg_id) -> bool`** — the single entry point all evaluators (polling, WebSocket, catch-up) must call before firing an order. Implementation: `UPDATE sandbox_gtt_legs SET leg_status='triggering', claimed_at=now() WHERE id=:leg_id AND leg_status='pending'`; return `session.execute(stmt).rowcount == 1` then `session.commit()`. Winner proceeds to `_fire_leg(leg_id, execution_price)`; losers return `False` and skip silently.
+     - **`_fire_leg(leg_id, execution_price)`** (internal, only called by claim winner) — release leg's share of GTT margin, call `order_manager.place_order()` for the leg payload, persist the returned `orderid` to `leg.triggered_order_id`, flip `leg.leg_status` from `triggering → triggered`, then for `two-leg`: atomically claim-and-cancel sibling with `UPDATE … SET leg_status='cancelled' WHERE id=:sibling AND leg_status IN ('pending','triggering')` and release its margin per Phase 0.2 rule. Finally flip parent `gtt_status` from `active → triggered` (CAS) and publish `GTTTriggeredEvent`. If the sibling row returns `rowcount=0`, another path already claimed it — respect their outcome (log and continue).
    - Trade-ID style for auto-fired orders: `ORDER-GTT-<ts>-<uuid8>` (distinguishable in `sandbox_trades`).
 
 2. **Sandbox service wrapper**
@@ -177,21 +182,21 @@ Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from 
 3. **Polling monitor**
    - (E) `sandbox/execution_engine.py`:
      - Inside `check_and_execute_pending_orders()`, after regular-order batch, call new `_check_pending_gtts()`.
-     - Query `SandboxGTT` join `SandboxGTTLeg` where `gtt_status='active'`.
+     - Query `SandboxGTT` join `SandboxGTTLeg` where `gtt_status='active'` AND `leg_status='pending'`.
      - Reuse `_fetch_quotes_batch()` (symbols from legs).
      - Evaluate: BUY leg `ltp >= trigger_price`; SELL leg `ltp <= trigger_price`.
-     - On trigger: release GTT margin, call `order_manager.place_order()` with leg payload (which blocks its own margin), write `triggered_order_id` onto leg, if `two-leg` cancel sibling leg + release its (already released or separately held) margin per Phase 0.2 rule, mark parent `triggered`, publish `GTTTriggeredEvent`.
-   - Out-of-market-hours short-circuit using the existing `is_market_open()` helper.
+     - **On trigger: call `gtt_manager.try_claim_trigger(leg.id)` — only proceed if it returns `True`.** The manager handles margin, the broker-side order, sibling cancellation, status transitions, and event emission.
+     - **No market-hours gate.** The polling engine today has no `is_market_open()` check; the GTT monitor must match that behaviour to avoid silent divergence from regular-order semantics.
 
 4. **WebSocket monitor**
    - (E) `sandbox/websocket_execution_engine.py`:
-     - Add `_pending_gtts_index: dict[str, list[str]]` (symbol → list of `gtt_id`).
+     - Add `_pending_gtts_index: dict[str, list[int]]` (symbol → list of `leg_id`, not parent `gtt_id` — claims happen at the leg level).
      - On subscribe/startup: rebuild index from DB (symmetry with existing order index).
-     - On tick: evaluate GTTs for the ticking symbol via same trigger logic as §3.3.
+     - On tick: for each indexed leg, run the same BUY/SELL trigger logic as §3.3; on trigger, call `gtt_manager.try_claim_trigger(leg_id)` — only proceed if `True`.
      - Symbol refcounting already handles shared symbols.
 
 5. **Catch-up**
-   - (E) `sandbox/catch_up_processor.py` — `catch_up_gtts()` after master-contract download: one multiquotes call for all unique GTT symbols; fire any triggers already breached.
+   - (E) `sandbox/catch_up_processor.py` — `catch_up_gtts()` after master-contract download: one multiquotes call for all unique GTT symbols; for every leg whose trigger is already breached, call `gtt_manager.try_claim_trigger(leg_id)` and fire on win. Runs unconditionally on startup — explicitly **not** gated by market hours, because this is exactly the recovery path for off-hours restarts.
 
 6. **Expiry watcher**
    - (E) `sandbox/execution_thread.py` — add APScheduler job (hourly) that flips `active` GTTs with `expires_at < now` to `expired`, releases margin, publishes `GTTExpiredEvent`.
@@ -215,6 +220,8 @@ Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from 
 - **Restart test:** place GTT, stop app, move price past trigger externally (use a mock LTP), start app → catch-up fires the trigger on boot.
 - **Expiry test:** manually set `expires_at = now()-1h` on an active GTT, wait one hour (or force the scheduler tick) → status flips to `expired`, margin released.
 - **Reconciliation:** `reconcile_margin` reports 0 discrepancies after a mixed sequence of regular orders, GTT placements, triggers, and cancellations.
+- **Concurrent-path dedup (P1 coverage):** drive the polling engine, WebSocket engine, and catch-up processor to all observe a crossed trigger on the same leg within a 100 ms window. Assert exactly **one** `sandbox_orders` row is created for that leg, the leg transitions `pending → triggering → triggered` exactly once, and the two losing paths log the "claim lost" debug line without side effects. Cover this with a repeatable test (parallel threads invoking the claim helper on the same `leg_id`; expect exactly one `True`, all others `False`).
+- **OCO sibling race:** same test setup but with a two-leg GTT where both trigger prices are breached simultaneously. Assert exactly one leg fires, the sibling transitions directly to `cancelled`, no duplicate orders, and margin is released exactly once.
 
 ### Exit
 
@@ -371,7 +378,7 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 
 | Risk | Mitigation | Phase |
 |------|------------|-------|
-| Sandbox trigger races with tick volatility | Use same duplicate-trade guard as `execution_engine._process_order` (lines 214-233 pattern). | 3 |
+| Multiple evaluator paths (polling / WebSocket / catch-up) double-firing the same GTT | **Do not rely on the post-fact trade-dedup at `execution_engine.py:217`** — it only catches duplicates after a trade row exists on the same `orderid`, but each GTT path would generate its own `orderid` via `place_order()` and slip past the guard. Instead, every evaluator funnels through `gtt_manager.try_claim_trigger(leg_id)`, which CAS-flips `leg_status` from `pending → triggering` in a single conditional UPDATE. Only the winning path calls `_fire_leg()`. OCO sibling cancellation uses the same CAS pattern on the sibling leg. | 0.9, 3 |
 | OCO double-margin when broker charges sum vs. our `max` default | Configurable `gtt_oco_margin_mode` in `SandboxConfig`. | 0, 3 |
 | GTT modify arrives after GTT already triggered | Service-layer pre-check: re-read status before dispatch; return `{status: error, message: "GTT already triggered"}` 409. | 2 |
 | Broker GTT expires silently; OpenAlgo shows stale `active` | Nightly reconciliation job pulls `gttorderbook` from broker in live mode, diffs against last-seen state, logs & emits events for state changes. (Optional Phase 6 enhancement.) | 6+ |
@@ -405,3 +412,4 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-04-22 | Claude (Opus 4.7) | Initial draft. |
+| 2026-04-22 | Claude (Opus 4.7) | Addressed cubic-dev-ai review. **P1:** introduced leg-level atomic-claim (`try_claim_trigger`) as the single fire path for polling, WebSocket, and catch-up evaluators; added `triggering` intermediate state on `SandboxGTTLeg.leg_status` and `SandboxGTT.gtt_status`; added concurrent-path and OCO sibling-race acceptance tests; rewrote the corresponding Risk row. **P2:** removed the inaccurate "mirrors existing `execution_engine` behaviour" claim — sandbox engine does not call `is_market_open()`, so the GTT monitor explicitly does not gate on market hours (catch-up especially must not, per the original off-hours-restart recovery intent). |
