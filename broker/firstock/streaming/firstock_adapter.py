@@ -469,7 +469,9 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, ws, data) -> None:
         """Callback for data messages from the WebSocket"""
         try:
-            self.logger.info(f"Received data from Firstock WebSocket: {data}")
+            # Per-tick — keep at debug; the live feed would otherwise dump
+            # every tick's full payload at info, drowning the log.
+            self.logger.debug(f"Received data from Firstock WebSocket: {data}")
 
             # Handle market data
             if isinstance(data, dict) and "c_symbol" in data:
@@ -678,7 +680,11 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     }
                 )
 
-                self.logger.info(
+                # Per-tick publish — keep at debug to avoid per-message
+                # spam. The ZMQ publish itself is the real event; for
+                # debugging payloads, raise log level via the logging
+                # config rather than leaving this at info permanently.
+                self.logger.debug(
                     f"Publishing {mode_str} data for {symbol}.{exchange}: {market_data}"
                 )
 
