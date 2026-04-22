@@ -58,8 +58,9 @@ Phases ship independently. Each phase ends in a mergeable state; nothing half-bu
 1. **DB schema**
    - (N) `database/gtt_db.py` — SQLAlchemy ORM models `SandboxGTT`, `SandboxGTTLeg` (schema per design doc §5.1).
    - `SandboxGTT.gtt_status` enum: `active`, `triggering`, `triggered`, `cancelled`, `expired`, `rejected`.
-   - `SandboxGTTLeg.leg_status` enum: `pending`, `triggering`, `triggered`, `cancelled`. The `triggering` state is the atomic-claim target (Phase 0.9); no other state transition may write to a row already in `triggering`.
-   - Indexes: `(user_id, gtt_status)`, `(symbol, exchange)`, `gtt_id` unique, FK `legs.gtt_id → gtt.gtt_id`, and `(leg_status)` on legs to keep the active-trigger scan cheap.
+   - `SandboxGTTLeg.leg_status` enum: `pending`, `triggering`, `triggered`, `cancelled`. The `triggering` state is the atomic-claim target (Phase 0.9); a `triggering` row is writable by (a) the claim winner on success, (b) `_fire_leg` on failure reverting to `pending`, or (c) `reclaim_stranded_legs` reverting to `pending` after the claim timeout. Nothing else.
+   - `SandboxGTTLeg.claimed_at` (`DateTime`, nullable) — set to `CURRENT_TIMESTAMP` on the claim UPDATE, cleared (set `NULL`) on revert or final transition. The stranded-leg reaper reads this column; without it, a crashed-mid-trigger leg would be stuck in `triggering` forever since evaluators only rescan `pending` rows.
+   - Indexes: `(user_id, gtt_status)`, `(symbol, exchange)`, `gtt_id` unique, FK `legs.gtt_id → gtt.gtt_id`, and `(leg_status, claimed_at)` on legs — covers both the active-trigger scan and the reaper's stale-claim query.
 
 2. **Hand-rolled migration**
    - (N) `upgrade/migrate_gtt.py` — idempotent `CREATE TABLE IF NOT EXISTS` pair + default row in `SandboxConfig` for `gtt_oco_margin_mode=max`.
@@ -171,8 +172,9 @@ Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from 
      - `modify_gtt(trigger_id, gtt_data, user_id)` — under `FundManager._lock`: release old margin, revalidate, block new margin, update rows.
      - `cancel_gtt(trigger_id, user_id)` — release margin, mark `cancelled`.
      - `list_gtts(user_id, status_filter=None)` — read rows.
-     - **`try_claim_trigger(leg_id) -> bool`** — the single entry point all evaluators (polling, WebSocket, catch-up) must call before firing an order. Implementation: `UPDATE sandbox_gtt_legs SET leg_status='triggering', claimed_at=now() WHERE id=:leg_id AND leg_status='pending'`; return `session.execute(stmt).rowcount == 1` then `session.commit()`. Winner proceeds to `_fire_leg(leg_id, execution_price)`; losers return `False` and skip silently.
-     - **`_fire_leg(leg_id, execution_price)`** (internal, only called by claim winner) — release leg's share of GTT margin, call `order_manager.place_order()` for the leg payload, persist the returned `orderid` to `leg.triggered_order_id`, flip `leg.leg_status` from `triggering → triggered`, then for `two-leg`: atomically claim-and-cancel sibling with `UPDATE … SET leg_status='cancelled' WHERE id=:sibling AND leg_status IN ('pending','triggering')` and release its margin per Phase 0.2 rule. Finally flip parent `gtt_status` from `active → triggered` (CAS) and publish `GTTTriggeredEvent`. If the sibling row returns `rowcount=0`, another path already claimed it — respect their outcome (log and continue).
+     - **`try_claim_trigger(leg_id) -> bool`** — the single entry point all evaluators (polling, WebSocket, catch-up) must call before firing an order. Implementation: `UPDATE sandbox_gtt_legs SET leg_status='triggering', claimed_at=CURRENT_TIMESTAMP WHERE id=:leg_id AND leg_status='pending'`; return `session.execute(stmt).rowcount == 1` then `session.commit()`. Uses `CURRENT_TIMESTAMP` (SQL-standard, portable across SQLite / Postgres / MySQL) — `now()` is not available on SQLite which is the default sandbox DB. In Python this is expressed as `func.now()` in a SQLAlchemy `update()` construct, which compiles to `CURRENT_TIMESTAMP` on every dialect OpenAlgo supports. Winner proceeds to `_fire_leg(leg_id, execution_price)`; losers return `False` and skip silently.
+     - **`_fire_leg(leg_id, execution_price)`** (internal, only called by claim winner) — wraps its work in `try/except/finally`. On the happy path: release leg's share of GTT margin, call `order_manager.place_order()` for the leg payload, persist the returned `orderid` to `leg.triggered_order_id`, flip `leg.leg_status` from `triggering → triggered`, then for `two-leg`: atomically claim-and-cancel sibling with `UPDATE … SET leg_status='cancelled' WHERE id=:sibling AND leg_status IN ('pending','triggering')` and release its margin per Phase 0.2 rule. Finally flip parent `gtt_status` from `active → triggered` (CAS) and publish `GTTTriggeredEvent`. If the sibling row returns `rowcount=0`, another path already claimed it — respect their outcome (log and continue). **On any exception from `place_order` or a non-success broker response**: revert leg with `UPDATE sandbox_gtt_legs SET leg_status='pending', claimed_at=NULL WHERE id=:leg_id AND leg_status='triggering'` (CAS back; guards against the reaper racing in), restore any margin adjustment made before the failure, and publish `GTTFailedEvent` carrying the broker error. The next evaluator tick will re-pick the leg.
+     - **`reclaim_stranded_legs()`** — safety net for the crash-between-claim-and-completion case. Selects legs where `leg_status='triggering' AND claimed_at < CURRENT_TIMESTAMP - <claim_timeout>`; reverts each back to `pending` (CAS on `leg_status='triggering'` to avoid racing a live worker). The claim timeout is a new `SandboxConfig.gtt_claim_timeout_sec` entry with default **60** (≥ 2× the default 5 s polling interval; generous enough that a legitimate slow broker call completes before the reaper touches it). Called from two places: every poll tick of `execution_engine` (cheap — a single indexed query), and unconditionally at the start of `catch_up_gtts()` so a crashed process always self-heals on restart before the catch-up scan runs.
    - Trade-ID style for auto-fired orders: `ORDER-GTT-<ts>-<uuid8>` (distinguishable in `sandbox_trades`).
 
 2. **Sandbox service wrapper**
@@ -181,11 +183,11 @@ Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from 
 
 3. **Polling monitor**
    - (E) `sandbox/execution_engine.py`:
-     - Inside `check_and_execute_pending_orders()`, after regular-order batch, call new `_check_pending_gtts()`.
+     - Inside `check_and_execute_pending_orders()`, after regular-order batch, first call `gtt_manager.reclaim_stranded_legs()` (one indexed query; cheap), then call new `_check_pending_gtts()`.
      - Query `SandboxGTT` join `SandboxGTTLeg` where `gtt_status='active'` AND `leg_status='pending'`.
      - Reuse `_fetch_quotes_batch()` (symbols from legs).
      - Evaluate: BUY leg `ltp >= trigger_price`; SELL leg `ltp <= trigger_price`.
-     - **On trigger: call `gtt_manager.try_claim_trigger(leg.id)` — only proceed if it returns `True`.** The manager handles margin, the broker-side order, sibling cancellation, status transitions, and event emission.
+     - **On trigger: call `gtt_manager.try_claim_trigger(leg.id)` — only proceed if it returns `True`.** The manager handles margin, the broker-side order, sibling cancellation, status transitions, event emission, and failure revert.
      - **No market-hours gate.** The polling engine today has no `is_market_open()` check; the GTT monitor must match that behaviour to avoid silent divergence from regular-order semantics.
 
 4. **WebSocket monitor**
@@ -196,19 +198,25 @@ Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from 
      - Symbol refcounting already handles shared symbols.
 
 5. **Catch-up**
-   - (E) `sandbox/catch_up_processor.py` — `catch_up_gtts()` after master-contract download: one multiquotes call for all unique GTT symbols; for every leg whose trigger is already breached, call `gtt_manager.try_claim_trigger(leg_id)` and fire on win. Runs unconditionally on startup — explicitly **not** gated by market hours, because this is exactly the recovery path for off-hours restarts.
+   - (E) `sandbox/catch_up_processor.py` — `catch_up_gtts()` after master-contract download:
+     - **Step 1 (always):** call `gtt_manager.reclaim_stranded_legs()` to revert any leg stranded in `triggering` by a prior crash — must run **before** the breach scan, otherwise stranded legs would be invisible to it.
+     - **Step 2:** one multiquotes call for all unique GTT symbols; for every leg whose trigger is already breached, call `gtt_manager.try_claim_trigger(leg_id)` and fire on win.
+     - Runs unconditionally on startup — explicitly **not** gated by market hours, because this is exactly the recovery path for off-hours restarts.
 
-6. **Expiry watcher**
+6. **Config**
+   - (E) `database/sandbox_db.py` default-config seed — add `gtt_claim_timeout_sec = 60` to the `SandboxConfig` defaults so the reaper has a working threshold out of the box.
+
+7. **Expiry watcher**
    - (E) `sandbox/execution_thread.py` — add APScheduler job (hourly) that flips `active` GTTs with `expires_at < now` to `expired`, releases margin, publishes `GTTExpiredEvent`.
 
-7. **Margin reconciliation**
+8. **Margin reconciliation**
    - `fund_manager.reconcile_margin(user_id, auto_fix=True)` already exists. Add GTT's `margin_blocked` sum to its expected-used-margin calc so it doesn't false-flag.
    - (E) `sandbox/fund_manager.py`
 
 ### Files touched
 
 - **New:** `sandbox/gtt_manager.py`
-- **Edited:** `services/sandbox_service.py`, Phase-2 service files, `sandbox/execution_engine.py`, `sandbox/websocket_execution_engine.py`, `sandbox/catch_up_processor.py`, `sandbox/execution_thread.py`, `sandbox/fund_manager.py`
+- **Edited:** `services/sandbox_service.py`, Phase-2 service files, `sandbox/execution_engine.py`, `sandbox/websocket_execution_engine.py`, `sandbox/catch_up_processor.py`, `sandbox/execution_thread.py`, `sandbox/fund_manager.py`, `database/sandbox_db.py` (default-config seed)
 
 ### Acceptance
 
@@ -222,6 +230,10 @@ Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from 
 - **Reconciliation:** `reconcile_margin` reports 0 discrepancies after a mixed sequence of regular orders, GTT placements, triggers, and cancellations.
 - **Concurrent-path dedup (P1 coverage):** drive the polling engine, WebSocket engine, and catch-up processor to all observe a crossed trigger on the same leg within a 100 ms window. Assert exactly **one** `sandbox_orders` row is created for that leg, the leg transitions `pending → triggering → triggered` exactly once, and the two losing paths log the "claim lost" debug line without side effects. Cover this with a repeatable test (parallel threads invoking the claim helper on the same `leg_id`; expect exactly one `True`, all others `False`).
 - **OCO sibling race:** same test setup but with a two-leg GTT where both trigger prices are breached simultaneously. Assert exactly one leg fires, the sibling transitions directly to `cancelled`, no duplicate orders, and margin is released exactly once.
+- **Place-order failure revert:** mock `order_manager.place_order()` to raise mid-fire. Assert the leg reverts `triggering → pending`, `claimed_at` is cleared, margin is restored, and the next evaluator tick re-picks the leg and retries.
+- **Broker-error revert:** mock `order_manager.place_order()` to return a non-success response. Same assertions as above plus a `GTTFailedEvent` is published.
+- **Stranded-leg reclaim after crash:** force a leg into `leg_status='triggering'` with `claimed_at` set more than `gtt_claim_timeout_sec` in the past (simulates a worker crash mid-fire). Restart the app — catch-up's `reclaim_stranded_legs()` step must revert the leg to `pending` before the breach scan, and the leg must be re-evaluable by the next tick. Also test the live-process path: while the app is running, inject a stranded leg → next polling tick's reclaim call reverts it within one cycle.
+- **Reclaim does not race a live worker:** inject a `triggering` leg with `claimed_at = now - 1s` (well under the 60s timeout) and run the reaper → leg must remain in `triggering` (the CAS predicate depends on the timestamp, not just the status).
 
 ### Exit
 
@@ -379,6 +391,9 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 | Risk | Mitigation | Phase |
 |------|------------|-------|
 | Multiple evaluator paths (polling / WebSocket / catch-up) double-firing the same GTT | **Do not rely on the post-fact trade-dedup at `execution_engine.py:217`** — it only catches duplicates after a trade row exists on the same `orderid`, but each GTT path would generate its own `orderid` via `place_order()` and slip past the guard. Instead, every evaluator funnels through `gtt_manager.try_claim_trigger(leg_id)`, which CAS-flips `leg_status` from `pending → triggering` in a single conditional UPDATE. Only the winning path calls `_fire_leg()`. OCO sibling cancellation uses the same CAS pattern on the sibling leg. | 0.9, 3 |
+| Leg stranded in `triggering` forever after a crash or an unhandled `place_order` exception (evaluators only re-scan `pending` legs) | Two layers: (1) `_fire_leg` wraps its work in `try/except/finally` that CAS-reverts `triggering → pending` and restores margin on any failure; (2) `gtt_manager.reclaim_stranded_legs()` is a reaper that periodically reverts any `triggering` row older than `SandboxConfig.gtt_claim_timeout_sec` (default 60 s). Called from every polling tick and unconditionally at the start of `catch_up_gtts()` so a crashed process self-heals on restart before its breach scan runs. Reaper predicate includes the `claimed_at` check so it cannot race a live worker. | 3 |
+| Worker crashes **after** broker-side order is placed but **before** the leg transitions to `triggered` — reaper reverts leg to `pending`, next tick would place a duplicate order | Known corner case. Mitigation path for v1.x: pre-assign a UUID correlation id on the leg (`pending_order_correlation`) and pass it to `order_manager.place_order()` which writes it to `sandbox_orders.correlation_id`. The reaper then checks: if a `sandbox_orders` row with this correlation exists, finalize the leg to `triggered` with that orderid; otherwise revert. Tracked as a follow-up; out of scope for v1. | Post-v1 |
+| Portable SQL across SQLite / Postgres / MySQL | All CAS UPDATEs use `CURRENT_TIMESTAMP` (SQL-standard), not `now()`. In Python, expressed as `func.now()` in SQLAlchemy `update()` which compiles correctly on every dialect. | 0.9, 3 |
 | OCO double-margin when broker charges sum vs. our `max` default | Configurable `gtt_oco_margin_mode` in `SandboxConfig`. | 0, 3 |
 | GTT modify arrives after GTT already triggered | Service-layer pre-check: re-read status before dispatch; return `{status: error, message: "GTT already triggered"}` 409. | 2 |
 | Broker GTT expires silently; OpenAlgo shows stale `active` | Nightly reconciliation job pulls `gttorderbook` from broker in live mode, diffs against last-seen state, logs & emits events for state changes. (Optional Phase 6 enhancement.) | 6+ |
@@ -413,3 +428,4 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 |------|--------|--------|
 | 2026-04-22 | Claude (Opus 4.7) | Initial draft. |
 | 2026-04-22 | Claude (Opus 4.7) | Addressed cubic-dev-ai review. **P1:** introduced leg-level atomic-claim (`try_claim_trigger`) as the single fire path for polling, WebSocket, and catch-up evaluators; added `triggering` intermediate state on `SandboxGTTLeg.leg_status` and `SandboxGTT.gtt_status`; added concurrent-path and OCO sibling-race acceptance tests; rewrote the corresponding Risk row. **P2:** removed the inaccurate "mirrors existing `execution_engine` behaviour" claim — sandbox engine does not call `is_market_open()`, so the GTT monitor explicitly does not gate on market hours (catch-up especially must not, per the original off-hours-restart recovery intent). |
+| 2026-04-22 | Claude (Opus 4.7) | Addressed second cubic-dev-ai review. **P1 (portability):** replaced `now()` in the claim UPDATE with `CURRENT_TIMESTAMP` (SQL-standard; `now()` fails on SQLite, which is the default sandbox DB). **P1 (stranded-leg reclaim):** added `_fire_leg` try/except/finally that CAS-reverts on any failure, plus a `reclaim_stranded_legs()` reaper gated on a new `SandboxConfig.gtt_claim_timeout_sec` (default 60 s) called from every polling tick and at the start of catch-up. Added `claimed_at` column to `SandboxGTTLeg`, expanded the `(leg_status, claimed_at)` index, added four acceptance tests (place-order exception revert, broker-error revert, post-crash reclaim, reclaim-does-not-race-live-worker), and two new Risk rows (stranded-triggering recovery; post-`place_order` crash corner case flagged as a post-v1 follow-up with a correlation-id mitigation sketch). |
