@@ -12,6 +12,7 @@ class MstockExchangeMapper:
         "BSE": 3,  # BSE Cash Market
         "BFO": 4,  # BSE F&O
         "CDS": 13,  # Currency derivatives
+        "BCD": 4,  # BSE Currency Derivatives (BSEFO)
         "MCX": 5,  # MCX (assuming)
         "NSE_INDEX": 1,  # NSE Index
         "BSE_INDEX": 3,  # BSE Index

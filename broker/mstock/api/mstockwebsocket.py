@@ -101,6 +101,9 @@ class MstockWebSocket:
             elif len(data) >= 383:
                 num_packets = struct.unpack("<H", data[0:2])[0]
                 packet_size = struct.unpack("<H", data[2:4])[0]
+                if num_packets > 1:
+                    quotes = MstockWebSocket._parse_multi_packet(data, num_packets, packet_size)
+                    return quotes[0] if quotes else None
                 packet = data[4:4 + 379]
             else:
                 logger.error(f"Invalid packet size: {len(data)} bytes")
@@ -162,6 +165,23 @@ class MstockWebSocket:
         except Exception as e:
             logger.error(f"Error parsing binary packet: {str(e)}")
             return None
+
+    @staticmethod
+    def _parse_multi_packet(data: bytes, num_packets: int, packet_size: int) -> list[dict]:
+        """
+        Parse a multi-packet frame and return all successfully parsed quotes.
+        """
+        results = []
+        offset = 4
+        for _ in range(num_packets):
+            if offset + packet_size > len(data):
+                break
+            chunk = data[offset:offset + packet_size]
+            quote = MstockWebSocket.parse_binary_packet(chunk)
+            if quote:
+                results.append(quote)
+            offset += packet_size
+        return results
 
     # ==================== Streaming Mode Methods ====================
 
@@ -253,11 +273,16 @@ class MstockWebSocket:
     def _on_ws_message(self, ws, message):
         """Called for both binary and text messages"""
         if isinstance(message, bytes):
-            # Parse binary packet
-            if len(message) in [51, 123, 379] or len(message) >= 383:
+            if len(message) in [51, 123, 379]:
                 quote_data = self.parse_binary_packet(message)
                 if quote_data and self.data_callback:
                     self.data_callback(quote_data)
+            elif len(message) >= 383:
+                num_packets = struct.unpack("<H", message[0:2])[0]
+                packet_size = struct.unpack("<H", message[2:4])[0]
+                for quote_data in self._parse_multi_packet(message, num_packets, packet_size):
+                    if self.data_callback:
+                        self.data_callback(quote_data)
         elif isinstance(message, str):
             logger.debug(f"Received string message: {message}")
 
@@ -487,18 +512,27 @@ class MstockWebSocket:
                 try:
                     response = ws.recv()
                     if isinstance(response, bytes):
-                        if len(response) in [51, 123, 379] or len(response) >= 383:
-                            quote = self.parse_binary_packet(response)
-                            if quote and quote.get("token"):
+                        quotes = []
+                        if len(response) in [51, 123, 379]:
+                            q = self.parse_binary_packet(response)
+                            if q:
+                                quotes = [q]
+                        elif len(response) >= 383:
+                            num_packets = struct.unpack("<H", response[0:2])[0]
+                            packet_size = struct.unpack("<H", response[2:4])[0]
+                            quotes = self._parse_multi_packet(response, num_packets, packet_size)
+
+                        for quote in quotes:
+                            if quote.get("token"):
                                 token_key = quote["token"]
                                 is_full = not full_mode_size or len(response) >= full_mode_size
                                 if is_full:
                                     results[token_key] = quote
                                     full_packets.add(token_key)
                                 elif token_key not in results:
-                                    results[token_key] = quote  # partial fallback only
-                                if len(full_packets) >= expected:
-                                    break
+                                    results[token_key] = quote
+                        if len(full_packets) >= expected:
+                            break
                 except Exception:
                     break
 

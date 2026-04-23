@@ -90,7 +90,7 @@ def map_order_data(order_data):
                 order["producttype"] = "CNC"
             elif producttype == "INTRADAY":
                 order["producttype"] = "MIS"
-            elif exchange in ["NFO", "MCX", "BFO", "CDS", "BCD"] and producttype == "CARRYFORWARD":
+            elif lookup_exchange in ["NFO", "MCX", "BFO", "CDS", "BCD"] and producttype == "CARRYFORWARD":
                 order["producttype"] = "NRML"
 
             # Normalize status values for statistics
@@ -452,7 +452,7 @@ def map_position_data(position_data):
                 position["producttype"] = "CNC"
             elif producttype == "INTRADAY":
                 position["producttype"] = "MIS"
-            elif exchange in ["NFO", "MCX", "BFO", "CDS", "BCD"] and producttype == "CARRYFORWARD":
+            elif lookup_exchange in ["NFO", "MCX", "BFO", "CDS", "BCD"] and producttype == "CARRYFORWARD":
                 position["producttype"] = "NRML"
 
     return position_data

@@ -2617,6 +2617,8 @@ def save_strategy(strategy_id):
 def cleanup_on_exit():
     """Clean up all running processes on application exit"""
     logger.info("Cleaning up running strategies...")
+    if SCHEDULER and SCHEDULER.running:
+        SCHEDULER.shutdown(wait=False)
     with PROCESS_LOCK:
         for strategy_id in list(RUNNING_STRATEGIES.keys()):
             try:
