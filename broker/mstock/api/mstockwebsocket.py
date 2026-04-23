@@ -513,19 +513,20 @@ class MstockWebSocket:
                     response = ws.recv()
                     if isinstance(response, bytes):
                         quotes = []
+                        per_packet_size = len(response)
                         if len(response) in [51, 123, 379]:
                             q = self.parse_binary_packet(response)
                             if q:
                                 quotes = [q]
                         elif len(response) >= 383:
                             num_packets = struct.unpack("<H", response[0:2])[0]
-                            packet_size = struct.unpack("<H", response[2:4])[0]
-                            quotes = self._parse_multi_packet(response, num_packets, packet_size)
+                            per_packet_size = struct.unpack("<H", response[2:4])[0]
+                            quotes = self._parse_multi_packet(response, num_packets, per_packet_size)
 
                         for quote in quotes:
                             if quote.get("token"):
                                 token_key = quote["token"]
-                                is_full = not full_mode_size or len(response) >= full_mode_size
+                                is_full = not full_mode_size or per_packet_size >= full_mode_size
                                 if is_full:
                                     results[token_key] = quote
                                     full_packets.add(token_key)
