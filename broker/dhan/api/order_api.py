@@ -1,3 +1,10 @@
+"""Dhan broker order management module.
+
+Provides functions for placing, modifying, and cancelling orders through
+the Dhan v2 REST API. Also handles position management including smart
+order routing and bulk position square-off.
+"""
+
 import json
 import os
 

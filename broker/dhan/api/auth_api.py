@@ -1,3 +1,10 @@
+"""Dhan broker authentication module.
+
+Handles the OAuth2-based authentication flow with Dhan's API,
+including consent generation, consent consumption for access token
+exchange, and direct access token validation.
+"""
+
 import json
 import logging
 import os

@@ -1,3 +1,11 @@
+"""Dhan broker order data mapping module.
+
+Transforms order, trade, position, and holdings data between Dhan's
+v2 API response format and OpenAlgo's standardized internal format.
+Handles symbol resolution, product type mapping, order statistics
+calculation, and portfolio data processing.
+"""
+
 import json
 
 from broker.dhan.mapping.transform_data import map_exchange

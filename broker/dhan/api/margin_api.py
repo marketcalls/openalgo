@@ -1,3 +1,10 @@
+"""Dhan broker margin calculation module.
+
+Provides margin calculation using the Dhan v2 margin calculator API.
+Supports single-leg and multi-leg margin calculation with aggregation,
+since Dhan's API only accepts one order at a time.
+"""
+
 import json
 import os
 

@@ -1,3 +1,11 @@
+"""Dhan broker market data module.
+
+Provides the BrokerData class for fetching real-time quotes, multi-symbol
+quotes, historical OHLCV candlestick data (intraday and daily), open
+interest, and market depth from the Dhan v2 REST API. Includes rate
+limiting, date chunking, and automatic timezone conversion (UTC to IST).
+"""
+
 import json
 import os
 import threading

@@ -1,5 +1,13 @@
-# Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Upstox Broking Parameters https://dhanhq.co/docs/v2/orders/
+"""Dhan broker order data transformation module.
+
+Maps OpenAlgo API request parameters to Dhan's v2 API format for order
+placement and modification. Handles symbol resolution, exchange segment
+mapping, order type mapping, and product type mapping.
+
+See:
+    - OpenAlgo API docs: https://openalgo.in/docs
+    - Dhan API docs: https://dhanhq.co/docs/v2/orders/
+"""
 
 
 def transform_data(data, token):
