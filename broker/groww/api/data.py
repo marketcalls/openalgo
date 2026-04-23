@@ -1776,13 +1776,15 @@ class BrokerData:
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols with automatic batching
+        Get real-time quotes for multiple symbols with automatic batching.
+
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys
-                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+            symbols (list): List of dicts with 'symbol' and 'exchange' keys.
+                Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+
         Returns:
             list: List of quote data for each symbol with format:
-                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+                [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
             BATCH_SIZE = 50  # Groww API limit: up to 50 instruments per request
@@ -1822,11 +1824,13 @@ class BrokerData:
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
-        Process a single batch of symbols (internal method)
+        Process a single batch of symbols (internal method).
+
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+            symbols (list): List of dicts with 'symbol' and 'exchange' keys (max 50).
+
         Returns:
-            list: List of quote data for the batch
+            list: List of quote data for the batch.
         """
         # Build exchange_trading_symbols list and mapping
         # Group by segment (CASH vs FNO)
@@ -1913,13 +1917,15 @@ class BrokerData:
 
     def _fetch_ohlc_batch(self, exchange_symbols: list, segment: str, symbol_map: dict) -> list:
         """
-        Fetch OHLC data for a batch of symbols
+        Fetch OHLC data for a batch of symbols.
+
         Args:
-            exchange_symbols: List of exchange_trading_symbols (e.g., ['NSE_SBIN', 'NSE_TCS'])
-            segment: CASH or FNO
-            symbol_map: Mapping from exchange_symbol to original symbol/exchange
+            exchange_symbols (list): List of exchange_trading_symbols (e.g., ['NSE_SBIN', 'NSE_TCS']).
+            segment (str): Segment type, e.g., CASH or FNO.
+            symbol_map (dict): Mapping from exchange_symbol to original symbol/exchange.
+
         Returns:
-            list: List of quote data
+            list: List of quote data.
         """
         results = []
 

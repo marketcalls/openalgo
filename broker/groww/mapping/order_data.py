@@ -13,15 +13,15 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def map_order_data(order_data):
-    """
-    Processes and modifies order data from Groww format to OpenAlgo format.
+def map_order_data(order_data: dict) -> list:
+    """Processes and modifies order data from Groww format to OpenAlgo format.
 
-    Parameters:
-    - order_data: A dictionary with either 'data' key or raw Groww API response with 'order_list'.
+    Args:
+        order_data (dict): A dictionary with either 'data' key or raw Groww API 
+            response with 'order_list'.
 
     Returns:
-    - The modified order_data with standardized fields in OpenAlgo format.
+        list: The modified order data with standardized fields in OpenAlgo format.
     """
     logger.info("Starting map_order_data function")
     logger.debug(f"Order data type: {type(order_data)}")
@@ -173,18 +173,19 @@ def map_order_data(order_data):
     return mapped_orders
 
 
-def calculate_order_statistics(order_data):
-    """
-    Calculates statistics from order data, including totals for buy orders, sell orders,
-    completed orders, open orders, and rejected orders.
+def calculate_order_statistics(order_data: Any) -> dict:
+    """Calculates statistics from order data, including totals for various statuses.
 
-    Parameters:
-    - order_data: Can be either:
-      1. A list of order dictionaries (direct from get_order_book)
-      2. A dictionary with nested data structures (for backward compatibility)
+    Computes the total count of buy orders, sell orders, completed orders, 
+    open orders, and rejected orders from the provided order data.
+
+    Args:
+        order_data (Any): Can be either:
+            1. A list of order dictionaries (direct from get_order_book)
+            2. A dictionary with nested data structures (for backward compatibility)
 
     Returns:
-    - A dictionary containing counts of different types of orders.
+        dict: A dictionary containing counts of different types of orders.
     """
     logger.info("Starting calculate_order_statistics")
     logger.debug(f"Order data type: {type(order_data)}")
@@ -268,15 +269,15 @@ def calculate_order_statistics(order_data):
     return stats
 
 
-def transform_order_data(orders):
-    """
-    Transform order data from Groww API format to OpenAlgo standard format
+def transform_order_data(orders: Any) -> list:
+    """Transform order data from Groww API format to OpenAlgo standard format.
 
     Args:
-        orders (dict): Order data from Groww API
+        orders (Any): Expected to be a dict containing order data from Groww API,
+            or a list of already mapped orders.
 
     Returns:
-        list: Transformed orders in OpenAlgo format for orderbook.py
+        list: Transformed orders in OpenAlgo format for orderbook.py.
     """
     logger.info("Starting transform_order_data function")
     logger.debug(f"Input order data type: {type(orders)}")
@@ -523,7 +524,15 @@ def transform_order_data(orders):
     return transformed_orders
 
 
-def map_trade_data(trade_data):
+def map_trade_data(trade_data: Any) -> list:
+    """Map trade data from Groww to extract the trades list.
+
+    Args:
+        trade_data (Any): Raw trade data response from Groww API.
+
+    Returns:
+        list: A list of trade dictionaries.
+    """
     logger.info(f"Map trade data received type: {type(trade_data)}")
 
     # If it's a tuple with status code (from direct API), extract the data
@@ -556,7 +565,15 @@ def map_trade_data(trade_data):
     return map_order_data(trade_data)
 
 
-def transform_tradebook_data(tradebook_data):
+def transform_tradebook_data(tradebook_data: list) -> list:
+    """Transform tradebook data from Groww format to OpenAlgo format.
+
+    Args:
+        tradebook_data (list): List of trade dictionaries from Groww API.
+
+    Returns:
+        list: List of transformed trade dictionaries in OpenAlgo format.
+    """
     logger.info(f"Transform tradebook received type: {type(tradebook_data)}")
 
     # Handle empty input
@@ -708,7 +725,15 @@ def transform_tradebook_data(tradebook_data):
     return transformed_data
 
 
-def map_position_data(position_data):
+def map_position_data(position_data: Any) -> list:
+    """Extract position list from Groww position API response.
+
+    Args:
+        position_data (Any): Raw positions response from Groww API.
+
+    Returns:
+        list: List of position dictionaries.
+    """
     logger.info(f"Map position data received type: {type(position_data)}")
 
     # If it's a tuple with status code (from direct API), extract the data
@@ -736,7 +761,15 @@ def map_position_data(position_data):
     return map_order_data(position_data)
 
 
-def transform_positions_data(positions_data):
+def transform_positions_data(positions_data: list) -> list:
+    """Transform positions data from Groww to OpenAlgo format.
+
+    Args:
+        positions_data (list): List of position dictionaries from Groww API.
+
+    Returns:
+        list: List of transformed position dictionaries in OpenAlgo format.
+    """
     logger.info(
         f"Transform positions received type: {type(positions_data)}, length: {len(positions_data) if isinstance(positions_data, list) else 'not a list'}"
     )

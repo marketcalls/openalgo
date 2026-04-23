@@ -12,7 +12,15 @@ logger = get_logger(__name__)
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data directly from Groww API using the provided auth token."""
+    """
+    Fetch margin data directly from Groww API using the provided auth token.
+
+    Args:
+        auth_token (str): Authentication token for Groww API.
+
+    Returns:
+        dict: Processed margin data in OpenAlgo format, or empty dict if failed.
+    """
     logger.info(f"Getting margin data with token: {auth_token}...")
 
     try:

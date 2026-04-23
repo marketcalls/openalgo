@@ -2174,6 +2174,16 @@ def get_holdings(auth):
 
 
 def close_all_positions(token=None, auth=None):
+    """
+    Close all open positions for the authenticated user.
+
+    Args:
+        token (str, optional): API token (legacy support). Defaults to None.
+        auth (str, optional): Authentication token. Defaults to None.
+
+    Returns:
+        tuple: (Response dictionary containing status and results, HTTP status code)
+    """
     logger.info("Starting close_all_positions")
     logger.info(f"Current timestamp: {datetime.now().isoformat()}")
 
@@ -2186,9 +2196,7 @@ def close_all_positions(token=None, auth=None):
         from database.token_db import get_br_symbol
     except ImportError:
         from openalgo.database.token_db import get_br_symbol
-    """
-    Close all open positions for the authenticated user
-    """
+
     try:
         logger.info("Starting close_all_positions function")
         positions_data, status_code = get_positions(auth)

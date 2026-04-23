@@ -19,11 +19,11 @@ def calculate_margin_api(positions, auth):
     For CASH segment, only single position is supported.
 
     Args:
-        positions: List of positions in OpenAlgo format
-        auth: Authentication token for Groww
+        positions (list): List of positions in OpenAlgo format.
+        auth (str): Authentication token for Groww.
 
     Returns:
-        Tuple of (response, response_data)
+        tuple: (Response object, Response data dictionary).
     """
     AUTH_TOKEN = auth
 
