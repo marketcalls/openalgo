@@ -93,6 +93,7 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
+from database.superorder_db import init_db as ensure_superorder_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
@@ -515,6 +516,7 @@ def setup_environment(app):
                 ("Strategy DB", ensure_strategy_tables_exists),
                 ("Sandbox DB", ensure_sandbox_tables_exists),
                 ("Action Center DB", ensure_action_center_tables_exists),
+                ("Super Order DB", ensure_superorder_tables_exists),
                 ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
                 ("Market Calendar DB", ensure_market_calendar_tables_exists),
                 ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
@@ -562,6 +564,13 @@ def setup_environment(app):
                 logger.debug("Historify scheduler initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
+
+            try:
+                from services.superorder_monitoring_service import start_superorder_monitor
+                start_superorder_monitor()
+                logger.debug("Super Order monitor auto-started")
+            except Exception as e:
+                logger.error(f"Failed to auto-start Super Order monitor: {e}")
 
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
@@ -708,6 +717,7 @@ def shutdown_database_sessions(exception=None):
         ("database.strategy_db", "db_session"),
         ("database.user_db", "db_session"),
         ("database.action_center_db", "db_session"),
+        ("database.superorder_db", "db_session"),
         ("database.qty_freeze_db", "db_session"),
         ("database.sandbox_db", "db_session"),
         ("database.analyzer_db", "db_session"),
