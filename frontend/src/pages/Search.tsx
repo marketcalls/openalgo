@@ -230,11 +230,23 @@ export default function Search() {
               <TableBody>
                 {paginatedResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-12">
                       {error ? (
-                        <span className="text-destructive">{error}</span>
+                        <div className="text-destructive font-medium">{error}</div>
                       ) : (
-                        'No results found'
+                        <div className="flex flex-col items-center justify-center text-center">
+                          <SearchIcon className="h-12 w-12 text-muted-foreground mb-4" />
+                          <h3 className="text-lg font-semibold mb-2">No Results Found</h3>
+                          <p className="text-muted-foreground mb-4">
+                            We couldn't find any symbols matching your search criteria.
+                          </p>
+                          <Button asChild variant="outline">
+                            <Link to="/search/token">
+                              <SearchIcon className="h-4 w-4 mr-2" />
+                              Try New Search
+                            </Link>
+                          </Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>
