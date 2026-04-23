@@ -1674,6 +1674,17 @@ def _process_download_job(job_id: str, api_key: str):
             logger.debug(f"Waiting {delay:.1f}s before next download...")
             time.sleep(delay)
 
+            # Batch cooldown: every 10 symbols processed in this run, add a
+            # 5-10s pause so broker long-window rate limiters (req/min) reset.
+            items_done_this_run = processed_count - already_completed - already_failed
+            if items_done_this_run > 0 and items_done_this_run % 10 == 0:
+                batch_delay = random.uniform(5, 10)
+                logger.info(
+                    f"Job {job_id}: batch cooldown after {items_done_this_run} symbols, "
+                    f"sleeping {batch_delay:.1f}s"
+                )
+                time.sleep(batch_delay)
+
         # Job completed
         final_status = "completed" if failed == 0 else "completed_with_errors"
         update_job_status(job_id, final_status)
