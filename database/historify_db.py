@@ -1855,7 +1855,8 @@ def _safe_timestamp(val) -> str | None:
         if hasattr(val, "isoformat"):
             return val.isoformat()
         return str(val)
-    except:
+    except (TypeError, ValueError) as e:
+        logger.warning(f"Failed to parse timestamp {val}: {e}")
         return None
 
 
