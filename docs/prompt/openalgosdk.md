@@ -3,7 +3,11 @@
 To install the OpenAlgo Python library, use pip:
 
 ```bash
-pip install openalgo
+# Trading API only  
+pip install openalgo 
+
+# JIT-accelerated indicators                                                                 
+pip install openalgo[indicators]  
 ```
 
 ### Get the OpenAlgo apikey
@@ -767,12 +771,28 @@ print(response)
 
 ### History Example
 
+Download Data Directly from Broker API
+
 ```python
 response = client.history(symbol="SBIN", 
     exchange="NSE", 
     interval="5m", 
     start_date="2025-04-01", 
-    end_date="2025-04-08"
+    end_date="2025-04-08",
+    source = "api"
+    )
+print(response)
+```
+
+Download Data Directly from Historify DuckDB (Stored Data)
+
+```python
+response = client.history(symbol="SBIN", 
+    exchange="NSE", 
+    interval="5m", 
+    start_date="2025-04-01", 
+    end_date="2025-04-08",
+    source = "db"
     )
 print(response)
 ```

@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { strikeMoneyness } from '@/lib/strategyMath'
 import type { StrategyTemplate, TemplateLeg } from '@/lib/strategyTemplates'
 import { cn } from '@/lib/utils'
 import type { OptionStrike } from '@/types/option-chain'
@@ -124,6 +125,12 @@ export function TemplateDialog({
         <div className="space-y-3">
           {resolved.map((leg, idx) => {
             const multiExpiry = leg.resolvedExpiry !== expiry
+            const moneyness = strikeMoneyness(
+              leg.resolvedStrike,
+              atmStrike,
+              strikeStep,
+              leg.optionType
+            )
             return (
               <div key={idx} className="flex items-center gap-2 rounded-md border p-2 text-xs">
                 <span
@@ -156,6 +163,28 @@ export function TemplateDialog({
                   </SelectContent>
                 </Select>
                 <span className="text-xs font-semibold">{leg.optionType}</span>
+                {moneyness && (
+                  <span
+                    className={cn(
+                      'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+                      moneyness.kind === 'ATM' &&
+                        'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+                      moneyness.kind === 'ITM' &&
+                        'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+                      moneyness.kind === 'OTM' &&
+                        'bg-muted text-muted-foreground'
+                    )}
+                    title={
+                      moneyness.kind === 'ATM'
+                        ? 'At the Money'
+                        : moneyness.kind === 'ITM'
+                          ? `In the Money · ${Math.abs(moneyness.steps)} ${Math.abs(moneyness.steps) === 1 ? 'strike' : 'strikes'} from ATM`
+                          : `Out of the Money · ${Math.abs(moneyness.steps)} ${Math.abs(moneyness.steps) === 1 ? 'strike' : 'strikes'} from ATM`
+                    }
+                  >
+                    {moneyness.label}
+                  </span>
+                )}
                 {multiExpiry && (
                   <span
                     className={cn(

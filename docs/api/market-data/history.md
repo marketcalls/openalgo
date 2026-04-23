@@ -23,6 +23,21 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/history
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/history \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbol": "SBIN",
+  "exchange": "NSE",
+  "interval": "5m",
+  "start_date": "2025-04-01",
+  "end_date": "2025-04-08"
+}'
+```
+
 ## Sample API Response
 
 ```json

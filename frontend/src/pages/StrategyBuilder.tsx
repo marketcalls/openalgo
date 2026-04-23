@@ -1,4 +1,4 @@
-import { Briefcase, Save } from 'lucide-react'
+import { Activity, BarChart3, Briefcase, Layers, LineChart, Sparkles, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient } from '@/api/client'
@@ -16,7 +16,10 @@ import { PayoffChart } from '@/components/strategy-builder/PayoffChart'
 import { PnLTab } from '@/components/strategy-builder/PnLTab'
 import { PositionsPanel } from '@/components/strategy-builder/PositionsPanel'
 import { SaveStrategyDialog } from '@/components/strategy-builder/SaveStrategyDialog'
+import { ExecuteBasketDialog } from '@/components/trading/ExecuteBasketDialog'
 import { Simulators } from '@/components/strategy-builder/Simulators'
+import StrategyChartTab from '@/components/strategy-builder/StrategyChartTab'
+import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
 
 import { SymbolHeader } from '@/components/strategy-builder/SymbolHeader'
 import {
@@ -137,7 +140,6 @@ export default function StrategyBuilder() {
   const [daysElapsed, setDaysElapsed] = useState(0)
 
   const [greeksByLeg, setGreeksByLeg] = useState<Record<string, LegGreeks>>({})
-  const [livePricesByLeg, setLivePricesByLeg] = useState<Record<string, number>>({})
 
   const [editLegId, setEditLegId] = useState<string | null>(null)
   const [marginRequired, setMarginRequired] = useState<number | null>(null)
@@ -149,6 +151,36 @@ export default function StrategyBuilder() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [loadedEntry, setLoadedEntry] = useState<PortfolioEntry | null>(null)
+
+  // Basket execution dialog
+  const [executeDialogOpen, setExecuteDialogOpen] = useState(false)
+
+  // OpenAlgo-symbol → tick size map, built from the live option chain.
+  // Powers per-leg price snapping in the Execute Basket dialog so options
+  // priced in 0.05 ticks never leak floating-point drift into the order,
+  // and crypto legs with 0.0001 / 0.5 ticks are respected too.
+  const tickSizeBySymbol = useMemo(() => {
+    if (!chainData?.chain) return {}
+    const map: Record<string, number> = {}
+    for (const row of chainData.chain) {
+      if (row.ce?.symbol && row.ce.tick_size > 0) map[row.ce.symbol] = row.ce.tick_size
+      if (row.pe?.symbol && row.pe.tick_size > 0) map[row.pe.symbol] = row.pe.tick_size
+    }
+    return map
+  }, [chainData])
+
+  // Dynamic, read-only strategy name sent to /basketorder. Prefers the
+  // saved portfolio entry name; otherwise synthesises from current state.
+  const computedStrategyName = useMemo(() => {
+    if (loadedEntry?.name) return loadedEntry.name
+    const activeCount = legs.filter((l) => l.active).length
+    const template = activeTemplate?.name
+    const parts = [selectedUnderlying || 'Strategy']
+    if (template) parts.push(template)
+    if (selectedExpiry) parts.push(selectedExpiry)
+    if (activeCount > 0) parts.push(`(${activeCount}L)`)
+    return parts.join(' ')
+  }, [loadedEntry, legs, activeTemplate, selectedUnderlying, selectedExpiry])
 
   const requestIdRef = useRef(0)
 
@@ -683,17 +715,25 @@ export default function StrategyBuilder() {
     }
   }, [apiKey, legs, selectedExchange])
 
-  // Refresh live prices from chain whenever chain updates
-  useEffect(() => {
-    if (!chainData) return
-    const byId: Record<string, number> = {}
+  // F&O exchange for all leg symbols (used for WebSocket subscription).
+  const fnoExchange = useMemo(
+    () => optionExchangeFor(selectedExchange),
+    [selectedExchange]
+  )
+
+  // Chain-derived fallback prices (used until the first WS tick arrives).
+  // PnLTab itself handles real-time streaming internally to scope tick-
+  // driven re-renders (so ticks don't cascade into PayoffChart/Greeks/etc).
+  const fallbackPricesByLeg = useMemo(() => {
+    const map: Record<string, number> = {}
+    if (!chainData) return map
     for (const leg of legs) {
       if (leg.segment !== 'OPTION' || leg.strike === undefined || !leg.optionType) continue
       const row = chainData.chain.find((s) => s.strike === leg.strike)
       const side = leg.optionType === 'CE' ? row?.ce : row?.pe
-      if (side?.ltp !== undefined) byId[leg.id] = side.ltp
+      if (side?.ltp !== undefined) map[leg.id] = side.ltp
     }
-    setLivePricesByLeg(byId)
+    return map
   }, [chainData, legs])
 
   // Add legs from a template
@@ -1009,41 +1049,27 @@ export default function StrategyBuilder() {
   )
 
   return (
-    <div className="space-y-4 py-6">
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">
-            Strategy Builder
-            {loadedEntry && (
-              <span className="ml-2 rounded bg-violet-500/10 px-2 py-0.5 align-middle text-xs font-medium text-violet-700 dark:text-violet-400">
-                {loadedEntry.name}
-              </span>
-            )}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Design and analyse multi-leg options strategies with live Greeks and payoff.
-          </p>
+    <div className="space-y-5 py-6">
+      {/* Page header — Save/Portfolio actions moved down next to the Payoff
+          tabs where the user is actually working, so no scrolling back to
+          the top is needed. */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          <Sparkles className="h-3 w-3" />
+          Tools / Strategy Builder
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate('/strategybuilder/portfolio')}
-          >
-            <Briefcase className="mr-1.5 h-3.5 w-3.5" />
-            Portfolio
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => setSaveDialogOpen(true)}
-            disabled={legs.length === 0}
-            title={legs.length === 0 ? 'Add at least one leg to save' : ''}
-          >
-            <Save className="mr-1.5 h-3.5 w-3.5" />
-            {loadedEntry ? 'Update Strategy' : 'Save Strategy'}
-          </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-3xl font-bold tracking-tight">Strategy Builder</h1>
+          {loadedEntry && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-violet-700 dark:text-violet-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+              {loadedEntry.name}
+            </span>
+          )}
         </div>
+        <p className="text-sm text-muted-foreground">
+          Design and analyse multi-leg options strategies with live Greeks and payoff.
+        </p>
       </div>
 
       {/* Symbol header */}
@@ -1069,7 +1095,7 @@ export default function StrategyBuilder() {
       />
 
       {/* Template grid */}
-      <div className="rounded-lg border bg-card p-4">
+      <div className="overflow-hidden rounded-xl border bg-card p-5 shadow-sm">
         <TemplateGrid
           direction={direction}
           onDirectionChange={setDirection}
@@ -1084,6 +1110,7 @@ export default function StrategyBuilder() {
         chain={chainData?.chain ?? null}
         selectedExpiry={selectedExpiry}
         atmStrike={atmStrike}
+        strikeStep={strikeStep}
         onAdd={handleAddManualLeg}
       />
 
@@ -1091,15 +1118,45 @@ export default function StrategyBuilder() {
           This avoids an empty-looking Strategy Positions panel and a flat
           payoff chart on first load, which looked like a broken state. */}
       {legs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed bg-card/40 px-6 py-12 text-center">
-          <p className="text-sm font-medium">No positions yet</p>
-          <p className="max-w-md text-xs text-muted-foreground">
-            Pick a strategy template above, or use the <b>Add Position</b> form to add your
-            first leg. The payoff chart, Greeks and P&L tabs will appear here once you do.
-          </p>
+        <div className="relative overflow-hidden rounded-xl border border-dashed bg-gradient-to-br from-muted/30 via-background to-muted/20 px-6 py-14 shadow-sm">
+          {/* Decorative floating icons */}
+          <div className="pointer-events-none absolute -left-4 top-6 h-16 w-16 rounded-full bg-emerald-500/5 blur-2xl" />
+          <div className="pointer-events-none absolute right-12 top-10 h-20 w-20 rounded-full bg-violet-500/10 blur-3xl" />
+          <div className="pointer-events-none absolute bottom-4 left-1/2 h-20 w-40 -translate-x-1/2 rounded-full bg-blue-500/5 blur-3xl" />
+
+          <div className="relative mx-auto max-w-xl space-y-4 text-center">
+            <div className="mx-auto inline-flex h-14 w-14 items-center justify-center rounded-2xl border bg-background shadow-sm">
+              <div className="relative">
+                <BarChart3 className="h-7 w-7 text-violet-500/60" />
+                <span className="absolute -right-1 -top-1 inline-flex h-3 w-3 items-center justify-center rounded-full bg-emerald-500 ring-2 ring-background">
+                  <TrendingUp className="h-2 w-2 text-white" />
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-semibold">Your canvas awaits</h3>
+              <p className="mx-auto max-w-md text-[13px] text-muted-foreground">
+                Pick a pre-built strategy above, or add a position manually. Payoff chart,
+                Greeks and live P&amp;L will materialize here.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              <span className="inline-flex items-center gap-1 rounded-full border bg-background/80 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+                <LineChart className="h-3 w-3" /> Payoff diagrams
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border bg-background/80 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+                <Sparkles className="h-3 w-3" /> Greeks &amp; IV
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border bg-background/80 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+                <TrendingUp className="h-3 w-3" /> What-if sims
+              </span>
+            </div>
+          </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[360px_minmax(0,1fr)]">
           {/* Left column: positions */}
           <div className="min-w-0">
             <PositionsPanel
@@ -1120,19 +1177,73 @@ export default function StrategyBuilder() {
               marginRequired={marginRequired}
               isMarginLoading={isMarginLoading}
               marginSupported={marginSupported}
+              atmStrike={atmStrike}
+              strikeStep={strikeStep}
+              onSaveStrategy={() => setSaveDialogOpen(true)}
+              onExecute={() => setExecuteDialogOpen(true)}
+              isUpdating={loadedEntry !== null}
+              executeDisabled={!apiKey}
             />
           </div>
 
           {/* Right column: tabs + simulators */}
-          <div className="min-w-0 space-y-4">
+          <div className="min-w-0 space-y-5">
             <Tabs defaultValue="payoff" className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="payoff">Payoff Chart</TabsTrigger>
-                <TabsTrigger value="greeks">Greeks</TabsTrigger>
-                <TabsTrigger value="pnl">P&L</TabsTrigger>
-              </TabsList>
-              <TabsContent value="payoff" className="pt-3">
-                <div className="rounded-lg border bg-card p-2">
+              {/* Tabs on the left, Save/Portfolio actions aligned to the right
+                  so they're always visible directly above the Payoff graph —
+                  no scrolling back to the page header. */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <TabsList className="inline-flex h-10 gap-1 rounded-xl border bg-card p-1 shadow-sm">
+                  <TabsTrigger
+                    value="payoff"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <LineChart className="mr-1.5 h-3.5 w-3.5" />
+                    Payoff
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="greeks"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                    Greeks
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="pnl"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
+                    P&amp;L
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="strategychart"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <Activity className="mr-1.5 h-3.5 w-3.5" />
+                    Strategy Chart
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="multistrikeoi"
+                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                  >
+                    <Layers className="mr-1.5 h-3.5 w-3.5" />
+                    Multi Strike OI
+                  </TabsTrigger>
+                </TabsList>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate('/strategybuilder/portfolio')}
+                    className="h-10 gap-1.5 px-4 text-xs font-semibold"
+                  >
+                    <Briefcase className="h-3.5 w-3.5" />
+                    Portfolio
+                  </Button>
+                </div>
+              </div>
+              <TabsContent value="payoff" className="pt-4">
+                <div className="overflow-hidden rounded-xl border bg-card p-2 shadow-sm">
                   {spotPrice ? (
                     <PayoffChart
                       title={`${selectedUnderlying} — ${selectedExpiry || '—'}`}
@@ -1148,11 +1259,31 @@ export default function StrategyBuilder() {
                   )}
                 </div>
               </TabsContent>
-              <TabsContent value="greeks" className="pt-3">
+              <TabsContent value="greeks" className="pt-4">
                 <GreeksTab legs={legs} greeksByLeg={greeksByLeg} />
               </TabsContent>
-              <TabsContent value="pnl" className="pt-3">
-                <PnLTab legs={legs} currentPrices={livePricesByLeg} />
+              <TabsContent value="pnl" className="pt-4">
+                <PnLTab
+                  legs={legs}
+                  fnoExchange={fnoExchange}
+                  fallbackPrices={fallbackPricesByLeg}
+                />
+              </TabsContent>
+              <TabsContent value="strategychart" className="pt-4">
+                <StrategyChartTab
+                  underlying={selectedUnderlying}
+                  exchange={selectedExchange}
+                  legs={legs}
+                  optionExchange={fnoExchange}
+                />
+              </TabsContent>
+              <TabsContent value="multistrikeoi" className="pt-4">
+                <MultiStrikeOITab
+                  underlying={selectedUnderlying}
+                  exchange={selectedExchange}
+                  legs={legs}
+                  optionExchange={fnoExchange}
+                />
               </TabsContent>
             </Tabs>
 
@@ -1196,6 +1327,8 @@ export default function StrategyBuilder() {
         underlying={selectedUnderlying}
         optionExchange={optionExchangeFor(selectedExchange)}
         apiKey={apiKey ?? ''}
+        atmStrike={atmStrike}
+        strikeStep={strikeStep}
         onSave={saveEditedLeg}
         onDelete={removeLeg}
       />
@@ -1208,6 +1341,16 @@ export default function StrategyBuilder() {
         defaultWatchlist={loadedEntry?.watchlist ?? 'mytrades'}
         isUpdate={loadedEntry !== null}
         busy={isSaving}
+      />
+
+      <ExecuteBasketDialog
+        open={executeDialogOpen}
+        onOpenChange={setExecuteDialogOpen}
+        legs={legs}
+        exchange={optionExchangeFor(selectedExchange)}
+        strategyName={computedStrategyName}
+        tickSizeBySymbol={tickSizeBySymbol}
+        apiKey={apiKey ?? ''}
       />
     </div>
   )

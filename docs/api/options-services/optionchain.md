@@ -22,6 +22,20 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionchain
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/optionchain \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "underlying": "NIFTY",
+  "exchange": "NSE_INDEX",
+  "expiry_date": "30DEC25",
+  "strike_count": 10
+}'
+```
+
 ## Sample API Response
 
 ```json

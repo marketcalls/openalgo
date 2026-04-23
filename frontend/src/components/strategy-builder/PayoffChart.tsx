@@ -1,6 +1,6 @@
 import type * as PlotlyTypes from 'plotly.js'
 import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '@/lib/Plot2D'
 import type { PayoffResult } from '@/lib/strategyMath'
 import { useThemeStore } from '@/stores/themeStore'
 

@@ -20,6 +20,18 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/checkholiday
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/checkholiday \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "date": "2025-01-26",
+  "exchange": "NSE"
+}'
+```
+
 ## Sample API Response (Holiday)
 
 ```json

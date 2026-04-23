@@ -100,22 +100,31 @@ def calculate_order_statistics(order_data):
             elif order["exch"] in ["NFO", "MCX", "BFO", "CDS"] and order["prd"] == "M":
                 order["prd"] = "NRML"
 
-            # Map price type
-            if order["prctyp"] == "MKT":
-                order["prctyp"] = "MARKET"
-            elif order["prctyp"] == "LMT":
-                order["prctyp"] = "LIMIT"
-            elif order["prctyp"] == "SL-MKT":
-                order["prctyp"] = "SL-M"
-            elif order["prctyp"] == "SL-LMT":
-                order["prctyp"] = "SL"
+            # Map price type back to OpenAlgo canonical form. Tolerant of both
+            # short codes (Firstock V1 docs) and long forms (V1.7 order book
+            # sometimes returns "LIMIT"/"SL-LIMIT"), any casing/underscore.
+            raw_prctyp = str(order.get("prctyp") or "").upper().replace("_", "-").strip()
+            prctyp_map = {
+                "MKT": "MARKET",
+                "MARKET": "MARKET",
+                "LMT": "LIMIT",
+                "LIMIT": "LIMIT",
+                "SL-MKT": "SL-M",
+                "SL-MARKET": "SL-M",
+                "SL-M": "SL-M",
+                "SL-LMT": "SL",
+                "SL-LIMIT": "SL",
+                "SL": "SL",
+            }
+            order["prctyp"] = prctyp_map.get(raw_prctyp, raw_prctyp)
 
             # Count orders based on their status
-            if order["status"] == "COMPLETE":
+            status = str(order.get("status") or "").upper()
+            if status == "COMPLETE":
                 total_completed_orders += 1
-            elif order["status"] == "OPEN":
+            elif status in ("OPEN", "TRIGGER PENDING", "TRIGGER_PENDING", "PENDING"):
                 total_open_orders += 1
-            elif order["status"] == "REJECTED":
+            elif status == "REJECTED":
                 total_rejected_orders += 1
 
     return {
@@ -146,6 +155,20 @@ def transform_order_data(orders):
     # Calculate statistics and transform order fields
     calculate_order_statistics(mapped_orders)
 
+    # Map Firstock status -> OpenAlgo canonical status. Firstock returns
+    # "CANCELED" (single L) but OpenAlgo UI expects "cancelled" (double L);
+    # similarly for TRIGGER_PENDING which the UI treats as an open order.
+    status_map = {
+        "COMPLETE": "complete",
+        "OPEN": "open",
+        "REJECTED": "rejected",
+        "CANCELED": "cancelled",
+        "CANCELLED": "cancelled",
+        "TRIGGER PENDING": "trigger_pending",
+        "TRIGGER_PENDING": "trigger_pending",
+        "PENDING": "open",
+    }
+
     # Transform to final format
     transformed_orders = []
     for order in mapped_orders:
@@ -153,6 +176,9 @@ def transform_order_data(orders):
         trigger_price = order.get("trgprc", "0.00")
         if not trigger_price or trigger_price == "":
             trigger_price = "0.00"
+
+        raw_status = str(order.get("status") or "").upper()
+        mapped_status = status_map.get(raw_status, raw_status.lower())
 
         transformed_order = {
             "symbol": order.get("tsym", ""),
@@ -164,7 +190,7 @@ def transform_order_data(orders):
             "pricetype": order.get("prctyp", ""),
             "product": order.get("prd", ""),
             "orderid": order.get("norenordno", ""),
-            "order_status": order.get("status", "").lower(),
+            "order_status": mapped_status,
             "timestamp": order.get("norentm", ""),
         }
         transformed_orders.append(transformed_order)
@@ -534,9 +560,8 @@ def map_position_data(position_data):
         mapped_position["daysellqty"] = position.get("daySellQuantity", "0")
         mapped_position["daybuyamt"] = position.get("dayBuyAmount", "0.00")
         mapped_position["daybuyavgprc"] = position.get("dayBuyAveragePrice", "0.00")
-        mapped_position["daysellamt"] = position.get(
-            "daySellAveragePrice", "0.00"
-        )  # Using sell avg price as amount
+        mapped_position["daysellamt"] = position.get("daySellAmount", "0.00")
+        mapped_position["daysellavgprc"] = position.get("daySellAveragePrice", "0.00")
         mapped_position["unrealizedmtom"] = position.get("unrealizedMTOM", "0.00")
         mapped_position["realizedpnl"] = position.get("RealizedPNL", "0.00")
 
@@ -589,9 +614,7 @@ def transform_positions_data(positions):
             "day_buy_amount": position.get("daybuyamt", "0.00"),
             "day_sell_amount": position.get("daysellamt", "0.00"),
             "day_buy_average_price": position.get("daybuyavgprc", "0.00"),
-            "day_sell_average_price": position.get(
-                "daysellamt", "0.00"
-            ),  # Using sell amount as avg price
+            "day_sell_average_price": position.get("daysellavgprc", "0.00"),
             "unrealized_pnl": position.get("unrealizedmtom", "0.00"),
             "realized_pnl": position.get("realizedpnl", "0.00"),
         }

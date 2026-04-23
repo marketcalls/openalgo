@@ -23,6 +23,21 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbol": "NIFTY25NOV2526000CE",
+  "exchange": "NFO",
+  "interest_rate": 0.00,
+  "underlying_symbol": "NIFTY",
+  "underlying_exchange": "NSE_INDEX"
+}'
+```
+
 ## Sample API Response
 
 ```json

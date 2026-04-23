@@ -23,6 +23,21 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/multiquotes
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/multiquotes \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbols": [
+    {"symbol": "RELIANCE", "exchange": "NSE"},
+    {"symbol": "TCS", "exchange": "NSE"},
+    {"symbol": "INFY", "exchange": "NSE"}
+  ]
+}'
+```
+
 ## Sample API Response
 
 ```json
