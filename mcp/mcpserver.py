@@ -16,6 +16,10 @@ host = sys.argv[2]
 # Initialize OpenAlgo client with provided arguments
 client = api(api_key=api_key, host=host)
 
+# Default strategy name for all order-related calls originating from the MCP server.
+# Surfaced in OpenAlgo logs and analyzer views so MCP-driven trades are identifiable.
+MCP_STRATEGY = "python mcp"
+
 # Create MCP server
 mcp = FastMCP("openalgo")
 
@@ -42,7 +46,7 @@ def place_order(
     exchange: str = "NSE",
     price_type: str = "MARKET",
     product: str = "MIS",
-    strategy: str = "Python",
+    strategy: str = MCP_STRATEGY,
     price: float | None = None,
     trigger_price: float | None = None,
     disclosed_quantity: int | None = None,
@@ -57,9 +61,9 @@ def place_order(
         exchange: 'NSE', 'NFO', 'CDS', 'BSE', 'BFO', 'BCD', 'MCX', 'NCDEX'
         price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M'
         product: 'CNC', 'NRML', 'MIS'
-        strategy: Strategy name
+        strategy: Strategy name (defaults to 'python mcp')
         price: Limit price (required for LIMIT orders)
-        trigger_price: Trigger price (for stop loss orders)
+        trigger_price: Trigger price (required for SL and SL-M orders)
         disclosed_quantity: Disclosed quantity
     """
     try:
@@ -95,22 +99,27 @@ def place_smart_order(
     exchange: str = "NSE",
     price_type: str = "MARKET",
     product: str = "MIS",
-    strategy: str = "Python",
+    strategy: str = MCP_STRATEGY,
     price: float | None = None,
+    trigger_price: float | None = None,
+    disclosed_quantity: int | None = None,
 ) -> str:
     """
-    Place a smart order considering current position size.
+    Place a smart order that considers the current position size (auto-calculates delta
+    between requested and current size before sending to the broker).
 
     Args:
         symbol: Stock symbol
-        quantity: Number of shares
+        quantity: Target quantity
         action: 'BUY' or 'SELL'
         position_size: Current position size
         exchange: Exchange name
-        price_type: Order type
-        product: Product type
-        strategy: Strategy name
-        price: Limit price (optional)
+        price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M'
+        product: 'CNC', 'NRML', 'MIS'
+        strategy: Strategy name (defaults to 'python mcp')
+        price: Limit price (required for LIMIT orders)
+        trigger_price: Trigger price (required for SL / SL-M orders)
+        disclosed_quantity: Disclosed quantity
     """
     try:
         params = {
@@ -126,6 +135,10 @@ def place_smart_order(
 
         if price is not None:
             params["price"] = price
+        if trigger_price is not None:
+            params["trigger_price"] = trigger_price
+        if disclosed_quantity is not None:
+            params["disclosed_quantity"] = disclosed_quantity
 
         response = client.placesmartorder(**params)
         return json.dumps(response, indent=2)
@@ -134,7 +147,7 @@ def place_smart_order(
 
 
 @mcp.tool()
-def place_basket_order(orders: list[dict[str, Any]], strategy: str = "Python") -> str:
+def place_basket_order(orders: list[dict[str, Any]], strategy: str = MCP_STRATEGY) -> str:
     """
     Place multiple orders in a basket.
 
@@ -174,7 +187,7 @@ def place_split_order(
     exchange: str = "NSE",
     price_type: str = "MARKET",
     product: str = "MIS",
-    strategy: str = "Python",
+    strategy: str = MCP_STRATEGY,
     price: float | None = None,
     trigger_price: float | None = None,
     disclosed_quantity: int | None = None,
@@ -236,7 +249,7 @@ def place_options_order(
     action: str,
     quantity: int,
     expiry_date: str | None = None,
-    strategy: str = "Python",
+    strategy: str = MCP_STRATEGY,
     price_type: str = "MARKET",
     product: str = "MIS",
     price: float | None = None,
@@ -301,18 +314,19 @@ def place_options_order(
 
 @mcp.tool()
 def place_options_multi_order(
-    strategy: str,
     underlying: str,
     exchange: str,
     legs: list[dict[str, Any]],
     expiry_date: str | None = None,
+    strategy: str = MCP_STRATEGY,
 ) -> str:
     """
     Place a multi-leg options order (spreads, iron condor, straddles, etc.).
     BUY legs are executed first for margin efficiency, then SELL legs.
 
     Args:
-        strategy: Strategy name (required)
+        strategy: Strategy name (defaults to 'python mcp'). Give each multi-leg trade
+                  a meaningful name (e.g., 'nifty iron condor') to make tracking easier.
         underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'NIFTY28OCT25FUT')
         exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NFO')
         legs: List of leg dictionaries (1-20 legs). Each leg must contain:
@@ -380,58 +394,60 @@ def place_options_multi_order(
 @mcp.tool()
 def modify_order(
     order_id: str,
-    strategy: str,
     symbol: str,
     action: str,
     exchange: str,
-    price_type: str,
     product: str,
     quantity: int,
-    price: float | None = None,
+    price: float,
+    strategy: str = MCP_STRATEGY,
+    price_type: str = "LIMIT",
+    trigger_price: float = 0,
+    disclosed_quantity: int = 0,
 ) -> str:
     """
     Modify an existing order.
 
     Args:
         order_id: Order ID to modify
-        strategy: Strategy name
         symbol: Stock symbol
         action: 'BUY' or 'SELL'
         exchange: Exchange name
-        price_type: Order type
-        product: Product type
+        product: 'CNC', 'NRML', 'MIS'
         quantity: New quantity
-        price: New price (optional)
+        price: New price (required by the API — use current price if unchanged)
+        strategy: Strategy name (defaults to 'python mcp')
+        price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M' (defaults to 'LIMIT')
+        trigger_price: New trigger price for SL/SL-M orders (default 0)
+        disclosed_quantity: New disclosed quantity (default 0)
     """
     try:
-        params = {
-            "order_id": order_id,
-            "strategy": strategy,
-            "symbol": symbol.upper(),
-            "action": action.upper(),
-            "exchange": exchange.upper(),
-            "price_type": price_type.upper(),
-            "product": product.upper(),
-            "quantity": quantity,
-        }
-
-        if price is not None:
-            params["price"] = price
-
-        response = client.modifyorder(**params)
+        response = client.modifyorder(
+            order_id=order_id,
+            strategy=strategy,
+            symbol=symbol.upper(),
+            action=action.upper(),
+            exchange=exchange.upper(),
+            price_type=price_type.upper(),
+            product=product.upper(),
+            quantity=quantity,
+            price=price,
+            trigger_price=trigger_price,
+            disclosed_quantity=disclosed_quantity,
+        )
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error modifying order: {str(e)}"
 
 
 @mcp.tool()
-def cancel_order(order_id: str, strategy: str) -> str:
+def cancel_order(order_id: str, strategy: str = MCP_STRATEGY) -> str:
     """
     Cancel a specific order.
 
     Args:
         order_id: Order ID to cancel
-        strategy: Strategy name
+        strategy: Strategy name (defaults to 'python mcp')
     """
     try:
         response = client.cancelorder(order_id=order_id, strategy=strategy)
@@ -441,12 +457,12 @@ def cancel_order(order_id: str, strategy: str) -> str:
 
 
 @mcp.tool()
-def cancel_all_orders(strategy: str) -> str:
+def cancel_all_orders(strategy: str = MCP_STRATEGY) -> str:
     """
     Cancel all open orders for a strategy.
 
     Args:
-        strategy: Strategy name
+        strategy: Strategy name (defaults to 'python mcp')
     """
     try:
         response = client.cancelallorder(strategy=strategy)
@@ -459,12 +475,12 @@ def cancel_all_orders(strategy: str) -> str:
 
 
 @mcp.tool()
-def close_all_positions(strategy: str) -> str:
+def close_all_positions(strategy: str = MCP_STRATEGY) -> str:
     """
     Close all open positions for a strategy.
 
     Args:
-        strategy: Strategy name
+        strategy: Strategy name (defaults to 'python mcp')
     """
     try:
         response = client.closeposition(strategy=strategy)
@@ -474,15 +490,17 @@ def close_all_positions(strategy: str) -> str:
 
 
 @mcp.tool()
-def get_open_position(strategy: str, symbol: str, exchange: str, product: str) -> str:
+def get_open_position(
+    symbol: str, exchange: str, product: str, strategy: str = MCP_STRATEGY
+) -> str:
     """
     Get current open position for a specific instrument.
 
     Args:
-        strategy: Strategy name
         symbol: Stock symbol
         exchange: Exchange name
-        product: Product type
+        product: Product type ('CNC', 'NRML', 'MIS')
+        strategy: Strategy name (defaults to 'python mcp')
     """
     try:
         response = client.openposition(
@@ -500,13 +518,13 @@ def get_open_position(strategy: str, symbol: str, exchange: str, product: str) -
 
 
 @mcp.tool()
-def get_order_status(order_id: str, strategy: str) -> str:
+def get_order_status(order_id: str, strategy: str = MCP_STRATEGY) -> str:
     """
     Get status of a specific order.
 
     Args:
         order_id: Order ID
-        strategy: Strategy name
+        strategy: Strategy name (defaults to 'python mcp')
     """
     try:
         response = client.orderstatus(order_id=order_id, strategy=strategy)
@@ -631,15 +649,20 @@ def get_multi_quotes(symbols: list[dict[str, str]]) -> str:
 
 @mcp.tool()
 def get_option_chain(
-    underlying: str, exchange: str, expiry_date: str, strike_count: int | None = None
+    underlying: str,
+    exchange: str,
+    expiry_date: str | None = None,
+    strike_count: int | None = None,
 ) -> str:
     """
     Get option chain data with real-time quotes for all strikes.
 
     Args:
-        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'RELIANCE')
-        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NSE', 'BSE')
-        expiry_date: Expiry date in DDMMMYY format (e.g., '30DEC25')
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'RELIANCE',
+                    or a future like 'NIFTY30DEC25FUT')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NSE', 'BSE', 'NFO', 'BFO')
+        expiry_date: Expiry date in DDMMMYY format (e.g., '30DEC25'). Optional when the
+                     underlying already includes an expiry (e.g., 'NIFTY30DEC25FUT').
         strike_count: Number of strikes above and below ATM (1-100). If not provided, returns entire chain.
 
     Returns:
@@ -662,12 +685,12 @@ def get_option_chain(
         get_option_chain("NIFTY", "NSE_INDEX", "30DEC25")
     """
     try:
-        params = {
+        params: dict[str, Any] = {
             "underlying": underlying.upper(),
             "exchange": exchange.upper(),
-            "expiry_date": expiry_date.upper(),
         }
-
+        if expiry_date is not None:
+            params["expiry_date"] = expiry_date.upper()
         if strike_count is not None:
             params["strike_count"] = strike_count
 
@@ -737,24 +760,30 @@ def get_historical_data(
 
 
 @mcp.tool()
-def search_instruments(query: str, exchange: str = "NSE", instrument_type: str = None) -> str:
+def search_instruments(
+    query: str, exchange: str | None = None, instrument_type: str | None = None
+) -> str:
     """
     Search for instruments by name or symbol.
 
     Args:
-        query: Search query
-        exchange: Exchange to search in (NSE, BSE, NSE_INDEX, BSE_INDEX, etc.)
-        instrument_type: Optional - 'INDEX' to search in index exchanges
+        query: Search query (e.g., 'NIFTY 26000 DEC CE', 'RELIANCE')
+        exchange: Exchange to restrict the search to (NSE, BSE, NFO, BFO, MCX, NSE_INDEX, etc.).
+                  Optional — when omitted, searches across all exchanges.
+        instrument_type: Optional convenience filter — pass 'INDEX' to auto-rewrite
+                         exchange=NSE → NSE_INDEX and BSE → BSE_INDEX.
     """
     try:
-        # Handle index searches
-        if instrument_type and instrument_type.upper() == "INDEX":
+        resolved_exchange = exchange
+        if instrument_type and instrument_type.upper() == "INDEX" and exchange:
             if exchange.upper() == "NSE":
-                exchange = "NSE_INDEX"
+                resolved_exchange = "NSE_INDEX"
             elif exchange.upper() == "BSE":
-                exchange = "BSE_INDEX"
-
-        response = client.search(query=query, exchange=exchange.upper())
+                resolved_exchange = "BSE_INDEX"
+        if resolved_exchange is not None:
+            response = client.search(query=query, exchange=resolved_exchange.upper())
+        else:
+            response = client.search(query=query)
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error searching instruments: {str(e)}"
@@ -857,29 +886,36 @@ def get_available_intervals() -> str:
 
 @mcp.tool()
 def get_option_symbol(
-    underlying: str, exchange: str, expiry_date: str, offset: str, option_type: str
+    underlying: str,
+    exchange: str,
+    offset: str,
+    option_type: str,
+    expiry_date: str | None = None,
 ) -> str:
     """
     Get option symbol for specific strike and expiry.
 
     Args:
-        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
-        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
-        expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25')
-        offset: Strike offset - 'ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10'
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'NIFTY28OCT25FUT')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NFO', 'BFO')
+        offset: Strike offset - 'ATM', 'ITM1'-'ITM50', 'OTM1'-'OTM50'
         option_type: 'CE' for Call or 'PE' for Put
+        expiry_date: Expiry date in 'DDMMMYY' format (e.g., '28OCT25'). Optional when
+                     the underlying already includes an expiry.
 
     Returns:
         JSON with symbol, exchange, lotsize, tick_size, underlying_ltp
     """
     try:
-        response = client.optionsymbol(
-            underlying=underlying.upper(),
-            exchange=exchange.upper(),
-            expiry_date=expiry_date,
-            offset=offset.upper(),
-            option_type=option_type.upper(),
-        )
+        params: dict[str, Any] = {
+            "underlying": underlying.upper(),
+            "exchange": exchange.upper(),
+            "offset": offset.upper(),
+            "option_type": option_type.upper(),
+        }
+        if expiry_date is not None:
+            params["expiry_date"] = expiry_date
+        response = client.optionsymbol(**params)
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error getting option symbol: {str(e)}"
@@ -911,31 +947,50 @@ def get_synthetic_future(underlying: str, exchange: str, expiry_date: str) -> st
 def get_option_greeks(
     symbol: str,
     exchange: str,
-    underlying_symbol: str,
-    underlying_exchange: str,
-    interest_rate: float = 0.0,
+    interest_rate: float | None = None,
+    forward_price: float | None = None,
+    underlying_symbol: str | None = None,
+    underlying_exchange: str | None = None,
+    expiry_time: str | None = None,
 ) -> str:
     """
-    Calculate option Greeks (delta, gamma, theta, vega, rho).
+    Calculate option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility using Black-76.
 
     Args:
-        symbol: Option symbol (e.g., 'NIFTY25NOV2526000CE')
-        exchange: Exchange name (typically 'NFO')
-        underlying_symbol: Underlying symbol (e.g., 'NIFTY')
-        underlying_exchange: Underlying exchange ('NSE_INDEX')
-        interest_rate: Risk-free interest rate (default: 0.0)
+        symbol: Option symbol (e.g., 'NIFTY25NOV2526000CE'). Required.
+        exchange: Exchange code ('NFO', 'BFO', 'CDS', 'MCX'). Required.
+        interest_rate: Risk-free interest rate in annualized % (e.g., 6.5 for RBI repo).
+                       Optional — defaults to 0.
+        forward_price: Custom forward / synthetic futures price. If provided, skips the
+                       underlying price fetch. Useful for illiquid underlyings (FINNIFTY,
+                       MIDCPNIFTY) or custom scenario analysis.
+        underlying_symbol: Custom underlying symbol (e.g., 'NIFTY', 'NIFTY30DEC25FUT').
+                           Optional — auto-detected from the option symbol when omitted.
+        underlying_exchange: Custom underlying exchange ('NSE_INDEX', 'NFO', etc.).
+                             Optional — auto-detected when omitted.
+        expiry_time: Custom expiry time in HH:MM format (e.g., '19:00'). Required for
+                     MCX contracts with non-standard expiry times. Exchange defaults:
+                     NFO/BFO=15:30, CDS=12:30, MCX=23:30.
 
     Returns:
-        JSON with Greeks, IV, spot price, strike, days to expiry
+        JSON with greeks, implied_volatility, spot_price, strike, days_to_expiry.
     """
     try:
-        response = client.optiongreeks(
-            symbol=symbol.upper(),
-            exchange=exchange.upper(),
-            interest_rate=interest_rate,
-            underlying_symbol=underlying_symbol.upper(),
-            underlying_exchange=underlying_exchange.upper(),
-        )
+        params: dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "exchange": exchange.upper(),
+        }
+        if interest_rate is not None:
+            params["interest_rate"] = interest_rate
+        if forward_price is not None:
+            params["forward_price"] = forward_price
+        if underlying_symbol is not None:
+            params["underlying_symbol"] = underlying_symbol.upper()
+        if underlying_exchange is not None:
+            params["underlying_exchange"] = underlying_exchange.upper()
+        if expiry_time is not None:
+            params["expiry_time"] = expiry_time
+        response = client.optiongreeks(**params)
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error calculating option greeks: {str(e)}"
@@ -987,19 +1042,21 @@ def validate_order_constants() -> str:
 
 
 @mcp.tool()
-def send_telegram_alert(username: str, message: str) -> str:
+def send_telegram_alert(username: str, message: str, priority: int = 5) -> str:
     """
     Send a Telegram alert notification.
 
     Args:
         username: OpenAlgo login ID/username
         message: Alert message to send
+        priority: Notification priority (1-10, default 5). Higher values may be used
+                  by the bot for emphasis/sorting depending on configuration.
 
     Returns:
         JSON with status and message
     """
     try:
-        response = client.telegram(username=username, message=message)
+        response = client.telegram(username=username, message=message, priority=priority)
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error sending telegram alert: {str(e)}"
@@ -1096,30 +1153,35 @@ def check_holiday(date: str, exchange: str | None = None) -> str:
 
 
 @mcp.tool()
-def get_instruments(exchange: str, limit: int = 500) -> str:
+def get_instruments(exchange: str | None = None, limit: int = 500) -> str:
     """
-    Download the full instrument master for an exchange.
+    Download the full instrument master.
 
     Args:
-        exchange: Exchange name (NSE, BSE, NFO, BFO, MCX, CDS, BCD, NCDEX)
+        exchange: Exchange name (NSE, BSE, NFO, BFO, MCX, CDS, BCD, NSE_INDEX, BSE_INDEX).
+                  Optional — when omitted, downloads instruments for ALL exchanges.
         limit: Maximum number of rows to return in the response (default: 500).
                The full dataset can exceed 100k rows for derivatives exchanges, which
                overwhelms the MCP tool output. Use search_instruments for targeted lookups.
 
     Returns:
-        JSON with count, truncated flag, and data (list of instrument records).
+        JSON with count, returned, truncated flag, and data (list of instrument records).
         Each record includes: symbol, brsymbol, name, exchange, lotsize,
         instrumenttype, expiry, strike, token, tick_size.
     """
     try:
-        response = client.instruments(exchange=exchange.upper())
+        response = (
+            client.instruments(exchange=exchange.upper())
+            if exchange is not None
+            else client.instruments()
+        )
         # SDK returns a DataFrame on success, dict on error
         if hasattr(response, "reset_index"):
             total = len(response)
             df_head = response.head(limit).reset_index(drop=True)
             return json.dumps(
                 {
-                    "exchange": exchange.upper(),
+                    "exchange": exchange.upper() if exchange else "ALL",
                     "count": total,
                     "returned": len(df_head),
                     "truncated": total > limit,
