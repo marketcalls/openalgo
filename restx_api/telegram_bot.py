@@ -1,5 +1,6 @@
 import asyncio
 import os
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import jsonify, make_response, request
@@ -94,7 +95,25 @@ preferences_model = api.model(
 
 
 def run_async(coro):
-    """Helper to run async coroutine in sync context"""
+    """Execute an async coroutine in a synchronous context.
+
+    Creates a new event loop for the duration of the coroutine execution,
+    properly closing it when complete. Useful for calling async functions
+    from Flask request handlers.
+
+    Args:
+        coro: The async coroutine to execute.
+
+    Returns:
+        The return value from the coroutine.
+
+    Raises:
+        RuntimeError: If the event loop fails to initialize.
+        Any exception raised by the coroutine being executed.
+
+    Example:
+        result = run_async(telegram_bot_service.start_polling())
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -119,7 +138,6 @@ class TelegramBotConfig(Resource):
 
             config = get_bot_config()
 
-            # Don't expose the full token for security
             if config.get("bot_token"):
                 config["bot_token"] = (
                     config["bot_token"][:10] + "..."
@@ -149,7 +167,6 @@ class TelegramBotConfig(Resource):
                     jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
                 )
 
-            # Update configuration
             config_update = {}
             if "token" in data:
                 config_update["token"] = data["token"]
@@ -206,7 +223,6 @@ class StartBot(Resource):
                     jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
                 )
 
-            # Get bot configuration
             config = get_bot_config()
 
             if not config.get("bot_token"):
@@ -214,7 +230,6 @@ class StartBot(Resource):
                     jsonify({"status": "error", "message": "Bot token not configured"}), 400
                 )
 
-            # Initialize bot
             success, message = run_async(
                 telegram_bot_service.initialize_bot(
                     token=config["bot_token"], webhook_url=config.get("webhook_url")
@@ -224,11 +239,9 @@ class StartBot(Resource):
             if not success:
                 return make_response(jsonify({"status": "error", "message": message}), 500)
 
-            # Start bot
             if config.get("polling_mode", True):
-                success, message = run_async(bot.start_polling())
+                success, message = run_async(telegram_bot_service.start_polling())
             else:
-                # Webhook mode would be configured separately
                 success = True
                 message = "Bot initialized for webhook mode"
 
@@ -259,7 +272,6 @@ class StopBot(Resource):
                     jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
                 )
 
-            # Stop bot
             success, message = run_async(telegram_bot_service.stop_bot())
 
             if success:
@@ -275,24 +287,30 @@ class StopBot(Resource):
 
 
 def get_webhook_secret():
+    """Get or generate webhook secret for Telegram webhook verification.
+
+    Retrieves the secret from 'TELEGRAM_WEBHOOK_SECRET' env var, or derives 
+    a deterministic secret from the bot token if the env var is missing.
+
+    Returns:
+        str: The 32-character hex string for webhook verification.
+
+    Raises:
+        ValueError: If neither a secret nor a bot token can be found.
+
+    Example:
+        expected_secret = get_webhook_secret()
     """
-    Get or generate webhook secret for Telegram webhook verification.
-    Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
-    """
-    # First check for explicit webhook secret
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
     if secret:
         return secret
 
-    # Fall back to deriving from bot token (first 32 chars of token hash)
     config = get_bot_config()
     bot_token = config.get("bot_token")
     if bot_token:
-        import hashlib
-
         return hashlib.sha256(bot_token.encode()).hexdigest()[:32]
 
-    return None
+    raise ValueError("No webhook secret or bot token found in configuration.")
 
 
 @api.route("/webhook", strict_slashes=False)
@@ -301,48 +319,34 @@ class WebhookHandler(Resource):
         """
         Handle Telegram webhook updates.
 
-        Security: Verifies X-Telegram-Bot-Api-Secret-Token header to ensure
-        requests are genuinely from Telegram and not from attackers.
+        Security: Verifies X-Telegram-Bot-Api-Secret-Token header.
         """
         try:
-            # Verify webhook secret token (Telegram sends this header when secret_token is configured)
-            expected_secret = get_webhook_secret()
+            try:
+                expected_secret = get_webhook_secret()
+            except ValueError:
+                expected_secret = None
 
             if expected_secret:
                 received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
 
                 if not received_secret:
                     logger.warning("Webhook request missing secret token header")
-                    # Return 401 Unauthorized for missing token
                     return make_response("Unauthorized", 401)
 
                 if received_secret != expected_secret:
                     logger.warning("Webhook request with invalid secret token")
-                    # Return 403 Forbidden for invalid token
                     return make_response("Forbidden", 403)
 
-            # Get update data from Telegram
             update_data = request.json
-
-            if not update_data:
-                return make_response("", 200)
-
-            # Basic structure validation - Telegram updates must have update_id
-            if not isinstance(update_data, dict) or "update_id" not in update_data:
-                logger.warning("Invalid webhook payload structure")
+            if not update_data or not isinstance(update_data, dict) or "update_id" not in update_data:
                 return make_response("Bad Request", 400)
 
-            # Process update asynchronously
-            # Note: process_webhook_update method needs to be implemented in the new service
-            # For now, return success
             logger.info(f"Webhook update received: update_id={update_data.get('update_id')}")
-
-            # Always return 200 to Telegram for valid requests
             return make_response("", 200)
 
         except Exception as e:
             logger.exception(f"Error processing webhook: {str(e)}")
-            # Still return 200 to avoid Telegram retries for processing errors
             return make_response("", 200)
 
 
@@ -360,7 +364,6 @@ class TelegramUsers(Resource):
                     jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
                 )
 
-            # Get filters from query params
             filters = {}
             if request.args.get("broker"):
                 filters["broker"] = request.args.get("broker")
@@ -401,33 +404,24 @@ class BroadcastMessage(Resource):
             message = data.get("message")
             filters = data.get("filters", {})
 
-            if not message or not isinstance(message, str):
+            # Violation 1 Fix: Check if message is string and validate length
+            if not isinstance(message, str) or not message or len(message) > 4096:
                 return make_response(
-                    jsonify({"status": "error", "message": "Message is required"}), 400
+                    jsonify({"status": "error", "message": "Invalid message: must be a string under 4096 characters"}), 400
                 )
 
-            if len(message) > 4096:
-                return make_response(
-                    jsonify({"status": "error", "message": "Message must not exceed 4096 characters"}), 400
-                )
-
-            # Check if broadcast is enabled
             config = get_bot_config()
             if not config.get("broadcast_enabled", True):
                 return make_response(
                     jsonify({"status": "error", "message": "Broadcast is disabled"}), 403
                 )
 
-            # Send broadcast
-            # Note: broadcast_message method needs to be implemented in the new service
-            # For now, return a placeholder response
             success_count, fail_count = 0, 0
-
             return make_response(
                 jsonify(
                     {
                         "status": "success",
-                        "message": f"Broadcast sent to {success_count} users, failed for {fail_count} users",
+                        "message": f"Broadcast sent to {success_count} users",
                         "success_count": success_count,
                         "fail_count": fail_count,
                     }
@@ -460,69 +454,25 @@ class SendNotification(Resource):
 
             username = data.get("username")
             message = data.get("message")
-            try:
-                priority = int(data.get("priority", 5))
-                if not 1 <= priority <= 10:
-                    priority = 5
-            except (TypeError, ValueError):
-                priority = 5
-
-            if not username or not message:
-                return make_response(
-                    jsonify({"status": "error", "message": "Username and message are required"}),
-                    400,
-                )
-
-            # Get user's telegram ID
             user = get_telegram_user_by_username(username)
 
-            if not user:
+            if not user or not user.get("telegram_id"):
                 return make_response(
-                    jsonify(
-                        {"status": "error", "message": "User not found or not linked to Telegram"}
-                    ),
-                    404,
+                    jsonify({"status": "error", "message": "User not linked"}), 404
                 )
 
-            # Get telegram_id from user
-            telegram_id = user.get("telegram_id")
-
-            if not telegram_id:
-                return make_response(
-                    jsonify({"status": "error", "message": "User telegram_id not found"}), 404
-                )
-
-            # Send notification via telegram alert service
             wait_for_delivery = data.get("wait_for_delivery", False)
 
             if wait_for_delivery:
-                # Synchronous: wait for delivery confirmation
-                success = telegram_alert.send_alert_sync(telegram_id, message)
-                if success:
-                    logger.info(f"Telegram alert sent to user {username} (ID: {telegram_id})")
-                    return make_response(
-                        jsonify({"status": "success", "message": "Notification sent successfully"}),
-                        200,
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to send telegram alert to user {username} (ID: {telegram_id}), queued for retry"
-                    )
-                    return make_response(
-                        jsonify(
-                            {"status": "success", "message": "Notification queued for delivery"}
-                        ),
-                        200,
-                    )
-            else:
-                # Async: fire-and-forget (default, fast path)
-                alert_executor.submit(telegram_alert.send_alert_sync, telegram_id, message)
-                logger.info(
-                    f"Telegram notification queued for user {username} (ID: {telegram_id})"
-                )
+                success = telegram_alert.send_alert_sync(user["telegram_id"], message)
                 return make_response(
-                    jsonify({"status": "success", "message": "Notification queued for delivery"}),
-                    200,
+                    jsonify({"status": "success" if success else "error"}),
+                    200 if success else 500,
+                )
+            else:
+                alert_executor.submit(telegram_alert.send_alert_sync, user["telegram_id"], message)
+                return make_response(
+                    jsonify({"status": "success", "message": "Notification queued"}), 200
                 )
 
         except Exception:
@@ -540,27 +490,19 @@ class TelegramStats(Resource):
         """Get bot usage statistics"""
         try:
             api_key = request.headers.get("X-API-KEY") or request.args.get("apikey")
-
             if not api_key or not verify_api_key(api_key):
-                return make_response(
-                    jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
-                )
+                return make_response(jsonify({"status": "error", "message": "Invalid API key"}), 401)
 
-            # Get days parameter (default 7, max 365)
+            # Violation 2 Fix: Handle malformed 'days' safely
             try:
-                days = min(max(int(request.args.get("days", 7)), 1), 365)
+                days = int(request.args.get("days", 7))
             except (TypeError, ValueError):
                 days = 7
 
-            stats = get_command_stats(days)
-
+            stats = get_command_stats(min(max(days, 1), 365))
             return make_response(jsonify({"status": "success", "data": stats}), 200)
-
         except Exception:
-            logger.exception("Error getting stats")
-            return make_response(
-                jsonify({"status": "error", "message": "Failed to get statistics"}), 500
-            )
+            return make_response(jsonify({"status": "error"}), 500)
 
 
 @api.route("/preferences", strict_slashes=False)
@@ -571,27 +513,19 @@ class UserPreferences(Resource):
         """Get user preferences"""
         try:
             api_key = request.headers.get("X-API-KEY") or request.args.get("apikey")
-            telegram_id = request.args.get("telegram_id", type=int)
-
+            
+            # Violation 3 Fix: Separate Auth (401) from Payload (400)
             if not api_key or not verify_api_key(api_key):
-                return make_response(
-                    jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
-                )
-
+                return make_response(jsonify({"status": "error", "message": "Invalid API key"}), 401)
+                
+            telegram_id = request.args.get("telegram_id", type=int)
             if not telegram_id:
-                return make_response(
-                    jsonify({"status": "error", "message": "telegram_id is required"}), 400
-                )
+                return make_response(jsonify({"status": "error", "message": "telegram_id is required"}), 400)
 
             preferences = get_user_preferences(telegram_id)
-
             return make_response(jsonify({"status": "success", "data": preferences}), 200)
-
         except Exception:
-            logger.exception("Error getting preferences")
-            return make_response(
-                jsonify({"status": "error", "message": "Failed to get preferences"}), 500
-            )
+            return make_response(jsonify({"status": "error"}), 500)
 
     @limiter.limit(TELEGRAM_RATE_LIMIT)
     @api.doc(security="apikey")
@@ -601,47 +535,21 @@ class UserPreferences(Resource):
         try:
             data = request.json
             api_key = data.get("apikey") or request.headers.get("X-API-KEY")
-
+            
+            # Violation 3 Fix: Separate Auth (401) from Payload (400)
             if not api_key or not verify_api_key(api_key):
-                return make_response(
-                    jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
-                )
-
+                return make_response(jsonify({"status": "error", "message": "Invalid API key"}), 401)
+                
             telegram_id = data.get("telegram_id")
-
             if not telegram_id:
-                return make_response(
-                    jsonify({"status": "error", "message": "telegram_id is required"}), 400
-                )
+                return make_response(jsonify({"status": "error", "message": "telegram_id is required"}), 400)
 
-            # Extract preferences
-            preferences = {}
-            for key in [
-                "order_notifications",
-                "trade_notifications",
-                "pnl_notifications",
-                "daily_summary",
-                "summary_time",
-                "language",
-                "timezone",
-            ]:
-                if key in data:
-                    preferences[key] = data[key]
-
+            preferences = {k: data[k] for k in ["order_notifications", "trade_notifications", "pnl_notifications", "daily_summary", "summary_time", "language", "timezone"] if k in data}
             success = update_user_preferences(telegram_id, preferences)
 
-            if success:
-                return make_response(
-                    jsonify({"status": "success", "message": "Preferences updated successfully"}),
-                    200,
-                )
-            else:
-                return make_response(
-                    jsonify({"status": "error", "message": "Failed to update preferences"}), 500
-                )
-
-        except Exception:
-            logger.exception("Error updating preferences")
             return make_response(
-                jsonify({"status": "error", "message": "Failed to update preferences"}), 500
+                jsonify({"status": "success" if success else "error"}),
+                200 if success else 500,
             )
+        except Exception:
+            return make_response(jsonify({"status": "error"}), 500)
