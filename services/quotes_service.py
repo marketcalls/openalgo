@@ -439,6 +439,9 @@ def get_option_chain_quotes(
     return underlying_quote, option_results
 
 
+_EQUITY_EXCHANGE_FALLBACKS = {"BSE": "NSE", "NSE": "BSE"}
+
+
 def get_underlying_ltp(
     auth_token: str,
     feed_token: str | None,
@@ -449,6 +452,8 @@ def get_underlying_ltp(
     """
     Lightweight LTP fetch for ATM calculation.
     Uses REST endpoint if broker supports it, otherwise falls back to full quote.
+    If the primary exchange fails, tries the alternate equity exchange (BSE↔NSE)
+    since some brokers only carry a stock on one exchange in their master contract.
     """
     broker_module = import_broker_module(broker)
     if broker_module is None:
@@ -456,16 +461,25 @@ def get_underlying_ltp(
 
     data_handler = _create_data_handler(broker_module, auth_token, feed_token)
 
-    if hasattr(data_handler, "get_ltp_rest"):
-        ltp = data_handler.get_ltp_rest(symbol, exchange)
-        if ltp is not None:
-            return ltp
+    exchanges_to_try = [exchange]
+    fallback = _EQUITY_EXCHANGE_FALLBACKS.get(exchange.upper())
+    if fallback:
+        exchanges_to_try.append(fallback)
 
-    try:
-        quotes = data_handler.get_quotes(symbol, exchange)
-        if quotes:
-            return quotes.get("ltp")
-    except Exception as e:
-        logger.exception(f"Error fetching LTP for {symbol}: {e}")
+    for exch in exchanges_to_try:
+        if hasattr(data_handler, "get_ltp_rest"):
+            ltp = data_handler.get_ltp_rest(symbol, exch)
+            if ltp is not None:
+                return ltp
 
+        try:
+            quotes = data_handler.get_quotes(symbol, exch)
+            if quotes:
+                ltp = quotes.get("ltp")
+                if ltp is not None:
+                    return ltp
+        except Exception as e:
+            logger.debug(f"LTP fetch failed for {symbol} on {exch}: {e}")
+
+    logger.warning(f"Could not fetch LTP for {symbol} on any exchange: {exchanges_to_try}")
     return None
