@@ -156,8 +156,9 @@ The MCP server provides the following categories of tools:
 - `get_openalgo_version` - Check OpenAlgo version
 - `validate_order_constants` - Display valid order parameters
 - `send_telegram_alert` - Send Telegram notifications
-- `get_holidays` - Get trading holidays for a year
-- `get_timings` - Get exchange trading timings for a date
+- `get_holidays` - Get trading holidays for a year (year is optional — defaults to current year)
+- `get_timings` - Get exchange trading timings for a date (date is optional — defaults to today)
+- `check_holiday` - Quick pre-trade check: is a given date a holiday on a specific exchange?
 - `analyzer_status` - Get current analyzer mode status
 - `analyzer_toggle` - Toggle between analyze (simulated) and live trading mode
 - `calculate_margin` - Calculate margin requirements for positions
@@ -176,8 +177,10 @@ Once configured, you can ask your AI assistant to:
 - "Calculate the synthetic future price for NIFTY 25NOV25 expiry"
 - "Get option Greeks for NIFTY 26000 CE expiring on 25NOV25"
 - "Show me the option chain for NIFTY with 30DEC25 expiry"
-- "What are the trading holidays in 2025?"
+- "What are the trading holidays in 2026?"
 - "What are the market timings for today?"
+- "Is 2026-01-26 a holiday on NSE?"
+- "Get the last 5 days of NIFTY 1m candles from the local Historify DB" (uses `source='db'`)
 - "Get all instruments for NSE"
 
 ## Supported Exchanges

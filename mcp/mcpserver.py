@@ -2,6 +2,7 @@ import json
 import sys
 from typing import Any, Dict, List, Optional
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from openalgo import api
 
@@ -17,6 +18,18 @@ client = api(api_key=api_key, host=host)
 
 # Create MCP server
 mcp = FastMCP("openalgo")
+
+
+def _to_json(payload: Any) -> str:
+    """Serialize any SDK response (dict, list, or pandas DataFrame) to a JSON string."""
+    if hasattr(payload, "to_dict") and hasattr(payload, "reset_index"):
+        df = payload.reset_index()
+        return json.dumps(
+            {"count": len(df), "data": df.to_dict(orient="records")},
+            indent=2,
+            default=str,
+        )
+    return json.dumps(payload, indent=2, default=str)
 
 # ORDER MANAGEMENT TOOLS
 
@@ -682,17 +695,29 @@ def get_market_depth(symbol: str, exchange: str = "NSE") -> str:
 
 @mcp.tool()
 def get_historical_data(
-    symbol: str, exchange: str, interval: str, start_date: str, end_date: str
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+    source: str = "api",
 ) -> str:
     """
-    Get historical price data.
+    Get historical OHLCV data for a symbol.
 
     Args:
         symbol: Stock symbol
         exchange: Exchange name
-        interval: Time interval ('1m', '3m', '5m', '10m', '15m', '30m', '1h', 'D')
+        interval: Time interval. With source='api': '1m', '3m', '5m', '10m', '15m', '30m', '1h', 'D'.
+                  With source='db': also supports custom intervals (2m, 4m, 6m, 7m, 2h, 3h, 4h) and
+                  daily-based (W, M, Q, Y plus multiples like 2W, 3M).
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
+        source: 'api' (default) fetches from broker API. 'db' fetches from the local
+                OpenAlgo Historify DuckDB store (1m/D stored, other intervals computed via SQL).
+
+    Returns:
+        JSON with count and data (list of {timestamp, open, high, low, close, volume}).
     """
     try:
         response = client.history(
@@ -701,8 +726,9 @@ def get_historical_data(
             interval=interval,
             start_date=start_date,
             end_date=end_date,
+            source=source,
         )
-        return str(response)  # DataFrame converted to string
+        return _to_json(response)
     except Exception as e:
         return f"Error getting historical data: {str(e)}"
 
@@ -980,38 +1006,39 @@ def send_telegram_alert(username: str, message: str) -> str:
 
 
 @mcp.tool()
-def get_holidays(year: int) -> str:
+def get_holidays(year: int | None = None) -> str:
     """
     Get trading holidays for a specific year.
 
     Args:
-        year: Year to get holidays for (e.g., 2025)
+        year: Year to get holidays for (e.g., 2026). Optional — defaults to current year.
 
     Returns:
         JSON with list of trading holidays including:
         - date: Holiday date (YYYY-MM-DD)
         - description: Holiday name/reason
-        - holiday_type: TRADING_HOLIDAY or SPECIAL_SESSION
+        - holiday_type: TRADING_HOLIDAY, SETTLEMENT_HOLIDAY, or SPECIAL_SESSION
         - closed_exchanges: List of closed exchanges
         - open_exchanges: List of exchanges with special timings
 
     Example:
-        get_holidays(2025)
+        get_holidays(2026)
+        get_holidays()          # current year
     """
     try:
-        response = client.holidays(year=year)
-        return json.dumps(response, indent=2)
+        response = client.holidays(year=year) if year is not None else client.holidays()
+        return json.dumps(response, indent=2, default=str)
     except Exception as e:
         return f"Error getting holidays: {str(e)}"
 
 
 @mcp.tool()
-def get_timings(date: str) -> str:
+def get_timings(date: str | None = None) -> str:
     """
     Get exchange trading timings for a specific date.
 
     Args:
-        date: Date in YYYY-MM-DD format (e.g., '2025-12-23')
+        date: Date in YYYY-MM-DD format (e.g., '2026-04-23'). Optional — defaults to today.
 
     Returns:
         JSON with exchange timings including:
@@ -1020,78 +1047,116 @@ def get_timings(date: str) -> str:
         - end_time: Market close time in epoch milliseconds
 
     Example:
-        get_timings("2025-12-23")
+        get_timings("2026-04-23")
+        get_timings()           # today
     """
     try:
-        response = client.timings(date=date)
-        return json.dumps(response, indent=2)
+        response = client.timings(date=date) if date is not None else client.timings()
+        return json.dumps(response, indent=2, default=str)
     except Exception as e:
         return f"Error getting timings: {str(e)}"
 
 
 @mcp.tool()
-def get_instruments(exchange: str) -> str:
+def check_holiday(date: str, exchange: str | None = None) -> str:
     """
-    Download all instruments for an exchange.
+    Check if a specific date is a market holiday for an exchange.
+
+    This calls the /api/v1/checkholiday endpoint directly (not yet in the openalgo SDK).
+    Use this for fast pre-trade "is the market open?" checks.
+
+    Args:
+        date: Date in YYYY-MM-DD format (between 2020-01-01 and 2050-12-31). Required.
+        exchange: Exchange code (NSE, BSE, NFO, BFO, MCX, CDS, BCD). Optional.
+                  When omitted, returns true if the date is a holiday for any major exchange.
+
+    Returns:
+        JSON with:
+        - status: 'success' or 'error'
+        - data.date, data.exchange (if specified), data.is_holiday (bool)
+
+    Notes:
+        - Weekends and national holidays both return is_holiday=true.
+        - For a full calendar, use get_holidays(year).
+
+    Examples:
+        check_holiday("2026-01-26", "NSE")
+        check_holiday("2026-01-27")
+    """
+    try:
+        url = f"{host.rstrip('/')}/api/v1/checkholiday"
+        payload: dict[str, Any] = {"apikey": api_key, "date": date}
+        if exchange:
+            payload["exchange"] = exchange.upper()
+        with httpx.Client(timeout=30.0) as http:
+            r = http.post(url, json=payload, headers={"Content-Type": "application/json"})
+            return json.dumps(r.json(), indent=2, default=str)
+    except Exception as e:
+        return f"Error checking holiday: {str(e)}"
+
+
+@mcp.tool()
+def get_instruments(exchange: str, limit: int = 500) -> str:
+    """
+    Download the full instrument master for an exchange.
 
     Args:
         exchange: Exchange name (NSE, BSE, NFO, BFO, MCX, CDS, BCD, NCDEX)
+        limit: Maximum number of rows to return in the response (default: 500).
+               The full dataset can exceed 100k rows for derivatives exchanges, which
+               overwhelms the MCP tool output. Use search_instruments for targeted lookups.
 
     Returns:
-        JSON with list of all instruments including:
-        - symbol: Trading symbol
-        - name: Instrument name
-        - exchange: Exchange
-        - lotsize: Lot size
-        - instrumenttype: Type of instrument
-        - expiry: Expiry date (for derivatives)
-        - strike: Strike price (for options)
-        - token: Exchange token
-
-    Note: This can return a large dataset. Use search_instruments for specific queries.
-
-    Example:
-        get_instruments("NSE")
+        JSON with count, truncated flag, and data (list of instrument records).
+        Each record includes: symbol, brsymbol, name, exchange, lotsize,
+        instrumenttype, expiry, strike, token, tick_size.
     """
     try:
         response = client.instruments(exchange=exchange.upper())
-        return json.dumps(response, indent=2)
+        # SDK returns a DataFrame on success, dict on error
+        if hasattr(response, "reset_index"):
+            total = len(response)
+            df_head = response.head(limit).reset_index(drop=True)
+            return json.dumps(
+                {
+                    "exchange": exchange.upper(),
+                    "count": total,
+                    "returned": len(df_head),
+                    "truncated": total > limit,
+                    "limit": limit,
+                    "data": df_head.to_dict(orient="records"),
+                },
+                indent=2,
+                default=str,
+            )
+        return json.dumps(response, indent=2, default=str)
     except Exception as e:
         return f"Error getting instruments: {str(e)}"
 
 
 # Tool to get analyzer status
 @mcp.tool()
-def analyzer_status() -> dict:
+def analyzer_status() -> str:
     """
     Get the current analyzer status including mode and total logs.
 
     Returns:
-        Dictionary containing analyzer status information:
-        - analyze_mode: Boolean indicating if analyzer is active
-        - mode: Current mode ('analyze' or 'live')
-        - total_logs: Number of logs in analyzer
-
-    Example Response:
-        {
-            'data': {
-                'analyze_mode': True,
-                'mode': 'analyze',
-                'total_logs': 2
-            },
-            'status': 'success'
-        }
+        JSON with analyzer status information:
+        - data.analyze_mode: Boolean indicating if analyzer is active
+        - data.mode: Current mode ('analyze' or 'live')
+        - data.total_logs: Number of logs in analyzer
+        - status: 'success' or 'error'
     """
     try:
         response = client.analyzerstatus()
-        return response
+        return json.dumps(response, indent=2, default=str)
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return json.dumps({"status": "error", "error": str(e)}, indent=2)
 
 
 # Tool to toggle analyzer mode
 @mcp.tool()
-def analyzer_toggle(mode: bool) -> dict:
+def analyzer_toggle(mode: bool) -> str:
     """
     Toggle the analyzer mode between analyze (simulated) and live trading.
 
@@ -1099,21 +1164,19 @@ def analyzer_toggle(mode: bool) -> dict:
         mode: True for analyze mode (simulated), False for live mode
 
     Returns:
-        Dictionary with updated analyzer status:
-        - analyze_mode: Boolean indicating current state
-        - message: Status message
-        - mode: Current mode string
-        - total_logs: Number of logs in analyzer
+        JSON with updated analyzer status:
+        - data.analyze_mode, data.message, data.mode, data.total_logs
+        - status: 'success' or 'error'
 
     Example:
-        analyzer_toggle(True) - Switch to analyze mode (simulated responses)
-        analyzer_toggle(False) - Switch to live trading mode
+        analyzer_toggle(True)  # Switch to analyze mode (simulated responses)
+        analyzer_toggle(False) # Switch to live trading mode
     """
     try:
         response = client.analyzertoggle(mode=mode)
-        return response
+        return json.dumps(response, indent=2, default=str)
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return json.dumps({"status": "error", "error": str(e)}, indent=2)
 
 
 if __name__ == "__main__":
