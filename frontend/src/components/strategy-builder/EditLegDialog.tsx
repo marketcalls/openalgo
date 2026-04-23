@@ -312,7 +312,7 @@ export function EditLegDialog({
 
           {/* Lot Qty */}
           <div className="space-y-1">
-            <label className="text-sm font-medium">Lot Qty: {lots}</label>
+            <label className="text-sm font-medium">Lot Qty</label>
             <div className="inline-flex h-10 w-[160px] items-center overflow-hidden rounded-md border">
               <button
                 type="button"

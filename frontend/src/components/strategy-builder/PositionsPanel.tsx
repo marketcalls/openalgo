@@ -1,7 +1,7 @@
-import { Layers, Pencil, RotateCw, Trash2 } from 'lucide-react'
+import { Layers, Pencil, RotateCw, Save, Send, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { strikeMoneyness, type StrategyLeg } from '@/lib/strategyMath'
+import { type StrategyLeg, strikeMoneyness } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 
 export interface PositionsPanelProps {
@@ -32,6 +32,15 @@ export interface PositionsPanelProps {
   atmStrike?: number | null
   /** Common strike increment (e.g. 50 for NIFTY) — drives moneyness step count. */
   strikeStep?: number
+
+  /** Opens the Save Strategy dialog. Button hidden if omitted. */
+  onSaveStrategy?: () => void
+  /** Opens the Execute Basket dialog. Button hidden if omitted. */
+  onExecute?: () => void
+  /** True when editing an existing saved strategy (changes Save label to Update). */
+  isUpdating?: boolean
+  /** True when no broker session — disables Execute. */
+  executeDisabled?: boolean
 }
 
 function formatCurrency(v: number): string {
@@ -58,7 +67,13 @@ interface MetricTileProps {
   emphasize?: boolean
 }
 
-function MetricTile({ label, value, tone = 'neutral', span = 1, emphasize = false }: MetricTileProps) {
+function MetricTile({
+  label,
+  value,
+  tone = 'neutral',
+  span = 1,
+  emphasize = false,
+}: MetricTileProps) {
   return (
     <div
       className={cn(
@@ -104,6 +119,10 @@ export function PositionsPanel({
   marginSupported,
   atmStrike = null,
   strikeStep = 0,
+  onSaveStrategy,
+  onExecute,
+  isUpdating = false,
+  executeDisabled = false,
 }: PositionsPanelProps) {
   const allSelected = legs.length > 0 && legs.every((l) => l.active)
   const activeCount = legs.filter((l) => l.active).length
@@ -128,9 +147,7 @@ export function PositionsPanel({
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold leading-none">Positions</h3>
             <p className="mt-1 truncate text-[10px] text-muted-foreground">
-              {legs.length > 0
-                ? `${activeCount}/${legs.length} active`
-                : 'No legs added yet'}
+              {legs.length > 0 ? `${activeCount}/${legs.length} active` : 'No legs added yet'}
             </p>
           </div>
         </div>
@@ -174,9 +191,7 @@ export function PositionsPanel({
         {legs.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 p-8 text-center">
             <p className="text-xs font-medium text-muted-foreground">No legs yet</p>
-            <p className="text-[11px] text-muted-foreground/80">
-              Pick a template or add manually
-            </p>
+            <p className="text-[11px] text-muted-foreground/80">Pick a template or add manually</p>
           </div>
         ) : (
           <ul>
@@ -184,9 +199,7 @@ export function PositionsPanel({
               const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
               const sign = leg.side === 'BUY' ? 1 : -1
               const qty = leg.lots * leg.lotSize
-              const realisedPnl = isClosed
-                ? sign * ((leg.exitPrice ?? 0) - leg.price) * qty
-                : 0
+              const realisedPnl = isClosed ? sign * ((leg.exitPrice ?? 0) - leg.price) * qty : 0
               const descriptor =
                 leg.segment === 'OPTION' && leg.strike !== undefined && leg.optionType
                   ? `${leg.strike}${leg.optionType}`
@@ -255,12 +268,7 @@ export function PositionsPanel({
                       <span className="font-semibold tabular-nums">{leg.lots}×</span>
                       <span className="font-semibold">{descriptor}</span>
                       {(() => {
-                        const m = strikeMoneyness(
-                          leg.strike,
-                          atmStrike,
-                          strikeStep,
-                          leg.optionType
-                        )
+                        const m = strikeMoneyness(leg.strike, atmStrike, strikeStep, leg.optionType)
                         if (!m) return null
                         return (
                           <span
@@ -268,8 +276,7 @@ export function PositionsPanel({
                               'shrink-0 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wider',
                               m.kind === 'ATM' &&
                                 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-                              m.kind === 'ITM' &&
-                                'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+                              m.kind === 'ITM' && 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
                               m.kind === 'OTM' && 'bg-muted text-muted-foreground'
                             )}
                             title={
@@ -339,6 +346,44 @@ export function PositionsPanel({
         )}
       </div>
 
+      {/* Action row — sits directly above the metrics table so it's within
+          thumb-reach of the leg list. */}
+      {(onSaveStrategy || onExecute) && (
+        <div className="flex items-center justify-end gap-2 border-t bg-muted/10 px-3.5 py-2.5">
+          {onSaveStrategy && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onSaveStrategy}
+              disabled={legs.length === 0}
+              title={legs.length === 0 ? 'Add at least one leg to save' : ''}
+              className="h-9 gap-1.5 text-xs font-semibold"
+            >
+              <Save className="h-3.5 w-3.5" />
+              {isUpdating ? 'Update Strategy' : 'Save Strategy'}
+            </Button>
+          )}
+          {onExecute && (
+            <Button
+              size="sm"
+              onClick={onExecute}
+              disabled={activeCount === 0 || executeDisabled}
+              title={
+                activeCount === 0
+                  ? 'Add at least one active leg to execute'
+                  : executeDisabled
+                    ? 'API key required'
+                    : ''
+              }
+              className="h-9 gap-1.5 text-xs font-semibold"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Execute
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Metrics — 2-col grid with hairline dividers */}
       <div className="border-t">
         <dl className="grid grid-cols-2 divide-x divide-y">
@@ -348,12 +393,7 @@ export function PositionsPanel({
             tone="profit"
             emphasize
           />
-          <MetricTile
-            label="Max Loss"
-            value={formatCurrency(maxLoss)}
-            tone="loss"
-            emphasize
-          />
+          <MetricTile label="Max Loss" value={formatCurrency(maxLoss)} tone="loss" emphasize />
           <MetricTile
             label="Prob. of Profit"
             value={probOfProfit > 0 ? formatPct(probOfProfit * 100) : '—'}
@@ -403,6 +443,7 @@ export function PositionsPanel({
             ))}
           </div>
         )}
+
       </div>
     </div>
   )

@@ -61,6 +61,32 @@ export interface MultiQuotesApiResponse {
   message?: string
 }
 
+export interface BasketOrderItem {
+  symbol: string
+  exchange: string
+  action: 'BUY' | 'SELL'
+  quantity: number
+  pricetype: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  product: 'CNC' | 'NRML' | 'MIS'
+  price?: number
+  trigger_price?: number
+  disclosed_quantity?: number
+}
+
+export interface BasketOrderResult {
+  symbol: string
+  status: 'success' | 'error'
+  orderid?: string
+  message?: string
+}
+
+export interface BasketOrderResponse {
+  status: 'success' | 'error'
+  message?: string
+  results?: BasketOrderResult[]
+  mode?: 'live' | 'analyze'
+}
+
 export const tradingApi = {
   /**
    * Get real-time quotes for a symbol
@@ -172,6 +198,23 @@ export const tradingApi = {
    */
   placeOrder: async (order: PlaceOrderRequest): Promise<ApiResponse<{ orderid: string }>> => {
     const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/placeorder', order)
+    return response.data
+  },
+
+  /**
+   * Place a basket of orders in one call. Each item is independent — the
+   * backend returns a per-order `results[]` so partial success is possible.
+   */
+  placeBasketOrder: async (
+    apiKey: string,
+    strategy: string,
+    orders: BasketOrderItem[]
+  ): Promise<BasketOrderResponse> => {
+    const response = await apiClient.post<BasketOrderResponse>('/basketorder', {
+      apikey: apiKey,
+      strategy,
+      orders,
+    })
     return response.data
   },
 
