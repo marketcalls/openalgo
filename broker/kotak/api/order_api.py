@@ -380,7 +380,7 @@ def modify_order(data, auth_token):
     client = get_httpx_client()
 
     token_id = get_token(data["symbol"], data["exchange"])
-    newdata = transform_modify_order_data(data, token_id)
+    newdata = transform_modify_order_data(data, token_id, auth_token)
 
     logger.info(f"MODIFY ORDER - Transformed data: {newdata}")
 
