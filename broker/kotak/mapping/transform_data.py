@@ -71,8 +71,14 @@ def _compute_mp(data, auth_token):
             f"MPP: trigger_price invalid for SL-M {symbol}/{exchange}, using mp={FALLBACK_MP}"
         )
         return FALLBACK_MP
-    percentage = get_mpp_percentage(trigger_price, instrument_type)
-    mp_value = _mp_from_percentage(percentage)
+    try:
+        percentage = get_mpp_percentage(trigger_price, instrument_type)
+        mp_value = _mp_from_percentage(percentage)
+    except Exception as e:
+        logger.warning(
+            f"MPP: Failed to compute mp for SL-M {symbol}/{exchange}: {e}. Using mp={FALLBACK_MP}"
+        )
+        return FALLBACK_MP
     logger.info(
         f"MPP (SL-M): Symbol={symbol}, TriggerPrice={trigger_price}, "
         f"InstrumentType={instrument_type}, SlabPct={percentage}%, mp={mp_value}"
@@ -124,14 +130,14 @@ def transform_data(data, token, auth_token=None):
     return transformed
 
 
-def transform_modify_order_data(data, token):
+def transform_modify_order_data(data, token, auth_token=None):
     symbol = get_br_symbol(data["symbol"], data["exchange"])
     # Basic mapping - ALL values must be strings for Kotak API
     transformed = {
         "tk": str(token),
         "dq": str(data.get("disclosed_quantity", "0")),
         "es": reverse_map_exchange(data["exchange"]),
-        "mp": _compute_mp(data, auth_token=None),
+        "mp": _compute_mp(data, auth_token),
         "dd": "NA",
         "vd": "DAY",
         "pc": data.get("product", "MIS"),
