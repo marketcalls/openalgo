@@ -38,7 +38,7 @@ class MstockCapabilityRegistry:
     """
 
     # mstock broker capabilities
-    exchanges = ["NSE", "BSE", "BFO", "NFO", "MCX", "CDS"]
+    exchanges = ["NSE", "BSE", "BFO", "NFO", "MCX", "CDS", "BCD"]
 
     # Available subscription modes for mstock
     # 1: LTP only
@@ -48,12 +48,13 @@ class MstockCapabilityRegistry:
 
     # Market depth support - mstock provides 5 levels for all exchanges
     depth_support = {
-        "NSE": [5],  # NSE supports 5 levels
-        "BSE": [5],  # BSE supports 5 levels
-        "BFO": [5],  # BFO supports 5 levels
-        "NFO": [5],  # NFO supports 5 levels
-        "MCX": [5],  # MCX supports 5 levels
-        "CDS": [5],  # CDS supports 5 levels
+        "NSE": [5],
+        "BSE": [5],
+        "BFO": [5],
+        "NFO": [5],
+        "MCX": [5],
+        "CDS": [5],
+        "BCD": [5],
     }
 
     @classmethod

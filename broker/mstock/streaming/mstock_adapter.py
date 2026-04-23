@@ -74,15 +74,21 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("Connecting to mstock WebSocket in streaming mode...")
         self.running = True
 
-        # Start streaming — returns immediately (same as Angel/Upstox pattern)
+        # Start streaming — returns immediately, login happens asynchronously
         self.ws_client.connect_stream(self._on_data)
-        self.connected = True
-        self.logger.info("mstock WebSocket adapter connected")
+
+        # Wait for login to complete before marking as connected
+        if self.ws_client._login_event.wait(timeout=10):
+            self.connected = True
+            self.logger.info("mstock WebSocket adapter connected and logged in")
+        else:
+            self.connected = False
+            self.logger.warning("mstock WebSocket login timed out — subscriptions will be queued")
 
     def _on_data(self, quote_data: dict) -> None:
         """Callback function called when data is received from WebSocket"""
         try:
-            token = quote_data.get("token")
+            token = str(quote_data.get("token", ""))
             if not token:
                 self.logger.warning("Received data without token")
                 return
@@ -90,7 +96,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             matching_subscriptions = []
             with self.lock:
                 for correlation_id, sub in self.subscriptions.items():
-                    if sub["token"] == token:
+                    if str(sub["token"]) == token:
                         matching_subscriptions.append(sub)
 
             if not matching_subscriptions:
@@ -153,7 +159,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         token = token_info["token"]
         brexchange = token_info["brexchange"]
-        exchange_type = MstockExchangeMapper.get_exchange_type(brexchange)
+        exchange_type = MstockExchangeMapper.get_exchange_type(exchange)
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
         needs_ws_subscribe = False

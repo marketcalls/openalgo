@@ -240,6 +240,16 @@ class MstockWebSocket:
         ws.send(login_msg)
         logger.debug("Sent LOGIN message")
 
+        # Mark as logged in immediately after sending LOGIN.
+        # mStock may not send a text response to LOGIN — the one-off
+        # fetch_quote path confirms login works without waiting for a reply.
+        self._logged_in = True
+        self._login_event.set()
+        logger.info("mstock WebSocket login sent, marking as ready")
+
+        # Re-subscribe to existing subscriptions (needed after reconnection)
+        self._resubscribe_all()
+
     def _on_ws_message(self, ws, message):
         """Called for both binary and text messages"""
         if isinstance(message, bytes):
@@ -250,14 +260,6 @@ class MstockWebSocket:
                     self.data_callback(quote_data)
         elif isinstance(message, str):
             logger.debug(f"Received string message: {message}")
-            # Mark as logged in after receiving login response
-            if not self._logged_in:
-                self._logged_in = True
-                self._login_event.set()
-                logger.info("mstock login confirmed")
-
-                # Re-subscribe to existing subscriptions
-                self._resubscribe_all()
 
     def _on_ws_error(self, ws, error):
         """Called on WebSocket error"""
@@ -403,22 +405,107 @@ class MstockWebSocket:
             }
             ws.send(json.dumps(subscribe_msg))
 
-            # Wait for binary response
-            for _ in range(3):
+            # Wait for binary response — for mode 3 keep reading until we get
+            # the full 379-byte SnapQuote packet (broker may send 51-byte LTP first)
+            full_mode_size = 379 if mode == 3 else None
+            best_quote = None
+            for _ in range(6):
                 try:
                     response = ws.recv()
                     if isinstance(response, bytes):
                         if len(response) in [51, 123, 379] or len(response) >= 383:
                             quote = self.parse_binary_packet(response)
                             if quote:
-                                ws.close()
-                                return quote
+                                best_quote = quote
+                                if not full_mode_size or len(response) >= full_mode_size:
+                                    break  # got the full packet we wanted
                 except Exception:
                     break
 
             ws.close()
-            return None
+            return best_quote
 
         except Exception as e:
             logger.error(f"Error fetching quote: {e}")
             return None
+
+    def fetch_quotes_batch(self, token_exchange_list: list, mode: int = 3) -> dict:
+        """
+        Fetch quotes for multiple tokens in a single WebSocket connection.
+
+        Args:
+            token_exchange_list: List of (token, exchange_type) tuples
+            mode: 1=LTP, 2=Quote, 3=SnapQuote (default, includes oi/bid/ask)
+
+        Returns:
+            dict: Map of token_str -> parsed quote dict
+        """
+        results = {}
+        if not token_exchange_list:
+            return results
+
+        try:
+            import websocket as ws_module
+
+            ws = ws_module.create_connection(
+                self.ws_url,
+                sslopt={"cert_reqs": ssl.CERT_NONE},
+                timeout=15,
+            )
+
+            # Login
+            ws.send(f"LOGIN:{self.auth_token}")
+            try:
+                ws.recv()
+            except Exception:
+                pass
+
+            # Group tokens by exchange_type
+            exchange_groups: dict[int, list[str]] = {}
+            for token, exchange_type in token_exchange_list:
+                if exchange_type not in exchange_groups:
+                    exchange_groups[exchange_type] = []
+                exchange_groups[exchange_type].append(str(token))
+
+            token_list = [
+                {"exchangeType": et, "tokens": tokens}
+                for et, tokens in exchange_groups.items()
+            ]
+
+            subscribe_msg = {
+                "action": 1,
+                "params": {"mode": mode, "tokenList": token_list},
+            }
+            ws.send(json.dumps(subscribe_msg))
+
+            expected = len(token_exchange_list)
+            full_mode_size = 379 if mode == 3 else None
+            full_packets: set[str] = set()  # tokens for which we have a full packet
+            ws.settimeout(10)
+
+            for _ in range(expected * 3):
+                try:
+                    response = ws.recv()
+                    if isinstance(response, bytes):
+                        if len(response) in [51, 123, 379] or len(response) >= 383:
+                            quote = self.parse_binary_packet(response)
+                            if quote and quote.get("token"):
+                                token_key = quote["token"]
+                                is_full = not full_mode_size or len(response) >= full_mode_size
+                                if is_full:
+                                    results[token_key] = quote
+                                    full_packets.add(token_key)
+                                elif token_key not in results:
+                                    results[token_key] = quote  # partial fallback only
+                                if len(full_packets) >= expected:
+                                    break
+                except Exception:
+                    break
+
+            ws.close()
+            logger.info(f"Batch WS fetch: got {len(results)}/{expected} quotes ({len(full_packets)} full)")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error in fetch_quotes_batch: {e}")
+            return results
