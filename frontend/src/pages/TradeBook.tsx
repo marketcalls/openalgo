@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, Download, Loader2, RefreshCw, Settings2, ToolCase, TrendingDown, TrendingUp } from 'lucide-react'
+import { ArrowDown, ArrowUp, Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { tradingApi } from '@/api/trading'
