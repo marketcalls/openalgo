@@ -20,6 +20,43 @@ client = api(api_key=api_key, host=host)
 # Surfaced in OpenAlgo logs and analyzer views so MCP-driven trades are identifiable.
 MCP_STRATEGY = "python mcp"
 
+# OpenAlgo standardized index symbols (NSE_INDEX / BSE_INDEX) — rolled out across all brokers.
+# Source: https://docs.openalgo.in/symbol-format
+NSE_INDEX_SYMBOLS = [
+    "NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX",
+    "HANGSENGBEESNAV",
+    "NIFTY100", "NIFTY200", "NIFTY500",
+    "NIFTYALPHA50", "NIFTYAUTO", "NIFTYCOMMODITIES", "NIFTYCONSUMPTION",
+    "NIFTYCPSE", "NIFTYDIVOPPS50", "NIFTYENERGY", "NIFTYFMCG",
+    "NIFTYGROWSECT15",
+    "NIFTYGS10YR", "NIFTYGS10YRCLN", "NIFTYGS1115YR", "NIFTYGS15YRPLUS",
+    "NIFTYGS48YR", "NIFTYGS813YR", "NIFTYGSCOMPSITE",
+    "NIFTYINFRA", "NIFTYIT", "NIFTYMEDIA", "NIFTYMETAL",
+    "NIFTYMIDLIQ15", "NIFTYMIDCAP100", "NIFTYMIDCAP150", "NIFTYMIDCAP50",
+    "NIFTYMIDSML400", "NIFTYMNC", "NIFTYPHARMA", "NIFTYPSE", "NIFTYPSUBANK",
+    "NIFTYPVTBANK", "NIFTYREALTY", "NIFTYSERVSECTOR",
+    "NIFTYSMLCAP100", "NIFTYSMLCAP250", "NIFTYSMLCAP50",
+    "NIFTY100EQLWGT", "NIFTY100LIQ15", "NIFTY100LOWVOL30",
+    "NIFTY100QUALTY30", "NIFTY200QUALTY30",
+    "NIFTY50DIVPOINT", "NIFTY50EQLWGT",
+    "NIFTY50PR1XINV", "NIFTY50PR2XLEV", "NIFTY50TR1XINV", "NIFTY50TR2XLEV",
+    "NIFTY50VALUE20",
+]
+BSE_INDEX_SYMBOLS = [
+    "SENSEX", "BANKEX", "SENSEX50",
+    "BSE100", "BSE150MIDCAPINDEX", "BSE200", "BSE250LARGEMIDCAPINDEX",
+    "BSE400MIDSMALLCAPINDEX", "BSE500",
+    "BSEAUTO", "BSECAPITALGOODS", "BSECARBONEX", "BSECONSUMERDURABLES",
+    "BSECPSE", "BSEDOLLEX100", "BSEDOLLEX200", "BSEDOLLEX30",
+    "BSEENERGY", "BSEFASTMOVINGCONSUMERGOODS", "BSEFINANCIALSERVICES",
+    "BSEGREENEX", "BSEHEALTHCARE", "BSEINDIAINFRASTRUCTUREINDEX",
+    "BSEINDUSTRIALS", "BSEINFORMATIONTECHNOLOGY", "BSEIPO",
+    "BSELARGECAP", "BSEMETAL", "BSEMIDCAP", "BSEMIDCAPSELECTINDEX",
+    "BSEOIL&GAS", "BSEPOWER", "BSEPSU", "BSEREALTY", "BSESENSEXNEXT50",
+    "BSESMALLCAP", "BSESMALLCAPSELECTINDEX", "BSESMEIPO",
+    "BSETECK", "BSETELECOM",
+]
+
 # Create MCP server
 mcp = FastMCP("openalgo")
 
@@ -265,7 +302,10 @@ def place_options_order(
         offset: Strike offset - 'ATM', 'ITM1'-'ITM50', 'OTM1'-'OTM50'
         option_type: 'CE' for Call or 'PE' for Put
         action: 'BUY' or 'SELL'
-        quantity: Number of lots (must be multiple of lot size)
+        quantity: Absolute quantity — must be a multiple of the contract lot size.
+                  Do NOT hardcode lot size — call get_option_symbol() or get_option_chain()
+                  first to read the current 'lotsize' from the broker master contract,
+                  then pass quantity = lots * lotsize.
         expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25'). Optional if underlying includes expiry.
         strategy: Strategy name (default: Python)
         price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M' (default: MARKET)
@@ -334,7 +374,11 @@ def place_options_multi_order(
             - offset: Strike offset ('ATM', 'ITM1'-'ITM50', 'OTM1'-'OTM50')
             - option_type: 'CE' for Call or 'PE' for Put
             - action: 'BUY' or 'SELL'
-            - quantity: Number of lots (must be multiple of lot size)
+            - quantity: Absolute quantity — must be a multiple of the contract lot size.
+                        Do NOT hardcode lot size. Look up the current 'lotsize' per leg
+                        using get_option_symbol() or get_option_chain() first, then pass
+                        quantity = lots * lotsize. Lot sizes can change (e.g., NIFTY has
+                        changed multiple times) and differ by underlying.
             Optional:
             - expiry_date: Per-leg expiry in DDMMMYY format for diagonal/calendar spreads
             - pricetype: 'MARKET', 'LIMIT', 'SL', 'SL-M' (default: MARKET)
@@ -807,13 +851,10 @@ def get_symbol_info(symbol: str, exchange: str = "NSE", instrument_type: str = N
             elif exchange.upper() == "BSE":
                 exchange = "BSE_INDEX"
 
-        # Or check if symbol is a known index
-        nse_indices = ["NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX"]
-        bse_indices = ["SENSEX", "BANKEX", "SENSEX50"]
-
-        if symbol.upper() in nse_indices and exchange.upper() == "NSE":
+        # Or auto-route to the _INDEX exchange if the symbol is a known index.
+        if symbol.upper() in NSE_INDEX_SYMBOLS and exchange.upper() == "NSE":
             exchange = "NSE_INDEX"
-        elif symbol.upper() in bse_indices and exchange.upper() == "BSE":
+        elif symbol.upper() in BSE_INDEX_SYMBOLS and exchange.upper() == "BSE":
             exchange = "BSE_INDEX"
 
         response = client.symbol(symbol=symbol.upper(), exchange=exchange.upper())
@@ -825,20 +866,22 @@ def get_symbol_info(symbol: str, exchange: str = "NSE", instrument_type: str = N
 @mcp.tool()
 def get_index_symbols(exchange: str = "NSE") -> str:
     """
-    Get common index symbols for NSE or BSE.
+    Get the OpenAlgo-standardized index symbols for NSE or BSE.
+
+    These are the common index names rolled out across all supported brokers via the
+    OpenAlgo symbol standardization. Use exchange code 'NSE_INDEX' / 'BSE_INDEX' when
+    placing orders or fetching quotes for these symbols.
 
     Args:
         exchange: NSE or BSE
 
     Returns:
-        List of common index symbols for the specified exchange
+        JSON with exchange, exchange_code, and the full list of standardized index
+        symbols (57+ NSE, 40+ BSE).
     """
     indices = {
-        "NSE": {
-            "exchange_code": "NSE_INDEX",
-            "symbols": ["NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX"],
-        },
-        "BSE": {"exchange_code": "BSE_INDEX", "symbols": ["SENSEX", "BANKEX", "SENSEX50"]},
+        "NSE": {"exchange_code": "NSE_INDEX", "symbols": NSE_INDEX_SYMBOLS},
+        "BSE": {"exchange_code": "BSE_INDEX", "symbols": BSE_INDEX_SYMBOLS},
     }
 
     exchange_upper = exchange.upper()

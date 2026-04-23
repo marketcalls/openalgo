@@ -213,7 +213,11 @@ OpenAlgo uses standardized exchange codes to identify trading venues.
 
 ## Common Index Symbols
 
-### NSE Indices (Exchange: NSE_INDEX)
+OpenAlgo has rolled out a **standardized index symbol set across all supported brokers**. Use exchange code `NSE_INDEX` or `BSE_INDEX` when placing orders or fetching quotes for these symbols — the same symbol works identically on every broker.
+
+### NSE Indices (Exchange: `NSE_INDEX`)
+
+**Headline indices**
 
 | Symbol | Description |
 |--------|-------------|
@@ -223,14 +227,52 @@ OpenAlgo uses standardized exchange codes to identify trading venues.
 | `NIFTYNXT50` | Nifty Next 50 |
 | `MIDCPNIFTY` | Nifty Midcap Select |
 | `INDIAVIX` | India VIX |
+| `HANGSENGBEESNAV` | Hang Seng BeES NAV |
 
-### BSE Indices (Exchange: BSE_INDEX)
+**Broad-market indices**
+
+`NIFTY100`, `NIFTY200`, `NIFTY500`
+
+**Sectoral indices**
+
+`NIFTYAUTO`, `NIFTYBANK` (= `BANKNIFTY`), `NIFTYCOMMODITIES`, `NIFTYCONSUMPTION`, `NIFTYCPSE`, `NIFTYENERGY`, `NIFTYFMCG`, `NIFTYINFRA`, `NIFTYIT`, `NIFTYMEDIA`, `NIFTYMETAL`, `NIFTYMNC`, `NIFTYPHARMA`, `NIFTYPSE`, `NIFTYPSUBANK`, `NIFTYPVTBANK`, `NIFTYREALTY`, `NIFTYSERVSECTOR`
+
+**Mid & smallcap indices**
+
+`NIFTYMIDCAP50`, `NIFTYMIDCAP100`, `NIFTYMIDCAP150`, `NIFTYMIDLIQ15`, `NIFTYMIDSML400`, `NIFTYSMLCAP50`, `NIFTYSMLCAP100`, `NIFTYSMLCAP250`
+
+**Strategy / factor indices**
+
+`NIFTYALPHA50`, `NIFTYDIVOPPS50`, `NIFTYGROWSECT15`, `NIFTY50VALUE20`, `NIFTY100EQLWGT`, `NIFTY100LIQ15`, `NIFTY100LOWVOL30`, `NIFTY100QUALTY30`, `NIFTY200QUALTY30`, `NIFTY50DIVPOINT`, `NIFTY50EQLWGT`, `NIFTY50PR1XINV`, `NIFTY50PR2XLEV`, `NIFTY50TR1XINV`, `NIFTY50TR2XLEV`
+
+**Government securities (G-Sec) indices**
+
+`NIFTYGS10YR`, `NIFTYGS10YRCLN`, `NIFTYGS1115YR`, `NIFTYGS15YRPLUS`, `NIFTYGS48YR`, `NIFTYGS813YR`, `NIFTYGSCOMPSITE`
+
+### BSE Indices (Exchange: `BSE_INDEX`)
+
+**Headline indices**
 
 | Symbol | Description |
 |--------|-------------|
 | `SENSEX` | S&P BSE Sensex |
 | `BANKEX` | S&P BSE Bankex |
 | `SENSEX50` | S&P BSE Sensex 50 |
+| `BSESENSEXNEXT50` | BSE Sensex Next 50 |
+
+**Broad-market indices**
+
+`BSE100`, `BSE200`, `BSE500`, `BSE150MIDCAPINDEX`, `BSE250LARGEMIDCAPINDEX`, `BSE400MIDSMALLCAPINDEX`, `BSELARGECAP`, `BSEMIDCAP`, `BSEMIDCAPSELECTINDEX`, `BSESMALLCAP`, `BSESMALLCAPSELECTINDEX`
+
+**Sectoral indices**
+
+`BSEAUTO`, `BSECAPITALGOODS`, `BSECONSUMERDURABLES`, `BSECPSE`, `BSEENERGY`, `BSEFASTMOVINGCONSUMERGOODS`, `BSEFINANCIALSERVICES`, `BSEHEALTHCARE`, `BSEINDUSTRIALS`, `BSEINFORMATIONTECHNOLOGY`, `BSEMETAL`, `BSEOIL&GAS`, `BSEPOWER`, `BSEPSU`, `BSEREALTY`, `BSETECK`, `BSETELECOM`
+
+**Thematic / strategy indices**
+
+`BSECARBONEX`, `BSEDOLLEX30`, `BSEDOLLEX100`, `BSEDOLLEX200`, `BSEGREENEX`, `BSEINDIAINFRASTRUCTUREINDEX`, `BSEIPO`, `BSESMEIPO`
+
+> The `BSEOIL&GAS` symbol literally contains an ampersand — preserve it exactly as shown when passing the symbol via API, JSON body, or webhook. For the full authoritative reference see [docs.openalgo.in/symbol-format](https://docs.openalgo.in/symbol-format).
 
 ## Product Types
 
