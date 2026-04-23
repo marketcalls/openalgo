@@ -95,6 +95,26 @@ Build trading strategies visually without writing code:
 - **Webhook triggers** for TradingView and external signals
 - **Visual debugging** with execution flow highlighting
 
+### Options & Strategy Analytics Tools (`/tools`)
+A complete suite of twelve built-in analytical tools for options trading and market analysis — no external subscriptions required. Accessible from the **Tools** page in the sidebar:
+
+| Tool | Route | What it does |
+|------|-------|--------------|
+| **Strategy Builder** | `/strategybuilder` | Build multi-leg option strategies with live Greeks, payoff diagrams, what-if simulators, Strategy Chart, Multi Strike OI tabs, and basket order execution |
+| **Strategy Portfolio** | `/strategybuilder/portfolio` | Saved strategies across MyTrades and Simulation watchlists |
+| **Option Chain** | `/optionchain` | Real-time option chain with live Greeks, OI data, and quick order placement |
+| **Option Greeks** | `/ivchart` | Historical IV, Delta, Theta, Vega, and Gamma charts for ATM options |
+| **OI Tracker** | `/oitracker` | Open Interest analysis with CE/PE OI bars, PCR overlay, and ATM strike marker |
+| **Max Pain** | `/maxpain` | Max Pain strike calculation with visual pain distribution across strikes |
+| **Straddle Chart** | `/straddle` | Dynamic ATM Straddle chart with rolling strike, Spot, and Synthetic Futures overlay |
+| **Straddle PnL** | `/straddlepnl` | Simulated intraday ATM straddle P&L with automated N-point adjustments and trade log |
+| **Vol Surface** | `/volsurface` | 3D Implied Volatility surface across strikes and expiries using live option chain data |
+| **GEX Dashboard** | `/gex` | Gamma Exposure analysis with OI Walls, Net GEX per strike, and top gamma strikes |
+| **IV Smile** | `/ivsmile` | Implied Volatility smile with Call/Put IV curves, ATM IV, and skew analysis |
+| **OI Profile** | `/oiprofile` | Futures candlestick with OI butterfly and daily OI change across strikes |
+
+All tools stream live from your connected broker via the unified WebSocket feed and work identically across every supported broker.
+
 ### API Analyzer Mode
 Complete testing environment with ₹1 Crore virtual capital:
 - Test strategies with real market data without risking money
