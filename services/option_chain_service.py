@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
-from database.token_db_enhanced import fno_search_symbols
+from database.token_db_enhanced import fno_search_symbols, get_symbol_info
 from services.option_symbol_service import (
     construct_option_symbol,
     find_atm_strike_from_actual,
@@ -57,7 +57,7 @@ from services.option_symbol_service import (
     get_option_exchange,
     parse_underlying_symbol,
 )
-from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
+from services.quotes_service import get_multiquotes, get_option_chain_quotes, get_quotes, get_underlying_ltp, import_broker_module
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
@@ -180,18 +180,9 @@ def get_option_symbols_for_chain(
             ce_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "CE")
             pe_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "PE")
 
-            # Query database for both CE and PE
-            ce_record = (
-                db_session.query(SymToken)
-                .filter(SymToken.symbol == ce_symbol, SymToken.exchange == exchange)
-                .first()
-            )
-
-            pe_record = (
-                db_session.query(SymToken)
-                .filter(SymToken.symbol == pe_symbol, SymToken.exchange == exchange)
-                .first()
-            )
+            # Use in-memory cache instead of DB queries
+            ce_record = get_symbol_info(ce_symbol, exchange)
+            pe_record = get_symbol_info(pe_symbol, exchange)
 
         chain_symbols.append(
             {
@@ -298,24 +289,29 @@ def get_option_chain(
                     {"status": "error", "message": f"Failed to fetch LTP for {quote_symbol}: {_e}"},
                     500,
                 )
+
+            if not success:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Failed to fetch LTP for {quote_symbol}: {quote_response.get('message', 'Unknown error')}",
+                    },
+                    status_code,
+                )
+
+            underlying_data = quote_response.get("data", {})
+            underlying_ltp = underlying_data.get("ltp")
+            underlying_prev_close = underlying_data.get("prev_close", 0)
         else:
-            success, quote_response, status_code = get_quotes(
-                symbol=quote_symbol, exchange=quote_exchange, api_key=api_key
-            )
+            # Non-crypto: resolve auth once, use lightweight REST LTP for ATM calc
+            _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
+            if _auth is None:
+                return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
 
-        if not success:
-            return (
-                False,
-                {
-                    "status": "error",
-                    "message": f"Failed to fetch LTP for {quote_symbol}: {quote_response.get('message', 'Unknown error')}",
-                },
-                status_code,
-            )
+            underlying_ltp = get_underlying_ltp(_auth, _feed, _broker, quote_symbol, quote_exchange)
+            underlying_prev_close = 0  # will be populated from batch fetch below
 
-        underlying_data = quote_response.get("data", {})
-        underlying_ltp = underlying_data.get("ltp")
-        underlying_prev_close = underlying_data.get("prev_close", 0)
         if underlying_ltp is None:
             return (
                 False,
@@ -323,7 +319,7 @@ def get_option_chain(
                 500,
             )
 
-        logger.info(f"Underlying LTP: {underlying_ltp}, Prev Close: {underlying_prev_close}")
+        logger.info(f"Underlying LTP: {underlying_ltp}")
 
         # Step 4: Get options exchange and available strikes
         options_exchange = get_option_exchange(quote_exchange)
@@ -378,7 +374,7 @@ def get_option_chain(
                 404,
             )
 
-        # Step 8: Fetch quotes for all options using multiquotes
+        # Step 8: Fetch quotes for all options (+ underlying for non-crypto batch path)
         logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
         if exchange.upper() in CRYPTO_EXCHANGES:
             # Reuse _auth, _bmod, _dh already initialised in Step 3 — no second
@@ -396,9 +392,7 @@ def get_option_chain(
                         _results.append(
                             {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
                         )
-                quotes_response = {"status": "success", "results": _results}
-                success = True
-                status_code = 200
+                option_results = _results
             except Exception as _e:
                 return (
                     False,
@@ -406,21 +400,24 @@ def get_option_chain(
                     500,
                 )
         else:
-            success, quotes_response, status_code = get_multiquotes(
-                symbols=symbols_to_fetch, api_key=api_key
+            # Single batch fetch: underlying + all options in one WS connection
+            underlying_quote, option_results = get_option_chain_quotes(
+                _auth, _feed, _broker,
+                quote_symbol, quote_exchange,
+                symbols_to_fetch,
             )
+            if underlying_quote:
+                underlying_prev_close = underlying_quote.get("prev_close", 0)
 
         # Build quote lookup map
         quotes_map = {}
-        if success and "results" in quotes_response:
-            for result in quotes_response["results"]:
-                symbol = result.get("symbol")
-                if symbol:
-                    # Handle both formats: direct data or nested data
-                    if "data" in result:
-                        quotes_map[symbol] = result["data"]
-                    elif "error" not in result:
-                        quotes_map[symbol] = result
+        for result in option_results:
+            symbol = result.get("symbol")
+            if symbol:
+                if "data" in result:
+                    quotes_map[symbol] = result["data"]
+                elif "error" not in result:
+                    quotes_map[symbol] = result
 
         # Step 9: Build final chain response
         chain = []
