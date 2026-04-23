@@ -58,6 +58,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -622,130 +623,153 @@ export default function Positions() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant={hasActiveFilters ? 'default' : 'outline'}
-                size="sm"
-                className="relative"
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Settings
-                {hasActiveFilters && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
-                )}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>Position Settings</DialogTitle>
-                <DialogDescription>Configure grouping and filters</DialogDescription>
-              </DialogHeader>
+            <TooltipProvider>
+              <Tooltip>
+                <DialogTrigger asChild>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={hasActiveFilters ? 'default' : 'outline'}
+                      size="sm"
+                      className="relative"
+                    >
+                      <Settings2 className="h-4 w-4 mr-2" />
+                      Settings
+                      {hasActiveFilters && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                      )}
+                    </Button>
 
-              <div className="space-y-6 py-4">
-                {/* Grouping */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Grouping
-                  </Label>
-                  <div className="space-y-2">
-                    {[
-                      { value: 'none', label: 'None' },
-                      { value: 'underlying', label: 'Underlying' },
-                      { value: 'underlying_expiry', label: 'Underlying & Expiry' },
-                    ].map((opt) => (
-                      <label
-                        key={opt.value}
-                        className={cn(
-                          'flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-muted',
-                          grouping === opt.value && 'bg-pink-500/10 border border-pink-500/30'
-                        )}
-                      >
-                        <input
-                          type="radio"
-                          name="grouping"
-                          checked={grouping === opt.value}
-                          onChange={() => {
-                            setGrouping(opt.value as GroupingType)
-                            setCollapsedGroups(new Set())
-                          }}
-                          className="accent-pink-500"
-                        />
-                        <span
-                          className={cn(grouping === opt.value && 'text-pink-500 font-semibold')}
-                        >
-                          {opt.label}
-                        </span>
-                      </label>
-                    ))}
+                  </TooltipTrigger>
+                </DialogTrigger>
+                <TooltipContent>Configure grouping and filters</TooltipContent>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Position Settings</DialogTitle>
+                    <DialogDescription>Configure grouping and filters</DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-6 py-4">
+                    {/* Grouping */}
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Grouping
+                      </Label>
+                      <div className="space-y-2">
+                        {[
+                          { value: 'none', label: 'None' },
+                          { value: 'underlying', label: 'Underlying' },
+                          { value: 'underlying_expiry', label: 'Underlying & Expiry' },
+                        ].map((opt) => (
+                          <label
+                            key={opt.value}
+                            className={cn(
+                              'flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-muted',
+                              grouping === opt.value && 'bg-pink-500/10 border border-pink-500/30'
+                            )}
+                          >
+                            <input
+                              type="radio"
+                              name="grouping"
+                              checked={grouping === opt.value}
+                              onChange={() => {
+                                setGrouping(opt.value as GroupingType)
+                                setCollapsedGroups(new Set())
+                              }}
+                              className="accent-pink-500"
+                            />
+                            <span
+                              className={cn(grouping === opt.value && 'text-pink-500 font-semibold')}
+                            >
+                              {opt.label}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="border-t" />
+
+                    {/* Product Type */}
+                    {!isCrypto && (
+                      <div className="space-y-3">
+                        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          Product Type
+                        </Label>
+                        <div className="flex flex-wrap gap-2">
+                          <FilterChip type="product" value="CNC" label="CNC" />
+                          <FilterChip type="product" value="MIS" label="MIS" />
+                          <FilterChip type="product" value="NRML" label="NRML" />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Direction */}
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Direction
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        <FilterChip type="direction" value="LONG" label="Long" />
+                        <FilterChip type="direction" value="SHORT" label="Short" />
+                      </div>
+                    </div>
+
+                    {/* Exchange */}
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Exchange
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        <FilterChip type="exchange" value="NSE" label="NSE" />
+                        <FilterChip type="exchange" value="BSE" label="BSE" />
+                        <FilterChip type="exchange" value="NFO" label="NFO" />
+                        <FilterChip type="exchange" value="BFO" label="BFO" />
+                        <FilterChip type="exchange" value="MCX" label="MCX" />
+                        <FilterChip type="exchange" value="CDS" label="CDS" />
+                      </div>
+                    </div>
                   </div>
-                </div>
 
-                <div className="border-t" />
-
-                {/* Product Type */}
-                {!isCrypto && (
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Product Type
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="product" value="CNC" label="CNC" />
-                    <FilterChip type="product" value="MIS" label="MIS" />
-                    <FilterChip type="product" value="NRML" label="NRML" />
-                  </div>
-                </div>
-                )}
-
-                {/* Direction */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Direction
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="direction" value="LONG" label="Long" />
-                    <FilterChip type="direction" value="SHORT" label="Short" />
-                  </div>
-                </div>
-
-                {/* Exchange */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Exchange
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="exchange" value="NSE" label="NSE" />
-                    <FilterChip type="exchange" value="BSE" label="BSE" />
-                    <FilterChip type="exchange" value="NFO" label="NFO" />
-                    <FilterChip type="exchange" value="BFO" label="BFO" />
-                    <FilterChip type="exchange" value="MCX" label="MCX" />
-                    <FilterChip type="exchange" value="CDS" label="CDS" />
-                  </div>
-                </div>
-              </div>
-
-              <DialogFooter>
-                <Button variant="ghost" onClick={clearFilters}>
-                  Clear All
-                </Button>
-                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
-              </DialogFooter>
-            </DialogContent>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={clearFilters}>
+                      Clear All
+                    </Button>
+                    <Button onClick={() => setSettingsOpen(false)}>Done</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Tooltip>
+            </TooltipProvider>
           </Dialog>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchPositions(true)}
+                  disabled={isRefreshing}
+                >
+                  <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
+                  Refresh
+                </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchPositions(true)}
-            disabled={isRefreshing}
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh Positions</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
-          <Button variant="outline" size="sm" onClick={exportToCSV}>
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" onClick={exportToCSV}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+
+              </TooltipTrigger>
+              <TooltipContent>Export Positions</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -952,14 +976,14 @@ export default function Positions() {
                                 </Badge>
                               </TableCell>
                               {!isCrypto && (
-                              <TableCell className="w-[80px]">
-                                <Badge
-                                  variant="outline"
-                                  className={PRODUCT_COLORS[position.product] || ''}
-                                >
-                                  {position.product}
-                                </Badge>
-                              </TableCell>
+                                <TableCell className="w-[80px]">
+                                  <Badge
+                                    variant="outline"
+                                    className={PRODUCT_COLORS[position.product] || ''}
+                                  >
+                                    {position.product}
+                                  </Badge>
+                                </TableCell>
                               )}
                               <TableCell
                                 className={cn(

@@ -31,6 +31,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
@@ -232,19 +233,36 @@ export default function Holdings() {
           <p className="text-muted-foreground">View your holdings portfolio</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchHoldings(true)}
-            disabled={isRefreshing}
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV}>
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchHoldings(true)}
+                  disabled={isRefreshing}
+                >
+                  <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
+                  Refresh
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh Holdings</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" onClick={exportToCSV}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export Holdings</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
+
         </div>
       </div>
 
