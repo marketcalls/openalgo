@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Briefcase, Layers, LineChart, Save, Sparkles, TrendingUp } from 'lucide-react'
+import { Activity, BarChart3, Briefcase, Layers, LineChart, Sparkles, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient } from '@/api/client'
@@ -16,6 +16,7 @@ import { PayoffChart } from '@/components/strategy-builder/PayoffChart'
 import { PnLTab } from '@/components/strategy-builder/PnLTab'
 import { PositionsPanel } from '@/components/strategy-builder/PositionsPanel'
 import { SaveStrategyDialog } from '@/components/strategy-builder/SaveStrategyDialog'
+import { ExecuteBasketDialog } from '@/components/trading/ExecuteBasketDialog'
 import { Simulators } from '@/components/strategy-builder/Simulators'
 import StrategyChartTab from '@/components/strategy-builder/StrategyChartTab'
 import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
@@ -150,6 +151,36 @@ export default function StrategyBuilder() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [loadedEntry, setLoadedEntry] = useState<PortfolioEntry | null>(null)
+
+  // Basket execution dialog
+  const [executeDialogOpen, setExecuteDialogOpen] = useState(false)
+
+  // OpenAlgo-symbol → tick size map, built from the live option chain.
+  // Powers per-leg price snapping in the Execute Basket dialog so options
+  // priced in 0.05 ticks never leak floating-point drift into the order,
+  // and crypto legs with 0.0001 / 0.5 ticks are respected too.
+  const tickSizeBySymbol = useMemo(() => {
+    if (!chainData?.chain) return {}
+    const map: Record<string, number> = {}
+    for (const row of chainData.chain) {
+      if (row.ce?.symbol && row.ce.tick_size > 0) map[row.ce.symbol] = row.ce.tick_size
+      if (row.pe?.symbol && row.pe.tick_size > 0) map[row.pe.symbol] = row.pe.tick_size
+    }
+    return map
+  }, [chainData])
+
+  // Dynamic, read-only strategy name sent to /basketorder. Prefers the
+  // saved portfolio entry name; otherwise synthesises from current state.
+  const computedStrategyName = useMemo(() => {
+    if (loadedEntry?.name) return loadedEntry.name
+    const activeCount = legs.filter((l) => l.active).length
+    const template = activeTemplate?.name
+    const parts = [selectedUnderlying || 'Strategy']
+    if (template) parts.push(template)
+    if (selectedExpiry) parts.push(selectedExpiry)
+    if (activeCount > 0) parts.push(`(${activeCount}L)`)
+    return parts.join(' ')
+  }, [loadedEntry, legs, activeTemplate, selectedUnderlying, selectedExpiry])
 
   const requestIdRef = useRef(0)
 
@@ -1148,6 +1179,10 @@ export default function StrategyBuilder() {
               marginSupported={marginSupported}
               atmStrike={atmStrike}
               strikeStep={strikeStep}
+              onSaveStrategy={() => setSaveDialogOpen(true)}
+              onExecute={() => setExecuteDialogOpen(true)}
+              isUpdating={loadedEntry !== null}
+              executeDisabled={!apiKey}
             />
           </div>
 
@@ -1204,16 +1239,6 @@ export default function StrategyBuilder() {
                   >
                     <Briefcase className="h-3.5 w-3.5" />
                     Portfolio
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => setSaveDialogOpen(true)}
-                    disabled={legs.length === 0}
-                    title={legs.length === 0 ? 'Add at least one leg to save' : ''}
-                    className="h-10 gap-1.5 px-4 text-xs font-semibold"
-                  >
-                    <Save className="h-3.5 w-3.5" />
-                    {loadedEntry ? 'Update Strategy' : 'Save Strategy'}
                   </Button>
                 </div>
               </div>
@@ -1316,6 +1341,16 @@ export default function StrategyBuilder() {
         defaultWatchlist={loadedEntry?.watchlist ?? 'mytrades'}
         isUpdate={loadedEntry !== null}
         busy={isSaving}
+      />
+
+      <ExecuteBasketDialog
+        open={executeDialogOpen}
+        onOpenChange={setExecuteDialogOpen}
+        legs={legs}
+        exchange={optionExchangeFor(selectedExchange)}
+        strategyName={computedStrategyName}
+        tickSizeBySymbol={tickSizeBySymbol}
+        apiKey={apiKey ?? ''}
       />
     </div>
   )
