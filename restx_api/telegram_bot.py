@@ -181,7 +181,7 @@ class TelegramBotConfig(Resource):
                     rate_limit = int(data["rate_limit_per_minute"])
                     if not 1 <= rate_limit <= 120:
                         return make_response(
-                            jsonify({"status": "error", "message": "rate_limit_per_minute must be 1-120"}), 400
+                            jsonify({"status": "error", "message": "rate_limit_per_minute must be between 1 and 120"}), 400
                         )
                     config_update["rate_limit_per_minute"] = rate_limit
                 except (TypeError, ValueError):
@@ -240,7 +240,6 @@ class StartBot(Resource):
                 return make_response(jsonify({"status": "error", "message": message}), 500)
 
             if config.get("polling_mode", True):
-                # Corrected to use telegram_bot_service for consistency
                 success, message = run_async(telegram_bot_service.start_polling())
             else:
                 success = True
@@ -311,7 +310,6 @@ def get_webhook_secret():
     if bot_token:
         return hashlib.sha256(bot_token.encode()).hexdigest()[:32]
 
-    # Fixed: Now properly raises ValueError as documented
     raise ValueError("No webhook secret or bot token found in configuration.")
 
 
@@ -363,7 +361,7 @@ class TelegramUsers(Resource):
 
             if not api_key or not verify_api_key(api_key):
                 return make_response(
-                    jsonify({"status": "error", "message": "Invalid API key"}), 401
+                    jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
                 )
 
             filters = {}
@@ -400,13 +398,16 @@ class BroadcastMessage(Resource):
 
             if not api_key or not verify_api_key(api_key):
                 return make_response(
-                    jsonify({"status": "error", "message": "Invalid API key"}), 401
+                    jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
                 )
 
             message = data.get("message")
-            if not message or len(message) > 4096:
+            filters = data.get("filters", {})
+
+            # Violation 1 Fix: Check if message is string and validate length
+            if not isinstance(message, str) or not message or len(message) > 4096:
                 return make_response(
-                    jsonify({"status": "error", "message": "Invalid message length"}), 400
+                    jsonify({"status": "error", "message": "Invalid message: must be a string under 4096 characters"}), 400
                 )
 
             config = get_bot_config()
@@ -448,7 +449,7 @@ class SendNotification(Resource):
 
             if not api_key or not verify_api_key(api_key):
                 return make_response(
-                    jsonify({"status": "error", "message": "Invalid API key"}), 401
+                    jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
                 )
 
             username = data.get("username")
@@ -490,9 +491,14 @@ class TelegramStats(Resource):
         try:
             api_key = request.headers.get("X-API-KEY") or request.args.get("apikey")
             if not api_key or not verify_api_key(api_key):
-                return make_response(jsonify({"status": "error"}), 401)
+                return make_response(jsonify({"status": "error", "message": "Invalid API key"}), 401)
 
-            days = int(request.args.get("days", 7))
+            # Violation 2 Fix: Handle malformed 'days' safely
+            try:
+                days = int(request.args.get("days", 7))
+            except (TypeError, ValueError):
+                days = 7
+
             stats = get_command_stats(min(max(days, 1), 365))
             return make_response(jsonify({"status": "success", "data": stats}), 200)
         except Exception:
@@ -507,10 +513,14 @@ class UserPreferences(Resource):
         """Get user preferences"""
         try:
             api_key = request.headers.get("X-API-KEY") or request.args.get("apikey")
+            
+            # Violation 3 Fix: Separate Auth (401) from Payload (400)
+            if not api_key or not verify_api_key(api_key):
+                return make_response(jsonify({"status": "error", "message": "Invalid API key"}), 401)
+                
             telegram_id = request.args.get("telegram_id", type=int)
-
-            if not api_key or not verify_api_key(api_key) or not telegram_id:
-                return make_response(jsonify({"status": "error"}), 400)
+            if not telegram_id:
+                return make_response(jsonify({"status": "error", "message": "telegram_id is required"}), 400)
 
             preferences = get_user_preferences(telegram_id)
             return make_response(jsonify({"status": "success", "data": preferences}), 200)
@@ -525,10 +535,14 @@ class UserPreferences(Resource):
         try:
             data = request.json
             api_key = data.get("apikey") or request.headers.get("X-API-KEY")
+            
+            # Violation 3 Fix: Separate Auth (401) from Payload (400)
+            if not api_key or not verify_api_key(api_key):
+                return make_response(jsonify({"status": "error", "message": "Invalid API key"}), 401)
+                
             telegram_id = data.get("telegram_id")
-
-            if not api_key or not verify_api_key(api_key) or not telegram_id:
-                return make_response(jsonify({"status": "error"}), 400)
+            if not telegram_id:
+                return make_response(jsonify({"status": "error", "message": "telegram_id is required"}), 400)
 
             preferences = {k: data[k] for k in ["order_notifications", "trade_notifications", "pnl_notifications", "daily_summary", "summary_time", "language", "timezone"] if k in data}
             success = update_user_preferences(telegram_id, preferences)
