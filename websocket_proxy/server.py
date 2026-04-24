@@ -149,6 +149,16 @@ class WebSocketProxy:
 
             # Try to start the WebSocket server with proper socket options for immediate port reuse
             try:
+                # max_queue caps per-client send buffer to absorb tick bursts
+                # without prematurely killing slow clients (default 32 was
+                # surfacing as "random disconnects" during NIFTY expiry-day
+                # storms). ping_interval/ping_timeout are set explicitly so
+                # the keepalive contract is locked into the codebase rather
+                # than relying on the websockets library defaults.
+                ws_max_queue = int(os.getenv("WS_MAX_QUEUE", "1024"))
+                ws_ping_interval = int(os.getenv("WS_PING_INTERVAL", "20"))
+                ws_ping_timeout = int(os.getenv("WS_PING_TIMEOUT", "20"))
+
                 # Start WebSocket server with socket reuse options
                 self.server = await websockets.serve(
                     self.handle_client,
@@ -156,6 +166,9 @@ class WebSocketProxy:
                     self.port,
                     # Enable socket reuse for immediate port availability after close
                     reuse_port=True if hasattr(socket, "SO_REUSEPORT") else False,
+                    max_queue=ws_max_queue,
+                    ping_interval=ws_ping_interval,
+                    ping_timeout=ws_ping_timeout,
                 )
 
                 highlighted_success_address = highlight_url(f"{self.host}:{self.port}")
@@ -1536,17 +1549,16 @@ class WebSocketProxy:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
                     continue
 
-                # OPTIMIZATION: Message throttling for high-frequency updates
-                # Skip if we sent the same message too recently (reduces CPU on fast updates)
+                # No server-side LTP throttling: the previous time-based
+                # throttle dropped intra-window ticks instead of coalescing
+                # them, so clients could miss the latest price during bursts
+                # (e.g. NIFTY expiry, circuit triggers). With the O(1)
+                # subscription_index, fan-out is cheap enough to forward every
+                # tick. If CPU pressure ever returns, replace this with a
+                # trailing-edge coalescer that emits the latest pending tick.
                 sub_key = (symbol, exchange, mode)
                 current_time = time.time()
-
-                # Only throttle LTP mode (mode 1), not Quote/Depth
-                if mode == 1:  # LTP mode
-                    last_time = self.last_message_time.get(sub_key, 0)
-                    if current_time - last_time < self.message_throttle_interval:
-                        continue  # Skip this update, too soon
-                    self.last_message_time[sub_key] = current_time
+                self.last_message_time[sub_key] = current_time
 
                 # Feed market data to MarketDataService for backend consumers
                 # (sandbox execution engine, position MTM, RMS, etc.)
