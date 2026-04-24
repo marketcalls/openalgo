@@ -1,0 +1,28 @@
+meta {
+  name: SuperOrder
+  type: http
+  seq: 5
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/superorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "your_api_key_here",
+      "strategy": "Test Strategy",
+      "exchange": "NSE",
+      "symbol": "YESBANK",
+      "action": "BUY",
+      "product": "MIS",
+      "pricetype": "LIMIT",
+      "quantity": "10",
+      "price": "21.50",
+      "target_price": "23.00",
+      "stoploss_price": "20.00",
+      "trail_jump": "0.50"
+  }
+}
