@@ -38,7 +38,7 @@ def place_superorder(
 
         # Calculate expiration time
         expires_at = None
-        if order_data["product_type"].upper() in ["INTRADAY", "MIS"]:
+        if order_data["product"].upper() in ["INTRADAY", "MIS"]:
             # Auto-cancel at end of day
             today = datetime.datetime.now().replace(
                 hour=15, minute=30, second=0, microsecond=0
@@ -53,10 +53,10 @@ def place_superorder(
             user_id=user_id,
             symbol=order_data["symbol"],
             exchange=order_data["exchange"],
-            product_type=order_data["product_type"],
-            transaction_type=order_data["transaction_type"],
+            product_type=order_data["product"],
+            transaction_type=order_data["action"],
             quantity=order_data["quantity"],
-            entry_price=order_data["entry_price"],
+            entry_price=order_data["price"],
             target_price=order_data["target_price"],
             stoploss_price=order_data["stoploss_price"],
             trail_jump=order_data.get("trail_jump"),
@@ -66,7 +66,7 @@ def place_superorder(
         )
 
         # Determine pricetype for Main Leg
-        if order_data["entry_price"] > 0:
+        if order_data["price"] > 0:
             pricetype = "LIMIT"
         else:
             pricetype = "MARKET"
@@ -74,14 +74,14 @@ def place_superorder(
         # Place the main leg order using existing place_order service
         main_leg_data = {
             "apikey": api_key,
-            "strategy": "SuperOrder",  # Or use order_tag
+            "strategy": order_data.get("strategy", "SuperOrder"),
             "symbol": order_data["symbol"],
             "exchange": order_data["exchange"],
-            "action": order_data["transaction_type"],
+            "action": order_data["action"],
             "quantity": order_data["quantity"],
             "pricetype": pricetype,
-            "product": order_data["product_type"],
-            "price": order_data["entry_price"],
+            "product": order_data["product"],
+            "price": order_data["price"],
         }
 
         from services.place_order_service import place_order
