@@ -1,7 +1,7 @@
 import os
 
 from flask import jsonify, make_response, request
-from flask_restx import Namespace, Resource
+from flask_restx import Namespace, Resource, fields
 from marshmallow import ValidationError
 
 from limiter import limiter
@@ -24,8 +24,68 @@ modify_superorder_schema = ModifySuperOrderSchema()
 cancel_superorder_schema = CancelSuperOrderSchema()
 
 
+super_order_model = api.model(
+    "SuperOrder",
+    {
+        "apikey": fields.String(
+            required=True,
+            description="OpenAlgo API Key",
+            example="a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00",
+        ),
+        "strategy": fields.String(
+            required=True,
+            description="Strategy name for tracking",
+            example="Test Strategy",
+        ),
+        "exchange": fields.String(
+            required=True, description="Exchange (NSE / BSE / MCX)", example="NSE"
+        ),
+        "symbol": fields.String(
+            required=True, description="Trading symbol", example="YESBANK"
+        ),
+        "action": fields.String(
+            required=True, description="BUY or SELL", example="BUY"
+        ),
+        "product": fields.String(
+            required=True, description="MIS / NRML / CNC / MTF", example="MIS"
+        ),
+        "pricetype": fields.String(
+            required=True,
+            description="LIMIT (Super Orders require a limit entry price)",
+            example="LIMIT",
+        ),
+        "quantity": fields.String(
+            required=True, description="Number of shares/lots", example="10"
+        ),
+        "price": fields.String(
+            required=True, description="Entry price (Main Leg limit price)", example="21.50"
+        ),
+        "target_price": fields.String(
+            required=True,
+            description="Target exit price (above entry for BUY, below for SELL)",
+            example="23.00",
+        ),
+        "stoploss_price": fields.String(
+            required=True,
+            description="Stop-loss price (below entry for BUY, above for SELL)",
+            example="20.00",
+        ),
+        "trail_jump": fields.String(
+            required=False,
+            description="Trailing SL increment (min: tick size). Omit to disable.",
+            example="0.50",
+        ),
+    },
+)
+
 @api.route("/", strict_slashes=False)
 class SuperOrderList(Resource):
+    @api.doc("place_super_order")
+    @api.expect(super_order_model)
+    @api.response(200, "Success")
+    @api.response(400, "Validation Error")
+    @api.response(401, "Unauthorized")
+    @api.response(500, "Internal Server Error")
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
         """Place a new Super Order"""

@@ -275,10 +275,10 @@ def modify_superorder(
                 mod_main_leg = True
 
             if (
-                order_data.get("entry_price") is not None
-                and order_data["entry_price"] != order.entry_price
+                order_data.get("price") is not None
+                and order_data["price"] != order.entry_price
             ):
-                order.entry_price = order_data["entry_price"]
+                order.entry_price = order_data["price"]
                 main_leg_mod_data["price"] = order.entry_price
                 main_leg_mod_data["pricetype"] = (
                     "LIMIT" if order.entry_price > 0 else "MARKET"
@@ -297,7 +297,7 @@ def modify_superorder(
             # Active state
             if (
                 order_data.get("quantity") is not None
-                or order_data.get("entry_price") is not None
+                or order_data.get("price") is not None
             ):
                 return (
                     False,

@@ -446,22 +446,24 @@ class SuperOrderSchema(Schema):
     """Schema for placing a Super Order"""
 
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    strategy = fields.Str(required=True)
     symbol = fields.Str(required=True)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
-    product_type = fields.Str(
+    product = fields.Str(
         required=True,
         validate=validate.OneOf(["INTRADAY", "NRML", "CNC", "MTF", "MIS"]),
     )
-    transaction_type = fields.Str(
+    action = fields.Str(
         required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"])
     )
+    pricetype = fields.Str(missing="LIMIT")
     quantity = fields.Float(
         required=True,
         validate=validate.Range(
             min=0, min_inclusive=False, error="Quantity must be a positive number."
         ),
     )
-    entry_price = fields.Float(
+    price = fields.Float(
         required=True,
         validate=validate.Range(min=0, error="Price must be a non-negative number."),
     )
@@ -499,7 +501,7 @@ class ModifySuperOrderSchema(Schema):
             min=0, min_inclusive=False, error="Quantity must be a positive number."
         ),
     )
-    entry_price = fields.Float(
+    price = fields.Float(
         missing=None,
         allow_none=True,
         validate=validate.Range(min=0, error="Price must be a non-negative number."),
