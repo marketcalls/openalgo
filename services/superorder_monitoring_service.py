@@ -52,7 +52,29 @@ class SuperOrderMonitor:
                 self._thread.join(timeout=2.0)
                 logger.info("Super Order Monitor stopped.")
 
+    def _verify_imports(self):
+        """Validate required service imports at startup to prevent silent loop failures."""
+        try:
+            from services.cancel_order_service import cancel_order
+            from services.orderstatus_service import get_order_status
+            from services.place_order_service import place_order
+            from services.quotes_service import get_multiquotes
+            # Just accessing the variables ensures they resolve
+            _ = get_order_status
+            _ = place_order
+            _ = cancel_order
+            _ = get_multiquotes
+        except ImportError as e:
+            logger.critical(f"FATAL: Missing dependency for Super Order Monitor: {e}")
+            raise RuntimeError(f"Super Order Monitor failed to initialize: {e}") from e
+
     def _monitor_loop(self, interval: int):
+        try:
+            self._verify_imports()
+        except RuntimeError:
+            self._running = False
+            return
+
         while self._running:
             try:
                 self._process_super_orders()
