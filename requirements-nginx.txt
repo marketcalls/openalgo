@@ -74,7 +74,7 @@ narwhals==2.19.0
 nbformat==5.10.4
 nest-asyncio==1.6.0
 numpy==2.4.4
-openalgo==1.0.47
+openalgo==1.0.49
 ordered-set==4.1.0
 orjson==3.11.8
 packaging==24.1
