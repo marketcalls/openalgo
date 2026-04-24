@@ -4,6 +4,8 @@
 
 OpenAlgo standardizes financial instrument identification via a common symbol format across all exchanges and brokers, enhancing compatibility and simplifying automated trading. This uniform symbology eliminates the need for traders to adapt to varied broker-specific formats, streamlining algorithm development and execution. The format integrates key identifiers such as the base symbol, expiration date, and option type, ensuring consistent and error-free communication within trading systems. With OpenAlgo, developers can efficiently extend platform capabilities while traders focus on strategy, not syntax.
 
+{% embed url="<https://www.youtube.com/watch?v=DcmDYpGYdJY>" %}
+
 ### Equity Symbol Format
 
 In the context of OpenAlgo, equity symbols are constructed based on the base symbol of the stock.
@@ -28,7 +30,7 @@ Below are the extended examples for various futures contracts:
 
 **BSE Futures:**
 
-* **Example:** For SENSEX futures expiring in April 2024, the symbol would be `SENSEX24APR25FUT`.
+* **Example:** For SENSEX futures expiring in April 2024, the symbol would be `SENSEX24APR24FUT`.
 
 **Currency Futures:**
 
@@ -72,25 +74,123 @@ Options symbols in OpenAlgo are structured to include the base symbol, the expir
 
 ### Common NSE Index Symbols (Exchange Code : NSE\_INDEX)
 
-NIFTY
-\
-NIFTYNXT50
-\
-FINNIFTY
-\
-BANKNIFTY
-\
-MIDCPNIFTY
-\
-INDIAVIX
+{% columns %}
+{% column %}
+NIFTY\
+NIFTYNXT50\
+FINNIFTY\
+BANKNIFTY\
+MIDCPNIFTY\
+INDIAVIX\
+HANGSENGBEESNAV\
+NIFTY100\
+NIFTY200\
+NIFTY500\
+NIFTYALPHA50\
+NIFTYAUTO\
+NIFTYCOMMODITIES\
+NIFTYCONSUMPTION\
+NIFTYCPSE\
+NIFTYDIVOPPS50\
+NIFTYENERGY\
+NIFTYFMCG\
+NIFTYGROWSECT15\
+NIFTYGS10YR\
+NIFTYGS10YRCLN\
+NIFTYGS1115YR\
+NIFTYGS15YRPLUS\
+NIFTYGS48YR\
+NIFTYGS813YR\
+NIFTYGSCOMPSITE\
+NIFTYINFRA\
+NIFTYIT
+{% endcolumn %}
+
+{% column %}
+NIFTYMEDIA\
+NIFTYMETAL\
+NIFTYMIDLIQ15\
+NIFTYMIDCAP100\
+NIFTYMIDCAP150\
+NIFTYMIDCAP50\
+NIFTYMIDSML400\
+NIFTYMNC\
+NIFTYPHARMA\
+NIFTYPSE\
+NIFTYPSUBANK\
+NIFTYPVTBANK\
+NIFTYREALTY\
+NIFTYSERVSECTOR\
+NIFTYSMLCAP100\
+NIFTYSMLCAP250\
+NIFTYSMLCAP50\
+NIFTY100EQLWGT\
+NIFTY100LIQ15\
+NIFTY100LOWVOL30\
+NIFTY100QUALTY30\
+NIFTY200QUALTY30\
+NIFTY50DIVPOINT\
+NIFTY50EQLWGT\
+NIFTY50PR1XINV\
+NIFTY50PR2XLEV\
+NIFTY50TR1XINV\
+NIFTY50TR2XLEV\
+NIFTY50VALUE20
+{% endcolumn %}
+{% endcolumns %}
+
+{% columns %}
+{% column %}
+
+{% endcolumn %}
+
+{% column %}
+
+{% endcolumn %}
+{% endcolumns %}
 
 ### Common BSE Index Symbols (Exchange Code : BSE\_INDEX)
 
-SENSEX
-\
-BANKEX
-\
-SENSEX50
+SENSEX\
+BANKEX\
+SENSEX50\
+BSE100\
+BSE150MIDCAPINDEX\
+BSE200\
+BSE250LARGEMIDCAPINDEX\
+BSE400MIDSMALLCAPINDEX\
+BSE500\
+BSEAUTO\
+BSECAPITALGOODS\
+BSECARBONEX\
+BSECONSUMERDURABLES\
+BSECPSE\
+BSEDOLLEX100\
+BSEDOLLEX200\
+BSEDOLLEX30\
+BSEENERGY\
+BSEFASTMOVINGCONSUMERGOODS\
+BSEFINANCIALSERVICES\
+BSEGREENEX\
+BSEHEALTHCARE\
+BSEINDIAINFRASTRUCTUREINDEX\
+BSEINDUSTRIALS\
+BSEINFORMATIONTECHNOLOGY\
+BSEIPO\
+BSELARGECAP\
+BSEMETAL\
+BSEMIDCAP\
+BSEMIDCAPSELECTINDEX\
+BSEOIL\&GAS\
+BSEPOWER\
+BSEPSU\
+BSEREALTY\
+BSESENSEXNEXT50\
+BSESMALLCAP\
+BSESMALLCAPSELECTINDEX\
+BSESMEIPO\
+BSETECK\
+BSETELECOM
 
 ### Exchange  Codes
 
@@ -126,3 +226,21 @@ For developers, understanding the database schema is essential for managing data
 <figure><img src="https://17901342-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FmBwEhITzgv0O0fEGIIRN%2Fuploads%2FvUWO49dLv5Pklo6qPtIV%2Fimage.png?alt=media&#x26;token=7cea9426-f5b9-4c29-b29f-a2e4b9ea7030" alt=""><figcaption></figcaption></figure>
 
 This schema captures both the standardized OpenAlgo symbology and the potentially divergent broker-specific information, enabling algorithms and traders to operate across multiple platforms without confusion. It allows for the storage of instrument metadata necessary for trading activities and ensures that all financial instruments are identifiable and their market details readily accessible.
+
+
+---
+
+# Agent Instructions: Querying This Documentation
+
+If you need additional information that is not directly available in this page, you can query the documentation dynamically by asking a question.
+
+Perform an HTTP GET request on the current page URL with the `ask` query parameter:
+
+```
+GET https://docs.openalgo.in/symbol-format.md?ask=<question>
+```
+
+The question should be specific, self-contained, and written in natural language.
+The response will contain a direct answer to the question and relevant excerpts and sources from the documentation.
+
+Use this mechanism when the answer is not explicitly present in the current page, you need clarification or additional context, or you want to retrieve related documentation sections.
