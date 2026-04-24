@@ -54,6 +54,7 @@ import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 // Sort configuration types
 type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status';
@@ -98,7 +99,7 @@ function formatTime(timestamp: string): string {
 
   const timeValue = parseTimestamp(timestamp)
   if (timeValue === 0) {
-     // Last resort: extract HH:MM:SS if embedded in the string
+    // Last resort: extract HH:MM:SS if embedded in the string
     const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
     return timeMatch ? timeMatch[1] : timestamp
   }
@@ -154,8 +155,8 @@ export default function OrderBook() {
   // Filter and Sort orders
   const sortedAndFilteredOrders = useMemo(() => {
     // 1. Filter Logic
-    const filtered = statusFilter.length === 0 
-      ? orders 
+    const filtered = statusFilter.length === 0
+      ? orders
       : orders.filter((order) => statusFilter.includes(order.order_status))
 
     // 2. Sort Logic
@@ -410,62 +411,85 @@ export default function OrderBook() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant={hasActiveFilters ? 'default' : 'outline'}
-                size="sm"
-                className="relative"
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Filters
-                {hasActiveFilters && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
-                )}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>Order Filters</DialogTitle>
-                <DialogDescription>Filter orders by status</DialogDescription>
-              </DialogHeader>
+            <TooltipProvider>
+              <Tooltip>
+                <DialogTrigger asChild>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={hasActiveFilters ? 'default' : 'outline'}
+                      size="sm"
+                      className="relative"
+                    >
+                      <Settings2 className="h-4 w-4 mr-2" />
+                      Filters
+                      {hasActiveFilters && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                      )}
+                    </Button>
 
-              <div className="space-y-6 py-4">
-                {/* Order Status */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Order Status
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip status="complete" label="Complete" />
-                    <FilterChip status="open" label="Open" />
-                    <FilterChip status="rejected" label="Rejected" />
-                    <FilterChip status="cancelled" label="Cancelled" />
+                  </TooltipTrigger>
+                </DialogTrigger>
+                <TooltipContent>Order Filters</TooltipContent>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Order Filters</DialogTitle>
+                    <DialogDescription>Filter orders by status</DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-6 py-4">
+                    {/* Order Status */}
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Order Status
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        <FilterChip status="complete" label="Complete" />
+                        <FilterChip status="open" label="Open" />
+                        <FilterChip status="rejected" label="Rejected" />
+                        <FilterChip status="cancelled" label="Cancelled" />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              <DialogFooter>
-                <Button variant="ghost" onClick={clearFilters}>
-                  Clear All
-                </Button>
-                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
-              </DialogFooter>
-            </DialogContent>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={clearFilters}>
+                      Clear All
+                    </Button>
+                    <Button onClick={() => setSettingsOpen(false)}>Done</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Tooltip>
+            </TooltipProvider>
           </Dialog>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchOrders(true)}
-            disabled={isRefreshing}
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV}>
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchOrders(true)}
+                  disabled={isRefreshing}
+                >
+                  <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
+                  Refresh
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh Orders</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" onClick={exportToCSV}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export Orders</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" disabled={openOrders.length === 0}>
@@ -491,28 +515,30 @@ export default function OrderBook() {
       </div>
 
       {/* Active Filters Bar */}
-      {hasActiveFilters && (
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm text-muted-foreground">Active Filters:</span>
-          {statusFilter.map((status) => (
-            <Badge
-              key={status}
-              variant="secondary"
-              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+      {
+        hasActiveFilters && (
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-muted-foreground">Active Filters:</span>
+            {statusFilter.map((status) => (
+              <Badge
+                key={status}
+                variant="secondary"
+                className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+              >
+                {status}
+              </Badge>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-red-500 border-red-500/50 hover:bg-red-500/10"
+              onClick={clearFilters}
             >
-              {status}
-            </Badge>
-          ))}
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-red-500 border-red-500/50 hover:bg-red-500/10"
-            onClick={clearFilters}
-          >
-            Clear All
-          </Button>
-        </div>
-      )}
+              Clear All
+            </Button>
+          </div>
+        )
+      }
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-5">
@@ -581,7 +607,7 @@ export default function OrderBook() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead 
+                    <TableHead
                       className="w-[120px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('symbol')}
                     >
@@ -593,7 +619,7 @@ export default function OrderBook() {
                       </div>
                     </TableHead>
                     <TableHead className="w-[80px]">Exchange</TableHead>
-                    <TableHead 
+                    <TableHead
                       className="w-[70px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('action')}
                     >
@@ -610,7 +636,7 @@ export default function OrderBook() {
                     <TableHead className="w-[80px]">Type</TableHead>
                     {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
                     <TableHead className="w-[140px]">Order ID</TableHead>
-                    <TableHead 
+                    <TableHead
                       className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('order_status')}
                     >
@@ -621,7 +647,7 @@ export default function OrderBook() {
                         )}
                       </div>
                     </TableHead>
-                    <TableHead 
+                    <TableHead
                       className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => requestSort('timestamp')}
                     >
@@ -868,6 +894,6 @@ export default function OrderBook() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </div >
   )
 }
