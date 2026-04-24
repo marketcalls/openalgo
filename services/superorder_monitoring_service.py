@@ -156,7 +156,10 @@ class SuperOrderMonitor:
                 continue
 
             success, response, status_code = get_order_status(
-                {"orderid": order.main_order_id}, api_key=api_key
+                # Ensure we bypass global analyze mode so we read the actual LIVE status
+                # since Super Orders are live broker orders.
+                {"orderid": order.main_order_id, "mode": "live"},
+                api_key=api_key
             )
             if success and response.get("status") == "success":
                 data = response.get("data", {})
@@ -231,6 +234,9 @@ class SuperOrderMonitor:
 
         for order in active_orders:
             ltp = quotes_dict.get((order.symbol, order.exchange))
+
+            logger.info(f"Checking Super Order {order.id}: symbol={order.symbol}, LTP={ltp}, target={order.target_price}, sl={order.stoploss_price}")
+
             if ltp is None:
                 continue
 
@@ -254,7 +260,7 @@ class SuperOrderMonitor:
 
             if triggered_leg:
                 logger.info(
-                    f"Super Order {order.id} {triggered_leg} triggered at {ltp}."
+                    f"Super Order {order.id}: {triggered_leg.capitalize()} price reached. Firing exit order at {ltp}."
                 )
                 self._execute_leg(order, triggered_leg, api_key)
 
@@ -330,13 +336,15 @@ class SuperOrderMonitor:
             order_id_str = str(response_data.get("orderid"))
             if leg_type == "TARGET":
                 order.target_order_id = order_id_str
+                other_leg = "stop-loss"
             else:
                 order.stoploss_order_id = order_id_str
+                other_leg = "target"
 
             order.status = "CLOSED"
             db_session.commit()
             logger.info(
-                f"Super Order {order.id} {leg_type} executed. Status set to CLOSED."
+                f"Super Order {order.id}: {leg_type.capitalize()} leg executed. Cancelling {other_leg} leg. Status -> CLOSED."
             )
         else:
             logger.error(
