@@ -10,13 +10,6 @@ from restx_api.schemas import (
     ModifySuperOrderSchema,
     SuperOrderSchema,
 )
-from services.superorder_service import (
-    cancel_superorder,
-    get_superorder,
-    get_superorders,
-    modify_superorder,
-    place_superorder,
-)
 from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
@@ -42,6 +35,7 @@ class SuperOrderList(Resource):
 
             api_key = order_data.get("apikey", None)
 
+            from services.superorder_service import place_superorder
             success, response_data, status_code = place_superorder(
                 order_data=order_data, api_key=api_key
             )
@@ -71,6 +65,7 @@ class SuperOrderList(Resource):
                     jsonify({"status": "error", "message": "API key required"}), 400
                 )
 
+            from services.superorder_service import get_superorders
             success, response_data, status_code = get_superorders(api_key=api_key)
             return make_response(jsonify(response_data), status_code)
 
@@ -95,6 +90,7 @@ class SuperOrderDetails(Resource):
                     jsonify({"status": "error", "message": "API key required"}), 400
                 )
 
+            from services.superorder_service import get_superorder
             success, response_data, status_code = get_superorder(
                 order_id=id, api_key=api_key
             )
@@ -122,6 +118,7 @@ class SuperOrderDetails(Resource):
             order_data = modify_superorder_schema.load(data)
             api_key = order_data.get("apikey")
 
+            from services.superorder_service import modify_superorder
             success, response_data, status_code = modify_superorder(
                 order_data=order_data, api_key=api_key
             )
@@ -156,6 +153,7 @@ class SuperOrderDetails(Resource):
                     jsonify({"status": "error", "message": "API key required"}), 400
                 )
 
+            from services.superorder_service import cancel_superorder
             success, response_data, status_code = cancel_superorder(
                 order_id=id, api_key=api_key
             )

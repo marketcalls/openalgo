@@ -3,9 +3,6 @@ from typing import Any, Optional
 
 from database.auth_db import get_auth_token_broker, verify_api_key
 from database.superorder_db import SuperOrder, db_session
-from services.cancel_order_service import cancel_order
-from services.modify_order_service import modify_order
-from services.place_order_service import place_order
 from utils.logging import get_logger
 
 # Initialize logger
@@ -87,6 +84,7 @@ def place_superorder(
             "price": order_data["entry_price"],
         }
 
+        from services.place_order_service import place_order
         success, response_data, status_code = place_order(
             order_data=main_leg_data,
             api_key=api_key,
@@ -288,6 +286,7 @@ def modify_superorder(
                 mod_main_leg = True
 
             if mod_main_leg:
+                from services.modify_order_service import modify_order
                 success, resp, code = modify_order(
                     order_data=main_leg_mod_data, api_key=api_key
                 )
@@ -340,6 +339,8 @@ def cancel_superorder(
         order = SuperOrder.query.filter_by(id=order_id, user_id=user_id).first()
         if not order:
             return False, {"status": "error", "message": "Super Order not found"}, 404
+
+        from services.cancel_order_service import cancel_order
 
         if order.status == "PENDING":
             if order.main_order_id:

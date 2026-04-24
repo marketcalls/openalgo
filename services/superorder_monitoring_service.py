@@ -6,9 +6,6 @@ from typing import Any, Optional
 
 from database.auth_db import get_api_key_for_tradingview
 from database.superorder_db import SuperOrder, db_session
-from services.cancel_order_service import cancel_order
-from services.orderstatus_service import get_orderstatus
-from services.place_order_service import place_order
 from services.quotes_service import get_multiquotes
 
 logger = logging.getLogger(__name__)
@@ -108,6 +105,7 @@ class SuperOrderMonitor:
             db_session.rollback()
 
     def _cancel_expired_orders(self, orders: list[SuperOrder]):
+        from services.cancel_order_service import cancel_order
         now = datetime.now()
         for order in orders:
             if order.expires_at and now >= order.expires_at:
@@ -130,6 +128,7 @@ class SuperOrderMonitor:
                 db_session.commit()
 
     def _check_pending_orders(self, pending_orders: list[SuperOrder], api_key: str):
+        from services.orderstatus_service import get_orderstatus
         for order in pending_orders:
             if not order.main_order_id:
                 continue
@@ -284,6 +283,7 @@ class SuperOrderMonitor:
             )
 
     def _execute_leg(self, order: SuperOrder, leg_type: str, api_key: str):
+        from services.place_order_service import place_order
         # We need to send an opposing market order to exit the position
         exit_action = "SELL" if order.transaction_type.upper() == "BUY" else "BUY"
 

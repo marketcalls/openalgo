@@ -14,7 +14,6 @@ from services.orderbook_service import get_orderbook
 from services.place_smart_order_service import place_smart_order
 from services.positionbook_service import get_positionbook
 from services.tradebook_service import get_tradebook
-from services.superorder_service import get_superorders
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -165,6 +164,7 @@ def superorderbook():
         logger.warning(f"No API key found for user {login_username}")
         return redirect(url_for("auth.logout"))
 
+    from services.superorder_service import get_superorders
     success, response, status_code = get_superorders(api_key=api_key)
 
     if not success:
