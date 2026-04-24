@@ -421,7 +421,36 @@ def start_strategy_process(strategy_id):
     """Start a strategy in a new process - cross-platform implementation"""
     with PROCESS_LOCK:  # Thread-safe operation
         if strategy_id in RUNNING_STRATEGIES:
-            return False, "Strategy already running"
+            # Validate that the tracked process is actually still alive.
+            # A stale entry can survive natural exit, SIGTERM from a scheduled
+            # stop that wasn't followed by a UI Stop click, or any path that
+            # bypasses stop_strategy_process(). Without this check, the next
+            # scheduled/manual start silently fails with "already running"
+            # forever (until the worker is restarted).
+            existing = RUNNING_STRATEGIES[strategy_id]
+            existing_proc = existing.get("process")
+            is_alive = True
+            try:
+                if isinstance(existing_proc, subprocess.Popen):
+                    is_alive = existing_proc.poll() is None
+                elif hasattr(existing_proc, "is_running"):
+                    is_alive = bool(existing_proc.is_running())
+                else:
+                    pid = existing.get("pid")
+                    is_alive = bool(pid and psutil.pid_exists(pid))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                is_alive = False
+
+            if is_alive:
+                return False, "Strategy already running"
+
+            # Stale entry — clean it up and fall through to start a fresh process.
+            logger.warning(
+                f"Removing stale RUNNING_STRATEGIES entry for {strategy_id} "
+                f"(tracked process is no longer alive); starting fresh"
+            )
+            close_log_handle_safely(existing)
+            RUNNING_STRATEGIES.pop(strategy_id, None)
 
         config = STRATEGY_CONFIGS.get(strategy_id)
         if not config:
@@ -1072,7 +1101,26 @@ def scheduled_start_strategy(strategy_id: str):
     logger.info(
         f"Strategy {strategy_id} ({exch}) - all checks passed, starting"
     )
-    start_strategy_process(strategy_id)
+    success, message = start_strategy_process(strategy_id)
+    if not success:
+        # Surface the failure - otherwise the scheduler swallows it silently
+        # and the user sees nothing in the logs (no log file is created
+        # because start_strategy_process bailed before opening one).
+        logger.error(
+            f"Scheduled start FAILED for strategy {strategy_id} ({exch}): {message}"
+        )
+        if strategy_id in STRATEGY_CONFIGS:
+            STRATEGY_CONFIGS[strategy_id]["last_error"] = (
+                f"Scheduled start failed: {message}"
+            )
+            save_configs()
+        try:
+            broadcast_status_update(strategy_id, "error", message)
+        except Exception as broadcast_err:  # pragma: no cover - defensive
+            logger.debug(
+                f"Could not broadcast scheduled-start failure for "
+                f"{strategy_id}: {broadcast_err}"
+            )
 
 
 def scheduled_stop_strategy(strategy_id: str):
