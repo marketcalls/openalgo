@@ -75,10 +75,16 @@ All brokers share a unified API interface, making it easy to switch between brok
 
 ### Unified REST API Layer (`/api/v1/`)
 A single, standardized API across all brokers with 30+ endpoints:
-- **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing
+- **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing, and **Super Orders** (multi-legged OCO orders with entry, target, trailing stop-loss).
 - **Portfolio**: Get positions, holdings, order book, trade book, funds
 - **Market Data**: Real-time quotes, historical data, market depth (Level 5), symbol search
 - **Advanced**: Option Greeks calculator, margin calculator, synthetic futures, auto-split orders
+
+### Super Order (Multi-Legged OCO)
+- **Single Submission**: Submit entry, target, and stop-loss legs in a single API call.
+- **Auto-Monitoring**: The background monitoring service tracks partial and full fills of the main leg.
+- **Trailing Stop-Loss**: Dynamically trail your stop-loss order by a configurable trailing jump as the market moves in your favor.
+- **OCO Logic**: When either the target or stop-loss condition is met, the other leg is automatically cancelled.
 
 ### Real-Time WebSocket Streaming
 - Unified WebSocket proxy server for all brokers (port 8765)
