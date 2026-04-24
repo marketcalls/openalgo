@@ -876,7 +876,7 @@ export default function Positions() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <SortableHeader column={0} label="Symbol" className="w-[140px]" />
+                    <SortableHeader column={0} label="Symbol" className="w-[140px] pl-6" />
                     <TableHead className="w-[80px]">Exchange</TableHead>
                     {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
                     <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
@@ -884,7 +884,7 @@ export default function Positions() {
                     <TableHead className="w-[120px] text-right">LTP</TableHead>
                     <SortableHeader column={6} label="P&L" className="w-[120px] text-right" />
                     <SortableHeader column={7} label="P&L %" className="w-[100px] text-right" />
-                    <TableHead className="w-[60px] text-right">Action</TableHead>
+                    <TableHead className="w-[60px] text-right pr-6">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -901,7 +901,7 @@ export default function Positions() {
                             className="bg-muted/50 cursor-pointer hover:bg-muted"
                             onClick={() => toggleGroup(groupKey)}
                           >
-                            <TableCell colSpan={6}>
+                            <TableCell colSpan={6} className="pl-6">
                               <div className="flex items-center gap-3 py-1 font-semibold">
                                 {isCollapsed ? (
                                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -932,7 +932,7 @@ export default function Positions() {
                               {groupStats.pnlPercent >= 0 ? '+' : ''}
                               {groupStats.pnlPercent.toFixed(2)}%
                             </TableCell>
-                            <TableCell />
+                            <TableCell className="pr-6" />
                           </TableRow>
                         )}
 
@@ -940,7 +940,7 @@ export default function Positions() {
                         {!isCollapsed &&
                           groupPositions.map((position, index) => (
                             <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
-                              <TableCell className="w-[140px] font-medium">
+                              <TableCell className="w-[140px] font-medium pl-6">
                                 {position.symbol}
                               </TableCell>
                               <TableCell className="w-[80px]">
@@ -1001,7 +1001,7 @@ export default function Positions() {
                                 {calculatePnlPercent(position) >= 0 ? '+' : ''}
                                 {calculatePnlPercent(position).toFixed(2)}%
                               </TableCell>
-                              <TableCell className="w-[60px] text-right">
+                              <TableCell className="w-[60px] text-right pr-6">
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -1020,7 +1020,7 @@ export default function Positions() {
                 </TableBody>
                 <TableFooter>
                   <TableRow className="bg-muted/50">
-                    <TableCell colSpan={6} className="text-right text-muted-foreground">
+                    <TableCell colSpan={6} className="text-right text-muted-foreground pl-6">
                       Total P&L:
                     </TableCell>
                     <TableCell
@@ -1032,7 +1032,7 @@ export default function Positions() {
                       {stats.totalPnl >= 0 ? '+' : ''}
                       {formatCurrency(stats.totalPnl)}
                     </TableCell>
-                    <TableCell colSpan={2} />
+                    <TableCell colSpan={2} className="pr-6" />
                   </TableRow>
                 </TableFooter>
               </Table>
