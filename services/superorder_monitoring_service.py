@@ -128,13 +128,13 @@ class SuperOrderMonitor:
                 db_session.commit()
 
     def _check_pending_orders(self, pending_orders: list[SuperOrder], api_key: str):
-        from services.orderstatus_service import get_orderstatus
+        from services.orderstatus_service import get_order_status
         for order in pending_orders:
             if not order.main_order_id:
                 continue
 
-            success, response, status_code = get_orderstatus(
-                order.main_order_id, api_key=api_key
+            success, response, status_code = get_order_status(
+                {"orderid": order.main_order_id}, api_key=api_key
             )
             if success and response.get("status") == "success":
                 data = response.get("data", {})
