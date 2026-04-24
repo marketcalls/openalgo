@@ -1102,7 +1102,7 @@ def scheduled_start_strategy(strategy_id: str):
         f"Strategy {strategy_id} ({exch}) - all checks passed, starting"
     )
     success, message = start_strategy_process(strategy_id)
-    if not success:
+    if not success and message != "Strategy already running":
         # Surface the failure - otherwise the scheduler swallows it silently
         # and the user sees nothing in the logs (no log file is created
         # because start_strategy_process bailed before opening one).
