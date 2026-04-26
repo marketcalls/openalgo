@@ -343,7 +343,11 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     """
     # Set session parameters
     session["logged_in"] = True
-    session["AUTH_TOKEN"] = auth_token
+    # NOTE: do NOT store the broker auth_token in the Flask session. Flask's
+    # default session is a signed-but-unencrypted client-side cookie, so any
+    # value placed here is readable by anyone who obtains the cookie (XSS,
+    # browser-extension, HAR/profile leak). The encrypted DB copy retrieved
+    # via get_auth_token() is the single source of truth for broker calls.
     if feed_token:
         session["FEED_TOKEN"] = feed_token  # Store feed token in session if available
     if user_id:
