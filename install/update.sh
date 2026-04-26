@@ -338,6 +338,24 @@ elif [ ! -f "$OPENALGO_PATH/.env" ]; then
     else
         cp "$OPENALGO_PATH/.sample.env" "$OPENALGO_PATH/.env"
     fi
+
+    # Generate fresh APP_KEY and API_KEY_PEPPER and substitute the placeholders.
+    # Without this, the new .env would carry the public sample placeholder values
+    # — the app's startup check would then auto-rotate them, which works, but
+    # generating here keeps update.sh symmetric with install.sh and avoids the
+    # noisy "first-run setup" message after what the user thinks is just an update.
+    NEW_APP_KEY=$($PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))")
+    NEW_PEPPER=$($PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))")
+    if [ "$SERVER_MODE" = true ]; then
+        sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$NEW_APP_KEY|g" "$OPENALGO_PATH/.env"
+        sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$NEW_PEPPER|g" "$OPENALGO_PATH/.env"
+        sudo chmod 600 "$OPENALGO_PATH/.env"
+    else
+        sed -i.bak "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$NEW_APP_KEY|g" "$OPENALGO_PATH/.env" && rm -f "$OPENALGO_PATH/.env.bak"
+        sed -i.bak "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$NEW_PEPPER|g" "$OPENALGO_PATH/.env" && rm -f "$OPENALGO_PATH/.env.bak"
+        chmod 600 "$OPENALGO_PATH/.env"
+    fi
+    log_message "Generated fresh APP_KEY and API_KEY_PEPPER in $OPENALGO_PATH/.env" "$GREEN"
     log_message "Please edit $OPENALGO_PATH/.env with your broker credentials and settings." "$RED"
 fi
 

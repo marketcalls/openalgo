@@ -747,8 +747,8 @@ sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
 # Explicitly set HOST_SERVER in case the default value didn't match
 sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
 sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
-sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $OPENALGO_PATH/.env
-sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
+sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" $OPENALGO_PATH/.env
+sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
 
 # Disable session expiry for crypto brokers (24/7 markets)
 if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
@@ -1120,6 +1120,10 @@ sudo chown -R $WEB_USER:$WEB_GROUP $OPENALGO_PATH
 sudo chmod -R 755 $OPENALGO_PATH
 # Set more restrictive permissions for sensitive directories
 sudo chmod 700 $OPENALGO_PATH/keys
+# Restrict .env to the service account only — contains APP_KEY, API_KEY_PEPPER,
+# broker API credentials, and SMTP password. The recursive chmod 755 above
+# would otherwise leave it world-readable on shared boxes.
+sudo chmod 600 $OPENALGO_PATH/.env
 
 # Remove existing socket file if it exists
 [ -S "$SOCKET_FILE" ] && sudo rm -f $SOCKET_FILE

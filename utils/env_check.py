@@ -1,7 +1,28 @@
 import os
+import re
+import secrets
+import sqlite3
 import sys
+import time
 
 from dotenv import load_dotenv
+
+# Placeholder values shipped in .sample.env. OpenAlgo detects these on startup
+# and rotates them to fresh random secrets on first run. Coordinated with the
+# install/*.sh scripts which use the same strings as their sed targets.
+PLACEHOLDER_APP_KEY = "OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE"
+PLACEHOLDER_PEPPER = "OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE"
+
+# Historical leaked literals: these were the original values in .sample.env
+# committed to the public repo before the placeholder switch. Any .env that
+# still carries them is publicly forgeable. Detected as compromised so users
+# who copied .sample.env from an older commit (without running an install
+# script) are still caught and rotated.
+_LEAKED_LITERAL_APP_KEY = "3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84"
+_LEAKED_LITERAL_PEPPER = "a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772"
+
+COMPROMISED_APP_KEYS = frozenset([PLACEHOLDER_APP_KEY, _LEAKED_LITERAL_APP_KEY])
+COMPROMISED_PEPPERS = frozenset([PLACEHOLDER_PEPPER, _LEAKED_LITERAL_PEPPER])
 
 
 def configure_llvmlite_paths() -> None:
@@ -206,6 +227,218 @@ def check_env_version_compatibility() -> bool:
     return True
 
 
+def _db_has_user_data(env_dir: str) -> bool:
+    """Return True if the main SQLite users table has any rows.
+
+    Used as a safety gate before rotating API_KEY_PEPPER, which would
+    invalidate every existing Argon2 password hash and Fernet-encrypted
+    broker token. Conservative on uncertainty: any error treats the DB
+    as populated. The cost of a false 'populated' is a printed warning;
+    the cost of a false 'empty' is silently bricking real user data.
+
+    Args:
+        env_dir: Absolute directory containing the .env file. Used to
+            resolve a relative DATABASE_URL such as ``sqlite:///db/openalgo.db``
+            against the project root.
+
+    Returns:
+        True if the users table exists and contains at least one row, or
+        if any check fails. False only when we can prove the DB is empty.
+    """
+    db_url = os.getenv("DATABASE_URL", "")
+    m = re.match(r"sqlite:///(.+)", db_url)
+    if not m:
+        # Non-SQLite (e.g., Postgres) — be conservative. Server installs that
+        # use such backends already run install.sh which rotates the keys
+        # before this code ever sees a compromised value.
+        return True
+
+    db_path = m.group(1)
+    if not os.path.isabs(db_path):
+        db_path = os.path.join(env_dir, db_path)
+    if not os.path.exists(db_path):
+        return False  # Fresh install — DB file not yet created.
+
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+            )
+            if cur.fetchone() is None:
+                return False
+            cur = conn.execute("SELECT 1 FROM users LIMIT 1")
+            return cur.fetchone() is not None
+    except sqlite3.Error:
+        return True  # Conservative on any error.
+
+
+def _atomic_rewrite_dotenv(env_path: str, pairs: list) -> None:
+    """Atomically replace each (old, new) value pair inside .env.
+
+    Cross-platform safe by design:
+
+    - ``newline=""`` on read and write preserves whatever line endings the
+      original file used (LF on Unix-clone, CRLF if the file was created on
+      Windows). Without it, Python's text-mode universal-newlines would
+      silently rewrite LF as CRLF on Windows, producing a noisy diff.
+    - ``os.replace`` is atomic on POSIX (``rename(2)``) and on Windows
+      (``MoveFileEx`` since Python 3.3). On Windows, if a file watcher or
+      editor is briefly holding ``.env`` open with an exclusive lock, the
+      replace fails with ERROR_ACCESS_DENIED; retry up to twice with a small
+      delay before giving up.
+    - ``os.chmod(0o600)`` is POSIX-only and is skipped on Windows. New files
+      created on Windows inherit the parent directory's ACL, which on a user
+      home / project directory is already restricted to that user.
+
+    Args:
+        env_path: Absolute path to the .env file to rewrite.
+        pairs: List of (old_value, new_value) tuples to substitute. Old
+            values must be unique enough that ``str.replace`` won't collide
+            with unrelated content; the placeholder strings used here are
+            64+ characters of underscore-separated ASCII and meet that bar.
+
+    Raises:
+        OSError: If the rewrite cannot complete (read-only mount, persistent
+            file lock on Windows, permission denied, etc.). Caller surfaces
+            this with a manual-rotation instruction.
+    """
+    with open(env_path, "r", encoding="utf-8", newline="") as f:
+        content = f.read()
+    for old, new in pairs:
+        content = content.replace(old, new)
+    tmp = env_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(content)
+    if os.name != "nt":
+        os.chmod(tmp, 0o600)
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            os.replace(tmp, env_path)
+            return
+        except OSError as e:
+            last_err = e
+            if os.name != "nt":
+                raise
+            time.sleep(0.15)
+    if last_err is not None:
+        raise last_err
+
+
+def _generate_keys_on_first_run(env_path: str) -> None:
+    """Detect publicly-known APP_KEY/API_KEY_PEPPER and rotate or warn.
+
+    Decision matrix:
+
+    +----------------------+----------------------------+----------------------+
+    | Compromised value(s) | Database state             | Action               |
+    +======================+============================+======================+
+    | Neither              | any                        | silent fast path     |
+    +----------------------+----------------------------+----------------------+
+    | APP_KEY only         | any                        | rotate APP_KEY       |
+    +----------------------+----------------------------+----------------------+
+    | PEPPER (or both)     | no users (fresh install)   | rotate both          |
+    +----------------------+----------------------------+----------------------+
+    | PEPPER (or both)     | users exist (populated)    | rotate APP_KEY only, |
+    |                      |                            | warn re PEPPER       |
+    +----------------------+----------------------------+----------------------+
+
+    Why APP_KEY rotation is always safe:
+        APP_KEY only signs Flask session cookies and Flask-WTF CSRF tokens.
+        After rotation, existing browser sessions fail signature verification
+        and the user re-logs in once. No persisted data is invalidated.
+
+    Why PEPPER rotation is gated:
+        API_KEY_PEPPER feeds Argon2 password hashing in database/user_db.py
+        and the Fernet KDF in database/auth_db.py. Rotating it invalidates
+        every stored password hash (one-way, cannot be migrated), every
+        Fernet-encrypted broker auth/feed token, and every Fernet-encrypted
+        TradingView API key. On a fresh install there is nothing to lose.
+        On a populated DB this would brick the deployment, so we refuse to
+        rotate and instead print a remediation path the operator can take
+        in a controlled fashion.
+
+    Why this is a no-op for existing install.sh users:
+        install.sh and friends rewrite the placeholders to fresh random
+        values *before* the app first runs. By the time this function
+        executes, the env vars are not in the compromised set, the
+        ``frozenset`` membership check returns False, and the function
+        returns immediately — no DB query, no file I/O.
+
+    Args:
+        env_path: Absolute path to the .env file.
+    """
+    app_key = os.getenv("APP_KEY", "")
+    pepper = os.getenv("API_KEY_PEPPER", "")
+
+    app_key_compromised = app_key in COMPROMISED_APP_KEYS
+    pepper_compromised = pepper in COMPROMISED_PEPPERS
+
+    if not (app_key_compromised or pepper_compromised):
+        return  # Common case: silent fast path.
+
+    env_dir = os.path.dirname(os.path.abspath(env_path))
+    db_populated = _db_has_user_data(env_dir)
+
+    pairs = []
+    rotated_names = []
+
+    if app_key_compromised:
+        new_app_key = secrets.token_hex(32)
+        pairs.append((app_key, new_app_key))
+        os.environ["APP_KEY"] = new_app_key
+        rotated_names.append("APP_KEY")
+
+    if pepper_compromised and not db_populated:
+        new_pepper = secrets.token_hex(32)
+        pairs.append((pepper, new_pepper))
+        os.environ["API_KEY_PEPPER"] = new_pepper
+        rotated_names.append("API_KEY_PEPPER")
+
+    if pairs:
+        try:
+            _atomic_rewrite_dotenv(env_path, pairs)
+        except OSError as e:
+            sys.stderr.write(
+                "\n\033[91m\033[1m[OpenAlgo security]\033[0m\n"
+                "\033[91mDetected publicly-known APP_KEY/API_KEY_PEPPER in .env, but\n"
+                f"could not rewrite the file ({e}).\n"
+                "\n"
+                "Generate fresh values manually and paste them into .env:\n"
+                '  python -c "import secrets; print(secrets.token_hex(32))"\n'
+                "\033[0m\n"
+            )
+            sys.exit(1)
+
+    # User-facing reporting.
+    flask_debug = os.getenv("FLASK_DEBUG", "").lower() in ("true", "1", "t")
+    is_reloader_parent = flask_debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+
+    if rotated_names and not db_populated and not is_reloader_parent:
+        print(
+            "\n\033[92m\033[1m[OpenAlgo first-run setup]\033[0m "
+            f"\033[92mGenerated fresh {' and '.join(rotated_names)} and saved\n"
+            f"to {env_path}. The .sample.env placeholder values have been replaced\n"
+            "with cryptographically random secrets. This message will not appear\n"
+            "again on subsequent runs.\033[0m\n",
+            flush=True,
+        )
+    elif "APP_KEY" in rotated_names and db_populated and not is_reloader_parent:
+        print(
+            "\n\033[93m\033[1m[OpenAlgo security]\033[0m "
+            "\033[93mYour APP_KEY in .env was the public sample value. It has been\n"
+            "rotated to a fresh random value. Active browser sessions will need\n"
+            "to log in again.\033[0m\n",
+            flush=True,
+        )
+
+    # PEPPER on a populated DB is intentionally left alone here — rotating it
+    # in-place would brick existing Argon2 password hashes and Fernet-encrypted
+    # tokens. The dedicated upgrade/rotate_pepper.py migration handles that
+    # case explicitly with re-encryption + password reset.
+
+
 def load_and_check_env_variables() -> None:
     """
     Load environment variables from .env and check for required critical variables.
@@ -232,6 +465,13 @@ def load_and_check_env_variables() -> None:
 
     # Load environment variables from the .env file with override=True to ensure values are updated
     load_dotenv(dotenv_path=env_path, override=True)
+
+    # Detect the publicly-known sample APP_KEY/API_KEY_PEPPER values and rotate
+    # them to fresh random secrets on first run. Silent no-op for any user
+    # whose .env was set up via install.sh / install-docker.sh / etc., which
+    # already rotate before the app first runs. See _generate_keys_on_first_run
+    # for the full decision matrix and why PEPPER rotation is gated.
+    _generate_keys_on_first_run(env_path)
 
     # Define the required environment variables
     required_vars = [
