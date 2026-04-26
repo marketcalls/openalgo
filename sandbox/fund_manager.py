@@ -43,9 +43,11 @@ logger = get_logger(__name__)
 class FundManager:
     """Manages virtual funds for sandbox mode"""
 
-    # Class-level lock for thread safety across all fund operations
-    # This prevents race conditions when multiple threads modify funds simultaneously
-    _lock = threading.Lock()
+    # Class-level lock for thread safety across all fund operations.
+    # RLock (reentrant) is required because guarded methods call
+    # _ensure_funds_initialized() -> initialize_funds(), which re-acquires
+    # the same lock on the same thread.
+    _lock = threading.RLock()
 
     def __init__(self, user_id):
         self.user_id = user_id
