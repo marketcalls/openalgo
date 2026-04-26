@@ -190,9 +190,9 @@ def format_openalgo_to_groww_symbol(symbol, exchange):
                         # Reconstruct date string
                         date_str = f"{day}{month}{year}"
 
-                        # Extract strike - look for numbers after the date
+                        # Extract strike - look for numbers (incl. decimals) after the date
                         date_end_pos = remaining.find(month) + len(month) + len(year)
-                        strike_match = re.search(r"\d+", remaining[date_end_pos:])
+                        strike_match = re.search(r"\d+(?:\.\d+)?", remaining[date_end_pos:])
                         if strike_match:
                             strike_str = strike_match.group(0)
 
@@ -460,9 +460,10 @@ def reformat_symbol(row):
     elif instrument_type in ["CE", "PE"]:
         import re
 
-        # Match format like: NSE-AARTIIND-26Jun25-435-CE
+        # Match format like: NSE-AARTIIND-26Jun25-435-CE (strike may be decimal e.g. 287.5)
         match = re.match(
-            r"NSE-([A-Z0-9]+)-(\d{2})([A-Za-z]{3})(\d{2})-(\d+)-([CP]E)", row["groww_symbol"]
+            r"NSE-([A-Z0-9]+)-(\d{2})([A-Za-z]{3})(\d{2})-(\d+(?:\.\d+)?)-([CP]E)",
+            row["groww_symbol"],
         )
         if match:
             symbol, day, month, year, strike_price, opt_type = match.groups()
@@ -703,8 +704,13 @@ def process_groww_data(path):
             underlying = df_mapped.loc[fno_data_mask, "underlying"]
             base_symbol = underlying.where(underlying.notna() & (underlying != ""), df_mapped.loc[fno_data_mask, "symbol"])
 
-            # Strike as integer string
-            strike_str = df_mapped.loc[fno_data_mask, "strike"].fillna(0).astype(int).astype(str)
+            # Strike as string: preserve decimals (e.g. 287.5 for 2.5-rupee
+            # interval stocks like BANKBARODA, ADANIPOWER); collapse only
+            # whole numbers to int form (190.0 -> "190", not "190.0").
+            def _format_strike(v):
+                f = float(v)
+                return str(int(f)) if f == int(f) else str(f)
+            strike_str = df_mapped.loc[fno_data_mask, "strike"].fillna(0).apply(_format_strike)
 
             # Get instrument type from original df
             orig_inst_type = df.loc[fno_data_mask.values, "instrument_type"]
