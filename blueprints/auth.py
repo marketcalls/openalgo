@@ -158,7 +158,6 @@ def _try_resume_broker_session(username):
             logger.error(f"handle_auth_success failed during resume: {e}", exc_info=True)
             # Clear partial session state and fall through to OAuth
             session.pop("logged_in", None)
-            session.pop("AUTH_TOKEN", None)
             session.pop("broker", None)
             session.pop("session_id", None)
             return None

@@ -923,7 +923,14 @@ def webhook(webhook_id):
                 payload.update({"quantity": str(mapping.quantity)})
                 endpoint = "placeorder"
 
-            logger.info(f"Queueing {endpoint} with payload: {payload}")
+            logger.info(
+                "Queueing %s symbol=%s exchange=%s action=%s qty=%s",
+                endpoint,
+                payload.get("symbol"),
+                payload.get("exchange"),
+                payload.get("action"),
+                payload.get("quantity"),
+            )
 
             # Queue the order instead of executing directly
             queue_order(endpoint, payload)

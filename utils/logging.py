@@ -28,14 +28,27 @@ try:
 except ImportError:
     COLORAMA_AVAILABLE = False
 
-# Sensitive patterns to filter out
+# Sensitive patterns to filter out.
+#
+# The patterns must match the forms the codebase actually emits, not just
+# `key=value`. Python dict repr (`'apikey': 'X'`), JSON (`"apikey":"X"`),
+# and shell-style (`apikey="X"`) all need to redact. The character class on
+# the value side allows `\w \- . + / =` so JWTs and base64 tokens are fully
+# consumed; the surrounding quote (if any) is preserved by anchoring on the
+# prefix capture group.
 SENSITIVE_PATTERNS = [
-    (r"(api[_-]?key[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(password[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(token[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(secret[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(authorization[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
+    # Bearer header tokens — run first so the broader pattern below doesn't
+    # leave the bearer suffix exposed when wrapped in quotes.
     (r"(Bearer\s+)[\w\-\.]+", r"\1[REDACTED]"),
+    # Common credential keys in any of: key=val, key: val, 'key': 'val',
+    # "key":"val", key="val". Includes broker-token aliases the codebase
+    # actually logs (enctoken, feed_token, access_token, session_token).
+    # Value class is a negated set so passwords with symbols (@!#$ ...) are
+    # fully consumed; we stop at whitespace, quotes, and dict/JSON structure.
+    (
+        r"(['\"]?(?:api[_-]?key[_-]?pepper|api[_-]?key|app[_-]?key|password|access[_-]?token|enctoken|feed[_-]?token|session[_-]?token|auth[_-]?token|authorization|secret|pepper|token)['\"]?\s*[:=]\s*['\"]?)[^\s'\",;}\]]+",
+        r"\1[REDACTED]",
+    ),
 ]
 
 # Color mappings for different log levels
