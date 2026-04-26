@@ -145,8 +145,8 @@ if errorlevel 1 (
 
 REM Update .env file with generated keys
 echo [INFO] Updating configuration with secure keys...
-powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace '3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84', '%APP_KEY%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
-powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772', '%API_KEY_PEPPER%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE', '%APP_KEY%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE', '%API_KEY_PEPPER%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
 echo [OK] Secure keys generated and saved.
 
 REM Get broker configuration

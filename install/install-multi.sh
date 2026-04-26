@@ -349,8 +349,8 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
 
     # 7. Update security keys
-    sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
-    sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" "$ENV_FILE"
+    sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
+    sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" "$ENV_FILE"
 
     # 8. Update database paths (unique per instance - ALL 6 databases)
     sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
@@ -387,6 +387,10 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo chmod -R 755 "$INSTANCE_DIR"
     # Set more restrictive permissions for sensitive directories
     sudo chmod 700 "$INSTANCE_DIR/keys"
+    # Restrict .env to the service account only — contains APP_KEY, API_KEY_PEPPER,
+    # broker API credentials. The recursive chmod 755 above would otherwise leave
+    # it world-readable on shared multi-tenant boxes.
+    sudo chmod 600 "$ENV_FILE"
     [ -S "$SOCKET_FILE" ] && sudo rm -f "$SOCKET_FILE"
 
     # Configure Nginx (initial for SSL)

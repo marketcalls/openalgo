@@ -831,8 +831,10 @@ for i in "${!CONF_DOMAINS[@]}"; do
         sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
         sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" "$ENV_FILE"
         sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
-        sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
-        sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$PEPPER|g" "$ENV_FILE"
+        sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
+        sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$PEPPER|g" "$ENV_FILE"
+        # Restrict .env to owner — contains APP_KEY, PEPPER, and broker creds.
+        chmod 600 "$ENV_FILE"
         
         # XTS
         if [ ! -z "$M_KEY" ]; then
