@@ -42,6 +42,17 @@ def get_permission_checks():
     # Extract db directory from main database path
     db_dir = os.path.dirname(main_db) if main_db else "db"
 
+    # Inside Docker, .env is bind-mounted read-only and must be readable to
+    # the container's appuser (UID 1000). Mode 0o600 with a root-owned host
+    # file makes the file unreadable to the container and crash-loops it
+    # with "Error: .env file not found." (See issue #960.) On Docker we
+    # therefore expect the file to be world-readable (0o644); on bare-metal
+    # gunicorn deployments it is owned by www-data and stays at 0o600.
+    is_docker = os.path.exists("/.dockerenv") or os.environ.get(
+        "APP_MODE", ""
+    ).strip().strip("'\"") == "standalone"
+    env_expected_mode = 0o644 if is_docker else 0o600
+
     # Define expected permissions for each path
     # Format: (relative_path, expected_unix_mode, description, is_sensitive)
     return [
@@ -51,7 +62,7 @@ def get_permission_checks():
         (logs_db, 0o644, "Logs database file (SQLite)", False),
         (sandbox_db, 0o644, "Sandbox database file (SQLite)", False),
         (historify_db, 0o644, "Historical data database (DuckDB)", False),
-        (".env", 0o600, "Environment configuration (sensitive)", True),
+        (".env", env_expected_mode, "Environment configuration (sensitive)", True),
         ("log", 0o755, "Log directory", False),
         ("log/strategies", 0o755, "Strategy logs directory", False),
         ("keys", 0o700, "Encryption keys directory (sensitive)", True),

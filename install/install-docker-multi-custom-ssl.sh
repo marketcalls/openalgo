@@ -833,8 +833,11 @@ for i in "${!CONF_DOMAINS[@]}"; do
         sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$PEPPER|g" "$ENV_FILE"
-        # Restrict .env to owner — contains APP_KEY, PEPPER, and broker creds.
-        chmod 600 "$ENV_FILE"
+        # .env is bind-mounted read-only into the container; it must remain
+        # readable to the container's appuser (UID 1000). chmod 600 with a
+        # root-owned host file makes start.sh exit with "Error: .env file
+        # not found." See https://github.com/marketcalls/openalgo/issues/960.
+        chmod 644 "$ENV_FILE"
         
         # XTS
         if [ ! -z "$M_KEY" ]; then
