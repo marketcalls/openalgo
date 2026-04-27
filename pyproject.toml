@@ -17,7 +17,7 @@ dependencies = [
   "bidict==0.23.1",
   "blinker==1.9.0",
   "cachetools==7.0.5",
-  "certifi==2024.7.4",
+  "certifi==2026.2.25",
   "cffi==2.0.0",
   "charset-normalizer==3.4.7",
   "choreographer==1.2.1",
