@@ -562,8 +562,11 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
             if not hmac.compare_digest(provided_secret, workflow.webhook_secret):
                 return jsonify({"error": "Invalid webhook secret"}), 401
 
-    # Get API key - prioritize stored API key from workflow
-    api_key = workflow.api_key  # Use API key stored when workflow was activated
+    # Get API key - prioritize stored API key from workflow.
+    # The column is encrypted at rest; use the helper that decrypts it
+    # (and falls back to plaintext for pre-migration rows).
+    from database.flow_db import get_workflow_api_key
+    api_key = get_workflow_api_key(workflow)  # Use API key stored when workflow was activated
     if not api_key:
         api_key = get_current_api_key()  # Fallback to session (if called from UI)
     if not api_key:

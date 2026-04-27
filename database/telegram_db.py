@@ -446,15 +446,29 @@ def get_all_telegram_users(filters: dict | None = None) -> list[dict]:
 # Bot Configuration Functions
 
 
+def _safe_decrypt_telegram(value):
+    """Decrypt a value with the telegram_db Fernet, falling back to the
+    raw value on failure. Used during the transition window where the
+    bot_config.token column may still hold plaintext (pre-rotate_pepper).
+    """
+    if not value:
+        return None
+    try:
+        return fernet.decrypt(value.encode()).decode()
+    except Exception:
+        return value
+
+
 def get_bot_config() -> dict:
-    """Get bot configuration"""
+    """Get bot configuration with the bot token decrypted."""
     try:
         config = db_session.query(BotConfig).filter_by(id=1).first()
 
         if config:
+            decrypted_token = _safe_decrypt_telegram(config.token)
             return {
-                "bot_token": config.token,
-                "token": config.token,  # Alias for backward compatibility
+                "bot_token": decrypted_token,
+                "token": decrypted_token,  # Alias for backward compatibility
                 "is_active": config.is_active,
                 "bot_username": config.bot_username,
                 "max_message_length": config.max_message_length,
@@ -491,11 +505,15 @@ def update_bot_config(config: dict) -> bool:
             bot_config = BotConfig(id=1)
             db_session.add(bot_config)
 
-        # Update fields (map bot_token to token for database)
+        # Update fields (map bot_token to token for database).
+        # The token is encrypted at rest with the telegram_db Fernet.
         for key, value in config.items():
             # Handle the bot_token -> token mapping
             if key == "bot_token":
-                bot_config.token = value
+                if value:
+                    bot_config.token = fernet.encrypt(value.encode()).decode()
+                else:
+                    bot_config.token = None
             elif hasattr(bot_config, key) and key not in ["id", "created_at"]:
                 setattr(bot_config, key, value)
 

@@ -35,6 +35,14 @@ PROJECT_ROOT = os.path.dirname(UPGRADE_DIR)
 
 # Migration scripts in order of execution
 # Each migration is idempotent - safe to run multiple times
+#
+# DO NOT add destructive migrations here.
+# In particular, upgrade/rotate_pepper.py is intentionally absent from this
+# list. It rotates API_KEY_PEPPER and re-encrypts every PEPPER-derived
+# ciphertext, which invalidates Argon2 password hashes and forces a one-time
+# password reset for every user. That is operator-controlled work, not
+# something to run unattended on every update. Operators run it explicitly:
+#   cd upgrade && uv run rotate_pepper.py
 MIGRATIONS = [
     # Legacy migrations (for users upgrading from older versions)
     ("add_feed_token.py", "Feed Token Support"),

@@ -397,6 +397,23 @@ def init_db():
     init_db_with_logging(Base, engine, "Auth DB", logger)
 
 
+def safe_decrypt_token(value):
+    """Decrypt a Fernet-encrypted value, falling back to the raw value
+    when decryption fails (typical reason: the column still holds plaintext
+    from before the rotate_pepper.py migration). Returns None for empty input.
+
+    This is the read-path helper used by columns that transitioned from
+    plaintext to ciphertext (totp_secret, samco secret_api_key, flow api_key,
+    telegram bot token). Callers must pass values encrypted with the same
+    Fernet key (i.e. the auth_db one) — telegram_db and settings_db have
+    their own derivations and use their own helpers.
+    """
+    if not value:
+        return None
+    decrypted = decrypt_token(value)
+    return decrypted if decrypted is not None else value
+
+
 def encrypt_token(token):
     """Encrypt auth token"""
     if not token:
@@ -979,6 +996,10 @@ def _get_samco_auth(user_id):
 def samco_save_secret_key(user_id, secret_api_key):
     """Save or update the secret API key for a Samco user.
     Creates a placeholder auth record if one doesn't exist yet (pre-login setup).
+
+    The secret_api_key is encrypted at rest with the auth_db Fernet (PBKDF2
+    over API_KEY_PEPPER). Pre-migration rows containing plaintext are
+    transparently handled by safe_decrypt_token on read.
     """
     try:
         record = _get_samco_auth(user_id)
@@ -991,7 +1012,7 @@ def samco_save_secret_key(user_id, secret_api_key):
             )
             db_session.add(record)
             logger.info(f"Created placeholder auth record for samco user {user_id}")
-        record.secret_api_key = secret_api_key
+        record.secret_api_key = encrypt_token(secret_api_key) if secret_api_key else None
         db_session.commit()
         return True
     except Exception as e:
@@ -1061,10 +1082,15 @@ def samco_has_secret_key(user_id):
 
 
 def samco_get_secret_key(user_id):
-    """Get the stored secret API key for a Samco user."""
+    """Get the stored secret API key for a Samco user (decrypted).
+
+    Falls back to the raw column value if Fernet decryption fails — that's
+    a pre-migration plaintext row, which keeps working until the operator
+    runs upgrade/rotate_pepper.py.
+    """
     record = _get_samco_auth(user_id)
     if record and record.secret_api_key:
-        return record.secret_api_key
+        return safe_decrypt_token(record.secret_api_key)
     return None
 
 

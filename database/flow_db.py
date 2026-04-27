@@ -54,6 +54,27 @@ def generate_webhook_secret():
     return secrets.token_hex(32)
 
 
+def get_workflow_api_key(workflow):
+    """Decrypt and return a workflow's stored OpenAlgo API key.
+
+    The api_key column transitioned from plaintext to Fernet-encrypted
+    (auth_db Fernet, PBKDF2 over API_KEY_PEPPER). Pre-migration plaintext
+    rows are returned as-is via safe_decrypt_token's fallback.
+    """
+    if not workflow or not workflow.api_key:
+        return None
+    from database.auth_db import safe_decrypt_token
+    return safe_decrypt_token(workflow.api_key)
+
+
+def _encrypt_api_key(api_key):
+    """Encrypt an API key for storage in flow_workflows.api_key."""
+    if not api_key:
+        return None
+    from database.auth_db import encrypt_token
+    return encrypt_token(api_key)
+
+
 class FlowWorkflow(Base):
     """Model for flow workflows"""
 
@@ -220,7 +241,11 @@ def update_workflow(workflow_id, **kwargs):
         ]
         for field in allowed_fields:
             if field in kwargs:
-                setattr(workflow, field, kwargs[field])
+                # api_key is encrypted at rest with the auth_db Fernet.
+                if field == "api_key":
+                    setattr(workflow, field, _encrypt_api_key(kwargs[field]))
+                else:
+                    setattr(workflow, field, kwargs[field])
 
         db_session.commit()
 
