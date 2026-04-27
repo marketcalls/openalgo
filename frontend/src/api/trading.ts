@@ -229,8 +229,8 @@ export const tradingApi = {
       action: string
       product: string
       pricetype: string
-      price: number
       quantity: number
+      price?: number
       trigger_price?: number
       disclosed_quantity?: number
     }
