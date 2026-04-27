@@ -38,6 +38,8 @@ Phases ship independently. Each phase ends in a mergeable state; nothing half-bu
 | 0.7 | API naming | `placegttorder`, `modifygttorder`, `cancelgttorder`, `gttorderbook` (lowercase, no separators — matches existing style). |
 | 0.8 | ID naming | OpenAlgo uses `trigger_id` in JSON (broker-neutral); sandbox table column `gtt_id` (internal). |
 | 0.9 | Sandbox trigger-evaluation concurrency | **Atomic leg-level claim.** Three paths (polling engine, WebSocket engine, startup catch-up) can all observe the same crossed trigger. The existing `_process_order` duplicate guard (`execution_engine.py:217`) only dedupes after a trade row exists for a given `orderid` — it cannot catch the case where each path independently calls `order_manager.place_order()` and each generates a different `orderid`. All three paths must instead funnel through a single `gtt_manager.try_claim_trigger(leg_id)` helper that performs a **conditional UPDATE** on `sandbox_gtt_legs.leg_status` from `pending → triggering` (broker-agnostic CAS; works on SQLite + Postgres + MySQL). Only the path whose UPDATE returns `rowcount == 1` calls `place_order()`; others back off silently. |
+| 0.10 | Action Center support in **analyze mode** | **YES** — `should_route_to_pending` is mode-agnostic; analyze-mode users with `order_mode = semi_auto` get the same approval gate. On approval the queued GTT is routed to the **sandbox** GTT engine, not the broker. The dispatch helper inside `approve_pending_order` calls the same `place_gtt_order_with_auth(...)` service used by direct REST callers; the service itself reads `get_analyze_mode()` and routes to live broker vs. sandbox engine. This gives analyze-mode parity for free with no separate semi-auto-sandbox code path. |
+| 0.11 | Mode-binding for queued GTT | The queued order JSON includes a `_meta.openalgo_mode` field (`"live"` or `"analyze"`) captured at **queue time**. `approve_pending_order` re-reads the user's current mode and refuses with HTTP 409 if it has changed between queue and approve (rare but possible if the operator toggles `/auth/analyzer-toggle` mid-queue). Without this guard, a GTT queued in live mode could be approved while the user is in analyze, silently misrouting; or vice versa, exposing real funds to a sandbox-grade approval. |
 
 ### Exit
 
@@ -125,8 +127,92 @@ DB has GTT tables; validators + events exist as importable symbols; nothing else
    - (N) `restx_api/place_gtt_order.py`, `restx_api/modify_gtt_order.py`, `restx_api/cancel_gtt_order.py`, `restx_api/gtt_orderbook.py`. Each mirrors `place_order.py`: `@limiter.limit(ORDER_RATE_LIMIT)`, schema `.load()`, service call, tuple unpack, `make_response`.
    - (E) `restx_api/__init__.py` — import namespaces + `api.add_namespace(..., path="/placegttorder")` etc.
 
-4. **Semi-auto / Action Center hook**
-   - (E) `services/order_router_service.py` — extend `should_route_to_pending(api_key, api_type)` to recognise `placegttorder` (queue) and explicitly return `False` for `modifygttorder` / `cancelgttorder` (per Phase 0.3).
+4. **Semi-auto / Action Center integration**
+
+   GTT placement is opt-in routable through Action Center for users running in semi-automatic mode (`order_mode = semi_auto`). Modify and cancel are explicitly **not** queueable (Phase 0.3) — once a GTT is live at the broker, the semi-auto delay between queue and approve is incompatible with the GTT's own trigger timing. Both live and analyze modes flow through the same Action Center surface (Phase 0.10).
+
+   **a. Routing decision (entry point)**
+   - (E) `services/order_router_service.py:should_route_to_pending(api_key, api_type)` — extend to:
+     - return `True` for `api_type == "placegttorder"` when the user's `order_mode` is `semi_auto`,
+     - explicitly return `False` for `api_type == "modifygttorder"` and `api_type == "cancelgttorder"` regardless of mode (per Phase 0.3),
+     - all other GTT calls (`gttorderbook` — read-only) bypass the queue.
+   - The semi-auto branch creates the row via `database.action_center_db.create_pending_order(user_id, api_type, order_data_json)` and returns `(False, {"status": "queued", "queue_id": ..., "message": "Pending approval in Action Center"}, 202)` from `place_gtt_order_with_auth`. The REST endpoint surfaces this as HTTP 202 (Accepted) — no broker call yet.
+
+   **b. Queue payload shape**
+
+   The JSON written to `pending_orders.order_data` is the full validated `PlaceGTTOrderSchema.dump()` plus a `_meta` block carrying the mode-binding (Phase 0.11):
+   ```json
+   {
+     "trigger_type": "single|oco",
+     "symbol": "RELIANCE",
+     "exchange": "NSE",
+     "last_price": "1234.5",
+     "expires_at": "2026-04-22T15:30:00+05:30",
+     "legs": [
+       {"action": "BUY", "quantity": "10", "trigger_price": "1240", "price": "1245", "product": "CNC"}
+     ],
+     "_meta": {
+       "openalgo_mode": "live",
+       "queued_at_ist": "...",
+       "broker": "zerodha"
+     }
+   }
+   ```
+   `_meta.openalgo_mode` is the mode-binding value re-validated at approval time (see Phase 0.11).
+
+   **c. Pretty-print parser**
+   - (E) `services/action_center_service.py:parse_pending_order` — add a new `elif api_type == "placegttorder":` branch alongside the existing `optionsorder` / `basketorder` / `smartorder` branches. Mirrors the basket-order shape: a top-level summary plus a leg list. Returns:
+     ```python
+     {
+         "type": "GTT",
+         "trigger_type": order_data["trigger_type"].upper(),  # SINGLE or OCO
+         "symbol": order_data["symbol"],
+         "exchange": order_data["exchange"],
+         "expires_at": order_data.get("expires_at", "365d default"),
+         "legs": [
+             {
+                 "action": leg["action"],
+                 "qty": leg["quantity"],
+                 "trigger_price": leg["trigger_price"],
+                 "limit_price": leg["price"],
+                 "product": leg.get("product", "MIS"),
+             }
+             for leg in order_data["legs"]
+         ],
+         "raw_order_data": {k: v for k, v in order_data.items() if k not in ["apikey", "api_key"]},
+     }
+     ```
+   This is what the React Action Center page renders for queued GTTs.
+
+   **d. Approval dispatch**
+   - (E) `database/action_center_db.py:approve_pending_order` — the existing dispatch lookup must learn about `placegttorder`:
+     ```python
+     api_type_to_service = {
+         "placeorder":     place_order_service.place_order_with_auth,
+         "basketorder":    basket_service.place_basket_order_with_auth,
+         "smartorder":     smart_order_service.place_smart_order_with_auth,
+         "placegttorder":  place_gtt_order_service.place_gtt_order_with_auth,  # NEW
+     }
+     ```
+   - Before dispatch: re-read the user's current mode via `database.settings_db.get_analyze_mode()`. If it differs from `order_data["_meta"]["openalgo_mode"]`, return HTTP 409 with `{"error": "mode_mismatch", "queued_in": "live", "current_mode": "analyze"}` and leave the row in `pending` (operator can cancel and re-queue). Phase 0.11 rationale.
+   - On dispatch: the service itself reads `get_analyze_mode()` and dispatches live → Zerodha broker, analyze → sandbox GTT engine. The Action Center wrapper does not need to know which path runs.
+   - On success: existing `update_broker_status(pending_order_id, broker_order_id, broker_status)` is called with `broker_order_id = trigger_id` (live) or `sandbox_gtt_id` (analyze). The Action Center UI shows the `trigger_id` so the user can correlate it to the GTT book.
+
+   **e. Audit trail**
+   - On queue: `order_logs` row with `api_type = "placegttorder"`, `status = "pending_approval"`, `result_data = {"queue_id": ..., "openalgo_mode": ...}`.
+   - On approve: same row pattern but `status = "approved"` and `broker_order_id` populated.
+   - On reject: `status = "rejected"`, `rejected_reason` from operator.
+   - Reuses existing `order_logs` schema — no new columns needed.
+
+   **f. UI surface**
+   - (E) `frontend/src/pages/ActionCenter.tsx` — extend the row renderer to recognise the new GTT shape returned by `parse_pending_order`. Mirrors the basket-order card pattern (summary + leg list).
+   - (E) `frontend/src/components/pending-order-cards/` — add `GttPendingCard.tsx` alongside `BasketPendingCard.tsx`. Displays `trigger_type` badge (`SINGLE` / `OCO`), `symbol (exchange)`, `expires_at`, leg list with action / qty / trigger / limit, and the standard approve / reject buttons. Reuses `PendingOrderActions.tsx`.
+
+   **g. Tests**
+   - Sandbox-mode user, `order_mode = semi_auto`, calls `POST /api/v1/placegttorder` → response 202 with `queue_id`, `pending_orders` row created with `api_type = "placegttorder"`, no broker call, no `sandbox_gtt` row yet.
+   - Operator hits `POST /action-center/approve/{id}` → `place_gtt_order_with_auth` runs in sandbox mode, `sandbox_gtt` row created, `pending_orders.status = "approved"`, `broker_order_id` set to the sandbox `gtt_id`.
+   - Live-mode user with semi-auto on; mode toggled to analyze between queue and approve → approval returns 409 `mode_mismatch`, row stays `pending` (Phase 0.11).
+   - `POST /api/v1/modifygttorder` and `POST /api/v1/cancelgttorder` from a semi-auto user → both bypass the queue (Phase 0.3) and dispatch directly to the broker / sandbox engine. Verified by absence of any `pending_orders` row.
 
 5. **Playground collection**
    - (N) `collections/openalgo/IN_stock/orders/place_gtt_order.bru` — single-leg + OCO example bodies.
@@ -398,6 +484,8 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 | GTT modify arrives after GTT already triggered | Service-layer pre-check: re-read status before dispatch; return `{status: error, message: "GTT already triggered"}` 409. | 2 |
 | Broker GTT expires silently; OpenAlgo shows stale `active` | Nightly reconciliation job pulls `gttorderbook` from broker in live mode, diffs against last-seen state, logs & emits events for state changes. (Optional Phase 6 enhancement.) | 6+ |
 | Semi-auto queue collides with GTT triggers | Disallow semi-auto for modify/cancel (Phase 0.3). | 2 |
+| Operator toggles mode between queue and approve in Action Center | `_meta.openalgo_mode` captured at queue time, re-validated at approval (Phase 0.11). 409 + leave row pending if changed; operator cancels and re-queues. | 0.11, 2 |
+| Approval lag exceeds GTT expiry window | Pre-check inside `approve_pending_order` GTT branch: if `now > order_data["expires_at"]`, refuse with HTTP 410 `gtt_already_expired` and auto-cancel the row (status = `expired`). Logged as `gtt_approve_expired` event. | 2 |
 | Order-logs table bloat | No new schema; reuses `order_logs`. If volume becomes a concern, apply the same retention policy as regular orders. | — |
 
 ---
