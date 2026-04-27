@@ -79,10 +79,30 @@ def get_env_value(key: str) -> str:
 
 
 def mask_secret(value: str, show_chars: int = 4) -> str:
-    """Mask a secret value, showing only first few characters."""
-    if not value or len(value) <= show_chars:
-        return "*" * len(value) if value else ""
-    return value[:show_chars] + "*" * (len(value) - show_chars)
+    """Mask a secret value, showing only the first few characters.
+
+    Returns a FIXED-length output (``prefix + '*' * 8``) regardless of the
+    original secret's length. This intentionally hides the secret's true
+    length so an over-the-shoulder viewer (or a screenshot) cannot infer
+    "this is a 64-char Zerodha API secret" vs "this is a 32-char Fyers
+    secret" from the asterisk count.
+
+    The fixed-length mask also keeps the rendered value bounded so a long
+    secret (some brokers issue 80+ char tokens) cannot overflow the
+    Profile UI's column layout — the bug originally reported in the
+    Current Configuration card where the asterisks ran past the right
+    edge of the card.
+
+    For empty values, returns "" so the frontend can detect "not set" and
+    show its placeholder copy.
+    """
+    if not value:
+        return ""
+    if len(value) <= show_chars:
+        # Edge case: secret shorter than the prefix budget. Show only the
+        # mask suffix to avoid revealing the entire short value.
+        return "*" * 8
+    return value[:show_chars] + "*" * 8
 
 
 def get_broker_from_redirect_url(redirect_url: str) -> str:
