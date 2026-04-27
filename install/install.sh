@@ -750,6 +750,11 @@ sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
 sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
 
+# This deployment runs gunicorn behind the nginx reverse proxy configured below
+# (Unix socket bind, not directly reachable from the internet). The proxy sets
+# X-Forwarded-For / X-Real-IP for IP-based features; trust those headers.
+sudo sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" $OPENALGO_PATH/.env
+
 # Disable session expiry for crypto brokers (24/7 markets)
 if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
     sudo sed -i "s|DISABLE_SESSION_EXPIRY = 'false'|DISABLE_SESSION_EXPIRY = 'true'|g" $OPENALGO_PATH/.env

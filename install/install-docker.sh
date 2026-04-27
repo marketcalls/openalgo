@@ -261,6 +261,10 @@ $SUDO sed -i "s|<broker>|$BROKER_NAME|g" .env
 $SUDO sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" .env
 $SUDO sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" .env
 
+# Container is published only on 127.0.0.1:5000 with nginx in front; trust the
+# proxy's X-Forwarded-For / X-Real-IP so IP-based features see the real client.
+$SUDO sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" .env
+
 # .env is bind-mounted read-only into the container at /app/.env.
 # The container runs as `appuser` (UID 1000 from the Dockerfile); a
 # chmod 600 + root-owned host file would make .env unreadable to the

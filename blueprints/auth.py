@@ -388,6 +388,17 @@ def reset_password():
             user.set_password(password)
             db_session.commit()
 
+            # Security: a password reset means we cannot trust any other
+            # active session for this account. Kick every device — the
+            # operator (or attacker) chose the reset path because they
+            # could prove control of the email/TOTP, not because every
+            # logged-in browser is theirs. Force re-login everywhere.
+            from database.auth_db import clear_user_sessions
+            clear_user_sessions(user.username)
+            socketio.emit("force_logout", {
+                "message": "Your password was reset. Please log in again with the new password.",
+            })
+
             # Clear reset session data for security
             session.pop("reset_token", None)
             session.pop("reset_email", None)
@@ -475,6 +486,20 @@ def change_password():
 
             user.set_password(new_password)
             db_session.commit()
+
+            # Security: a password change is a strong signal of suspected
+            # compromise (or routine rotation). Either way, every active
+            # session for this account should be re-authenticated. Kick all
+            # devices — including the current one — and let the user log
+            # in again with the new password. This prevents an attacker
+            # who already has a valid cookie from continuing to hold it.
+            from database.auth_db import clear_user_sessions
+            clear_user_sessions(username)
+            socketio.emit("force_logout", {
+                "message": "Your password was changed. Please log in again with the new password.",
+            })
+            session.clear()
+
             return jsonify(
                 {"status": "success", "message": "Your password has been changed successfully."}
             )
@@ -1009,6 +1034,18 @@ def change_password_api():
         user.set_password(new_password)
         db_session.commit()
         logger.info(f"Password changed successfully for user: {username}")
+
+        # Security: a password change should invalidate every active session
+        # for this account, including the current browser. The user logs in
+        # again with the new password — typical 5-second flow — and any
+        # attacker holding a stolen cookie is kicked out at the same moment.
+        from database.auth_db import clear_user_sessions
+        clear_user_sessions(username)
+        socketio.emit("force_logout", {
+            "message": "Your password was changed. Please log in again with the new password.",
+        })
+        session.clear()
+
         return jsonify({"status": "success", "message": "Password changed successfully"})
     except Exception as e:
         logger.exception(f"Error changing password: {e}")

@@ -352,6 +352,10 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
     sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" "$ENV_FILE"
 
+    # Each instance runs gunicorn behind nginx (Unix socket bind). Trust the
+    # proxy's X-Forwarded-For / X-Real-IP for IP-based features.
+    sudo sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
+
     # 8. Update database paths (unique per instance - ALL 6 databases)
     sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
     sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
