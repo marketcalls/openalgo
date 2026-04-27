@@ -678,6 +678,25 @@ def process_mstock_json(json_data):
         + "PE"
     )
 
+    # -------------------------------------------------------------------
+    # Normalize instrumenttype to OpenAlgo standard: FUT, CE, PE
+    # mStock API returns legacy types (FUTIDX, OPTSTK, OPTIDX, etc.)
+    # -------------------------------------------------------------------
+    futures_mask = df["instrumenttype"].isin(
+        ["FUTIDX", "FUTSTK", "FUTCOM", "FUTCUR", "FUTIRC", "FUTIRT"]
+    )
+    df.loc[futures_mask, "instrumenttype"] = "FUT"
+
+    options_ce_mask = df["instrumenttype"].isin(
+        ["OPTIDX", "OPTSTK", "OPTFUT", "OPTCUR", "OPTIRC"]
+    ) & df["brsymbol"].str.endswith("CE", na=False)
+    df.loc[options_ce_mask, "instrumenttype"] = "CE"
+
+    options_pe_mask = df["instrumenttype"].isin(
+        ["OPTIDX", "OPTSTK", "OPTFUT", "OPTCUR", "OPTIRC"]
+    ) & df["brsymbol"].str.endswith("PE", na=False)
+    df.loc[options_pe_mask, "instrumenttype"] = "PE"
+
     # Return the processed DataFrame
     # Note: Index symbol formatting is handled in fetch_and_process_mstock_indices()
     return df

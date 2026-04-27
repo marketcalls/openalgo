@@ -371,3 +371,115 @@ def get_multiquotes(
             },
             400,
         )
+
+
+def _create_data_handler(broker_module, auth_token, feed_token):
+    """Create a BrokerData instance, passing feed_token if the broker accepts it."""
+    if hasattr(broker_module.BrokerData.__init__, "__code__"):
+        param_count = broker_module.BrokerData.__init__.__code__.co_argcount
+        if param_count > 2:
+            return broker_module.BrokerData(auth_token, feed_token)
+    return broker_module.BrokerData(auth_token)
+
+
+def get_option_chain_quotes(
+    auth_token: str,
+    feed_token: str | None,
+    broker: str,
+    underlying_symbol: str,
+    underlying_exchange: str,
+    option_symbols: list[dict[str, str]],
+) -> tuple[dict | None, list[dict]]:
+    """
+    Fetch underlying quote + all option quotes, using a single batch WS
+    connection when the broker supports it.
+
+    Returns:
+        (underlying_quote_dict, option_results_list)
+        underlying_quote_dict has keys: bid, ask, open, high, low, ltp, prev_close, volume, oi
+        option_results_list items: {symbol, exchange, data: {...}} or {symbol, exchange, error: ...}
+    """
+    broker_module = import_broker_module(broker)
+    if broker_module is None:
+        logger.error(f"Broker module not found for {broker}")
+        return None, []
+
+    data_handler = _create_data_handler(broker_module, auth_token, feed_token)
+
+    # Fast path: broker supports combined batch fetch
+    if hasattr(data_handler, "get_quotes_with_batch"):
+        underlying_quote, option_results = data_handler.get_quotes_with_batch(
+            underlying_symbol, underlying_exchange, option_symbols
+        )
+        return underlying_quote, option_results
+
+    # Fallback: separate calls for brokers without batch support
+    try:
+        underlying_quote = data_handler.get_quotes(underlying_symbol, underlying_exchange)
+    except Exception as e:
+        logger.exception(f"Error fetching underlying quote: {e}")
+        underlying_quote = None
+
+    option_results = []
+    if hasattr(data_handler, "get_multiquotes"):
+        try:
+            results = data_handler.get_multiquotes(option_symbols)
+            if results:
+                option_results = results
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes: {e}")
+    else:
+        for item in option_symbols:
+            try:
+                q = data_handler.get_quotes(item["symbol"], item["exchange"])
+                option_results.append({"symbol": item["symbol"], "exchange": item["exchange"], "data": q})
+            except Exception as e:
+                option_results.append({"symbol": item["symbol"], "exchange": item["exchange"], "error": str(e)})
+
+    return underlying_quote, option_results
+
+
+_EQUITY_EXCHANGE_FALLBACKS = {"BSE": "NSE", "NSE": "BSE"}
+
+
+def get_underlying_ltp(
+    auth_token: str,
+    feed_token: str | None,
+    broker: str,
+    symbol: str,
+    exchange: str,
+) -> float | None:
+    """
+    Lightweight LTP fetch for ATM calculation.
+    Uses REST endpoint if broker supports it, otherwise falls back to full quote.
+    If the primary exchange fails, tries the alternate equity exchange (BSE↔NSE)
+    since some brokers only carry a stock on one exchange in their master contract.
+    """
+    broker_module = import_broker_module(broker)
+    if broker_module is None:
+        return None
+
+    data_handler = _create_data_handler(broker_module, auth_token, feed_token)
+
+    exchanges_to_try = [exchange]
+    fallback = _EQUITY_EXCHANGE_FALLBACKS.get(exchange.upper())
+    if fallback:
+        exchanges_to_try.append(fallback)
+
+    for exch in exchanges_to_try:
+        if hasattr(data_handler, "get_ltp_rest"):
+            ltp = data_handler.get_ltp_rest(symbol, exch)
+            if ltp is not None:
+                return ltp
+
+        try:
+            quotes = data_handler.get_quotes(symbol, exch)
+            if quotes:
+                ltp = quotes.get("ltp")
+                if ltp is not None:
+                    return ltp
+        except Exception as e:
+            logger.debug(f"LTP fetch failed for {symbol} on {exch}: {e}")
+
+    logger.warning(f"Could not fetch LTP for {symbol} on any exchange: {exchanges_to_try}")
+    return None

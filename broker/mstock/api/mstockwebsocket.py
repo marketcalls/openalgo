@@ -18,6 +18,11 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Module-level persistent WebSocket connection cache.
+# Keyed by (api_key, auth_token) so daily token rotation auto-invalidates.
+_persistent_ws_lock = threading.Lock()
+_persistent_ws: dict = {}  # {(api_key, auth_token): websocket connection}
+
 
 class MstockWebSocket:
     """
@@ -101,6 +106,9 @@ class MstockWebSocket:
             elif len(data) >= 383:
                 num_packets = struct.unpack("<H", data[0:2])[0]
                 packet_size = struct.unpack("<H", data[2:4])[0]
+                if num_packets > 1:
+                    quotes = MstockWebSocket._parse_multi_packet(data, num_packets, packet_size)
+                    return quotes[0] if quotes else None
                 packet = data[4:4 + 379]
             else:
                 logger.error(f"Invalid packet size: {len(data)} bytes")
@@ -162,6 +170,23 @@ class MstockWebSocket:
         except Exception as e:
             logger.error(f"Error parsing binary packet: {str(e)}")
             return None
+
+    @staticmethod
+    def _parse_multi_packet(data: bytes, num_packets: int, packet_size: int) -> list[dict]:
+        """
+        Parse a multi-packet frame and return all successfully parsed quotes.
+        """
+        results = []
+        offset = 4
+        for _ in range(num_packets):
+            if offset + packet_size > len(data):
+                break
+            chunk = data[offset:offset + packet_size]
+            quote = MstockWebSocket.parse_binary_packet(chunk)
+            if quote:
+                results.append(quote)
+            offset += packet_size
+        return results
 
     # ==================== Streaming Mode Methods ====================
 
@@ -240,24 +265,31 @@ class MstockWebSocket:
         ws.send(login_msg)
         logger.debug("Sent LOGIN message")
 
+        # Mark as logged in immediately after sending LOGIN.
+        # mStock may not send a text response to LOGIN — the one-off
+        # fetch_quote path confirms login works without waiting for a reply.
+        self._logged_in = True
+        self._login_event.set()
+        logger.info("mstock WebSocket login sent, marking as ready")
+
+        # Re-subscribe to existing subscriptions (needed after reconnection)
+        self._resubscribe_all()
+
     def _on_ws_message(self, ws, message):
         """Called for both binary and text messages"""
         if isinstance(message, bytes):
-            # Parse binary packet
-            if len(message) in [51, 123, 379] or len(message) >= 383:
+            if len(message) in [51, 123, 379]:
                 quote_data = self.parse_binary_packet(message)
                 if quote_data and self.data_callback:
                     self.data_callback(quote_data)
+            elif len(message) >= 383:
+                num_packets = struct.unpack("<H", message[0:2])[0]
+                packet_size = struct.unpack("<H", message[2:4])[0]
+                for quote_data in self._parse_multi_packet(message, num_packets, packet_size):
+                    if self.data_callback:
+                        self.data_callback(quote_data)
         elif isinstance(message, str):
             logger.debug(f"Received string message: {message}")
-            # Mark as logged in after receiving login response
-            if not self._logged_in:
-                self._logged_in = True
-                self._login_event.set()
-                logger.info("mstock login confirmed")
-
-                # Re-subscribe to existing subscriptions
-                self._resubscribe_all()
 
     def _on_ws_error(self, ws, error):
         """Called on WebSocket error"""
@@ -403,22 +435,172 @@ class MstockWebSocket:
             }
             ws.send(json.dumps(subscribe_msg))
 
-            # Wait for binary response
-            for _ in range(3):
+            # Wait for binary response — for mode 3 keep reading until we get
+            # the full 379-byte SnapQuote packet (broker may send 51-byte LTP first)
+            full_mode_size = 379 if mode == 3 else None
+            best_quote = None
+            for _ in range(6):
                 try:
                     response = ws.recv()
                     if isinstance(response, bytes):
                         if len(response) in [51, 123, 379] or len(response) >= 383:
                             quote = self.parse_binary_packet(response)
                             if quote:
-                                ws.close()
-                                return quote
+                                best_quote = quote
+                                if not full_mode_size or len(response) >= full_mode_size:
+                                    break  # got the full packet we wanted
                 except Exception:
                     break
 
             ws.close()
-            return None
+            return best_quote
 
         except Exception as e:
             logger.error(f"Error fetching quote: {e}")
             return None
+
+    def _get_persistent_ws(self):
+        """
+        Get or create a persistent WebSocket connection for batch fetches.
+        Reuses an existing connection if available and healthy, avoiding
+        repeated TCP/TLS handshake + LOGIN overhead.
+        """
+        import websocket as ws_module
+
+        cache_key = (self.api_key, self.auth_token)
+
+        with _persistent_ws_lock:
+            ws = _persistent_ws.get(cache_key)
+
+            if ws is not None:
+                try:
+                    ws.ping()
+                    return ws
+                except Exception:
+                    logger.debug("Persistent WS stale, reconnecting")
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    _persistent_ws.pop(cache_key, None)
+
+            # Create new connection
+            ws = ws_module.create_connection(
+                self.ws_url,
+                sslopt={"cert_reqs": ssl.CERT_NONE},
+                timeout=15,
+            )
+            ws.send(f"LOGIN:{self.auth_token}")
+            try:
+                ws.recv()
+            except Exception:
+                pass
+
+            _persistent_ws[cache_key] = ws
+            logger.info("Persistent WS connection established for batch fetches")
+            return ws
+
+    def _discard_persistent_ws(self):
+        """Remove and close the cached connection for this auth token."""
+        cache_key = (self.api_key, self.auth_token)
+        with _persistent_ws_lock:
+            ws = _persistent_ws.pop(cache_key, None)
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def fetch_quotes_batch(self, token_exchange_list: list, mode: int = 3) -> dict:
+        """
+        Fetch quotes for multiple tokens, reusing a persistent WebSocket
+        connection to avoid TCP/TLS/LOGIN overhead on every call.
+
+        Args:
+            token_exchange_list: List of (token, exchange_type) tuples
+            mode: 1=LTP, 2=Quote, 3=SnapQuote (default, includes oi/bid/ask)
+
+        Returns:
+            dict: Map of token_str -> parsed quote dict
+        """
+        results = {}
+        if not token_exchange_list:
+            return results
+
+        for attempt in range(2):
+            try:
+                ws = self._get_persistent_ws()
+
+                # Group tokens by exchange_type
+                exchange_groups: dict[int, list[str]] = {}
+                for token, exchange_type in token_exchange_list:
+                    if exchange_type not in exchange_groups:
+                        exchange_groups[exchange_type] = []
+                    exchange_groups[exchange_type].append(str(token))
+
+                token_list = [
+                    {"exchangeType": et, "tokens": tokens}
+                    for et, tokens in exchange_groups.items()
+                ]
+
+                subscribe_msg = {
+                    "action": 1,
+                    "params": {"mode": mode, "tokenList": token_list},
+                }
+                ws.send(json.dumps(subscribe_msg))
+
+                expected = len(token_exchange_list)
+                full_mode_size = 379 if mode == 3 else None
+                full_packets: set[str] = set()
+                ws.settimeout(10)
+
+                for _ in range(expected * 3):
+                    try:
+                        response = ws.recv()
+                        if isinstance(response, bytes):
+                            quotes = []
+                            per_packet_size = len(response)
+                            if len(response) in [51, 123, 379]:
+                                q = self.parse_binary_packet(response)
+                                if q:
+                                    quotes = [q]
+                            elif len(response) >= 383:
+                                num_packets = struct.unpack("<H", response[0:2])[0]
+                                per_packet_size = struct.unpack("<H", response[2:4])[0]
+                                quotes = self._parse_multi_packet(response, num_packets, per_packet_size)
+
+                            for quote in quotes:
+                                if quote.get("token"):
+                                    token_key = quote["token"]
+                                    is_full = not full_mode_size or per_packet_size >= full_mode_size
+                                    if is_full:
+                                        results[token_key] = quote
+                                        full_packets.add(token_key)
+                                    elif token_key not in results:
+                                        results[token_key] = quote
+                            if len(full_packets) >= expected:
+                                break
+                    except Exception:
+                        break
+
+                # Unsubscribe to keep the connection clean for next call
+                unsub_msg = {
+                    "action": 0,
+                    "params": {"mode": mode, "tokenList": token_list},
+                }
+                try:
+                    ws.send(json.dumps(unsub_msg))
+                except Exception:
+                    pass
+
+                logger.info(f"Batch WS fetch: got {len(results)}/{expected} quotes ({len(full_packets)} full)")
+                return results
+
+            except Exception as e:
+                logger.warning(f"Batch WS fetch attempt {attempt + 1} failed: {e}")
+                self._discard_persistent_ws()
+                results = {}
+                if attempt == 1:
+                    logger.error(f"Error in fetch_quotes_batch after retry: {e}")
+
+        return results

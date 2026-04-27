@@ -7,7 +7,7 @@ import pandas as pd
 
 from broker.mstock.api.mstockwebsocket import MstockWebSocket
 from broker.mstock.mapping.order_data import transform_holdings_data, transform_positions_data
-from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -131,7 +131,8 @@ class BrokerData:
             "BSE": "BSE",
             "NFO": "NFO",
             "BFO": "BFO",
-            "CDS": "CDS",
+            "CDS": "NSE",
+            "BCD": "BSE",
             "MCX": "MCX",
             "NSE_INDEX": "NSE",
             "BSE_INDEX": "BSE",
@@ -145,6 +146,7 @@ class BrokerData:
             "NFO": "2",
             "BFO": "5",
             "CDS": "3",
+            "BCD": "4",
             "MCX": "6",
             "NSE_INDEX": "1",
             "BSE_INDEX": "4",
@@ -171,73 +173,73 @@ class BrokerData:
             "BSE": 3,
             "BFO": 4,
             "CDS": 13,
-            "MCX": 5,  # Assuming MCX
+            "BCD": 3,
+            "MCX": 5,
             "NSE_INDEX": 1,
             "BSE_INDEX": 3,
         }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol using REST API
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
-        Returns:
-            dict: Quote data with required fields
+        Get real-time quotes for given symbol using WebSocket SnapQuote (mode 3).
+        Falls back to REST OHLC if WebSocket fails.
         """
         try:
-            # Get token for the symbol
             token = get_token(symbol, exchange)
-
             if not token:
                 raise Exception(f"Token not found for symbol: {symbol}, exchange: {exchange}")
 
-            # Map exchange for API
-            quote_exchange_map = {
-                "NSE": "NSE",
-                "BSE": "BSE",
-                "NFO": "NFO",
-                "BFO": "BFO",
-                "CDS": "CDS",
-                "MCX": "MCX",
-                "NSE_INDEX": "NSE",
-                "BSE_INDEX": "BSE",
-                "MCX_INDEX": "MCX",
-            }
+            ws_exchange_type = self.ws_exchange_map.get(exchange)
+            if ws_exchange_type is None:
+                brexchange = get_brexchange(symbol, exchange)
+                ws_exchange_type = self.ws_exchange_map.get(brexchange, 1)
 
-            api_exchange = quote_exchange_map.get(exchange)
+            logger.debug(f"Fetching quotes for {symbol} via WebSocket (token: {token}, ws_type: {ws_exchange_type})")
+
+            quote = self.websocket.fetch_quote(str(token), ws_exchange_type, mode=3)
+
+            if quote:
+                best_bid = quote["bids"][0]["price"] if quote.get("bids") else 0
+                best_ask = quote["asks"][0]["price"] if quote.get("asks") else 0
+                return {
+                    "bid": float(best_bid),
+                    "ask": float(best_ask),
+                    "open": float(quote.get("open", 0)),
+                    "high": float(quote.get("high", 0)),
+                    "low": float(quote.get("low", 0)),
+                    "ltp": float(quote.get("ltp", 0)),
+                    "prev_close": float(quote.get("close", 0)),
+                    "volume": int(quote.get("volume", 0)),
+                    "oi": int(quote.get("oi", 0)),
+                }
+
+            # Fallback to REST OHLC
+            logger.warning(f"WebSocket quote failed for {symbol}, falling back to REST OHLC")
+            api_exchange = get_brexchange(symbol, exchange)
             if not api_exchange:
-                raise Exception(f"Exchange '{exchange}' not supported for quotes")
+                raise Exception(f"brexchange not found for {symbol} on {exchange}")
 
-            logger.debug(f"Fetching quotes for {symbol} (token: {token}, exchange: {api_exchange})")
-
-            # Call REST API for quote
             payload = {"mode": "OHLC", "exchangeTokens": {api_exchange: [str(token)]}}
-
             response = get_api_response("/instruments/quote", self.auth_token, "GET", payload)
 
             if not response.get("status"):
                 raise Exception(f"API error: {response.get('message', 'Unknown error')}")
 
-            # Extract quote from response
             fetched = response.get("data", {}).get("fetched", [])
-
             if not fetched:
                 raise Exception("No quote data received from API")
 
             quote_data = fetched[0]
-
-            # Return in OpenAlgo standard format
             return {
-                "bid": 0,  # Not provided in OHLC mode
-                "ask": 0,  # Not provided in OHLC mode
+                "bid": 0,
+                "ask": 0,
                 "open": float(quote_data.get("open", 0)),
                 "high": float(quote_data.get("high", 0)),
                 "low": float(quote_data.get("low", 0)),
                 "ltp": float(quote_data.get("ltp", 0)),
                 "prev_close": float(quote_data.get("close", 0)),
                 "volume": int(quote_data.get("volume", 0)) if quote_data.get("volume") else 0,
-                "oi": 0,  # Not provided in OHLC mode
+                "oi": 0,
             }
 
         except Exception as e:
@@ -298,20 +300,7 @@ class BrokerData:
         skipped_symbols = []
         symbol_map = {}  # Map token to original symbol/exchange
 
-        # Exchange mapping for quote API (uses exchange names like NSE, BSE)
-        quote_exchange_map = {
-            "NSE": "NSE",
-            "BSE": "BSE",
-            "NFO": "NFO",
-            "BFO": "BFO",
-            "CDS": "CDS",
-            "MCX": "MCX",
-            "NSE_INDEX": "NSE",
-            "BSE_INDEX": "BSE",
-            "MCX_INDEX": "MCX",
-        }
-
-        # Step 1: Prepare tokens grouped by exchange
+        # Step 1: Prepare tokens grouped by brexchange
         exchange_tokens = {}  # {"NSE": ["3045", "1594"], "BSE": ["500410"]}
 
         for item in symbols:
@@ -332,7 +321,9 @@ class BrokerData:
 
             try:
                 token = get_token(symbol, exchange)
-                api_exchange = quote_exchange_map.get(exchange)
+                # Use brexchange (mStock native exchange) for API call
+                # NFO options → brexchange=NSE, BFO options → brexchange=BSE
+                api_exchange = get_brexchange(symbol, exchange)
 
                 if not token:
                     logger.warning(
@@ -349,13 +340,13 @@ class BrokerData:
                     continue
 
                 if not api_exchange:
-                    logger.warning(f"Skipping symbol {symbol}: Exchange '{exchange}' not supported")
+                    logger.warning(f"Skipping symbol {symbol}: brexchange not found for {exchange}")
                     skipped_symbols.append(
                         {
                             "symbol": symbol,
                             "exchange": exchange,
                             "data": None,
-                            "error": f"Exchange '{exchange}' not supported",
+                            "error": f"brexchange not found for exchange '{exchange}'",
                         }
                     )
                     continue
@@ -378,59 +369,51 @@ class BrokerData:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
-        # Step 2: Call REST API for bulk quotes
+        # Step 2: Fetch quotes via WebSocket batch (mode 3 = SnapQuote: ltp/ohlc/oi/bid/ask)
         try:
-            payload = {"mode": "OHLC", "exchangeTokens": exchange_tokens}
+            # Build (token, ws_exchange_type) list for batch fetch
+            token_exchange_list = []
+            for token_str, info in symbol_map.items():
+                ws_exchange_type = self.ws_exchange_map.get(info["exchange"])
+                if ws_exchange_type is None:
+                    # fallback: use brexchange to derive ws type
+                    brexchange = get_brexchange(info["symbol"], info["exchange"])
+                    ws_exchange_type = self.ws_exchange_map.get(brexchange, 1)
+                token_exchange_list.append((token_str, ws_exchange_type))
 
-            logger.info(f"Fetching {len(symbol_map)} quotes via REST API")
-            response = get_api_response("/instruments/quote", self.auth_token, "GET", payload)
+            logger.info(f"Fetching {len(token_exchange_list)} quotes via WebSocket batch (mode 3)")
+            ws_results = self.websocket.fetch_quotes_batch(token_exchange_list, mode=3)
 
-            if not response.get("status"):
-                raise Exception(f"API error: {response.get('message', 'Unknown error')}")
-
-            # Step 3: Process response - fetched quotes
-            fetched = response.get("data", {}).get("fetched", [])
-
-            for quote_data in fetched:
-                token_str = str(quote_data.get("symbolToken", ""))
-                info = symbol_map.get(token_str)
-
-                if info:
+            # Step 3: Map results back to symbols
+            for token_str, info in symbol_map.items():
+                quote = ws_results.get(token_str)
+                if quote:
+                    best_bid = quote["bids"][0]["price"] if quote.get("bids") else 0
+                    best_ask = quote["asks"][0]["price"] if quote.get("asks") else 0
                     results.append(
                         {
                             "symbol": info["symbol"],
                             "exchange": info["exchange"],
                             "data": {
-                                "bid": 0,  # Not provided in OHLC mode
-                                "ask": 0,  # Not provided in OHLC mode
-                                "open": float(quote_data.get("open", 0)),
-                                "high": float(quote_data.get("high", 0)),
-                                "low": float(quote_data.get("low", 0)),
-                                "ltp": float(quote_data.get("ltp", 0)),
-                                "prev_close": float(quote_data.get("close", 0)),
-                                "volume": int(quote_data.get("volume", 0))
-                                if quote_data.get("volume")
-                                else 0,
-                                "oi": 0,  # Not provided in OHLC mode
+                                "bid": float(best_bid),
+                                "ask": float(best_ask),
+                                "open": float(quote.get("open", 0)),
+                                "high": float(quote.get("high", 0)),
+                                "low": float(quote.get("low", 0)),
+                                "ltp": float(quote.get("ltp", 0)),
+                                "prev_close": float(quote.get("close", 0)),
+                                "volume": int(quote.get("volume", 0)),
+                                "oi": int(quote.get("oi", 0)),
                             },
                         }
                     )
-                    # Remove from symbol_map to track unfetched
-                    del symbol_map[token_str]
-
-            # Add unfetched symbols as errors
-            for token_str, info in symbol_map.items():
-                results.append(
-                    {
-                        "symbol": info["symbol"],
-                        "exchange": info["exchange"],
-                        "error": "No data received",
-                    }
-                )
+                else:
+                    results.append(
+                        {"symbol": info["symbol"], "exchange": info["exchange"], "error": "No data received"}
+                    )
 
         except Exception as e:
-            logger.error(f"Error calling quote API: {str(e)}")
-            # Mark all remaining as errors
+            logger.error(f"Error in WebSocket batch quotes: {str(e)}")
             for info in symbol_map.values():
                 results.append(
                     {"symbol": info["symbol"], "exchange": info["exchange"], "error": str(e)}
@@ -837,6 +820,134 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Debug - Error fetching intraday data: {str(e)}")
             raise Exception(f"Error fetching intraday data: {str(e)}")
+
+    def get_ltp_rest(self, symbol: str, exchange: str) -> float | None:
+        """
+        Fetch LTP via REST OHLC endpoint (no WebSocket connection).
+        Used as a lightweight preliminary fetch when a full WS batch follows immediately.
+        Returns the LTP float, or None on failure.
+        """
+        try:
+            token = get_token(symbol, exchange)
+            if not token:
+                return None
+            api_exchange = get_brexchange(symbol, exchange)
+            if not api_exchange:
+                return None
+            payload = {"mode": "OHLC", "exchangeTokens": {api_exchange: [str(token)]}}
+            response = get_api_response("/instruments/quote", self.auth_token, "GET", payload)
+            if not response.get("status"):
+                return None
+            fetched = response.get("data", {}).get("fetched", [])
+            if not fetched:
+                return None
+            return float(fetched[0].get("ltp", 0)) or None
+        except Exception as e:
+            logger.warning(f"REST LTP fetch failed for {symbol}: {e}")
+            return None
+
+    def get_quotes_with_batch(self, underlying_symbol: str, underlying_exchange: str, option_symbols: list) -> tuple:
+        """
+        Fetch underlying LTP and all option quotes in a single WebSocket connection.
+        Eliminates the second TCP/TLS handshake that happens when get_quotes and
+        get_multiquotes are called separately for option chain requests.
+
+        Args:
+            underlying_symbol: e.g. "NIFTY"
+            underlying_exchange: e.g. "NSE_INDEX"
+            option_symbols: list of {"symbol": ..., "exchange": ...} dicts
+
+        Returns:
+            (underlying_quote_dict, option_results_list) — same shapes as
+            get_quotes() and _process_multiquotes_batch() respectively.
+            Returns (None, []) on failure.
+        """
+        try:
+            # Resolve underlying token
+            underlying_token = get_token(underlying_symbol, underlying_exchange)
+            if not underlying_token:
+                raise Exception(f"Token not found for {underlying_symbol} on {underlying_exchange}")
+
+            underlying_ws_type = self.ws_exchange_map.get(underlying_exchange)
+            if underlying_ws_type is None:
+                brexchange = get_brexchange(underlying_symbol, underlying_exchange)
+                underlying_ws_type = self.ws_exchange_map.get(brexchange, 1)
+
+            # Resolve option tokens
+            symbol_map = {}
+            skipped = []
+            for item in option_symbols:
+                sym, exch = item.get("symbol"), item.get("exchange")
+                if not sym or not exch:
+                    skipped.append({"symbol": sym, "exchange": exch, "data": None, "error": "Missing symbol/exchange"})
+                    continue
+                tok = get_token(sym, exch)
+                if not tok:
+                    skipped.append({"symbol": sym, "exchange": exch, "data": None, "error": "Token not found"})
+                    continue
+                ws_type = self.ws_exchange_map.get(exch)
+                if ws_type is None:
+                    brexch = get_brexchange(sym, exch)
+                    ws_type = self.ws_exchange_map.get(brexch, 1)
+                symbol_map[str(tok)] = {"symbol": sym, "exchange": exch, "ws_type": ws_type}
+
+            # Build combined token list: underlying first, then options
+            token_exchange_list = [(str(underlying_token), underlying_ws_type)]
+            for tok_str, info in symbol_map.items():
+                token_exchange_list.append((tok_str, info["ws_type"]))
+
+            # Single WS fetch for everything
+            ws_results = self.websocket.fetch_quotes_batch(token_exchange_list, mode=3)
+
+            # Extract underlying quote
+            underlying_raw = ws_results.get(str(underlying_token))
+            if underlying_raw:
+                best_bid = underlying_raw["bids"][0]["price"] if underlying_raw.get("bids") else 0
+                best_ask = underlying_raw["asks"][0]["price"] if underlying_raw.get("asks") else 0
+                underlying_quote = {
+                    "bid": float(best_bid),
+                    "ask": float(best_ask),
+                    "open": float(underlying_raw.get("open", 0)),
+                    "high": float(underlying_raw.get("high", 0)),
+                    "low": float(underlying_raw.get("low", 0)),
+                    "ltp": float(underlying_raw.get("ltp", 0)),
+                    "prev_close": float(underlying_raw.get("close", 0)),
+                    "volume": int(underlying_raw.get("volume", 0)),
+                    "oi": int(underlying_raw.get("oi", 0)),
+                }
+            else:
+                underlying_quote = None
+
+            # Extract option quotes
+            option_results = list(skipped)
+            for tok_str, info in symbol_map.items():
+                quote = ws_results.get(tok_str)
+                if quote:
+                    best_bid = quote["bids"][0]["price"] if quote.get("bids") else 0
+                    best_ask = quote["asks"][0]["price"] if quote.get("asks") else 0
+                    option_results.append({
+                        "symbol": info["symbol"],
+                        "exchange": info["exchange"],
+                        "data": {
+                            "bid": float(best_bid),
+                            "ask": float(best_ask),
+                            "open": float(quote.get("open", 0)),
+                            "high": float(quote.get("high", 0)),
+                            "low": float(quote.get("low", 0)),
+                            "ltp": float(quote.get("ltp", 0)),
+                            "prev_close": float(quote.get("close", 0)),
+                            "volume": int(quote.get("volume", 0)),
+                            "oi": int(quote.get("oi", 0)),
+                        },
+                    })
+                else:
+                    option_results.append({"symbol": info["symbol"], "exchange": info["exchange"], "error": "No data received"})
+
+            return underlying_quote, option_results
+
+        except Exception as e:
+            logger.exception(f"Error in get_quotes_with_batch: {e}")
+            return None, []
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
