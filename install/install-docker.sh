@@ -261,10 +261,16 @@ $SUDO sed -i "s|<broker>|$BROKER_NAME|g" .env
 $SUDO sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" .env
 $SUDO sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" .env
 
-# Restrict .env to the current user only — contains APP_KEY, API_KEY_PEPPER,
-# broker credentials. The container mounts it as :ro, but on the host it must
-# not be world-readable.
-$SUDO chmod 600 .env
+# .env is bind-mounted read-only into the container at /app/.env.
+# The container runs as `appuser` (UID 1000 from the Dockerfile); a
+# chmod 600 + root-owned host file would make .env unreadable to the
+# container, causing start.sh to exit with "Error: .env file not found."
+# (See https://github.com/marketcalls/openalgo/issues/960.)
+# Mode 644 keeps the file readable to UID 1000 while still scoping write
+# access to the host owner. The Docker install runs in /opt/openalgo
+# which is typically root-only directory traversal anyway, so the host
+# threat surface is small.
+$SUDO chmod 644 .env
 
 # Update XTS market data credentials if applicable
 if is_xts_broker "$BROKER_NAME"; then

@@ -182,9 +182,13 @@ do_setup() {
         sed -i "s/OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE/$APP_KEY/g" "$OPENALGO_DIR/$ENV_FILE"
         sed -i "s/OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
     fi
-    # Restrict .env to the current user only — it now contains the rotated
-    # secrets plus the broker credentials added below.
-    chmod 600 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+    # Note: deliberately NOT chmod 600 here. The container runs as appuser
+    # (UID 1000) and bind-mounts $ENV_FILE read-only into /app/.env; mode
+    # 600 owned by the host user (who is typically not UID 1000 on a desktop
+    # Mac/Linux box) would make the file unreadable inside the container,
+    # crash-looping the container with "Error: .env file not found."
+    # See https://github.com/marketcalls/openalgo/issues/960.
+    # The default cp mode (644) is what we want for Docker bind-mounts.
     log_ok "Secure keys generated and saved."
 
     # Get broker configuration
