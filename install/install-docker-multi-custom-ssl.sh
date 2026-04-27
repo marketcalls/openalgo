@@ -833,6 +833,9 @@ for i in "${!CONF_DOMAINS[@]}"; do
         sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$PEPPER|g" "$ENV_FILE"
+        # Each instance is published only on 127.0.0.1 with nginx in front;
+        # trust the proxy's X-Forwarded-For / X-Real-IP.
+        sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
         # .env is bind-mounted read-only into the container; it must remain
         # readable to the container's appuser (UID 1000). chmod 600 with a
         # root-owned host file makes start.sh exit with "Error: .env file
