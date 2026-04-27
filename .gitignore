@@ -45,6 +45,9 @@ checkpoints.json
 # Strategy encryption key
 db/strategy_encryption.key
 
+# DB backup files (created by upgrade/rotate_pepper.py and other migrations)
+db/backups/
+
 # CSV Files (except specific data files)
 *.csv
 !symbols.csv

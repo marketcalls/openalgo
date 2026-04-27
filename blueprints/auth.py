@@ -950,7 +950,11 @@ def get_profile_data():
                 img_buffer = io.BytesIO()
                 qr.make_image(fill_color="black", back_color="white").save(img_buffer, format="PNG")
                 qr_code = base64.b64encode(img_buffer.getvalue()).decode()
-                totp_secret = user.totp_secret
+                # Use the public getter that decrypts the at-rest ciphertext.
+                # `user.totp_secret` is the raw column value (ciphertext);
+                # `get_totp_secret()` returns the plaintext with a fallback
+                # for pre-migration rows.
+                totp_secret = user.get_totp_secret()
             except Exception as e:
                 logger.exception(f"Error generating TOTP QR code: {e}")
 

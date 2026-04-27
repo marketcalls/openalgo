@@ -64,8 +64,24 @@ class User(Base):
     username = Column(String(80), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)  # Increased length for Argon2 hash
-    totp_secret = Column(String(32), nullable=False)  # For TOTP-based password reset
+    # Widened from 32 -> 255 to fit Fernet ciphertext (~100 chars).
+    # SQLite ignores VARCHAR length so existing rows are unaffected; the
+    # change matters only on Postgres/MySQL.
+    totp_secret = Column(String(255), nullable=False)  # Fernet-encrypted at rest
     is_admin = Column(Boolean, default=False)
+
+    def get_totp_secret(self):
+        """Return the user's TOTP secret in plaintext.
+
+        Encrypted-at-rest with auth_db Fernet (PBKDF2 over API_KEY_PEPPER).
+        Pre-migration plaintext rows are transparently handled by
+        safe_decrypt_token's fallback. This is the only correct way to read
+        the secret — never use ``self.totp_secret`` directly outside this
+        class, since that returns the raw column value (ciphertext or stale
+        plaintext).
+        """
+        from database.auth_db import safe_decrypt_token
+        return safe_decrypt_token(self.totp_secret) or self.totp_secret
 
     def set_password(self, password):
         """Hash password using Argon2 with pepper"""
@@ -87,13 +103,13 @@ class User(Base):
 
     def get_totp_uri(self):
         """Get the TOTP URI for QR code generation"""
-        return pyotp.totp.TOTP(self.totp_secret).provisioning_uri(
+        return pyotp.totp.TOTP(self.get_totp_secret()).provisioning_uri(
             name=self.email, issuer_name="OpenAlgo"
         )
 
     def verify_totp(self, token):
         """Verify TOTP token"""
-        totp = pyotp.TOTP(self.totp_secret)
+        totp = pyotp.TOTP(self.get_totp_secret())
         return totp.verify(token)
 
 
@@ -126,9 +142,17 @@ def add_user(username, email, password, is_admin=False):
         if a user with the same username or email already exists.
     """
     try:
-        # Generate TOTP secret for the user
+        # Generate TOTP secret and store it encrypted at rest using the
+        # auth_db Fernet (same pattern used for broker tokens, API keys).
+        # See _totp_plaintext() for the read path.
+        from database.auth_db import encrypt_token
         totp_secret = pyotp.random_base32()
-        user = User(username=username, email=email, totp_secret=totp_secret, is_admin=is_admin)
+        user = User(
+            username=username,
+            email=email,
+            totp_secret=encrypt_token(totp_secret),
+            is_admin=is_admin,
+        )
         user.set_password(password)
         db_session.add(user)
         db_session.commit()
