@@ -197,8 +197,9 @@ export function ConfigPanel() {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-4 p-4">
+      <div className="flex-1 min-h-0">
+        <ScrollArea className="h-full">
+          <div className="space-y-4 p-4">
 
           {/* ===== SCHEDULE/START ===== */}
           {nodeType === 'start' && (<>
@@ -560,8 +561,9 @@ export function ConfigPanel() {
 
           <Separator />
           <div className="space-y-2"><Label className="text-xs text-muted-foreground">Node ID</Label><code className="block text-[10px] bg-muted px-2 py-1 rounded font-mono">{selectedNode.id}</code></div>
-        </div>
-      </ScrollArea>
+          </div>
+        </ScrollArea>
+      </div>
     </div>
   )
 }
