@@ -44,6 +44,12 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # Exchanges that support 50-level depth (Fyers TBT only supports NSE equity)
     TBT_SUPPORTED_EXCHANGES = {"NSE", "NFO"}
 
+    # Delay before flushing the HSM subscription batch. Short enough that the
+    # OptionChain page (which fires ~80 subscribes back-to-back) still feels
+    # snappy, long enough that they all collapse into one Fyers symbol-token
+    # POST inside FyersAdapter.subscribe_symbols instead of N sequential ones.
+    HSM_BATCH_DELAY_SEC = 0.15
+
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger("fyers_websocket_adapter")
@@ -64,6 +70,13 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.tbt_subscriptions = {}  # symbol -> {ticker, exchange, channel}
         self.tbt_symbol_to_ticker = {}  # OpenAlgo symbol -> Fyers ticker
         self.tbt_ticker_to_symbol = {}  # Fyers ticker -> OpenAlgo symbol
+
+        # HSM batch queue: collects {data_type, exchange, symbol, callback}
+        # entries from per-symbol subscribe() calls and flushes them together
+        # so a single FyersAdapter.subscribe_symbols call covers many symbols.
+        self._hsm_batch_queue: list[dict] = []
+        self._hsm_batch_timer: threading.Timer | None = None
+        self._hsm_batch_lock = threading.Lock()
 
         self.logger.info("Fyers WebSocket Adapter initialized")
 
@@ -154,6 +167,16 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Set flags to stop operations
             self.running = False
             self.connected = False
+
+            # Cancel any pending batch flush so it doesn't fire post-disconnect
+            with self._hsm_batch_lock:
+                if self._hsm_batch_timer is not None:
+                    try:
+                        self._hsm_batch_timer.cancel()
+                    except Exception:
+                        pass
+                    self._hsm_batch_timer = None
+                self._hsm_batch_queue.clear()
 
             # Clear all active subscriptions and callbacks
             with self.lock:
@@ -277,11 +300,20 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Store the callback
                 self.active_callbacks[subscription_key] = data_callback
 
-                # Subscribe based on mode
+                # Subscribe based on mode. HSM modes (LTP / Quote / 5-level
+                # Depth) go through the batch queue so back-to-back subscribes
+                # from the UI collapse into one FyersAdapter.subscribe_symbols
+                # call (and thus one Fyers symbol-token POST).
                 if mode == 1:  # LTP
-                    success = self.fyers_adapter.subscribe_ltp(symbol_info, data_callback)
+                    self._enqueue_hsm_subscribe(
+                        "SymbolUpdate", exchange, symbol, data_callback
+                    )
+                    success = True
                 elif mode == 2:  # Quote
-                    success = self.fyers_adapter.subscribe_quote(symbol_info, data_callback)
+                    self._enqueue_hsm_subscribe(
+                        "SymbolUpdate", exchange, symbol, data_callback
+                    )
+                    success = True
                 elif mode == 3:  # Depth
                     # Check if 50-level depth is requested via symbol suffix (e.g., "TCS:50")
                     # This allows differentiation without modifying feed.py
@@ -298,8 +330,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         # The client subscribed with "TCS:50", so we must publish with that
 
                     if use_tbt and exchange in self.TBT_SUPPORTED_EXCHANGES:
-                        # Use 50-level TBT WebSocket
-                        # Pass both actual_symbol (for API) and original_symbol (for topic matching)
+                        # Use 50-level TBT WebSocket — direct path, no batching
                         success = self._subscribe_tbt_depth(
                             actual_symbol, exchange, data_callback, original_symbol
                         )
@@ -308,22 +339,23 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 f"Subscribed to 50-level depth (TBT) for {exchange}:{actual_symbol}"
                             )
                         else:
-                            # Fallback to 5-level depth if TBT unavailable
+                            # Fallback to 5-level depth if TBT unavailable — go via batch queue
                             self.logger.warning(
                                 f"TBT unavailable, falling back to 5-level depth for {exchange}:{actual_symbol}"
                             )
-                            success = self.fyers_adapter.subscribe_depth(symbol_info, data_callback)
-                            if success:
-                                self.logger.info(
-                                    f"Subscribed to 5-level depth (HSM) for {exchange}:{actual_symbol}"
-                                )
-                    else:
-                        # Use 5-level depth (HSM WebSocket)
-                        success = self.fyers_adapter.subscribe_depth(symbol_info, data_callback)
-                        if success:
-                            self.logger.info(
-                                f"Subscribed to 5-level depth (HSM) for {exchange}:{actual_symbol}"
+                            self._enqueue_hsm_subscribe(
+                                "DepthUpdate", exchange, actual_symbol, data_callback
                             )
+                            success = True
+                    else:
+                        # 5-level depth (HSM WebSocket) via batch queue
+                        self._enqueue_hsm_subscribe(
+                            "DepthUpdate", exchange, actual_symbol, data_callback
+                        )
+                        success = True
+                        self.logger.debug(
+                            f"Queued 5-level depth (HSM) for {exchange}:{actual_symbol}"
+                        )
                 else:
                     self.logger.error(f"Unsupported subscription mode: {mode}")
                     return {"status": "error", "message": f"Unsupported subscription mode: {mode}"}
@@ -436,6 +468,89 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Unsubscription error: {e}")
             return {"status": "error", "message": f"Unsubscription failed: {str(e)}"}
+
+    def _enqueue_hsm_subscribe(
+        self, data_type: str, exchange: str, symbol: str, callback
+    ) -> None:
+        """Queue a single HSM subscribe and arm the batch flush timer."""
+        with self._hsm_batch_lock:
+            self._hsm_batch_queue.append(
+                {
+                    "data_type": data_type,
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "callback": callback,
+                }
+            )
+            if self._hsm_batch_timer is None:
+                self._hsm_batch_timer = threading.Timer(
+                    self.HSM_BATCH_DELAY_SEC, self._flush_hsm_batch
+                )
+                self._hsm_batch_timer.daemon = True
+                self._hsm_batch_timer.start()
+
+    def _flush_hsm_batch(self) -> None:
+        """
+        Drain the batched subscribe queue and dispatch one
+        FyersAdapter.subscribe_symbols call per data_type.
+
+        FyersAdapter takes a single callback and stores it for every symbol in
+        the call, so we register a per-flush dispatcher closure that captures
+        a {full_symbol -> data_callback} map and routes each tick back to the
+        original per-symbol closure (which sets symbol/exchange/mode for the
+        ZeroMQ topic before calling _send_data).
+        """
+        try:
+            with self._hsm_batch_lock:
+                pending = self._hsm_batch_queue
+                self._hsm_batch_queue = []
+                self._hsm_batch_timer = None
+
+            if not pending:
+                return
+
+            if not self.fyers_adapter or not self.connected:
+                self.logger.warning(
+                    f"Dropping batch of {len(pending)} HSM subscribes — adapter not connected"
+                )
+                return
+
+            # Group by data_type, dedupe by full_symbol (last writer wins —
+            # matches the single-call semantics where the latest callback
+            # registration overwrites the prior one).
+            grouped: dict[str, dict[str, dict]] = {}
+            for item in pending:
+                full_symbol = f"{item['exchange']}:{item['symbol']}"
+                grouped.setdefault(item["data_type"], {})[full_symbol] = item
+
+            for data_type, items in grouped.items():
+                symbol_info = [
+                    {"exchange": it["exchange"], "symbol": it["symbol"]}
+                    for it in items.values()
+                ]
+                callbacks_map = {
+                    full_symbol: it["callback"] for full_symbol, it in items.items()
+                }
+
+                def _dispatch(data, _cbs=callbacks_map):
+                    if not data:
+                        return
+                    cb = _cbs.get(f"{data.get('exchange')}:{data.get('symbol')}")
+                    if cb:
+                        cb(data)
+
+                try:
+                    if data_type == "DepthUpdate":
+                        self.fyers_adapter.subscribe_depth(symbol_info, _dispatch)
+                    else:
+                        self.fyers_adapter.subscribe_quote(symbol_info, _dispatch)
+                    self.logger.debug(
+                        f"Flushed HSM batch: {len(symbol_info)} symbols ({data_type})"
+                    )
+                except Exception as e:
+                    self.logger.error(f"HSM batch subscribe failed for {data_type}: {e}")
+        except Exception as e:
+            self.logger.error(f"Error in _flush_hsm_batch: {e}")
 
     def _subscribe_tbt_depth(
         self, symbol: str, exchange: str, callback, original_symbol: str = None

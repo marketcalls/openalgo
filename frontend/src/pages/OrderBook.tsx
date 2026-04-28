@@ -309,16 +309,20 @@ export default function OrderBook() {
   const handleModifyOrder = async () => {
     if (!modifyingOrder) return
 
+    const pt = modifyForm.pricetype
+    const sendsPrice = pt === 'LIMIT' || pt === 'SL'
+    const sendsTrigger = pt === 'SL' || pt === 'SL-M'
+
     try {
       const response = await tradingApi.modifyOrder(modifyingOrder.orderid, {
         symbol: modifyingOrder.symbol,
         exchange: modifyingOrder.exchange,
         action: modifyingOrder.action,
         product: modifyingOrder.product,
-        pricetype: modifyForm.pricetype,
-        price: modifyForm.price,
+        pricetype: pt,
         quantity: modifyForm.quantity,
-        trigger_price: modifyForm.trigger_price,
+        ...(sendsPrice && { price: modifyForm.price }),
+        ...(sendsTrigger && { trigger_price: modifyForm.trigger_price }),
       })
       if (response.status === 'success') {
         showToast.success(`Order modified: ${modifyingOrder.orderid}`, 'orders')

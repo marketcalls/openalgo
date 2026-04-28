@@ -559,6 +559,19 @@ export default function OptionChain() {
     setExpiries([])
   }
 
+  // Clear underlying / expiry / expiries in the SAME React event as the
+  // exchange change, so the next render has expiry='' (which makes the
+  // polling hook's enabled flag false) BEFORE useOptionChainPolling's
+  // dependency-driven effect fires a fetch with the new exchange and the
+  // previous exchange's underlying / expiry.
+  const handleExchangeChange = (value: string) => {
+    if (value === selectedExchange) return
+    setSelectedExchange(value)
+    setSelectedUnderlying('')
+    setExpiries([])
+    setSelectedExpiry('')
+  }
+
   const handleRefresh = () => {
     refetch()
   }
@@ -626,7 +639,7 @@ export default function OptionChain() {
           <h1 className="text-3xl font-bold">Option Chain</h1>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Select value={selectedExchange} onValueChange={setSelectedExchange}>
+          <Select value={selectedExchange} onValueChange={handleExchangeChange}>
             <SelectTrigger className="w-24">
               <SelectValue placeholder="Exchange" />
             </SelectTrigger>

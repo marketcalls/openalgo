@@ -51,6 +51,14 @@ export function useOptionChainPolling(
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
+  // Drop the previous chain whenever the request identity changes. Without
+  // this, useOptionChainLive briefly pairs the prior chain's option symbols
+  // with the newly-switched optionExchange (e.g. NFO:SENSEX..., BFO:NIFTY...),
+  // which the broker rejects as invalid subscriptions.
+  useEffect(() => {
+    setState((prev) => ({ ...prev, data: null, lastUpdate: null }))
+  }, [apiKey, underlying, exchange, expiryDate, strikeCount])
+
   // Determine if polling should be active
   const shouldPoll = enabled && (!pauseWhenHidden || isVisible)
 

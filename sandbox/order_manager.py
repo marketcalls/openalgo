@@ -81,6 +81,18 @@ class OrderManager:
             product = order_data["product"].upper()
             strategy = order_data.get("strategy", "")
 
+            # Drop fields that don't apply to this price_type so stale values from
+            # the form (e.g. a leftover trigger_price after switching SL-M -> LIMIT)
+            # cannot be stored or shown back in the orderbook.
+            #   MARKET -> no price, no trigger
+            #   LIMIT  -> price only
+            #   SL     -> price + trigger
+            #   SL-M   -> trigger only
+            if price_type in ("MARKET", "SL-M"):
+                price = None
+            if price_type in ("MARKET", "LIMIT"):
+                trigger_price = None
+
             # Get symbol info for lot size validation (from cache)
             symbol_obj = get_symbol_info(symbol, exchange)
             if not symbol_obj:
@@ -753,10 +765,35 @@ class OrderManager:
                 order.quantity = new_quantity
                 order.pending_quantity = new_quantity
 
+            # Only accept the fields that apply to this order's price_type:
+            #   MARKET -> none, LIMIT -> price, SL -> price+trigger, SL-M -> trigger
+            allows_price = order.price_type in ("LIMIT", "SL")
+            allows_trigger = order.price_type in ("SL", "SL-M")
+
             if "price" in new_data and new_data["price"]:
+                if not allows_price:
+                    return (
+                        False,
+                        {
+                            "status": "error",
+                            "message": f"{order.price_type} orders do not accept a price",
+                            "mode": "analyze",
+                        },
+                        400,
+                    )
                 order.price = Decimal(str(new_data["price"]))
 
             if "trigger_price" in new_data and new_data["trigger_price"]:
+                if not allows_trigger:
+                    return (
+                        False,
+                        {
+                            "status": "error",
+                            "message": f"{order.price_type} orders do not accept a trigger_price",
+                            "mode": "analyze",
+                        },
+                        400,
+                    )
                 order.trigger_price = Decimal(str(new_data["trigger_price"]))
 
             order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
