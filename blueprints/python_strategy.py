@@ -101,6 +101,43 @@ IS_WINDOWS = OS_TYPE == "windows"
 IS_MAC = OS_TYPE == "darwin"
 IS_LINUX = OS_TYPE == "linux"
 
+# Aliased ``time`` module: the top-level ``from datetime import ... time``
+# import shadows the stdlib ``time`` module, so we re-import under a
+# distinct name for sleep/monotonic helpers.
+import time as time_mod  # noqa: E402  (intentional late import for clarity)
+
+
+def _wait_for_pid_exit(pid, timeout=5.0, poll_interval=0.1):
+    """Eventlet-safe wait for a PID to exit.
+
+    ``psutil.Process.wait()`` and ``psutil.wait_procs()`` ultimately call
+    ``select.poll()`` inside ``psutil._psposix.wait_pid_pidfd_open``. Under
+    gunicorn ``--worker-class eventlet`` (OpenAlgo's default), eventlet's
+    monkey-patching strips ``select.poll`` and the call raises
+    ``AttributeError: module 'select' has no attribute 'poll'`` -- which
+    breaks both manual and scheduled strategy stops.
+
+    This helper polls with ``psutil.pid_exists`` (a simple ``os.stat`` call)
+    and ``time.sleep`` (eventlet-aware), and reaps zombie children if we
+    own them. Returns True if the process has exited within the timeout.
+    """
+    deadline = time_mod.monotonic() + max(0.0, timeout)
+    while time_mod.monotonic() < deadline:
+        if not psutil.pid_exists(pid):
+            return True
+        try:
+            p = psutil.Process(pid)
+            if p.status() == psutil.STATUS_ZOMBIE:
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except (ChildProcessError, OSError):
+                    pass
+                return True
+        except psutil.NoSuchProcess:
+            return True
+        time_mod.sleep(poll_interval)
+    return not psutil.pid_exists(pid)
+
 
 def init_scheduler():
     """Initialize the APScheduler with IST timezone"""
@@ -694,13 +731,18 @@ def stop_strategy_process(strategy_id):
                         except ProcessLookupError:
                             pass  # Process already dead
             elif hasattr(process, "terminate"):
-                # For psutil.Process objects
+                # For psutil.Process objects (typically restored after a
+                # gunicorn worker restart). We MUST NOT call process.wait()
+                # here -- under eventlet it raises AttributeError on
+                # ``select.poll``. See _wait_for_pid_exit() for context.
                 try:
                     process.terminate()
-                    process.wait(timeout=5)
-                except psutil.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
+                    if not _wait_for_pid_exit(pid, timeout=5):
+                        try:
+                            process.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                        _wait_for_pid_exit(pid, timeout=2)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass  # Process already dead or no permission
             else:
@@ -742,12 +784,19 @@ def stop_strategy_process(strategy_id):
 
 
 def terminate_process_cross_platform(pid):
-    """Terminate a process in a cross-platform way"""
+    """Terminate a process in a cross-platform way.
+
+    Avoids ``psutil.wait_procs`` / ``psutil.Process.wait`` because those
+    call ``select.poll`` under the hood, which eventlet (gunicorn worker
+    class on this deployment) monkey-patches away. Uses an eventlet-safe
+    polling loop instead.
+    """
     try:
         process = psutil.Process(pid)
 
-        # Terminate child processes first
+        # Snapshot children before terminate so we can poll them by PID
         children = process.children(recursive=True)
+        child_pids = [c.pid for c in children]
         for child in children:
             try:
                 child.terminate()
@@ -757,13 +806,21 @@ def terminate_process_cross_platform(pid):
         # Terminate main process
         process.terminate()
 
-        # Wait and kill if necessary
-        gone, alive = psutil.wait_procs([process] + children, timeout=3)
-        for p in alive:
-            try:
-                p.kill()
-            except psutil.NoSuchProcess:
-                pass
+        # Wait for everything to die, eventlet-safely
+        all_pids = [pid] + child_pids
+        deadline = time_mod.monotonic() + 3.0
+        while time_mod.monotonic() < deadline and any(
+            psutil.pid_exists(p) for p in all_pids
+        ):
+            time_mod.sleep(0.1)
+
+        # Force-kill any survivors
+        for p_pid in all_pids:
+            if psutil.pid_exists(p_pid):
+                try:
+                    psutil.Process(p_pid).kill()
+                except psutil.NoSuchProcess:
+                    pass
 
     except psutil.NoSuchProcess:
         pass  # Process already dead
