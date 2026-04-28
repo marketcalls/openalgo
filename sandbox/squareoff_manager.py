@@ -64,7 +64,7 @@ class SquareOffManager:
             current_time = now.time()
 
             # Step 1: Cancel all open MIS orders past square-off time
-            self._cancel_open_mis_orders(current_time)
+            cancelled_count = self._cancel_open_mis_orders(current_time)
 
             # Step 2: Get all open MIS positions (quantity != 0)
             mis_positions = (
@@ -73,24 +73,22 @@ class SquareOffManager:
                 .all()
             )
 
-            if not mis_positions:
-                logger.debug("No MIS positions to square-off")
-                return
-
             positions_to_close = []
+            if mis_positions:
+                # Check each position against its exchange's square-off time
+                for position in mis_positions:
+                    exchange = position.exchange
+                    square_off_time = self.square_off_times.get(exchange)
 
-            # Check each position against its exchange's square-off time
-            for position in mis_positions:
-                exchange = position.exchange
-                square_off_time = self.square_off_times.get(exchange)
+                    if not square_off_time:
+                        logger.warning(f"No square-off time configured for exchange {exchange}")
+                        continue
 
-                if not square_off_time:
-                    logger.warning(f"No square-off time configured for exchange {exchange}")
-                    continue
-
-                # Check if current time has passed square-off time
-                if current_time >= square_off_time:
-                    positions_to_close.append(position)
+                    # Check if current time has passed square-off time
+                    if current_time >= square_off_time:
+                        positions_to_close.append(position)
+            else:
+                logger.debug("No MIS positions to square-off")
 
             if positions_to_close:
                 logger.info(f"Found {len(positions_to_close)} MIS positions to square-off")
@@ -98,11 +96,37 @@ class SquareOffManager:
             else:
                 logger.debug(f"No positions due for square-off at {current_time.strftime('%H:%M')}")
 
+            # Notify UI if anything changed. The per-position close goes through
+            # _execute_order (already publishes SandboxOrderFilledEvent), so
+            # Positions/OrderBook will refresh per-fill. But the auto-cancel
+            # path bypasses the service layer entirely, so without this emit
+            # OrderBook would miss the cancellations until manual refresh.
+            if cancelled_count or positions_to_close:
+                try:
+                    from events import SandboxAutoSquareOffEvent
+                    from utils.event_bus import bus
+
+                    bus.publish(
+                        SandboxAutoSquareOffEvent(
+                            mode="analyze",
+                            api_type="sandbox.auto_squareoff",
+                            cancelled_orders=cancelled_count,
+                            closed_positions=len(positions_to_close),
+                        )
+                    )
+                except Exception as pub_err:
+                    logger.debug(f"Failed to publish SandboxAutoSquareOffEvent: {pub_err}")
+
         except Exception as e:
             logger.exception(f"Error checking square-off conditions: {e}")
 
     def _cancel_open_mis_orders(self, current_time):
-        """Cancel all open MIS orders past their exchange's square-off time"""
+        """Cancel all open MIS orders past their exchange's square-off time.
+
+        Returns the number of orders successfully cancelled, so the caller
+        can decide whether to emit a UI-refresh event.
+        """
+        cancelled_count = 0
         try:
             from database.sandbox_db import SandboxOrders
             from sandbox.order_manager import OrderManager
@@ -111,9 +135,7 @@ class SquareOffManager:
             open_orders = SandboxOrders.query.filter_by(product="MIS", order_status="open").all()
 
             if not open_orders:
-                return
-
-            cancelled_count = 0
+                return 0
 
             for order in open_orders:
                 exchange = order.exchange
@@ -148,6 +170,8 @@ class SquareOffManager:
 
         except Exception as e:
             logger.exception(f"Error in _cancel_open_mis_orders: {e}")
+
+        return cancelled_count
 
     def _square_off_positions(self, positions):
         """Square-off a list of positions"""

@@ -244,6 +244,26 @@ class HoldingsManager:
             db_session.commit()
 
             logger.debug(f"Settled {settled_count} CNC positions for user {self.user_id}")
+
+            # Notify UI so Positions and Holdings auto-refresh once T+1 lands.
+            # Direct DB mutation (no order placement), so nothing else publishes
+            # for this transition.
+            if settled_count:
+                try:
+                    from events import SandboxT1SettlementEvent
+                    from utils.event_bus import bus
+
+                    bus.publish(
+                        SandboxT1SettlementEvent(
+                            mode="analyze",
+                            api_type="sandbox.t1_settlement",
+                            settled_users=1,
+                            settled_positions=settled_count,
+                        )
+                    )
+                except Exception as pub_err:
+                    logger.debug(f"Failed to publish SandboxT1SettlementEvent: {pub_err}")
+
             return True, f"Settled {settled_count} positions"
 
         except Exception as e:

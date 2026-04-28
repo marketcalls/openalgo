@@ -84,4 +84,24 @@ def register_all():
     bus.subscribe("analyzer.error", socketio_subscriber.on_analyzer_error, "socketio:analyzer_error")
     bus.subscribe("analyzer.error", telegram_subscriber.on_analyzer_error, "telegram:analyzer_error")
 
+    # --- sandbox engine-internal events (analyze mode only, UI auto-refresh) ---
+    # Only the socketio subscriber is wired — these are engine-driven state
+    # changes, not user API calls, so they don't belong in analyzer_logs and
+    # would be noise on telegram.
+    bus.subscribe(
+        "sandbox.order_filled",
+        socketio_subscriber.on_sandbox_order_filled,
+        "socketio:sandbox_order_filled",
+    )
+    bus.subscribe(
+        "sandbox.auto_squareoff",
+        socketio_subscriber.on_sandbox_auto_squareoff,
+        "socketio:sandbox_auto_squareoff",
+    )
+    bus.subscribe(
+        "sandbox.t1_settlement",
+        socketio_subscriber.on_sandbox_t1_settlement,
+        "socketio:sandbox_t1_settlement",
+    )
+
     logger.debug("EventBus: all subscribers registered")
