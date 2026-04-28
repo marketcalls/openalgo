@@ -11,6 +11,8 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any, Dict, List, Optional
 
+from database.token_db import get_br_symbol
+
 from .fyers_hsm_websocket import FyersHSMWebSocket
 from .fyers_mapping import FyersDataMapper
 from .fyers_token_converter import FyersTokenConverter
@@ -214,51 +216,60 @@ class FyersAdapter:
                     self.logger.error("No valid HSM tokens generated")
                     return False
 
-                # CRITICAL FIX: Ensure proper HSM token mapping
-                # The tokens are generated in the same order as valid_symbols
-                self.logger.debug(f"\nCreating HSM mappings for {len(hsm_tokens)} tokens...")
-                self.logger.debug(f"HSM Tokens: {hsm_tokens}")
-                valid_symbol_list = [f"{s['exchange']}:{s['symbol']}" for s in valid_symbols]
-                self.logger.debug(f"Valid Symbols: {valid_symbol_list}")
+                # Build the HSM<->OpenAlgo mapping by JOINING through brsymbol.
+                #
+                # The previous implementation paired hsm_tokens[i] with
+                # valid_symbols[i] positionally, on the assumption that Fyers'
+                # /data/symbol-token API preserves input order in its
+                # `validSymbol` response. It DOES NOT reliably preserve order
+                # — especially when index + options are mixed in one call —
+                # so the pairing got scrambled. The visible symptom: NIFTY
+                # spot LTP showed an option's premium, far-OTM strikes showed
+                # NIFTY's bid/ask, and CE/PE rows appeared swapped.
+                #
+                # `token_mappings` is correctly keyed per-token (hsm_token ->
+                # brsymbol). Building a brsymbol -> (exchange, symbol) reverse
+                # map from valid_symbols lets us recover the correct OpenAlgo
+                # identity for each HSM token regardless of API ordering.
+                self.logger.debug(f"Creating HSM mappings for {len(hsm_tokens)} tokens...")
 
-                # Primary mapping strategy: Map by order (most reliable)
-                # Since convert_openalgo_symbols_to_hsm processes symbols in order
-                for i, hsm_token in enumerate(hsm_tokens):
-                    if i < len(valid_symbols):
-                        symbol_info = valid_symbols[i]
-                        full_symbol = f"{symbol_info['exchange']}:{symbol_info['symbol']}"
+                brsymbol_to_openalgo: dict[str, tuple[str, str]] = {}
+                for s in valid_symbols:
+                    br = get_br_symbol(s["symbol"], s["exchange"])
+                    if br:
+                        brsymbol_to_openalgo[br] = (s["exchange"], s["symbol"])
 
-                        # Store bidirectional mappings
-                        self.symbol_to_hsm[full_symbol] = hsm_token
-                        self.hsm_to_symbol[hsm_token] = full_symbol
-
-                        # Get brsymbol for logging
-                        brsymbol = token_mappings.get(hsm_token, "N/A")
-                        self.logger.debug(f"✅ Mapped #{i + 1}: {full_symbol} <-> {hsm_token}")
-                        self.logger.debug(f"   Brsymbol: {brsymbol}")
-
-                # Verify all active subscriptions have mappings
-                unmapped_subs = []
-                for full_symbol in self.active_subscriptions:
-                    if full_symbol not in self.symbol_to_hsm:
-                        unmapped_subs.append(full_symbol)
-                        self.logger.warning(f"⚠️ Unmapped subscription: {full_symbol}")
-
-                # If there are unmapped subscriptions and unused tokens, map them
-                if unmapped_subs:
-                    unused_tokens = [t for t in hsm_tokens if t not in self.hsm_to_symbol]
-                    if unused_tokens:
-                        self.logger.debug(
-                            f"Attempting to map {len(unmapped_subs)} unmapped subscriptions..."
+                mapped_count = 0
+                for hsm_token in hsm_tokens:
+                    brsym = token_mappings.get(hsm_token)
+                    if not brsym:
+                        self.logger.warning(
+                            f"No brsymbol in token_mappings for HSM token {hsm_token}"
                         )
-                        for i, full_symbol in enumerate(unmapped_subs):
-                            if i < len(unused_tokens):
-                                hsm_token = unused_tokens[i]
-                                self.symbol_to_hsm[full_symbol] = hsm_token
-                                self.hsm_to_symbol[hsm_token] = full_symbol
-                                self.logger.debug(
-                                    f"✅ Recovery mapped: {full_symbol} <-> {hsm_token}"
-                                )
+                        continue
+                    pair = brsymbol_to_openalgo.get(brsym)
+                    if not pair:
+                        self.logger.warning(
+                            f"brsymbol {brsym} did not match any input symbol"
+                        )
+                        continue
+                    exch, sym = pair
+                    full_symbol = f"{exch}:{sym}"
+                    self.symbol_to_hsm[full_symbol] = hsm_token
+                    self.hsm_to_symbol[hsm_token] = full_symbol
+                    mapped_count += 1
+                    self.logger.debug(
+                        f"Mapped {full_symbol} <-> {hsm_token} (brsymbol: {brsym})"
+                    )
+
+                # Sanity check: every input symbol should have ended up mapped.
+                unmapped_subs = [
+                    f"{s['exchange']}:{s['symbol']}"
+                    for s in valid_symbols
+                    if f"{s['exchange']}:{s['symbol']}" not in self.symbol_to_hsm
+                ]
+                for fs in unmapped_subs:
+                    self.logger.warning(f"Unmapped subscription: {fs}")
 
                 # Final verification
                 self.logger.debug("\n📊 Mapping Summary:")
