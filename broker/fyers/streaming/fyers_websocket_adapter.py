@@ -78,6 +78,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._hsm_batch_timer: threading.Timer | None = None
         self._hsm_batch_lock = threading.Lock()
 
+        # Shared dispatcher registry, keyed by f"{data_type}_{full_symbol}"
+        # (same shape FyersAdapter uses for its `subscription_callbacks` keys).
+        # Every flush WRITES into this single dict and every dispatcher READS
+        # from it, so when reconnect bursts produce multiple flushes the later
+        # dispatchers can still resolve symbols owned by earlier flushes.
+        # Without this, an earlier flush's per-flush captured callbacks_map
+        # could be replaced in FyersAdapter.subscription_callbacks by a later
+        # flush's dispatcher whose closed-over map didn't contain the symbol —
+        # causing ticks to land in the wrong row on the option chain.
+        self._hsm_callback_registry: dict = {}
+
         self.logger.info("Fyers WebSocket Adapter initialized")
 
     def initialize(
@@ -177,6 +188,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         pass
                     self._hsm_batch_timer = None
                 self._hsm_batch_queue.clear()
+                self._hsm_callback_registry.clear()
 
             # Clear all active subscriptions and callbacks
             with self.lock:
@@ -414,6 +426,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if hasattr(self, "active_callbacks") and key in self.active_callbacks:
                         del self.active_callbacks[key]
 
+                    # Drop the dispatcher-registry entry for this symbol so any
+                    # stale tick that arrives after unsubscribe doesn't get
+                    # routed into the previous closure.
+                    full_symbol = f"{exchange}:{symbol}"
+                    self._hsm_callback_registry.pop(
+                        f"DepthUpdate_{full_symbol}", None
+                    )
+                    self._hsm_callback_registry.pop(
+                        f"SymbolUpdate_{full_symbol}", None
+                    )
+
                     # Clean up TBT subscriptions if this was a depth subscription
                     if mode == 3:
                         self._unsubscribe_tbt_depth(symbol, exchange)
@@ -437,6 +460,11 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             # Clear all callbacks
                             if hasattr(self, "active_callbacks"):
                                 self.active_callbacks.clear()
+
+                            # Clear the dispatcher registry too — fyers_adapter
+                            # is being disconnected so any pending entries are
+                            # stale and would only route to old closures.
+                            self._hsm_callback_registry.clear()
 
                             self.logger.info(
                                 "Disconnected from Fyers HSM WebSocket - all background data stopped"
@@ -495,10 +523,14 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         FyersAdapter.subscribe_symbols call per data_type.
 
         FyersAdapter takes a single callback and stores it for every symbol in
-        the call, so we register a per-flush dispatcher closure that captures
-        a {full_symbol -> data_callback} map and routes each tick back to the
-        original per-symbol closure (which sets symbol/exchange/mode for the
-        ZeroMQ topic before calling _send_data).
+        the call, so each flush installs a tiny dispatcher under that data_type.
+        The dispatcher routes each tick back to the original per-symbol closure
+        (which sets symbol/exchange/mode for the ZeroMQ topic before calling
+        _send_data). The lookup goes through `self._hsm_callback_registry`,
+        which is shared across flushes — so when reconnect bursts produce more
+        than one flush within the timer window, every symbol still resolves
+        correctly regardless of which flush registered the dispatcher that the
+        broker adapter happened to keep.
         """
         try:
             with self._hsm_batch_lock:
@@ -528,14 +560,24 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     {"exchange": it["exchange"], "symbol": it["symbol"]}
                     for it in items.values()
                 ]
-                callbacks_map = {
-                    full_symbol: it["callback"] for full_symbol, it in items.items()
-                }
 
-                def _dispatch(data, _cbs=callbacks_map):
+                # Populate the SHARED registry BEFORE registering the dispatcher.
+                # Once subscribe_*() returns, ticks may start arriving immediately,
+                # and the dispatcher needs the registry entries to be visible.
+                for full_symbol, it in items.items():
+                    self._hsm_callback_registry[f"{data_type}_{full_symbol}"] = it[
+                        "callback"
+                    ]
+
+                # Capture data_type via default-arg to avoid Python's late-binding
+                # gotcha when this loop is iterated for multiple data_types.
+                def _dispatch(data, _data_type=data_type):
                     if not data:
                         return
-                    cb = _cbs.get(f"{data.get('exchange')}:{data.get('symbol')}")
+                    full_symbol = f"{data.get('exchange')}:{data.get('symbol')}"
+                    cb = self._hsm_callback_registry.get(
+                        f"{_data_type}_{full_symbol}"
+                    )
                     if cb:
                         cb(data)
 
