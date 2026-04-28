@@ -426,16 +426,27 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if hasattr(self, "active_callbacks") and key in self.active_callbacks:
                         del self.active_callbacks[key]
 
-                    # Drop the dispatcher-registry entry for this symbol so any
-                    # stale tick that arrives after unsubscribe doesn't get
-                    # routed into the previous closure.
+                    # Drop the dispatcher-registry entry for THIS mode only —
+                    # popping both sides would also kill a still-active sibling
+                    # subscription on the same symbol (e.g. unsubscribing Depth
+                    # while Quote is still live). Also pop the matching entry
+                    # in FyersAdapter.subscription_callbacks; otherwise the
+                    # stale `_dispatch` closure left there would keep the
+                    # routing layer treating this symbol as if the unsubscribed
+                    # side were still wired up — for indices that asymmetry
+                    # caused Quote-only subscribers to receive depth-shaped
+                    # ticks (issue #1093).
                     full_symbol = f"{exchange}:{symbol}"
+                    data_type_key = "DepthUpdate" if mode == 3 else "SymbolUpdate"
                     self._hsm_callback_registry.pop(
-                        f"DepthUpdate_{full_symbol}", None
+                        f"{data_type_key}_{full_symbol}", None
                     )
-                    self._hsm_callback_registry.pop(
-                        f"SymbolUpdate_{full_symbol}", None
-                    )
+                    if self.fyers_adapter and hasattr(
+                        self.fyers_adapter, "subscription_callbacks"
+                    ):
+                        self.fyers_adapter.subscription_callbacks.pop(
+                            f"{data_type_key}_{full_symbol}", None
+                        )
 
                     # Clean up TBT subscriptions if this was a depth subscription
                     if mode == 3:
