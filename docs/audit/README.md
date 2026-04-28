@@ -224,6 +224,7 @@ If using ngrok temporarily for webhooks:
 | [dependencies.md](./dependencies.md) | Third-party package security |
 | [recommendations.md](./recommendations.md) | Remaining improvements |
 | [ci-cd-audit.md](./ci-cd-audit.md) | CI/CD pipeline and code quality audit |
+| [websocket-keepalive-audit.md](./websocket-keepalive-audit.md) | Per-broker WebSocket ping/heartbeat/reconnect audit (32 brokers) |
 
 ## Bottom Line
 
