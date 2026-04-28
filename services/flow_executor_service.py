@@ -106,33 +106,44 @@ class WorkflowContext:
         }
         return builtins.get(name)
 
+    # Path segment: either a dotted key ([^.[\]]+) or a bracketed integer index (\[\d+\])
+    _PATH_SEGMENT_RE = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
+
     def interpolate(self, text: str) -> str:
-        """Replace {{variable}} patterns with actual values"""
+        """Replace {{variable}} patterns with actual values.
+
+        Supports dict key access (a.b.c) and list/tuple index access (a.b[0], a[0][1]).
+        """
         if not isinstance(text, str):
             return text
 
         def replacer(match):
             var_path = match.group(1).strip()
 
-            # Check built-in variables first
+            # Built-in variables — match only as a single whole token
             builtin_value = self._get_builtin_variable(var_path)
             if builtin_value is not None:
                 return builtin_value
 
-            # Then check user variables
-            parts = var_path.split(".")
             value = self.variables
-
-            for part in parts:
-                if isinstance(value, dict):
-                    value = value.get(part)
+            for seg in self._PATH_SEGMENT_RE.finditer(var_path):
+                key, idx = seg.group(1), seg.group(2)
+                if key is not None:
+                    if isinstance(value, dict):
+                        value = value.get(key)
+                    else:
+                        return match.group(0)
                 else:
-                    return match.group(0)
+                    i = int(idx)
+                    if isinstance(value, (list, tuple)) and -len(value) <= i < len(value):
+                        value = value[i]
+                    else:
+                        return match.group(0)
 
                 if value is None:
                     return match.group(0)
 
-            return str(value) if value is not None else match.group(0)
+            return str(value)
 
         return re.sub(r"\{\{([^}]+)\}\}", replacer, text)
 
