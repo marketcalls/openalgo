@@ -482,69 +482,78 @@ class FyersAdapter:
             # This follows the same pattern as Angel adapter which uses token-based matching
             """
 
-            # Get the appropriate callback for this specific symbol
+            # Build the list of callbacks to invoke for this tick.
+            #
+            # Stocks have two distinct HSM streams — `sf` (symbol feed → quote)
+            # and `dp` (depth feed) — and each tick belongs to exactly one
+            # subscriber. Indices have a SINGLE feed (`if`), so a single tick
+            # may need to be fanned out to both Quote (mode 2) and Depth
+            # (mode 3) subscribers when both are registered. Previously this
+            # branch only delivered to whichever callback existed, with Depth
+            # winning when both did — so a Quote-only subscriber that ran
+            # alongside any prior Depth registration silently received
+            # depth-shaped data labelled `subscription_mode: 3`. See issue
+            # #1093.
             full_symbol = f"{matched_subscription['exchange']}:{matched_subscription['symbol']}"
+            quote_cb = self.subscription_callbacks.get(f"SymbolUpdate_{full_symbol}")
+            depth_cb = self.subscription_callbacks.get(f"DepthUpdate_{full_symbol}")
 
+            dispatches: list[tuple[Callable, str]] = []
             if fyers_type == "dp":
-                callback = self.subscription_callbacks.get(f"DepthUpdate_{full_symbol}")
-                openalgo_data_type = "Depth"
+                if depth_cb:
+                    dispatches.append((depth_cb, "Depth"))
             elif fyers_type == "if":
-                # Check if we have depth subscription for this symbol
-                depth_callback = self.subscription_callbacks.get(f"DepthUpdate_{full_symbol}")
-                if depth_callback:
-                    callback = depth_callback
-                    openalgo_data_type = "Depth"
-                else:
-                    callback = self.subscription_callbacks.get(f"SymbolUpdate_{full_symbol}")
-                    openalgo_data_type = "Quote"
+                # Index feed: fan out to whichever sides are subscribed.
+                if quote_cb:
+                    dispatches.append((quote_cb, "Quote"))
+                if depth_cb:
+                    dispatches.append((depth_cb, "Depth"))
             else:
-                callback = self.subscription_callbacks.get(f"SymbolUpdate_{full_symbol}")
-                openalgo_data_type = "Quote"
+                if quote_cb:
+                    dispatches.append((quote_cb, "Quote"))
 
-            if not callback:
+            if not dispatches:
                 return
 
-            # Re-map data with correct type if needed
-            if openalgo_data_type == "Depth":
-                mapped_data = self.data_mapper.map_fyers_data(fyers_data, "Depth")
-                if not mapped_data:
-                    return
-
-            # Override symbol and exchange with subscription details to ensure consistency
-            mapped_data["symbol"] = matched_subscription["symbol"]
-            mapped_data["exchange"] = matched_subscription["exchange"]
-            mapped_data["update_type"] = update_type
-            mapped_data["timestamp"] = int(time.time())
-
-            # Deduplication check
-            symbol_key = f"{matched_subscription['exchange']}:{matched_subscription['symbol']}"
+            # Deduplicate ONCE at the symbol level so we don't drop the second
+            # fan-out leg just because the first leg already updated last_data.
+            symbol_key = full_symbol
+            now = int(time.time())
             current_ltp = mapped_data.get("ltp", 0)
-
-            # Check if this is duplicate data
             if symbol_key in self.last_data:
                 last_ltp = self.last_data[symbol_key].get("ltp", 0)
                 last_time = self.last_data[symbol_key].get("timestamp", 0)
-
-                # Skip if same LTP within 100ms (likely duplicate)
-                if current_ltp == last_ltp and abs(mapped_data["timestamp"] - last_time) < 0.1:
+                if current_ltp == last_ltp and abs(now - last_time) < 0.1:
                     return
+            self.last_data[symbol_key] = {"ltp": current_ltp, "timestamp": now}
 
-            # Update last data for deduplication
-            self.last_data[symbol_key] = {"ltp": current_ltp, "timestamp": mapped_data["timestamp"]}
+            for cb, openalgo_data_type in dispatches:
+                # Re-map per side. The Quote map already happened above; only
+                # rebuild for Depth to keep the cost of equity/futures (the
+                # common case, single dispatch) unchanged.
+                if openalgo_data_type == "Depth":
+                    side_data = self.data_mapper.map_fyers_data(fyers_data, "Depth")
+                    if not side_data:
+                        continue
+                else:
+                    side_data = dict(mapped_data)
 
-            # Debug logging
-            if openalgo_data_type == "Depth":
-                depth = mapped_data.get("depth", {})
-                buy_levels = depth.get("buy", [])
-                sell_levels = depth.get("sell", [])
-                bid1 = buy_levels[0]["price"] if buy_levels else "N/A"
-                ask1 = sell_levels[0]["price"] if sell_levels else "N/A"
-                self.logger.debug(f"🎉 {full_symbol} depth: Bid={bid1}, Ask={ask1}")
-            else:
-                self.logger.debug(f"🎉 {full_symbol} data: LTP={mapped_data.get('ltp', 0)}")
+                side_data["symbol"] = matched_subscription["symbol"]
+                side_data["exchange"] = matched_subscription["exchange"]
+                side_data["update_type"] = update_type
+                side_data["timestamp"] = now
 
-            # Send to symbol-specific callback
-            callback(mapped_data)
+                if openalgo_data_type == "Depth":
+                    depth = side_data.get("depth", {})
+                    buy_levels = depth.get("buy", [])
+                    sell_levels = depth.get("sell", [])
+                    bid1 = buy_levels[0]["price"] if buy_levels else "N/A"
+                    ask1 = sell_levels[0]["price"] if sell_levels else "N/A"
+                    self.logger.debug(f"🎉 {full_symbol} depth: Bid={bid1}, Ask={ask1}")
+                else:
+                    self.logger.debug(f"🎉 {full_symbol} data: LTP={side_data.get('ltp', 0)}")
+
+                cb(side_data)
 
         except Exception as e:
             self.logger.error(f"Error processing message: {e}")
