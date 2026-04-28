@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any
 
 from broker.iiflcapital.baseurl import BASE_URL
 from broker.iiflcapital.mapping.transform_data import (
@@ -12,6 +13,9 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+_DIRECT_ORDER_KEYS = {"instrumentId", "exchange", "transactionType", "quantity"}
+_SUCCESS_STATUSES = {"success", "ok"}
 
 _OPEN_STATUSES = {
     "OPEN",
@@ -101,6 +105,52 @@ def _status_wrapper(status_code: int):
     return SimpleNamespace(status=status_code)
 
 
+def _first_result(payload: Any) -> dict:
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if isinstance(result, list) and result:
+        return result[0] if isinstance(result[0], dict) else {}
+    if isinstance(result, dict):
+        return result
+    return {}
+
+
+def _is_direct_order_payload(data: Any) -> bool:
+    if isinstance(data, list):
+        return bool(data) and all(isinstance(item, dict) and _DIRECT_ORDER_KEYS.issubset(item) for item in data)
+    return isinstance(data, dict) and _DIRECT_ORDER_KEYS.issubset(data)
+
+
+def _extract_message(payload: Any, default: str) -> str:
+    if isinstance(payload, dict):
+        for key in ("message", "error", "description"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                return str(value)
+
+        result = payload.get("result")
+        if isinstance(result, list) and result and isinstance(result[0], dict):
+            for key in ("message", "error", "description"):
+                value = result[0].get(key)
+                if value not in (None, ""):
+                    return str(value)
+        elif isinstance(result, dict):
+            for key in ("message", "error", "description"):
+                value = result.get(key)
+                if value not in (None, ""):
+                    return str(value)
+
+    return default
+
+
+def _is_success_result(result: dict) -> bool:
+    if not isinstance(result, dict):
+        return False
+
+    status = str(result.get("status", "")).lower()
+    broker_order_id = result.get("brokerOrderId")
+    return status in _SUCCESS_STATUSES and bool(broker_order_id)
+
+
 def get_order_book(auth):
     _, data = _request("/orders", auth)
     return data
@@ -146,26 +196,35 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 
 def place_order_api(data, auth):
-    if all(k in data for k in ("instrumentId", "exchange", "transactionType", "quantity")):
+    if _is_direct_order_payload(data):
         order_payload = data
-    else:
+    elif isinstance(data, dict):
         token = get_token(data.get("symbol"), data.get("exchange"))
         if not token:
             wrapper = _status_wrapper(400)
             return wrapper, {"status": "error", "message": "Symbol token not found"}, None
         order_payload = transform_data(data, token)
+    else:
+        wrapper = _status_wrapper(400)
+        return wrapper, {"status": "error", "message": "Invalid order payload"}, None
 
     payload = order_payload if isinstance(order_payload, list) else [order_payload]
+    logger.debug(f"IIFL Capital place order payload: {payload}")
     response, response_data = _request("/orders", auth, method="POST", payload=payload)
+    logger.debug(f"IIFL Capital place order response: {response_data}")
 
-    order_id = None
-    result = response_data.get("result")
-    if isinstance(result, list) and result:
-        order_id = result[0].get("brokerOrderId")
-    elif isinstance(result, dict):
-        order_id = result.get("brokerOrderId")
+    result = _first_result(response_data)
+    order_id = result.get("brokerOrderId")
 
-    return _status_wrapper(response.status_code), response_data, order_id
+    if response.status_code == 200 and _ok(response_data) and _is_success_result(result):
+        return _status_wrapper(200), response_data, order_id
+
+    error_status = response.status_code if response.status_code != 200 else 400
+    error_response = {
+        "status": "error",
+        "message": _extract_message(response_data, "Failed to place order"),
+    }
+    return _status_wrapper(error_status), error_response, None
 
 
 def place_smartorder_api(data, auth):

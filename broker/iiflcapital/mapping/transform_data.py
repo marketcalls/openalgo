@@ -10,6 +10,7 @@ def map_exchange(exchange: str) -> str:
         "CDS": "NSECURR",
         "BCD": "BSECURR",
         "MCX": "MCXCOMM",
+        "NCDEX": "NCDEXCOMM",
     }
     return exchange_mapping.get((exchange or "").upper(), (exchange or "").upper())
 
