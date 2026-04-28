@@ -44,6 +44,10 @@ export const ExpiryNode = memo(({ data, selected }: ExpiryNodeProps) => {
             <span className="text-[10px] text-muted-foreground">Symbol</span>
             <span className="mono-data text-[10px] font-medium">{data.symbol || 'NIFTY'}</span>
           </div>
+          <div className="flex items-center justify-between rounded bg-muted/50 px-1.5 py-1">
+            <span className="text-[10px] text-muted-foreground">Type</span>
+            <span className="mono-data text-[10px] font-medium uppercase">{data.instrumenttype || 'options'}</span>
+          </div>
           {data.outputVariable && (
             <div className="text-center text-[9px] text-muted-foreground">
               {data.outputVariable}

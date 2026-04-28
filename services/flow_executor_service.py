@@ -871,8 +871,13 @@ class NodeExecutor:
         """Execute Expiry node - get expiry dates for F&O"""
         symbol = self.get_str(node_data, "symbol", "NIFTY")
         exchange = self.get_str(node_data, "exchange", "NFO")
-        self.log(f"Getting expiry dates for: {symbol}")
-        result = self.client.get_expiry(symbol=symbol, exchange=exchange)
+        instrumenttype = self.get_str(node_data, "instrumenttype", "options").lower()
+        if instrumenttype not in ("options", "futures"):
+            instrumenttype = "options"
+        self.log(f"Getting {instrumenttype} expiry dates for: {symbol}")
+        result = self.client.get_expiry(
+            symbol=symbol, exchange=exchange, instrumenttype=instrumenttype
+        )
         self.log(f"Expiry result: {result}")
         self.store_output(node_data, result)
         return result
