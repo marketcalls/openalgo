@@ -28,6 +28,26 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "Iron Condor Test",
+  "underlying": "NIFTY",
+  "exchange": "NSE_INDEX",
+  "expiry_date": "25NOV25",
+  "legs": [
+    {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 65},
+    {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 65},
+    {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 65},
+    {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 65}
+  ]
+}'
+```
+
 ## Sample API Response (Iron Condor)
 
 ```json

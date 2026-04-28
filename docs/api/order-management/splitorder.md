@@ -26,6 +26,24 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/splitorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/splitorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "Python",
+  "symbol": "YESBANK",
+  "exchange": "NSE",
+  "action": "SELL",
+  "quantity": "105",
+  "splitsize": "20",
+  "pricetype": "MARKET",
+  "product": "MIS"
+}'
+```
+
 ## Sample API Response
 
 ```json

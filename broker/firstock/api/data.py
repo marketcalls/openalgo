@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import traceback
 from datetime import datetime, timedelta
 
 import httpx
@@ -32,7 +31,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
             data["userId"] = api_key
 
         # Debug print
-        logger.info(f"Endpoint: {endpoint}")
+        logger.debug(f"Endpoint: {endpoint}")
         logger.debug(f"Payload: {json.dumps(data, indent=2)}")
 
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -110,8 +109,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
             logger.error("Connection error while calling Firstock API")
             raise Exception("Connection error - please check your internet connection")
         else:
-            logger.error(f"API Error: {e}")
-            logger.info(f"Traceback: {traceback.format_exc()}")
+            logger.exception(f"API Error: {e}")
             raise
 
 
@@ -578,8 +576,7 @@ class BrokerData:
             return combined_df
 
         except Exception as e:
-            logger.error(f"Error in get_history_chunked: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(f"Error in get_history_chunked: {e}")
             raise Exception(f"Error fetching chunked historical data: {str(e)}")
 
     def get_history_intraday_chunks(
@@ -631,7 +628,7 @@ class BrokerData:
 
             while current_date <= end_dt:
                 date_str = current_date.strftime("%d-%m-%Y")  # Firstock uses DD-MM-YYYY format
-                logger.info(f"Processing date: {date_str}")
+                logger.debug(f"Processing date: {date_str}")
 
                 # Define trading session chunks using full day to avoid hardcoded timings
                 time_chunks = [
@@ -654,7 +651,7 @@ class BrokerData:
                             "interval": "1mi",  # 1-minute interval
                         }
 
-                        logger.info(f"Fetching chunk: {start_time} to {end_time} on {date_str}")
+                        logger.debug(f"Fetching chunk: {start_time} to {end_time} on {date_str}")
 
                         # Make request with long timeout to prevent ReadTimeout errors
                         response = get_api_response(
@@ -692,7 +689,7 @@ class BrokerData:
 
                             if chunk_data:
                                 all_data.extend(chunk_data)
-                                logger.info(f"Retrieved {len(chunk_data)} candles for chunk")
+                                logger.debug(f"Retrieved {len(chunk_data)} candles for chunk")
                         else:
                             logger.warning(
                                 f"Failed to get data for chunk: {response.get('message', 'Unknown error')}"
@@ -828,7 +825,7 @@ class BrokerData:
                 chunk_end_str = current_end.strftime("%Y-%m-%d")
                 chunk_count += 1
 
-                logger.info(
+                logger.debug(
                     f"📊 Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}"
                 )
 
@@ -841,7 +838,7 @@ class BrokerData:
                     if not chunk_df.empty:
                         dfs.append(chunk_df)
                         successful_chunks += 1
-                        logger.info(f"✅ Chunk {chunk_count} successful: {len(chunk_df)} records")
+                        logger.debug(f"✅ Chunk {chunk_count} successful: {len(chunk_df)} records")
                     else:
                         logger.warning(f"⚠️ Chunk {chunk_count} returned no data")
 
@@ -1029,7 +1026,7 @@ class BrokerData:
                     # Debug logging for daily data timestamps
                     if interval == "D":
                         debug_dt = datetime.fromtimestamp(timestamp)
-                        logger.info(f"DEBUG: Daily candle timestamp: {timestamp} -> {debug_dt}")
+                        logger.debug(f"Daily candle timestamp: {timestamp} -> {debug_dt}")
 
                     # Extract OHLCV data according to new API format
                     data.append(
@@ -1080,6 +1077,5 @@ class BrokerData:
             return df
 
         except Exception as e:
-            logger.error(f"Error in get_history: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.exception(f"Error in get_history: {e}")
             raise Exception(f"Error fetching historical data: {str(e)}")

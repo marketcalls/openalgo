@@ -178,7 +178,8 @@ class FlowScheduler:
             self.scheduler.remove_job(job_id)
             logger.info(f"Removed job {job_id}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Failed to remove job {job_id}: {e}")
             return False
 
     def remove_workflow_job(self, workflow_id: int) -> bool:
@@ -212,7 +213,8 @@ class FlowScheduler:
             self.scheduler.pause_job(job_id)
             logger.info(f"Paused job {job_id}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Failed to pause job {job_id}: {e}")
             return False
 
     def resume_job(self, job_id: str) -> bool:
@@ -221,7 +223,8 @@ class FlowScheduler:
             self.scheduler.resume_job(job_id)
             logger.info(f"Resumed job {job_id}")
             return True
-        except Exception:
+        except Exception as e:
+            logger.exception(f"Failed to resume job {job_id}: {e}")
             return False
 
     def shutdown(self):

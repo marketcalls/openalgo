@@ -6,7 +6,6 @@ import struct
 import sys
 import threading
 import time
-import traceback
 import zlib
 from datetime import datetime
 
@@ -203,7 +202,8 @@ class NxtradStream:
             on_close=self.__on_close,
         )
 
-        threading.Thread(target=self.__task).start()
+        self._ws_thread = threading.Thread(target=self.__task)
+        self._ws_thread.start()
 
     def subscribeEvents(self, type):
         req = {}
@@ -350,8 +350,11 @@ class NxtradStream:
         return self.__send_data(req)
 
     def disconnect(self):
-        self.ws.close()
         self.isConnected = False
+        try:
+            self.ws.close()
+        except Exception:
+            pass
 
     def isConnected(self):
         return self.isConnected

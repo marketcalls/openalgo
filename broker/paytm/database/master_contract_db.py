@@ -164,8 +164,11 @@ def reformat_symbol(row):
         parts = row["name"].split(" ")
         base_symbol = parts[0].strip()
 
-        # Get strike price from the row directly instead of parsing from symbol
-        strike = str(int(float(row["strike_price"])))
+        # Get strike price from the row directly instead of parsing from symbol.
+        # Preserve decimal strikes (e.g. 287.5 for stocks with 2.5-rupee intervals);
+        # only collapse to int for whole-number strikes (190.0 -> "190", not "190.0").
+        strike_val = float(row["strike_price"])
+        strike = str(int(strike_val)) if strike_val == int(strike_val) else str(strike_val)
 
         # Determine option type (CE/PE)
         option_type = (

@@ -1,7 +1,9 @@
+import json
 import logging
 import os
 import re
 import sys
+import traceback
 from datetime import datetime, timedelta
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -26,14 +28,27 @@ try:
 except ImportError:
     COLORAMA_AVAILABLE = False
 
-# Sensitive patterns to filter out
+# Sensitive patterns to filter out.
+#
+# The patterns must match the forms the codebase actually emits, not just
+# `key=value`. Python dict repr (`'apikey': 'X'`), JSON (`"apikey":"X"`),
+# and shell-style (`apikey="X"`) all need to redact. The character class on
+# the value side allows `\w \- . + / =` so JWTs and base64 tokens are fully
+# consumed; the surrounding quote (if any) is preserved by anchoring on the
+# prefix capture group.
 SENSITIVE_PATTERNS = [
-    (r"(api[_-]?key[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(password[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(token[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(secret[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
-    (r"(authorization[\s]*[=:]\s*)[\w\-]+", r"\1[REDACTED]"),
+    # Bearer header tokens — run first so the broader pattern below doesn't
+    # leave the bearer suffix exposed when wrapped in quotes.
     (r"(Bearer\s+)[\w\-\.]+", r"\1[REDACTED]"),
+    # Common credential keys in any of: key=val, key: val, 'key': 'val',
+    # "key":"val", key="val". Includes broker-token aliases the codebase
+    # actually logs (enctoken, feed_token, access_token, session_token).
+    # Value class is a negated set so passwords with symbols (@!#$ ...) are
+    # fully consumed; we stop at whitespace, quotes, and dict/JSON structure.
+    (
+        r"(['\"]?(?:api[_-]?key[_-]?pepper|api[_-]?key|app[_-]?key|password|access[_-]?token|enctoken|feed[_-]?token|session[_-]?token|auth[_-]?token|authorization|secret|pepper|token)['\"]?\s*[:=]\s*['\"]?)[^\s'\",;}\]]+",
+        r"\1[REDACTED]",
+    ),
 ]
 
 # Color mappings for different log levels
@@ -275,6 +290,42 @@ class ColoredFormatter(logging.Formatter):
         return original_format
 
 
+class JSONErrorFormatter(logging.Formatter):
+    """Formats ERROR+ records as single-line JSON for machine consumption.
+
+    Output goes to log/errors.jsonl — one JSON object per line.
+    Claude Code can read this file directly to diagnose issues.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "ts": datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "module": record.module,
+            "file": f"{record.pathname}:{record.lineno}",
+            "message": record.getMessage(),
+        }
+
+        # Capture full traceback if present
+        if record.exc_info and record.exc_info[0] is not None:
+            entry["exception"] = traceback.format_exception(*record.exc_info)
+
+        # Capture Flask request context if available
+        try:
+            from flask import has_request_context, request
+            if has_request_context():
+                entry["request"] = {
+                    "method": request.method,
+                    "path": request.path,
+                    "ip": request.remote_addr,
+                }
+        except Exception:
+            pass
+
+        return json.dumps(entry, default=str)
+
+
 def cleanup_old_logs(log_dir: Path, retention_days: int):
     """Remove log files older than retention_days."""
     if not log_dir.exists():
@@ -345,6 +396,29 @@ def setup_logging():
         file_handler.setFormatter(file_formatter)
         file_handler.addFilter(sensitive_filter)
         root_logger.addHandler(file_handler)
+
+    # JSON error log — always active, captures ERROR+ to log/errors.jsonl
+    # Truncate to last 1000 entries on startup to prevent unbounded growth
+    errors_dir = Path(log_dir)
+    errors_dir.mkdir(exist_ok=True)
+    errors_file = errors_dir / "errors.jsonl"
+    try:
+        if errors_file.exists() and errors_file.stat().st_size > 0:
+            lines = errors_file.read_text(encoding="utf-8").splitlines()
+            if len(lines) > 1000:
+                errors_file.write_text(
+                    "\n".join(lines[-1000:]) + "\n", encoding="utf-8"
+                )
+    except Exception:
+        pass
+    json_handler = logging.FileHandler(
+        filename=str(errors_file),
+        encoding="utf-8",
+    )
+    json_handler.setLevel(logging.ERROR)
+    json_handler.setFormatter(JSONErrorFormatter())
+    json_handler.addFilter(sensitive_filter)
+    root_logger.addHandler(json_handler)
 
     # Suppress noisy third-party loggers
     logging.getLogger("werkzeug").setLevel(logging.WARNING)

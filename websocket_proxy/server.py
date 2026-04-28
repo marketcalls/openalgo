@@ -149,6 +149,16 @@ class WebSocketProxy:
 
             # Try to start the WebSocket server with proper socket options for immediate port reuse
             try:
+                # max_queue caps per-client send buffer to absorb tick bursts
+                # without prematurely killing slow clients (default 32 was
+                # surfacing as "random disconnects" during NIFTY expiry-day
+                # storms). ping_interval/ping_timeout are set explicitly so
+                # the keepalive contract is locked into the codebase rather
+                # than relying on the websockets library defaults.
+                ws_max_queue = int(os.getenv("WS_MAX_QUEUE", "1024"))
+                ws_ping_interval = int(os.getenv("WS_PING_INTERVAL", "20"))
+                ws_ping_timeout = int(os.getenv("WS_PING_TIMEOUT", "20"))
+
                 # Start WebSocket server with socket reuse options
                 self.server = await websockets.serve(
                     self.handle_client,
@@ -156,6 +166,9 @@ class WebSocketProxy:
                     self.port,
                     # Enable socket reuse for immediate port availability after close
                     reuse_port=True if hasattr(socket, "SO_REUSEPORT") else False,
+                    max_queue=ws_max_queue,
+                    ping_interval=ws_ping_interval,
+                    ping_timeout=ws_ping_timeout,
                 )
 
                 highlighted_success_address = highlight_url(f"{self.host}:{self.port}")
@@ -404,6 +417,28 @@ class WebSocketProxy:
         path = getattr(websocket, "path", "/unknown")
         logger.info(f"Client connected: {client_id} from path: {path}")
 
+        # Unauthenticated grace window: drop connections that don't complete auth
+        # within WS_AUTH_GRACE_SECONDS to prevent idle/holding-pattern resource
+        # exhaustion from unauthenticated clients on a public-facing port.
+        auth_grace_seconds = int(os.getenv("WS_AUTH_GRACE_SECONDS", "15"))
+
+        async def _enforce_auth_deadline():
+            try:
+                await aio.sleep(auth_grace_seconds)
+                if client_id not in self.user_mapping:
+                    logger.warning(
+                        f"Client {client_id} failed to authenticate within "
+                        f"{auth_grace_seconds}s — closing connection"
+                    )
+                    try:
+                        await websocket.close(code=4401, reason="auth timeout")
+                    except Exception:
+                        pass
+            except aio.CancelledError:
+                pass
+
+        auth_deadline_task = aio.ensure_future(_enforce_auth_deadline())
+
         try:
             # Process messages from the client
             async for message in websocket:
@@ -423,6 +458,7 @@ class WebSocketProxy:
         except Exception as e:
             logger.exception(f"Unexpected error handling client {client_id}: {e}")
         finally:
+            auth_deadline_task.cancel()
             # Clean up when the client disconnects
             await self.cleanup_client(client_id)
 
@@ -829,8 +865,7 @@ class WebSocketProxy:
                         await self.send_error(client_id, "BROKER_ERROR", str(retry_error))
                         return
                 else:
-                    import traceback
-                    logger.exception(traceback.format_exc())
+                    logger.exception(f"Broker error for {broker_name}: {error_str}")
                     await self.send_error(client_id, "BROKER_ERROR", error_str)
                     return
 
@@ -1514,17 +1549,16 @@ class WebSocketProxy:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
                     continue
 
-                # OPTIMIZATION: Message throttling for high-frequency updates
-                # Skip if we sent the same message too recently (reduces CPU on fast updates)
+                # No server-side LTP throttling: the previous time-based
+                # throttle dropped intra-window ticks instead of coalescing
+                # them, so clients could miss the latest price during bursts
+                # (e.g. NIFTY expiry, circuit triggers). With the O(1)
+                # subscription_index, fan-out is cheap enough to forward every
+                # tick. If CPU pressure ever returns, replace this with a
+                # trailing-edge coalescer that emits the latest pending tick.
                 sub_key = (symbol, exchange, mode)
                 current_time = time.time()
-
-                # Only throttle LTP mode (mode 1), not Quote/Depth
-                if mode == 1:  # LTP mode
-                    last_time = self.last_message_time.get(sub_key, 0)
-                    if current_time - last_time < self.message_throttle_interval:
-                        continue  # Skip this update, too soon
-                    self.last_message_time[sub_key] = current_time
+                self.last_message_time[sub_key] = current_time
 
                 # Feed market data to MarketDataService for backend consumers
                 # (sandbox execution engine, position MTM, RMS, etc.)
@@ -1634,10 +1668,7 @@ async def main():
             logger.error(f"Runtime error: {e}")
             raise
     except Exception as e:
-        import traceback
-
-        error_details = traceback.format_exc()
-        logger.exception(f"Server error: {e}\n{error_details}")
+        logger.exception(f"Server error: {e}")
         raise
     finally:
         # Always clean up resources

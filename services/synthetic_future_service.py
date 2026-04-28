@@ -12,10 +12,10 @@ Synthetic Future Price = Strike Price + Call Premium - Put Premium
 The basis (difference from spot) indicates the cost of carry.
 """
 
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from services.option_symbol_service import get_option_symbol
-from services.quotes_service import get_quotes
+from services.quotes_service import get_multiquotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -89,7 +89,7 @@ def calculate_synthetic_future(
                 500,
             )
 
-        # Step 2: Get ATM Put option symbol
+        # Step 2: Get ATM Put option symbol (reuse underlying_ltp to avoid redundant quote)
         success_put, put_response, status_code = get_option_symbol(
             underlying=underlying,
             exchange=exchange,
@@ -98,6 +98,7 @@ def calculate_synthetic_future(
             offset="ATM",
             option_type="PE",
             api_key=api_key,
+            underlying_ltp=underlying_ltp,
         )
 
         if not success_put:
@@ -107,16 +108,28 @@ def calculate_synthetic_future(
         put_symbol = put_response.get("symbol")
         put_exchange = put_response.get("exchange")
 
-        # Step 3: Get Call option LTP
-        success_call_quote, call_quote_response, status_code = get_quotes(
-            symbol=call_symbol, exchange=call_exchange, api_key=api_key
+        # Step 3: Get Call and Put LTPs in a single multiquotes request
+        symbols = [
+            {"symbol": call_symbol, "exchange": call_exchange},
+            {"symbol": put_symbol, "exchange": put_exchange},
+        ]
+        success_quotes, quotes_response, status_code = get_multiquotes(
+            symbols=symbols, api_key=api_key
         )
 
-        if not success_call_quote:
-            logger.error(f"Failed to get Call quote: {call_quote_response.get('message')}")
-            return False, call_quote_response, status_code
+        if not success_quotes:
+            logger.error(f"Failed to get option quotes: {quotes_response.get('message')}")
+            return False, quotes_response, status_code
 
-        call_ltp = call_quote_response.get("data", {}).get("ltp")
+        # Extract LTPs from multiquotes response
+        call_ltp = None
+        put_ltp = None
+        for result in quotes_response.get("results", []):
+            if result.get("symbol") == call_symbol:
+                call_ltp = result.get("data", {}).get("ltp")
+            elif result.get("symbol") == put_symbol:
+                put_ltp = result.get("data", {}).get("ltp")
+
         if call_ltp is None:
             return (
                 False,
@@ -127,16 +140,6 @@ def calculate_synthetic_future(
                 500,
             )
 
-        # Step 4: Get Put option LTP
-        success_put_quote, put_quote_response, status_code = get_quotes(
-            symbol=put_symbol, exchange=put_exchange, api_key=api_key
-        )
-
-        if not success_put_quote:
-            logger.error(f"Failed to get Put quote: {put_quote_response.get('message')}")
-            return False, put_quote_response, status_code
-
-        put_ltp = put_quote_response.get("data", {}).get("ltp")
         if put_ltp is None:
             return (
                 False,

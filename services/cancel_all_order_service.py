@@ -1,6 +1,5 @@
 import copy
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
@@ -133,8 +132,7 @@ def cancel_all_orders_with_auth(
             order_data, auth_token
         )
     except Exception as e:
-        logger.error(f"Error in broker_module.cancel_all_orders_api: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.cancel_all_orders_api: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to cancel all orders due to internal error",

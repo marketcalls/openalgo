@@ -459,10 +459,13 @@ export default function ProfilePage() {
             redirect_url: selectedBroker !== brokerCredentials.current_broker
               ? getRedirectUrl(selectedBroker)
               : brokerCredentials.redirect_url,
-            // Update masked values to show something was changed
-            broker_api_key: brokerApiKey ? `${brokerApiKey.slice(0, 6)}${'*'.repeat(Math.max(0, brokerApiKey.length - 6))}` : brokerCredentials.broker_api_key,
+            // Update masked values to show something was changed.
+            // Use a FIXED-length mask (prefix + 8 asterisks) so the rendered
+            // value cannot leak the secret's true length and cannot overflow
+            // the column layout. Mirrors blueprints/broker_credentials.py:mask_secret.
+            broker_api_key: brokerApiKey ? `${brokerApiKey.slice(0, 6)}${'*'.repeat(8)}` : brokerCredentials.broker_api_key,
             broker_api_key_raw_length: brokerApiKey ? brokerApiKey.length : brokerCredentials.broker_api_key_raw_length,
-            broker_api_secret: brokerApiSecret ? `${brokerApiSecret.slice(0, 4)}${'*'.repeat(Math.max(0, brokerApiSecret.length - 4))}` : brokerCredentials.broker_api_secret,
+            broker_api_secret: brokerApiSecret ? `${brokerApiSecret.slice(0, 4)}${'*'.repeat(8)}` : brokerCredentials.broker_api_secret,
             broker_api_secret_raw_length: brokerApiSecret ? brokerApiSecret.length : brokerCredentials.broker_api_secret_raw_length,
           })
         }
@@ -950,30 +953,33 @@ export default function ProfilePage() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4 pt-2">
-                <div className="space-y-2">
+                <div className="space-y-2 min-w-0">
                   <Label>API Key</Label>
-                  <code className="text-xs text-muted-foreground">
+                  {/* block truncate clamps long masked values to their column;
+                      backend mask is fixed-length but defence-in-depth in case
+                      a future change emits a longer string. */}
+                  <code className="block truncate text-xs text-muted-foreground">
                     {brokerCredentials?.broker_api_key || '(not set)'}
                   </code>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-2 min-w-0">
                   <Label>API Secret</Label>
-                  <code className="text-xs text-muted-foreground">
+                  <code className="block truncate text-xs text-muted-foreground">
                     {brokerCredentials?.broker_api_secret || '(not set)'}
                   </code>
                 </div>
               </div>
               {(brokerCredentials?.broker_api_key_market_raw_length ?? 0) > 0 && (
                 <div className="grid grid-cols-2 gap-4 pt-2">
-                  <div className="space-y-2">
+                  <div className="space-y-2 min-w-0">
                     <Label>Market API Key</Label>
-                    <code className="text-xs text-muted-foreground">
+                    <code className="block truncate text-xs text-muted-foreground">
                       {brokerCredentials?.broker_api_key_market || '(not set)'}
                     </code>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-2 min-w-0">
                     <Label>Market API Secret</Label>
-                    <code className="text-xs text-muted-foreground">
+                    <code className="block truncate text-xs text-muted-foreground">
                       {brokerCredentials?.broker_api_secret_market || '(not set)'}
                     </code>
                   </div>

@@ -209,18 +209,24 @@ class ConnectionHealthMonitor:
 
     def record_data_received(self):
         """Record that data was received"""
+        # Snapshot callback under the lock, invoke outside to avoid self-deadlock
+        # if a callback ever calls back into this monitor (see issue #1274).
+        callback = None
         with self.lock:
             self.last_data_timestamp = time.time()
             if self.connection_status == ConnectionStatus.STALE:
                 self.connection_status = ConnectionStatus.AUTHENTICATED
-                if self.on_connection_restored:
-                    try:
-                        self.on_connection_restored()
-                    except Exception as e:
-                        logger.exception(f"Error in connection restored callback: {e}")
+                callback = self.on_connection_restored
+
+        if callback:
+            try:
+                callback()
+            except Exception as e:
+                logger.exception(f"Error in connection restored callback: {e}")
 
     def set_connected(self, connected: bool, authenticated: bool = False):
         """Update connection status"""
+        callback = None
         with self.lock:
             if connected:
                 if authenticated:
@@ -232,11 +238,13 @@ class ConnectionHealthMonitor:
                 self.connection_status = ConnectionStatus.DISCONNECTED
                 if prev_status in (ConnectionStatus.CONNECTED, ConnectionStatus.AUTHENTICATED):
                     self.reconnect_count += 1
-                    if self.on_connection_lost:
-                        try:
-                            self.on_connection_lost()
-                        except Exception as e:
-                            logger.exception(f"Error in connection lost callback: {e}")
+                    callback = self.on_connection_lost
+
+        if callback:
+            try:
+                callback()
+            except Exception as e:
+                logger.exception(f"Error in connection lost callback: {e}")
 
     def get_health(self) -> dict[str, Any]:
         """Get current health status"""
@@ -273,17 +281,23 @@ class ConnectionHealthMonitor:
             try:
                 time.sleep(self.HEALTH_CHECK_INTERVAL)
 
+                callback = None
+                stale_data_age = None
                 with self.lock:
                     if self.connection_status == ConnectionStatus.AUTHENTICATED:
                         data_age = time.time() - self.last_data_timestamp
                         if self.last_data_timestamp > 0 and data_age > self.MAX_DATA_GAP_SECONDS:
                             self.connection_status = ConnectionStatus.STALE
-                            logger.warning(f"Connection marked stale - no data for {data_age:.1f}s")
-                            if self.on_data_stale:
-                                try:
-                                    self.on_data_stale()
-                                except Exception as e:
-                                    logger.exception(f"Error in data stale callback: {e}")
+                            stale_data_age = data_age
+                            callback = self.on_data_stale
+
+                if stale_data_age is not None:
+                    logger.warning(f"Connection marked stale - no data for {stale_data_age:.1f}s")
+                if callback:
+                    try:
+                        callback()
+                    except Exception as e:
+                        logger.exception(f"Error in data stale callback: {e}")
             except Exception as e:
                 logger.exception(f"Error in health check loop: {e}")
 

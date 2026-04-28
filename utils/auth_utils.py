@@ -238,19 +238,34 @@ def validate_password_strength(password):
 
 def mask_api_credential(credential, show_chars=4):
     """
-    Mask API credentials for display purposes, showing only the first few characters.
+    Mask API credentials for display, returning a fixed-length output.
+
+    Returns ``credential[:show_chars] + '*' * 8`` regardless of the
+    credential's actual length. The fixed-length suffix matters because:
+
+    1. It hides the secret's true length so an over-the-shoulder viewer
+       (or screenshot) cannot infer "this is a 64-char Zerodha secret"
+       vs "this is a 32-char Fyers secret" from the asterisk count.
+    2. It bounds the rendered string so a long token (some brokers issue
+       80+ char keys) cannot overflow a UI column layout.
+
+    Mirrors ``blueprints/broker_credentials.mask_secret``.
 
     Args:
         credential (str): The credential to mask
         show_chars (int): Number of characters to show from the beginning
 
     Returns:
-        str: Masked credential string
+        str: Masked credential string of fixed length, or "" if input is empty.
     """
-    if not credential or len(credential) <= show_chars:
-        return "*" * 8  # Return generic mask for short/empty credentials
+    if not credential:
+        return ""
+    if len(credential) <= show_chars:
+        # Edge case: credential shorter than the prefix budget. Show only
+        # the mask suffix to avoid revealing the entire short value.
+        return "*" * 8
 
-    return credential[:show_chars] + "*" * (len(credential) - show_chars)
+    return credential[:show_chars] + "*" * 8
 
 
 def async_master_contract_download(broker):
@@ -343,7 +358,11 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     """
     # Set session parameters
     session["logged_in"] = True
-    session["AUTH_TOKEN"] = auth_token
+    # NOTE: do NOT store the broker auth_token in the Flask session. Flask's
+    # default session is a signed-but-unencrypted client-side cookie, so any
+    # value placed here is readable by anyone who obtains the cookie (XSS,
+    # browser-extension, HAR/profile leak). The encrypted DB copy retrieved
+    # via get_auth_token() is the single source of truth for broker calls.
     if feed_token:
         session["FEED_TOKEN"] = feed_token  # Store feed token in session if available
     if user_id:

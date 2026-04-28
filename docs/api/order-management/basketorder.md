@@ -46,6 +46,44 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/basketorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/basketorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "Python",
+  "orders": [
+    {
+      "symbol": "BHEL",
+      "exchange": "NSE",
+      "action": "BUY",
+      "quantity": "1",
+      "pricetype": "MARKET",
+      "product": "MIS"
+    },
+    {
+      "symbol": "ZOMATO",
+      "exchange": "NSE",
+      "action": "SELL",
+      "quantity": "1",
+      "pricetype": "MARKET",
+      "product": "MIS"
+    },
+    {
+      "symbol": "RELIANCE",
+      "exchange": "NSE",
+      "action": "BUY",
+      "quantity": "1",
+      "pricetype": "LIMIT",
+      "product": "MIS",
+      "price": "1180"
+    }
+  ]
+}'
+```
+
 ## Sample API Response
 
 ```json
