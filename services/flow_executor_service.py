@@ -2090,11 +2090,11 @@ def execute_node_chain(
         filtered_edges = []
         for edge in edges_to_follow:
             source_handle = edge.get("sourceHandle", "")
-            if condition_met and source_handle == "yes":
+            if condition_met and source_handle in ("yes", "true"):
                 filtered_edges.append(edge)
-            elif not condition_met and source_handle == "no":
+            elif not condition_met and source_handle in ("no", "false"):
                 filtered_edges.append(edge)
-            elif source_handle not in ["yes", "no"]:
+            elif source_handle not in ("yes", "no", "true", "false"):
                 filtered_edges.append(edge)
         edges_to_follow = filtered_edges
 
