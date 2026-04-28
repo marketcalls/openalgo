@@ -221,6 +221,24 @@ def on_analyzer_error(event):
         _emit_analyzer_update(event)
 
 
+def on_sandbox_order_filled(event):
+    """Emit analyzer_update so OrderBook / TradeBook / Positions auto-refresh
+    when a pending sandbox order fills via live LTP."""
+    _emit_analyzer_update(event)
+
+
+def on_sandbox_auto_squareoff(event):
+    """Emit analyzer_update after the sandbox auto-square-off cycle so
+    OrderBook (cancelled MIS orders) and Positions (closed MIS) refresh."""
+    _emit_analyzer_update(event)
+
+
+def on_sandbox_t1_settlement(event):
+    """Emit analyzer_update after T+1 settlement so Positions and Holdings
+    pages refresh."""
+    _emit_analyzer_update(event)
+
+
 def _emit_analyzer_update(event):
     """Helper to emit the analyzer_update socketio event."""
     socketio.emit(
