@@ -678,6 +678,24 @@ def process_mstock_json(json_data):
         + "PE"
     )
 
+    # -------------------------------------------------------------------
+    # Normalize instrumenttype to OpenAlgo standard (match Angel format)
+    # Options: OPTIDX/OPTSTK/OPTFUT/OPTCUR/OPTIRC -> CE or PE
+    # Futures: FUTIDX/FUTSTK/FUTCOM/FUTCUR/FUTIRC/FUTIRT -> FUT
+    # -------------------------------------------------------------------
+    option_types = ["OPTIDX", "OPTSTK", "OPTFUT", "OPTCUR", "OPTIRC"]
+    df.loc[
+        (df["instrumenttype"].isin(option_types)) & (df["symbol"].str.endswith("CE", na=False)),
+        "instrumenttype",
+    ] = "CE"
+    df.loc[
+        (df["instrumenttype"].isin(option_types)) & (df["symbol"].str.endswith("PE", na=False)),
+        "instrumenttype",
+    ] = "PE"
+
+    future_types = ["FUTIDX", "FUTSTK", "FUTCOM", "FUTCUR", "FUTIRC", "FUTIRT"]
+    df.loc[df["instrumenttype"].isin(future_types), "instrumenttype"] = "FUT"
+
     # Return the processed DataFrame
     # Note: Index symbol formatting is handled in fetch_and_process_mstock_indices()
     return df

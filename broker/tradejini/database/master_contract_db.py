@@ -292,6 +292,7 @@ def process_scrip_data(scrip_data, group_info):
                         try:
                             expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
                             expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                            expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
                             openalgo_symbol = f"{base_symbol}{expiry_formatted}FUT"
 
                             record = {
@@ -301,7 +302,7 @@ def process_scrip_data(scrip_data, group_info):
                                 "exchange": exchange,
                                 "brexchange": exchange,
                                 "token": str(item["excToken"]),
-                                "expiry": expiry_date,
+                                "expiry": expiry_db,
                                 "strike": 0,
                                 "lotsize": int(item.get("lot", 1)),
                                 "instrumenttype": "FUT",
@@ -328,6 +329,7 @@ def process_scrip_data(scrip_data, group_info):
                         try:
                             expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
                             expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                            expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
                             strike_str = (
                                 str(int(strike_price))
                                 if strike_price.is_integer()
@@ -344,7 +346,7 @@ def process_scrip_data(scrip_data, group_info):
                                 "exchange": exchange,
                                 "brexchange": exchange,
                                 "token": str(item["excToken"]),
-                                "expiry": expiry_date,
+                                "expiry": expiry_db,
                                 "strike": strike_price,
                                 "lotsize": int(item.get("lot", 1)),
                                 "instrumenttype": option_type,
