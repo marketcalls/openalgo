@@ -342,6 +342,7 @@ export interface ExpiryNodeData {
   label?: string
   symbol: string
   exchange: string
+  instrumenttype?: 'options' | 'futures'
   outputVariable?: string
 }
 
