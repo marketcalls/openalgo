@@ -1254,54 +1254,146 @@ class NodeExecutor:
         return operators.get(operator, False)
 
     def execute_position_check(self, node_data: dict) -> dict:
-        """Execute Position Check node"""
+        """Execute Position Check node.
+
+        Honors the UI's `condition` field (exists, not_exists, quantity_above,
+        quantity_below, pnl_above, pnl_below). Earlier this read `operator` /
+        `threshold` directly, which the UI never writes, so every condition
+        defaulted to `gt 0` regardless of the dropdown selection.
+        """
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
         product = self.get_str(node_data, "product", "MIS")
-        operator = self.get_str(node_data, "operator", "gt")
-        threshold = self.get_int(node_data, "threshold", 0)
+        condition = self.get_str(node_data, "condition", "exists")
+        threshold = self.get_float(node_data, "threshold", 0.0)
 
         self.log(f"Checking position for: {symbol}")
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
         )
-        quantity = int(result.get("quantity", 0))
-        condition_met = self._evaluate_condition(quantity, operator, threshold)
-        self.log(f"Position check: qty={quantity} {operator} {threshold} = {condition_met}")
-        return {"status": "success", "condition": condition_met, "quantity": quantity}
+        quantity = int(result.get("quantity", 0) or 0)
+        pnl = float(result.get("pnl", 0) or 0)
+
+        if condition == "exists":
+            condition_met = quantity != 0
+            log_msg = f"Position check: qty={quantity} != 0 = {condition_met}"
+        elif condition == "not_exists":
+            condition_met = quantity == 0
+            log_msg = f"Position check: qty={quantity} == 0 = {condition_met}"
+        elif condition == "quantity_above":
+            condition_met = quantity > threshold
+            log_msg = f"Position check: qty={quantity} > {threshold} = {condition_met}"
+        elif condition == "quantity_below":
+            condition_met = quantity < threshold
+            log_msg = f"Position check: qty={quantity} < {threshold} = {condition_met}"
+        elif condition == "pnl_above":
+            condition_met = pnl > threshold
+            log_msg = f"Position check: pnl={pnl} > {threshold} = {condition_met}"
+        elif condition == "pnl_below":
+            condition_met = pnl < threshold
+            log_msg = f"Position check: pnl={pnl} < {threshold} = {condition_met}"
+        else:
+            condition_met = False
+            log_msg = f"Position check: unknown condition '{condition}' — returning False"
+
+        self.log(log_msg)
+        return {
+            "status": "success",
+            "condition": condition_met,
+            "quantity": quantity,
+            "pnl": pnl,
+        }
 
     def execute_fund_check(self, node_data: dict) -> dict:
-        """Execute Fund Check node"""
-        operator = self.get_str(node_data, "operator", "gt")
-        threshold = self.get_float(node_data, "threshold", 0)
+        """Execute Fund Check node.
+
+        UI writes a single `minAvailable` field — semantics: "trigger True
+        if available cash is at least this much". The previous version read
+        `operator`/`threshold` (never written by the UI), so it always
+        defaulted to `available > 0` and ignored `minAvailable`.
+        """
+        min_available = self.get_float(node_data, "minAvailable", 0.0)
 
         self.log("Checking funds")
         result = self.client.funds()
-        data = result.get("data", {})
-        available = float(data.get("availablecash", 0) if data else 0)
-        condition_met = self._evaluate_condition(available, operator, threshold)
-        self.log(f"Fund check: available={available} {operator} {threshold} = {condition_met}")
+        data = result.get("data", {}) or {}
+        available = float(data.get("availablecash", 0) or 0)
+        condition_met = available >= min_available
+        self.log(
+            f"Fund check: available={available} >= {min_available} = {condition_met}"
+        )
         return {"status": "success", "condition": condition_met, "available": available}
 
     def execute_price_condition(self, node_data: dict) -> dict:
-        """Execute Price Condition node"""
+        """Execute Price Condition node.
+
+        Honors the UI fields the panel actually writes: `field` (ltp / open /
+        high / low / prev_close / change_percent), `operator` (>, <, ==, >=,
+        <=, !=), and `value` (the threshold). The previous implementation
+        read `threshold` (never written by the UI) and passed the symbol
+        operators to a helper that only recognized word-keys, so all
+        comparisons collapsed to False regardless of the configured price.
+        """
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        operator = self.get_str(node_data, "operator", "gt")
-        threshold = self.get_float(node_data, "threshold", 0)
+        field = self.get_str(node_data, "field", "ltp")
+        operator = self.get_str(node_data, "operator", ">")
+        # Accept both `value` (current UI) and `threshold` (legacy) for back-compat.
+        value = node_data.get("value", node_data.get("threshold", 0))
+        try:
+            threshold = float(value) if value not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            threshold = 0.0
 
         self.log(f"Checking price for: {symbol}")
         result = self.client.get_quotes(symbol=symbol, exchange=exchange)
-        data = result.get("data", {})
-        ltp = float(data.get("ltp", 0) if data else 0)
-        condition_met = self._evaluate_condition(ltp, operator, threshold)
-        self.log(f"Price check: ltp={ltp} {operator} {threshold} = {condition_met}")
-        return {"status": "success", "condition": condition_met, "ltp": ltp}
+        data = result.get("data", {}) or {}
+
+        if field == "change_percent":
+            ltp = float(data.get("ltp", 0) or 0)
+            prev_close = float(data.get("prev_close", 0) or 0)
+            field_value = ((ltp - prev_close) / prev_close * 100.0) if prev_close else 0.0
+        else:
+            field_value = float(data.get(field, 0) or 0)
+
+        condition_met = self._compare(field_value, operator, threshold)
+        self.log(
+            f"Price check: {field}={field_value} {operator} {threshold} = {condition_met}"
+        )
+        return {
+            "status": "success",
+            "condition": condition_met,
+            "ltp": float(data.get("ltp", 0) or 0),
+            "field": field,
+            "field_value": field_value,
+        }
+
+    @staticmethod
+    def _compare(left: float, operator: str, right: float) -> bool:
+        """Compare two numbers using either symbol operators (>, <, ==, !=,
+        >=, <=) used by the UI or word operators (gt, lt, eq, neq, gte, lte)
+        used by some legacy node configs. Unknown operator → False."""
+        ops = {
+            ">": left > right, "gt": left > right,
+            "<": left < right, "lt": left < right,
+            "==": left == right, "eq": left == right,
+            "!=": left != right, "neq": left != right,
+            ">=": left >= right, "gte": left >= right,
+            "<=": left <= right, "lte": left <= right,
+        }
+        return ops.get(operator, False)
 
     def execute_time_window(self, node_data: dict) -> dict:
-        """Execute Time Window node"""
+        """Execute Time Window node.
+
+        Honors the `invertCondition` toggle from the UI ("Trigger outside
+        window"). Without inversion: True when current time is inside
+        [startTime, endTime]. With inversion: True when current time is
+        outside that range.
+        """
         start_time_str = node_data.get("startTime", "09:15")
         end_time_str = node_data.get("endTime", "15:30")
+        invert = bool(node_data.get("invertCondition", False))
 
         now = datetime.now().time()
         start_h, start_m, _ = parse_time_string(start_time_str, 9, 15)
@@ -1309,8 +1401,12 @@ class NodeExecutor:
         start_time = time(start_h, start_m)
         end_time = time(end_h, end_m)
 
-        condition_met = start_time <= now <= end_time
-        self.log(f"Time window: {start_time_str}-{end_time_str}, in_window={condition_met}")
+        in_window = start_time <= now <= end_time
+        condition_met = (not in_window) if invert else in_window
+        self.log(
+            f"Time window: {start_time_str}-{end_time_str}, in_window={in_window}, "
+            f"invert={invert}, result={condition_met}"
+        )
         return {"status": "success", "condition": condition_met}
 
     def execute_time_condition(self, node_data: dict) -> dict:
@@ -2099,18 +2195,26 @@ def execute_node_chain(
     # Determine which edges to follow
     edges_to_follow = edge_map.get(node_id, [])
 
-    # For condition nodes, filter edges based on Yes/No
+    # For condition nodes, filter edges based on the truthy/falsy source handle.
+    # Different node types emit different handle vocabularies — NotGate and
+    # TimeCondition use "yes"/"no", while PositionCheck, FundCheck,
+    # PriceCondition, and TimeWindow use "true"/"false". Treat them as synonyms
+    # so all condition forks are honored regardless of which node produced them.
     if result and "condition" in result:
         condition_met = result.get("condition", False)
         context.set_condition_result(node_id, condition_met)
+        TRUE_HANDLES = {"yes", "true"}
+        FALSE_HANDLES = {"no", "false"}
         filtered_edges = []
         for edge in edges_to_follow:
-            source_handle = edge.get("sourceHandle", "")
-            if condition_met and source_handle == "yes":
+            source_handle = edge.get("sourceHandle", "") or ""
+            if condition_met and source_handle in TRUE_HANDLES:
                 filtered_edges.append(edge)
-            elif not condition_met and source_handle == "no":
+            elif not condition_met and source_handle in FALSE_HANDLES:
                 filtered_edges.append(edge)
-            elif source_handle not in ["yes", "no"]:
+            elif source_handle not in TRUE_HANDLES and source_handle not in FALSE_HANDLES:
+                # Edge has no condition handle — pass-through (e.g. a Log node
+                # wired to the node's main bottom handle, not the True/False forks).
                 filtered_edges.append(edge)
         edges_to_follow = filtered_edges
 

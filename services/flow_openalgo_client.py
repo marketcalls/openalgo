@@ -324,7 +324,7 @@ class FlowOpenAlgoClient:
         self, symbol: str, exchange: str, product_type: str = None
     ) -> dict[str, Any]:
         """Get open position for a specific symbol.
-        Returns quantity matching standard OpenAlgo API response.
+        Returns quantity and pnl from the matching position in positionbook.
         """
         result = self.positionbook()
         if result.get("status") != "success":
@@ -332,7 +332,7 @@ class FlowOpenAlgoClient:
 
         positions = result.get("data", [])
         if not positions:
-            return {"status": "success", "quantity": 0}
+            return {"status": "success", "quantity": 0, "pnl": 0}
 
         for pos in positions:
             if pos.get("symbol") == symbol and pos.get("exchange") == exchange:
@@ -340,9 +340,13 @@ class FlowOpenAlgoClient:
                 pos_product = pos.get("product") or pos.get("product_type")
                 if product_type and pos_product != product_type:
                     continue
-                return {"status": "success", "quantity": pos.get("quantity", 0)}
+                return {
+                    "status": "success",
+                    "quantity": pos.get("quantity", 0),
+                    "pnl": pos.get("pnl", 0),
+                }
 
-        return {"status": "success", "quantity": 0}
+        return {"status": "success", "quantity": 0, "pnl": 0}
 
     # --- Options Operations ---
 
