@@ -14,20 +14,44 @@ flat declarative style suitable for that purpose.
 
 ## 1. Workflow shape
 
-A workflow is a JSON object with three top-level keys:
+A workflow is a JSON object with the following top-level keys (the snippet
+below is a *shape diagram*, not import-ready — see §8 for runnable examples):
 
-```json
+```jsonc
 {
+  "name": "My Workflow",
+  "description": "Optional one-line summary",
   "nodes": [ /* array of nodes */ ],
   "edges": [ /* array of edges */ ],
   "viewport": { "x": 0, "y": 0, "zoom": 1 }
 }
 ```
 
-`viewport` is optional and is used only for restoring the canvas position in
-the UI; importers may omit it.
+| Key | Required for import | Required for execution | Notes |
+|---|---|---|---|
+| `name` | **yes** | no | Importer rejects without it. The UI suffixes `(imported)` to whatever you supply. |
+| `description` | no | no | Free-text. Defaults to empty. |
+| `nodes` | **yes** (array, can be empty) | yes | See §2 + §7. |
+| `edges` | **yes** (array, can be empty) | yes | See §3. |
+| `viewport` | no | no | Restores canvas position only. Importers may omit. |
 
-### Persisted vs minimal
+### Importer validation
+
+The importer (`POST /api/workflows/import`, called from the Flow Editor's
+**Import** dialog) runs this check on the parsed JSON before saving:
+
+```js
+if (!parsed.name || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+  // -> "Invalid workflow format. Must have name, nodes, and edges."
+}
+```
+
+If `JSON.parse` itself throws (smart quotes, missing comma, real newline
+inside a string, BOM at the start), the message is the more generic
+**"Invalid JSON format. Please check the workflow data."** — that always
+indicates a syntax problem with the JSON text itself, not a missing field.
+
+### Persisted vs minimal node
 
 The DB stores additional UI-only fields per node (`measured`, `dragging`,
 `selected`). They are not required for import — the executor reads only `id`,
@@ -711,9 +735,25 @@ schemas.
 |---|---|---|---|
 | `symbol`, `exchange` | | | |
 | `interval` | `"1m"` \| `"5m"` \| `"15m"` \| `"1h"` \| `"1d"` (or any interval the broker supports — call `intervals` first) | `"5m"` | |
-| `startDate` | `"YYYY-MM-DD"` | — | |
-| `endDate` | `"YYYY-MM-DD"` | — | |
+| `startDate` | `"YYYY-MM-DD"` | — | **Required.** Note: the Config Panel currently writes a `days` integer instead — the executor does not consume it, so for import JSON write explicit `startDate`/`endDate` strings. |
+| `endDate` | `"YYYY-MM-DD"` | — | **Required.** See note above. |
 | `outputVariable` | string | — | |
+
+```json
+{
+  "id": "node_2",
+  "type": "history",
+  "position": { "x": 100, "y": 100 },
+  "data": {
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "interval": "5m",
+    "startDate": "2026-04-22",
+    "endDate": "2026-04-29",
+    "outputVariable": "ohlcv"
+  }
+}
+```
 
 #### openPosition — Open Position For Symbol
 
@@ -900,16 +940,30 @@ settings.
 
 #### variable — Set / Update Variable
 
+The UI dropdown offers eleven operations but only four are implemented by
+the executor today; pick from those when authoring import JSON:
+
+| Operation | Behaviour |
+|---|---|
+| `"set"` | Stores `value` under `variableName`. JSON-shaped strings (starting with `{` or `[`) are auto-parsed via `json.loads`, so you can carry structured data. |
+| `"add"` | `current + value` (numeric coercion). Initialises to 0 if unset. |
+| `"increment"` | `current + 1`. Initialises to 0 if unset. |
+| `"decrement"` | `current - 1`. Initialises to 0 if unset. |
+
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `variableName` | string | — | The name to set in workflow context. |
-| `operation` | `"set"` \| `"add"` \| `"subtract"` \| `"multiply"` \| `"divide"` \| `"increment"` \| `"decrement"` \| `"append"` \| `"parse_json"` \| `"stringify"` \| `"get"` | `"set"` | |
-| `value` | any | — | Used by `set`/`add`/`subtract`/`multiply`/`divide`/`append`/`parse_json`. Strings accept `{{vars}}`. JSON strings (starting with `{` or `[`) are auto-parsed under `set`. |
-| `sourceVariable` | string | — | Used by `get`/`stringify`. |
-| `jsonPath` | string | — | Used by `get`. e.g. `"data.ltp"`. |
+| `operation` | `"set"` \| `"add"` \| `"increment"` \| `"decrement"` | `"set"` | Other UI options (`subtract`, `multiply`, `divide`, `append`, `parse_json`, `stringify`, `get`) are **no-ops** on the executor side as of this writing — use `mathExpression` for arithmetic and `set` with a JSON-shaped string for structured assignment. |
+| `value` | any | — | Strings accept `{{vars}}`. |
 
 ```json
 { "id": "node_3", "type": "variable", "position": { "x": 100, "y": 300 }, "data": { "variableName": "qty", "operation": "set", "value": "10" } }
+```
+
+For richer arithmetic, use `mathExpression`:
+
+```json
+{ "id": "node_3", "type": "mathExpression", "position": { "x": 100, "y": 300 }, "data": { "expression": "{{quote.data.ltp}} * 0.99", "outputVariable": "stopPrice" } }
 ```
 
 #### mathExpression — Evaluate Math Expression
@@ -1042,6 +1096,8 @@ position does not already exist.
 
 ```json
 {
+  "name": "Daily RELIANCE Buy",
+  "description": "Place a 10-share intraday BUY of RELIANCE at 09:20 if no existing position",
   "nodes": [
     {
       "id": "node_1",
@@ -1089,6 +1145,8 @@ and places a 1-lot BUY.
 
 ```json
 {
+  "name": "TV NIFTY Long ATM CE",
+  "description": "Webhook -> ATM weekly CE long entry on NIFTY",
   "nodes": [
     {
       "id": "node_1",
@@ -1133,13 +1191,316 @@ and places a 1-lot BUY.
 }
 ```
 
-### 8.3 Compound condition (AND gate)
+### 8.3 Funds-aware split entry
+
+Every weekday at 09:30, fetch funds. If available cash >= ₹50k, split a 100-qty
+SBIN buy into 5 chunks of 20; otherwise log the skip.
+
+```json
+{
+  "name": "SBIN Funds-Gated Split Buy",
+  "description": "Conditional split entry on SBIN with available-cash guard",
+  "nodes": [
+    { "id": "node_1", "type": "start",      "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "daily", "time": "09:30", "days": [0,1,2,3,4], "marketHoursOnly": true } },
+    { "id": "node_2", "type": "fundCheck",  "position": { "x": 100, "y": 180 }, "data": { "minAvailable": 50000 } },
+    { "id": "node_3", "type": "splitOrder", "position": { "x":   0, "y": 300 }, "data": { "symbol": "SBIN", "exchange": "NSE", "action": "BUY", "quantity": 100, "splitSize": 20, "priceType": "MARKET", "product": "MIS", "outputVariable": "splitOut" } },
+    { "id": "node_4", "type": "log",        "position": { "x": 240, "y": 300 }, "data": { "message": "Skipped SBIN entry: available cash below 50k", "level": "warn" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_2", "sourceHandle": "true",  "target": "node_3" },
+    { "id": "e3", "source": "node_2", "sourceHandle": "false", "target": "node_4" }
+  ]
+}
+```
+
+### 8.4 Realized P&L Telegram every minute
+
+Pings the configured Telegram user with realized + unrealized P&L every minute
+during market hours. Useful for "watchdog" supervision.
+
+```json
+{
+  "name": "Realized PnL Telegram Watchdog",
+  "description": "Funds snapshot to Telegram every 1 min during market hours",
+  "nodes": [
+    { "id": "node_1", "type": "start",         "position": { "x": 100, "y": 100 }, "data": { "scheduleType": "interval", "intervalValue": 1, "intervalUnit": "minutes", "marketHoursOnly": true } },
+    { "id": "node_2", "type": "funds",         "position": { "x": 100, "y": 220 }, "data": { "outputVariable": "funds" } },
+    { "id": "node_3", "type": "telegramAlert", "position": { "x": 100, "y": 340 }, "data": { "username": "rajandran", "message": "Realized: Rs {{funds.data.m2mrealized}} | Unrealized: Rs {{funds.data.m2munrealized}} | Cash: Rs {{funds.data.availablecash}} | At {{time}} IST" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_2", "target": "node_3" }
+  ]
+}
+```
+
+Note `m2mrealized` and `m2munrealized` are returned as **strings** (e.g.
+`"1234.50"`). They interpolate into the Telegram message correctly; if you
+want to use them in a `priceCondition`, wrap them via `mathExpression` first.
+
+### 8.5 P&L stop-loss circuit breaker
+
+Polls the position book every 30 seconds. If aggregate P&L drops below
+₹-2000, square off everything and notify Telegram.
+
+```json
+{
+  "name": "Aggregate PnL Stop-Loss",
+  "description": "Square off when total open-position pnl falls below -2000",
+  "nodes": [
+    { "id": "node_1", "type": "start",          "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "interval", "intervalValue": 30, "intervalUnit": "seconds", "marketHoursOnly": true } },
+    { "id": "node_2", "type": "funds",          "position": { "x": 100, "y": 180 }, "data": { "outputVariable": "f" } },
+    { "id": "node_3", "type": "mathExpression", "position": { "x": 100, "y": 300 }, "data": { "expression": "{{f.data.m2mrealized}} + {{f.data.m2munrealized}}", "outputVariable": "totalPnL" } },
+    { "id": "node_4", "type": "priceCondition", "position": { "x": 100, "y": 420 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "field": "ltp", "operator": "<", "value": -2000 } },
+    { "id": "node_5", "type": "closePositions","position": { "x":   0, "y": 540 }, "data": {} },
+    { "id": "node_6", "type": "telegramAlert",  "position": { "x": 240, "y": 540 }, "data": { "username": "rajandran", "message": "PnL stop-loss tripped at {{totalPnL}}, all positions squared off" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_2", "target": "node_3" },
+    { "id": "e3", "source": "node_3", "target": "node_4" },
+    { "id": "e4", "source": "node_4", "sourceHandle": "true", "target": "node_5" },
+    { "id": "e5", "source": "node_5", "target": "node_6" }
+  ]
+}
+```
+
+> Note: today the `priceCondition` node compares against a quote-fetched
+> field (`ltp`/`open`/etc.). If you want to compare a workflow variable like
+> `{{totalPnL}}` directly, you currently need to write the value into a quote
+> via the broker — or wait for a `varCondition` node. For now the example
+> above is illustrative; in practice, square off via a `priceCondition` on
+> the actual symbol's LTP, or use a `mathExpression` -> negative-result
+> heuristic gate built from `andGate`.
+
+### 8.6 Iron condor with custom legs
+
+`optionsMultiOrder` accepts a `legs` array when `strategy="custom"` —
+useful for any structure the preset enums don't cover (calendars, ratios,
+butterflies). Each leg is `{ offset, optionType, action, quantity }` and
+optionally a leg-specific `expiryDate` for diagonals.
+
+```json
+{
+  "name": "NIFTY Custom Iron Fly",
+  "description": "ATM straddle hedged with OTM3 wings, current-week expiry",
+  "nodes": [
+    { "id": "node_1", "type": "start",             "position": { "x": 100, "y": 100 }, "data": { "scheduleType": "daily", "time": "09:25", "days": [0,1,2,3,4], "marketHoursOnly": true } },
+    { "id": "node_2", "type": "optionsMultiOrder", "position": { "x": 100, "y": 240 }, "data": {
+      "strategy": "custom",
+      "underlying": "NIFTY",
+      "expiryType": "current_week",
+      "action": "SELL",
+      "quantity": 1,
+      "priceType": "MARKET",
+      "product": "NRML",
+      "legs": [
+        { "offset": "ATM",  "optionType": "CE", "action": "SELL", "quantity": 1 },
+        { "offset": "ATM",  "optionType": "PE", "action": "SELL", "quantity": 1 },
+        { "offset": "OTM3", "optionType": "CE", "action": "BUY",  "quantity": 1 },
+        { "offset": "OTM3", "optionType": "PE", "action": "BUY",  "quantity": 1 }
+      ],
+      "outputVariable": "ironFly"
+    } }
+  ],
+  "edges": [ { "id": "e1", "source": "node_1", "target": "node_2" } ]
+}
+```
+
+### 8.7 Webhook → external HTTP forward
+
+Receive a webhook, then fan out: place an OpenAlgo order **and** post a
+copy of the payload to an external system (e.g. a Discord bot or a
+spreadsheet endpoint) for audit.
+
+```json
+{
+  "name": "Webhook to Order + External Audit",
+  "description": "Place order from webhook payload and POST to external audit URL",
+  "nodes": [
+    { "id": "node_1", "type": "webhookTrigger", "position": { "x": 100, "y":  80 }, "data": { "label": "TV Webhook", "exchange": "NSE" } },
+    { "id": "node_2", "type": "placeOrder",     "position": { "x":   0, "y": 220 }, "data": {
+      "symbol": "{{webhook.symbol}}",
+      "exchange": "{{webhook.exchange}}",
+      "action": "{{webhook.action}}",
+      "quantity": "{{webhook.qty}}",
+      "priceType": "MARKET",
+      "product": "MIS",
+      "outputVariable": "ord"
+    } },
+    { "id": "node_3", "type": "httpRequest",    "position": { "x": 240, "y": 220 }, "data": {
+      "method": "POST",
+      "url": "https://audit.example.com/orders",
+      "headers": "{\"Content-Type\": \"application/json\"}",
+      "body": "{\"symbol\": \"{{webhook.symbol}}\", \"action\": \"{{webhook.action}}\", \"orderid\": \"{{ord.orderid}}\", \"ts\": \"{{iso_timestamp}}\"}",
+      "timeout": 10,
+      "outputVariable": "auditResp"
+    } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_1", "target": "node_3" }
+  ]
+}
+```
+
+### 8.8 Three-condition AND gate
+
+Time-window AND price-above AND no-existing-position. Demonstrates
+`inputCount: 3` and `targetHandle: "input-N"`.
+
+```json
+{
+  "name": "Triple-Condition Long Entry",
+  "description": "Long RELIANCE only inside trading window, above 1500, with no existing long",
+  "nodes": [
+    { "id": "node_1", "type": "start",          "position": { "x": 200, "y":  20 }, "data": { "scheduleType": "interval", "intervalValue": 1, "intervalUnit": "minutes", "marketHoursOnly": true } },
+    { "id": "node_2", "type": "timeWindow",     "position": { "x":   0, "y": 140 }, "data": { "startTime": "09:30", "endTime": "14:30" } },
+    { "id": "node_3", "type": "priceCondition", "position": { "x": 200, "y": 140 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "field": "ltp", "operator": ">", "value": 1500 } },
+    { "id": "node_4", "type": "positionCheck",  "position": { "x": 400, "y": 140 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "product": "MIS", "condition": "not_exists" } },
+    { "id": "node_5", "type": "andGate",        "position": { "x": 200, "y": 280 }, "data": { "inputCount": 3 } },
+    { "id": "node_6", "type": "placeOrder",     "position": { "x": 200, "y": 400 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 1, "priceType": "MARKET", "product": "MIS", "outputVariable": "ord" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_1", "target": "node_3" },
+    { "id": "e3", "source": "node_1", "target": "node_4" },
+    { "id": "e4", "source": "node_2", "sourceHandle": "true", "target": "node_5", "targetHandle": "input-0" },
+    { "id": "e5", "source": "node_3", "sourceHandle": "true", "target": "node_5", "targetHandle": "input-1" },
+    { "id": "e6", "source": "node_4", "sourceHandle": "true", "target": "node_5", "targetHandle": "input-2" },
+    { "id": "e7", "source": "node_5", "sourceHandle": "true", "target": "node_6" }
+  ]
+}
+```
+
+### 8.9 Place order, wait, then auto-cancel
+
+Demonstrates `delay` + variable interpolation of an upstream order id. Places a
+LIMIT BUY at LTP - 0.5%, waits 90s, and cancels if it hasn't filled yet. The
+broker will silently no-op the cancel if the order already completed, so this
+is safe.
+
+```json
+{
+  "name": "RELIANCE LIMIT with 90s Auto-Cancel",
+  "description": "Place a sub-LTP limit and cancel if unfilled after 90 seconds",
+  "nodes": [
+    { "id": "node_1", "type": "start",         "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "daily", "time": "09:30", "days": [0,1,2,3,4], "marketHoursOnly": true } },
+    { "id": "node_2", "type": "getQuote",      "position": { "x": 100, "y": 180 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "outputVariable": "q" } },
+    { "id": "node_3", "type": "mathExpression","position": { "x": 100, "y": 300 }, "data": { "expression": "{{q.data.ltp}} * 0.995", "outputVariable": "limitPx" } },
+    { "id": "node_4", "type": "placeOrder",    "position": { "x": 100, "y": 420 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 5, "priceType": "LIMIT", "product": "MIS", "price": "{{limitPx}}", "outputVariable": "ord" } },
+    { "id": "node_5", "type": "delay",         "position": { "x": 100, "y": 540 }, "data": { "delayValue": 90, "delayUnit": "seconds" } },
+    { "id": "node_6", "type": "cancelOrder",   "position": { "x": 100, "y": 660 }, "data": { "orderId": "{{ord.orderid}}" } },
+    { "id": "node_7", "type": "log",           "position": { "x": 100, "y": 780 }, "data": { "message": "Auto-cancel sent for {{ord.orderid}} at {{time}} IST", "level": "info" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_2", "target": "node_3" },
+    { "id": "e3", "source": "node_3", "target": "node_4" },
+    { "id": "e4", "source": "node_4", "target": "node_5" },
+    { "id": "e5", "source": "node_5", "target": "node_6" },
+    { "id": "e6", "source": "node_6", "target": "node_7" }
+  ]
+}
+```
+
+### 8.10 Wait until square-off, then close + log
+
+Use `waitUntil` to pause execution until 15:15 IST, then close all open
+positions and log the action. Useful as a tail-end of any intraday flow.
+
+```json
+{
+  "name": "Intraday Square-Off at 15:15",
+  "description": "Wait until 15:15 IST, close all open positions, log the squareoff",
+  "nodes": [
+    { "id": "node_1", "type": "start",          "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "daily", "time": "09:25", "days": [0,1,2,3,4], "marketHoursOnly": true } },
+    { "id": "node_2", "type": "waitUntil",      "position": { "x": 100, "y": 180 }, "data": { "targetTime": "15:15", "label": "Square-off window" } },
+    { "id": "node_3", "type": "closePositions", "position": { "x": 100, "y": 300 }, "data": {} },
+    { "id": "node_4", "type": "log",            "position": { "x": 100, "y": 420 }, "data": { "message": "Daily square-off completed at {{time}} IST", "level": "info" } },
+    { "id": "node_5", "type": "telegramAlert",  "position": { "x": 100, "y": 540 }, "data": { "username": "rajandran", "message": "[OpenAlgo] Daily square-off done at {{time}} IST on {{date}}" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_2", "target": "node_3" },
+    { "id": "e3", "source": "node_3", "target": "node_4" },
+    { "id": "e4", "source": "node_4", "target": "node_5" }
+  ]
+}
+```
+
+### 8.11 Quantity from a math expression
+
+Sizes a position based on a fraction of available cash divided by LTP. Shows
+`getQuote` → `funds` → `mathExpression` → `variable` (set with computed value)
+→ `placeOrder` referencing the computed quantity.
+
+```json
+{
+  "name": "RELIANCE 5%-of-Cash Sizing",
+  "description": "Size BUY quantity at floor(0.05 * available_cash / ltp)",
+  "nodes": [
+    { "id": "node_1", "type": "start",          "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "daily", "time": "09:30", "days": [0,1,2,3,4], "marketHoursOnly": true } },
+    { "id": "node_2", "type": "funds",          "position": { "x": 100, "y": 180 }, "data": { "outputVariable": "f" } },
+    { "id": "node_3", "type": "getQuote",       "position": { "x": 100, "y": 300 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "outputVariable": "q" } },
+    { "id": "node_4", "type": "mathExpression", "position": { "x": 100, "y": 420 }, "data": { "expression": "(0.05 * {{f.data.availablecash}}) / {{q.data.ltp}}", "outputVariable": "sizedQty" } },
+    { "id": "node_5", "type": "placeOrder",     "position": { "x": 100, "y": 540 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": "{{sizedQty}}", "priceType": "MARKET", "product": "CNC", "outputVariable": "ord" } },
+    { "id": "node_6", "type": "log",            "position": { "x": 100, "y": 660 }, "data": { "message": "Sized BUY {{sizedQty}} units at LTP {{q.data.ltp}} (cash={{f.data.availablecash}}) -> orderid {{ord.orderid}}", "level": "info" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_2", "target": "node_3" },
+    { "id": "e3", "source": "node_3", "target": "node_4" },
+    { "id": "e4", "source": "node_4", "target": "node_5" },
+    { "id": "e5", "source": "node_5", "target": "node_6" }
+  ]
+}
+```
+
+> The `mathExpression` result will be a float (e.g. `1.234`). The
+> placeOrder node coerces the `quantity` field via `int(...)` so a float
+> truncates toward zero as in Python. Wrap with `floor()` in your math if
+> you want explicit rounding logic.
+
+### 8.12 Per-day order counter (variable increment)
+
+Keep an in-context counter of how many orders have been placed today. The
+`variable` node's `increment` operation initialises to 0 if unset, so no
+explicit reset is needed at the workflow's first run.
+
+```json
+{
+  "name": "Hourly Buy with Daily Counter",
+  "description": "Place 1 order per hour and track count via variable.increment",
+  "nodes": [
+    { "id": "node_1", "type": "start",       "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "interval", "intervalValue": 1, "intervalUnit": "hours", "marketHoursOnly": true } },
+    { "id": "node_2", "type": "placeOrder",  "position": { "x": 100, "y": 180 }, "data": { "symbol": "TATAMOTORS", "exchange": "NSE", "action": "BUY", "quantity": 1, "priceType": "MARKET", "product": "MIS", "outputVariable": "ord" } },
+    { "id": "node_3", "type": "variable",    "position": { "x": 100, "y": 300 }, "data": { "variableName": "todayCount", "operation": "increment" } },
+    { "id": "node_4", "type": "log",         "position": { "x": 100, "y": 420 }, "data": { "message": "Order #{{todayCount}} placed: {{ord.orderid}}", "level": "info" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "node_1", "target": "node_2" },
+    { "id": "e2", "source": "node_2", "target": "node_3" },
+    { "id": "e3", "source": "node_3", "target": "node_4" }
+  ]
+}
+```
+
+> **Counter scope.** `variable` storage is per-workflow-run today. Across
+> separate scheduled runs the counter resets to 0 each time. For a true
+> daily-persistent counter, write to the DB via an `httpRequest` to your
+> own endpoint, or use the broker's order-book and count the orders.
+
+### 8.13 Compound condition (AND gate, two inputs)
 
 Place an order only when (a) it is between 09:30–14:30 **and** (b) the symbol's
 LTP is above 1500.
 
 ```json
 {
+  "name": "RELIANCE Long Above 1500 in Window",
+  "description": "Buy 1 share of RELIANCE only when LTP > 1500 between 09:30 and 14:30",
   "nodes": [
     { "id": "node_1", "type": "start",          "position": {"x":100,"y": 50}, "data": { "scheduleType": "interval", "intervalValue": 1, "intervalUnit": "minutes", "marketHoursOnly": true } },
     { "id": "node_2", "type": "timeWindow",     "position": {"x":100,"y":150}, "data": { "startTime": "09:30", "endTime": "14:30" } },
@@ -1238,6 +1599,19 @@ positionBook (outputVariable=positions)
 
 ## 13. Pitfalls
 
+- **Missing top-level `name` on import.** The Flow Editor's import dialog
+  rejects any JSON missing a `name` field with *"Invalid workflow format.
+  Must have name, nodes, and edges."* The executor itself never reads it —
+  only the importer does. See §1.
+- **`JSON.parse` failures during paste.** *"Invalid JSON format. Please
+  check the workflow data."* always means the text isn't valid JSON. Common
+  causes: smart-quote conversion (`"` → `"` `"`) by Slack/Discord/word
+  processors, BOM/zero-width characters from doc editors, real newlines
+  injected inside a string value (use `\n` if you need a newline, never a
+  literal line break inside `"..."`). The fix-of-last-resort is to save the
+  JSON to a `.json` file and use the **file upload** button in the import
+  dialog — that path goes through `FileReader` and bypasses clipboard
+  munging entirely.
 - **Output variable not set.** If a downstream node references `{{name.field}}`
   but the upstream producer doesn't have `outputVariable: "name"` set, the
   literal `{{name.field}}` string is passed through. The workflow runs but
