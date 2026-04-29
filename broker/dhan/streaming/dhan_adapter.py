@@ -512,6 +512,18 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Remove from all possible subscriptions
         removed = False
         with self.lock:
+            # Drop any pending queued subscribes for this instrument so a
+            # quick subscribe -> unsubscribe before the batch timer fires
+            # does not leave a ghost upstream subscription on Dhan
+            # (Dhan has no real unsubscribe — once SUBSCRIBE is sent, it sticks).
+            self.subscription_queue = [
+                item for item in self.subscription_queue
+                if not (
+                    item["instrument"]["ExchangeSegment"] == dhan_exchange
+                    and item["instrument"]["SecurityId"] == token
+                )
+            ]
+
             # Check 5-depth subscriptions
             for depth in [5, 20]:
                 correlation_id = f"{symbol}_{exchange}_{mode}_{depth}"
@@ -582,6 +594,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.depth_20_timeouts.clear()
             self.depth_20_data_received.clear()
             self.depth_20_fallbacks.clear()
+            # Drop any queued subscribes that haven't been flushed yet,
+            # otherwise the batch timer would resurrect ghost subscriptions.
+            self.subscription_queue.clear()
 
         # Send unsubscribe messages (outside lock to avoid deadlock)
         if instruments_5depth and self.ws_client_5depth:
