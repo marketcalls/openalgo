@@ -101,6 +101,43 @@ IS_WINDOWS = OS_TYPE == "windows"
 IS_MAC = OS_TYPE == "darwin"
 IS_LINUX = OS_TYPE == "linux"
 
+# Aliased ``time`` module: the top-level ``from datetime import ... time``
+# import shadows the stdlib ``time`` module, so we re-import under a
+# distinct name for sleep/monotonic helpers.
+import time as time_mod  # noqa: E402  (intentional late import for clarity)
+
+
+def _wait_for_pid_exit(pid, timeout=5.0, poll_interval=0.1):
+    """Eventlet-safe wait for a PID to exit.
+
+    ``psutil.Process.wait()`` and ``psutil.wait_procs()`` ultimately call
+    ``select.poll()`` inside ``psutil._psposix.wait_pid_pidfd_open``. Under
+    gunicorn ``--worker-class eventlet`` (OpenAlgo's default), eventlet's
+    monkey-patching strips ``select.poll`` and the call raises
+    ``AttributeError: module 'select' has no attribute 'poll'`` -- which
+    breaks both manual and scheduled strategy stops.
+
+    This helper polls with ``psutil.pid_exists`` (a simple ``os.stat`` call)
+    and ``time.sleep`` (eventlet-aware), and reaps zombie children if we
+    own them. Returns True if the process has exited within the timeout.
+    """
+    deadline = time_mod.monotonic() + max(0.0, timeout)
+    while time_mod.monotonic() < deadline:
+        if not psutil.pid_exists(pid):
+            return True
+        try:
+            p = psutil.Process(pid)
+            if p.status() == psutil.STATUS_ZOMBIE:
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except (ChildProcessError, OSError):
+                    pass
+                return True
+        except psutil.NoSuchProcess:
+            return True
+        time_mod.sleep(poll_interval)
+    return not psutil.pid_exists(pid)
+
 
 def init_scheduler():
     """Initialize the APScheduler with IST timezone"""
@@ -421,7 +458,36 @@ def start_strategy_process(strategy_id):
     """Start a strategy in a new process - cross-platform implementation"""
     with PROCESS_LOCK:  # Thread-safe operation
         if strategy_id in RUNNING_STRATEGIES:
-            return False, "Strategy already running"
+            # Validate that the tracked process is actually still alive.
+            # A stale entry can survive natural exit, SIGTERM from a scheduled
+            # stop that wasn't followed by a UI Stop click, or any path that
+            # bypasses stop_strategy_process(). Without this check, the next
+            # scheduled/manual start silently fails with "already running"
+            # forever (until the worker is restarted).
+            existing = RUNNING_STRATEGIES[strategy_id]
+            existing_proc = existing.get("process")
+            is_alive = True
+            try:
+                if isinstance(existing_proc, subprocess.Popen):
+                    is_alive = existing_proc.poll() is None
+                elif hasattr(existing_proc, "is_running"):
+                    is_alive = bool(existing_proc.is_running())
+                else:
+                    pid = existing.get("pid")
+                    is_alive = bool(pid and psutil.pid_exists(pid))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                is_alive = False
+
+            if is_alive:
+                return False, "Strategy already running"
+
+            # Stale entry — clean it up and fall through to start a fresh process.
+            logger.warning(
+                f"Removing stale RUNNING_STRATEGIES entry for {strategy_id} "
+                f"(tracked process is no longer alive); starting fresh"
+            )
+            close_log_handle_safely(existing)
+            RUNNING_STRATEGIES.pop(strategy_id, None)
 
         config = STRATEGY_CONFIGS.get(strategy_id)
         if not config:
@@ -665,13 +731,18 @@ def stop_strategy_process(strategy_id):
                         except ProcessLookupError:
                             pass  # Process already dead
             elif hasattr(process, "terminate"):
-                # For psutil.Process objects
+                # For psutil.Process objects (typically restored after a
+                # gunicorn worker restart). We MUST NOT call process.wait()
+                # here -- under eventlet it raises AttributeError on
+                # ``select.poll``. See _wait_for_pid_exit() for context.
                 try:
                     process.terminate()
-                    process.wait(timeout=5)
-                except psutil.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
+                    if not _wait_for_pid_exit(pid, timeout=5):
+                        try:
+                            process.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                        _wait_for_pid_exit(pid, timeout=2)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass  # Process already dead or no permission
             else:
@@ -713,12 +784,19 @@ def stop_strategy_process(strategy_id):
 
 
 def terminate_process_cross_platform(pid):
-    """Terminate a process in a cross-platform way"""
+    """Terminate a process in a cross-platform way.
+
+    Avoids ``psutil.wait_procs`` / ``psutil.Process.wait`` because those
+    call ``select.poll`` under the hood, which eventlet (gunicorn worker
+    class on this deployment) monkey-patches away. Uses an eventlet-safe
+    polling loop instead.
+    """
     try:
         process = psutil.Process(pid)
 
-        # Terminate child processes first
+        # Snapshot children before terminate so we can poll them by PID
         children = process.children(recursive=True)
+        child_pids = [c.pid for c in children]
         for child in children:
             try:
                 child.terminate()
@@ -728,13 +806,21 @@ def terminate_process_cross_platform(pid):
         # Terminate main process
         process.terminate()
 
-        # Wait and kill if necessary
-        gone, alive = psutil.wait_procs([process] + children, timeout=3)
-        for p in alive:
-            try:
-                p.kill()
-            except psutil.NoSuchProcess:
-                pass
+        # Wait for everything to die, eventlet-safely
+        all_pids = [pid] + child_pids
+        deadline = time_mod.monotonic() + 3.0
+        while time_mod.monotonic() < deadline and any(
+            psutil.pid_exists(p) for p in all_pids
+        ):
+            time_mod.sleep(0.1)
+
+        # Force-kill any survivors
+        for p_pid in all_pids:
+            if psutil.pid_exists(p_pid):
+                try:
+                    psutil.Process(p_pid).kill()
+                except psutil.NoSuchProcess:
+                    pass
 
     except psutil.NoSuchProcess:
         pass  # Process already dead
@@ -1072,7 +1158,26 @@ def scheduled_start_strategy(strategy_id: str):
     logger.info(
         f"Strategy {strategy_id} ({exch}) - all checks passed, starting"
     )
-    start_strategy_process(strategy_id)
+    success, message = start_strategy_process(strategy_id)
+    if not success and message != "Strategy already running":
+        # Surface the failure - otherwise the scheduler swallows it silently
+        # and the user sees nothing in the logs (no log file is created
+        # because start_strategy_process bailed before opening one).
+        logger.error(
+            f"Scheduled start FAILED for strategy {strategy_id} ({exch}): {message}"
+        )
+        if strategy_id in STRATEGY_CONFIGS:
+            STRATEGY_CONFIGS[strategy_id]["last_error"] = (
+                f"Scheduled start failed: {message}"
+            )
+            save_configs()
+        try:
+            broadcast_status_update(strategy_id, "error", message)
+        except Exception as broadcast_err:  # pragma: no cover - defensive
+            logger.debug(
+                f"Could not broadcast scheduled-start failure for "
+                f"{strategy_id}: {broadcast_err}"
+            )
 
 
 def scheduled_stop_strategy(strategy_id: str):
