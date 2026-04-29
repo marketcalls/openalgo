@@ -51,6 +51,7 @@ from .synthetic_future import api as synthetic_future_ns
 from .telegram_bot import api as telegram_ns
 from .ticker import api as ticker_ns
 from .tradebook import api as tradebook_ns
+from .superorder import api as superorder_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path="/placeorder")
@@ -93,3 +94,4 @@ api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
 api.add_namespace(market_timings_ns, path="/market/timings")
 api.add_namespace(pnl_symbols_ns, path="/pnl")
+api.add_namespace(superorder_ns, path="/superorder")

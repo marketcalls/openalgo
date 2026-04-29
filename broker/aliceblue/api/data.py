@@ -75,13 +75,6 @@ class BrokerData:
                 logger.error("Session ID not available. Please login first.")
                 return None
 
-            # Clean up any existing connection
-            if hasattr(self, "_websocket") and self._websocket:
-                try:
-                    self._websocket.disconnect()
-                except Exception as e:
-                    logger.warning(f"Error closing existing WebSocket: {str(e)}")
-
             # Get user ID (clientId/UCC) for WebSocket authentication
             auth_obj = Auth.query.filter_by(broker='aliceblue', is_revoked=False).first()
             user_id = auth_obj.user_id if auth_obj else None
@@ -102,10 +95,22 @@ class BrokerData:
                 logger.error("Missing user_id (clientId) for AliceBlue WebSocket. Please re-login.")
                 return None
 
-            # Create new websocket connection
-            logger.info("Creating new WebSocket connection for AliceBlue")
-            self._websocket = AliceBlueWebSocket(user_id, self.session_id)
-            self._websocket.connect()
+            if hasattr(self, "_websocket") and self._websocket:
+                if not force_new and not self._websocket.is_connected:
+                    logger.info("WebSocket disconnected. Kicking connect().")
+                    self._websocket.connect()
+                elif force_new:
+                    try:
+                        self._websocket.disconnect()
+                    except Exception as e:
+                        logger.warning(f"Error closing existing WebSocket: {str(e)}")
+                    self._websocket = AliceBlueWebSocket(user_id, self.session_id)
+                    self._websocket.connect()
+            else:
+                # Create new websocket connection
+                logger.info("Creating new WebSocket connection for AliceBlue")
+                self._websocket = AliceBlueWebSocket(user_id, self.session_id)
+                self._websocket.connect()
 
             # Wait for connection to establish
             wait_time = 0
@@ -330,16 +335,27 @@ class BrokerData:
             br_symbol = get_br_symbol(symbol, exchange) or symbol
             api_exchange = self._map_exchange(exchange)
 
-            instrument = Instrument(exchange=api_exchange, token=token, symbol=br_symbol)
-            instruments.append(instrument)
-
-            symbol_map[f"{api_exchange}:{token}"] = {
+            key = f"{api_exchange}:{token}"
+            symbol_map[key] = {
                 "symbol": symbol,
                 "exchange": exchange,
                 "token": token,
             }
 
-        if not instruments:
+            cached_quote = ws.get_quote(api_exchange, token)
+            if cached_quote:
+                results.append(
+                    {"symbol": symbol, "exchange": exchange, "data": cached_quote}
+                )
+                # Remove from mapping so we don't wait for it later
+                del symbol_map[key]
+            else:
+                instrument = Instrument(exchange=api_exchange, token=token, symbol=br_symbol)
+                instruments.append(instrument)
+
+        if not instruments and results:
+            return skipped_symbols + results
+        elif not instruments:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
@@ -424,13 +440,9 @@ class BrokerData:
             return skipped_symbols + results
 
         finally:
-            # Always unsubscribe to avoid dangling subscriptions
-            if subscribed and ws and instruments:
-                try:
-                    logger.info(f"Unsubscribing from {len(instruments)} symbols")
-                    ws.unsubscribe(instruments, is_depth=False)
-                except Exception as unsub_err:
-                    logger.warning(f"Failed to unsubscribe batch on cleanup: {unsub_err}")
+            # Do NOT unsubscribe here. The monitoring service requires a continuous stream of
+            # ticks to evaluate triggers over time.
+            pass
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """

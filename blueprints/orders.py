@@ -153,6 +153,33 @@ def generate_positions_csv(positions_data):
     return output.getvalue()
 
 
+@orders_bp.route("/superorderbook")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def superorderbook():
+    login_username = session["user"]
+    api_key = get_api_key_for_tradingview(login_username)
+
+    if api_key is None:
+        logger.warning(f"No API key found for user {login_username}")
+        return redirect(url_for("auth.logout"))
+
+    from services.superorder_service import get_superorders
+    success, response, status_code = get_superorders(api_key=api_key)
+
+    if not success:
+        logger.error(f"Failed to get superorderbook data: {response.get('message', 'Unknown error')}")
+        return redirect(url_for("auth.logout"))
+
+    superorder_data = response.get("data", [])
+
+    # Normally we'd render a superorderbook.html. Since we don't have it, we return JSON or redirect for now
+    # We will just return the JSON. The frontend will consume it.
+    if request.is_json or request.path.endswith('/api'):
+        return jsonify(response)
+
+    return render_template("superorderbook.html", superorder_data=superorder_data)
+
 @orders_bp.route("/orderbook")
 @check_session_validity
 @limiter.limit(API_RATE_LIMIT)

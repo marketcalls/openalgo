@@ -717,27 +717,24 @@ class AliceBlueWebSocket:
             if self._stop_event.is_set():
                 return
 
-            # Grab reference to old thread while holding lock
-            old_thread = self._reconnect_thread
+            # Check if there's already a reconnection thread pending/running
+            if self._reconnect_thread and self._reconnect_thread.is_alive():
+                logger.info("Reconnection thread already active, skipping duplicate reconnect attempt.")
+                return
+
             self.reconnect_count += 1
             sleep_time = min(2**self.reconnect_count, 30)
 
-        # Join outside lock to avoid deadlock (delayed_reconnect -> connect -> self.lock)
-        if old_thread and old_thread.is_alive():
-            logger.info("Waiting for previous reconnect thread to finish")
-            old_thread.join(timeout=5)
+            logger.info(f"Attempting to reconnect in {sleep_time} seconds")
 
-        logger.info(f"Attempting to reconnect in {sleep_time} seconds")
+            def delayed_reconnect():
+                time.sleep(sleep_time)
+                if not self._stop_event.is_set():
+                    self.connect()
 
-        def delayed_reconnect():
-            time.sleep(sleep_time)
-            if not self._stop_event.is_set():
-                self.connect()
-
-        t = threading.Thread(target=delayed_reconnect, daemon=True)
-        with self.lock:
+            t = threading.Thread(target=delayed_reconnect, daemon=True)
             self._reconnect_thread = t
-        t.start()
+            t.start()
 
     def subscribe(self, instruments, is_depth=False):
         """Subscribe to market data for given instruments

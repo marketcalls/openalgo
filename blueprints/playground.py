@@ -185,6 +185,7 @@ def categorize_endpoint(path):
             "/optionsmultiorder",
             "/basketorder",
             "/splitorder",
+            "/superorder",
             "/modifyorder",
             "/cancelorder",
             "/cancelallorder",
