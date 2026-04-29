@@ -56,7 +56,13 @@ class UpstoxWebSocketClient:
             "on_error": None,
             "on_close": None,
         }
-        self._reconnect_config = {"max_attempts": 5, "base_delay": 2, "max_delay": 30}
+        # Per-disconnection reconnect budget. The counter is reset to 0 on
+        # every successful handshake (see `_on_ws_open`) — so this value caps
+        # how many back-to-back failures we'll tolerate within one
+        # disconnection storm, not the lifetime total. 5 was too aggressive
+        # under the cold-start race + 90s data-stall watchdog combination
+        # (the watchdog reconnected 5× during a slow start, then gave up).
+        self._reconnect_config = {"max_attempts": 50, "base_delay": 2, "max_delay": 30}
 
         # SSL context
         self._ssl_context = ssl.create_default_context()

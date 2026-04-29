@@ -31,6 +31,13 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # Thread cleanup timeout
     THREAD_JOIN_TIMEOUT = 5
 
+    # NOTE on Upstox V3 connection limits:
+    #   Standard tier: 2 connections per user
+    #   Plus tier:     5 connections per user
+    # The pool size is driven by the MAX_WEBSOCKET_CONNECTIONS environment
+    # variable in .env (default 3) — set it to 2 if you are on Standard,
+    # or up to 5 on Plus. See upstox-api-docs/21a-websocket-market-data-v3.md.
+
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger("upstox_websocket")
@@ -40,6 +47,20 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = False
         self.running = False
         self.lock = threading.Lock()
+
+        # Batch subscription queue (mirrors Zerodha pattern).
+        # Coalesces multiple subscribe() calls into one or two WS messages
+        # (one per Upstox mode: ltpc / full) and naturally bridges the cold-
+        # start race between connect() returning and _on_connect firing.
+        self.subscription_queue: list[dict[str, Any]] = []
+        self.batch_timer: threading.Timer | None = None
+        self.batch_delay = 0.5  # seconds — long enough to absorb the WS handshake
+
+        # Per-instrument LTPC cache. Upstox V3 sends incremental ticks where
+        # `fullFeed.marketFF.ltpc` may be absent on packets that only update
+        # `marketLevel`. We cache the last LTPC so quote/depth packets can
+        # carry forward a non-zero LTP into validation downstream.
+        self._last_ltpc: dict[str, dict[str, Any]] = {}
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, Any] | None = None
@@ -136,36 +157,76 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         with self.lock:
             self.subscriptions[correlation_id] = subscription_info
-            self.logger.debug(f"Stored subscription: {correlation_id} -> {subscription_info}")
+            self.subscription_queue.append(subscription_info)
+            self.logger.debug(f"Queued subscription: {correlation_id} -> {subscription_info}")
 
-        if self.connected and self.ws_client:
-            try:
-                success = self.ws_client.subscribe(
-                    [instrument_key], self._get_upstox_mode(mode, depth_level)
-                )
-
-                if success:
-                    self.logger.info(f"Subscribed to {symbol} on {exchange} (key={instrument_key})")
-                    return self._create_success_response(f"Subscribed to {symbol} on {exchange}")
-                else:
-                    with self.lock:
-                        self.subscriptions.pop(correlation_id, None)
-                    return self._create_error_response(
-                        "SUBSCRIBE_FAILED", f"Failed to subscribe to {symbol} on {exchange}"
-                    )
-
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                with self.lock:
-                    self.subscriptions.pop(correlation_id, None)
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        # Defer the actual WS send by `batch_delay` seconds so multiple
+        # subscribes coalesce into a single grouped-by-mode message. The
+        # delay also bridges the cold-start race between connect() returning
+        # and _on_connect firing — by the time the timer expires, the
+        # handshake has typically completed. If it hasn't, _process_batch_
+        # subscriptions defers; _on_connect will replay from self.subscriptions.
+        self._start_batch_timer()
 
         return self._create_success_response(
-            f"Subscription requested for {symbol}.{exchange}",
+            f"Subscription queued for {symbol}.{exchange}",
             symbol=symbol,
             exchange=exchange,
             mode=mode,
         )
+
+    def _start_batch_timer(self) -> None:
+        """Arm (or rearm) the batched-subscribe timer."""
+        with self.lock:
+            if self.batch_timer is not None:
+                self.batch_timer.cancel()
+            self.batch_timer = threading.Timer(
+                self.batch_delay, self._process_batch_subscriptions
+            )
+            self.batch_timer.daemon = True
+            self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Drain the subscription queue and send one bulk-subscribe per mode.
+
+        Upstox V3's `instrumentKeys` field accepts an array, so N symbols of
+        the same mode collapse to a single message. Modes 2 and 3 both map
+        to Upstox's `full` feed, so they coalesce into the same message.
+        """
+        # Snapshot under lock — release before the WS send to avoid blocking
+        # subsequent subscribe() calls during network I/O.
+        with self.lock:
+            self.batch_timer = None
+            queue = self.subscription_queue[:]
+            self.subscription_queue.clear()
+
+        if not queue:
+            return
+
+        # If the WS handshake hasn't completed, do nothing — _on_connect will
+        # replay every recorded subscription from self.subscriptions (which
+        # already includes everything we just dequeued).
+        if not (self.ws_client and getattr(self.ws_client, "_connected", False)):
+            self.logger.debug(
+                f"Batch deferred: WS not connected yet. {len(queue)} subscription(s) "
+                f"will be sent from _on_connect."
+            )
+            return
+
+        # Group instrument keys by Upstox mode string ("ltpc" or "full").
+        keys_by_mode: dict[str, list[str]] = {}
+        for sub in queue:
+            mode_str = self._get_upstox_mode(sub["mode"], sub.get("depth_level", 0))
+            keys_by_mode.setdefault(mode_str, []).append(sub["instrument_key"])
+
+        for mode_str, instrument_keys in keys_by_mode.items():
+            try:
+                self.logger.info(
+                    f"📦 Batch subscribing {len(instrument_keys)} instrument(s) in {mode_str} mode"
+                )
+                self.ws_client.subscribe(instrument_keys, mode_str)
+            except Exception as e:
+                self.logger.error(f"Batch subscribe failed for mode {mode_str}: {e}")
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """Unsubscribe from market data"""
@@ -213,6 +274,13 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.running = False
             self.connected = False
 
+            # Cancel any pending batch-subscribe timer so it doesn't fire
+            # against a half-torn-down adapter.
+            with self.lock:
+                if self.batch_timer is not None:
+                    self.batch_timer.cancel()
+                    self.batch_timer = None
+
             if self.ws_client:
                 try:
                     self.ws_client.disconnect()
@@ -221,6 +289,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             with self.lock:
                 self.subscriptions.clear()
+                self.subscription_queue.clear()
+                self._last_ltpc.clear()
 
             self.cleanup_zmq()
             self.logger.info("Disconnected from Upstox WebSocket")
@@ -246,6 +316,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.running = False
                 self.connected = False
                 self.subscriptions.clear()
+                self.subscription_queue.clear()
+                self._last_ltpc.clear()
+                if self.batch_timer is not None:
+                    self.batch_timer.cancel()
+                    self.batch_timer = None
 
             self.cleanup_zmq()
             self.logger.info("Upstox adapter cleaned up completely")
@@ -291,30 +366,43 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     # WebSocket event handlers (called synchronously by upstox_client)
     def _on_connect(self):
-        """Callback when WebSocket connection is opened"""
+        """Callback when WebSocket connection is opened.
+
+        Handles both the initial cold start (subscriptions queued before the
+        handshake completed) and reconnects (subscriptions need re-issuing).
+        Sends one bulk message per Upstox mode regardless of how many
+        symbols are involved.
+        """
         self.logger.info("Upstox WebSocket connection opened")
         self.connected = True
 
-        # Resubscribe to existing subscriptions on reconnection
+        # Drain the pending queue (subscribes that arrived before handshake)
+        # and merge with the persistent record; on reconnect, queue is empty
+        # but self.subscriptions still has every active subscription.
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    instrument_key = sub["instrument_key"]
-                    mode = sub["mode"]
-                    depth_level = sub["depth_level"]
+            if self.batch_timer is not None:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+            all_subs = list(self.subscriptions.values())
 
-                    if self.ws_client.subscribe(
-                        [instrument_key], self._get_upstox_mode(mode, depth_level)
-                    ):
-                        self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                    else:
-                        self.logger.warning(
-                            f"Failed to resubscribe to {sub['symbol']}.{sub['exchange']}"
-                        )
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+        if not all_subs:
+            return
+
+        keys_by_mode: dict[str, list[str]] = {}
+        for sub in all_subs:
+            mode_str = self._get_upstox_mode(sub["mode"], sub.get("depth_level", 0))
+            keys_by_mode.setdefault(mode_str, []).append(sub["instrument_key"])
+
+        for mode_str, instrument_keys in keys_by_mode.items():
+            try:
+                self.logger.info(
+                    f"🔌 Replaying {len(instrument_keys)} subscription(s) in {mode_str} mode "
+                    f"after WS handshake"
+                )
+                self.ws_client.subscribe(instrument_keys, mode_str)
+            except Exception as e:
+                self.logger.error(f"Replay subscribe failed for mode {mode_str}: {e}")
 
     def _on_error(self, error: str):
         """Handle WebSocket errors"""
@@ -400,24 +488,76 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _extract_market_data(
         self, feed_data: dict[str, Any], sub_info: dict[str, Any], current_ts: int
     ) -> dict[str, Any]:
-        """Extract market data based on subscription mode"""
+        """Extract market data based on subscription mode.
+
+        Wraps the per-mode extractors with a per-instrument LTPC cache: if
+        the current tick is incremental and didn't include `ltpc`, we
+        backfill from the last-seen value so `ltp` is always present
+        downstream. Bug observed in production: mode-3 (depth) packets that
+        only update `marketLevel` were producing `Missing LTP value`
+        validation failures because ltpc.get("ltp", 0) was emitting 0
+        (and in some paths returning an empty dict that dropped the key
+        entirely).
+        """
         mode = sub_info["mode"]
         symbol = sub_info["symbol"]
         exchange = sub_info["exchange"]
         token = sub_info["token"]
+        instrument_key = sub_info.get("instrument_key", token)
 
         base_data = {"symbol": symbol, "exchange": exchange, "token": token}
 
+        # Cache any LTPC that arrived on this tick, regardless of mode.
+        ltpc_in_tick = self._extract_tick_ltpc(feed_data)
+        if ltpc_in_tick:
+            with self.lock:
+                self._last_ltpc[instrument_key] = ltpc_in_tick
+
+        # Per-mode extraction.
         if mode == 1:
-            return self._extract_ltp_data(feed_data, base_data)
+            result = self._extract_ltp_data(feed_data, base_data)
         elif mode == 2:
-            return self._extract_quote_data(feed_data, base_data, current_ts)
+            result = self._extract_quote_data(feed_data, base_data, current_ts)
         elif mode == 3:
             depth_data = self._extract_depth_data(feed_data, current_ts)
             depth_data.update(base_data)
-            return depth_data
+            result = depth_data
+        else:
+            return {}
 
-        return {}
+        # Carry-forward: if the extractor produced an empty dict (no fullFeed
+        # wrapper) or its `ltp` is 0/missing, splice in the cached LTPC.
+        if not result:
+            cached = self._last_ltpc.get(instrument_key)
+            if cached:
+                result = base_data.copy()
+                result.update(
+                    {
+                        "ltp": float(cached.get("ltp", 0) or 0),
+                        "ltq": int(cached.get("ltq", 0) or 0),
+                        "ltt": int(cached.get("ltt", 0) or 0),
+                        "cp": float(cached.get("cp", 0) or 0),
+                        "timestamp": current_ts,
+                    }
+                )
+        elif not result.get("ltp"):
+            cached = self._last_ltpc.get(instrument_key)
+            if cached and cached.get("ltp"):
+                result["ltp"] = float(cached["ltp"])
+
+        return result
+
+    def _extract_tick_ltpc(self, feed_data: dict[str, Any]) -> dict[str, Any]:
+        """Pull LTPC from a Feed protobuf-as-dict regardless of which oneof
+        branch it was sent under (`Feed.ltpc` for mode=ltpc, or
+        `Feed.fullFeed.{marketFF|indexFF}.ltpc` for mode=full).
+        """
+        if "ltpc" in feed_data and isinstance(feed_data["ltpc"], dict):
+            return feed_data["ltpc"]
+        full_feed = feed_data.get("fullFeed") or {}
+        ff = full_feed.get("marketFF") or full_feed.get("indexFF") or {}
+        ltpc = ff.get("ltpc") or {}
+        return ltpc if isinstance(ltpc, dict) else {}
 
     def _extract_ltp_data(
         self, feed_data: dict[str, Any], base_data: dict[str, Any]
@@ -441,7 +581,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _extract_quote_data(
         self, feed_data: dict[str, Any], base_data: dict[str, Any], current_ts: int
     ) -> dict[str, Any]:
-        """Extract QUOTE data from feed"""
+        """Extract QUOTE data from feed."""
         if "fullFeed" not in feed_data:
             return {}
 
@@ -482,7 +622,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return market_data
 
     def _extract_depth_data(self, feed_data: dict[str, Any], current_ts: int) -> dict[str, Any]:
-        """Extract depth data from feed"""
+        """Extract depth data from feed."""
         if "fullFeed" not in feed_data:
             return {"buy": [], "sell": [], "timestamp": current_ts, "ltp": 0}
 
