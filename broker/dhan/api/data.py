@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 # Rate limiter for Dhan API - max 1 request per second
 _last_api_call_time = 0
 _rate_limit_lock = threading.Lock()
-DHAN_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
+DHAN_MIN_REQUEST_INTERVAL = 1.1  # seconds between requests
 
 
 def _apply_rate_limit():
