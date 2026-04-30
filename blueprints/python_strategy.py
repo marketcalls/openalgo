@@ -128,10 +128,15 @@ def _wait_for_pid_exit(pid, timeout=5.0, poll_interval=0.1):
         try:
             p = psutil.Process(pid)
             if p.status() == psutil.STATUS_ZOMBIE:
-                try:
-                    os.waitpid(pid, os.WNOHANG)
-                except (ChildProcessError, OSError):
-                    pass
+                # ``os.WNOHANG`` is Unix-only. Windows processes never enter
+                # ``STATUS_ZOMBIE`` in practice, so this branch is unreachable
+                # on Windows today, but guard explicitly to keep this
+                # cross-platform-safe if the entry condition ever widens.
+                if not IS_WINDOWS:
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except (ChildProcessError, OSError):
+                        pass
                 return True
         except psutil.NoSuchProcess:
             return True
