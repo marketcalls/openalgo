@@ -1,29 +1,38 @@
 from types import SimpleNamespace
 
 from broker.iiflcapital.baseurl import BASE_URL
-from broker.iiflcapital.mapping.transform_data import transform_data
-from database.token_db import get_token
+from broker.iiflcapital.mapping.margin_data import (
+    parse_margin_response,
+    transform_margin_positions,
+)
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def _mock_response(status_code):
+    return SimpleNamespace(status=status_code, status_code=status_code)
 
 
 def calculate_margin_api(positions, auth):
-    """Calculate margin using IIFL Capital span/exposure endpoint."""
-    transformed_positions = []
+    """
+    Calculate margin requirement for a basket of positions using IIFL Capital API.
 
-    for position in positions:
-        token = get_token(position.get("symbol"), position.get("exchange"))
-        if not token:
-            continue
-        transformed_positions.append(transform_data(position, token))
+    Args:
+        positions: List of positions in OpenAlgo format
+        auth: Authentication token for IIFL Capital
+
+    Returns:
+        Tuple of (response, response_data)
+    """
+    transformed_positions = transform_margin_positions(positions)
 
     if not transformed_positions:
-        return (
-            SimpleNamespace(status=400, status_code=400),
-            {
-                "status": "error",
-                "message": "No valid positions for margin calculation",
-            },
-        )
+        return _mock_response(400), {
+            "status": "error",
+            "message": "No valid positions to calculate margin. Check if symbols are valid.",
+        }
 
     client = get_httpx_client()
     headers = {
@@ -32,31 +41,30 @@ def calculate_margin_api(positions, auth):
         "Accept": "application/json",
     }
 
-    response = client.post(f"{BASE_URL}/spanexposure", headers=headers, json=transformed_positions)
+    logger.info(f"IIFL Capital margin calculation payload: {transformed_positions}")
 
     try:
-        payload = response.json()
-    except Exception:
-        payload = {"status": "error", "message": "Invalid broker response"}
-
-    response_wrapper = SimpleNamespace(status=response.status_code, status_code=response.status_code)
-
-    if response.status_code == 200:
-        result = payload.get("result", payload)
-        return (
-            response_wrapper,
-            {
-                "status": "success",
-                "data": {
-                    "span": result.get("span", 0),
-                    "exposure_margin": result.get("exposureMargin", 0),
-                    "total_margin": result.get("totalMargin", 0),
-                    "buy_premium": result.get("buyPremium", 0),
-                },
-            },
+        response = client.post(
+            f"{BASE_URL}/spanexposure",
+            headers=headers,
+            json=transformed_positions,
         )
+        response.status = response.status_code
 
-    return response_wrapper, {
-        "status": "error",
-        "message": payload.get("message", "Failed to calculate margin"),
-    }
+        try:
+            response_data = response.json()
+        except Exception:
+            logger.error(f"Failed to parse IIFL Capital margin response: {response.text}")
+            return response, {"status": "error", "message": "Invalid response from broker API"}
+
+        logger.info(f"IIFL Capital margin calculation response: {response_data}")
+
+        standardized_response = parse_margin_response(response_data)
+        return response, standardized_response
+
+    except Exception as error:
+        logger.error(f"Error calling IIFL Capital margin API: {error}")
+        return _mock_response(500), {
+            "status": "error",
+            "message": f"Failed to calculate margin: {error}",
+        }
