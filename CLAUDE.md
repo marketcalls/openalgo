@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-OpenAlgo is a production-ready algorithmic trading platform built with Flask (backend) and React 19 (frontend). It provides a unified API layer across 24+ Indian brokers, enabling seamless integration with TradingView, Amibroker, Excel, Python, and AI agents.
+OpenAlgo is a production-ready algorithmic trading platform built with Flask (backend) and React 19 (frontend). It provides a unified API layer across 30+ Indian brokers, enabling seamless integration with TradingView, Amibroker, Excel, Python, and AI agents.
 
 **Repository**: https://github.com/marketcalls/openalgo
 **Documentation**: https://docs.openalgo.in
@@ -99,7 +99,7 @@ npm run format
 - `app.py` - Main Flask application entry point
 - `blueprints/` - Flask route handlers (UI and webhooks)
 - `restx_api/` - REST API endpoints (`/api/v1/`)
-- `broker/` - Broker integrations (24+ brokers), each with `api/`, `database/`, `mapping/`, `streaming/`, `plugin.json`
+- `broker/` - Broker integrations (30+ brokers), each with `api/`, `database/`, `mapping/`, `streaming/`, `plugin.json`
 - `services/` - Business logic layer
 - `database/` - SQLAlchemy models and database utilities
 - `utils/` - Shared utilities and helpers
@@ -134,7 +134,7 @@ Broker API calls use `httpx` with HTTP/2 connection pooling (`utils/httpx_client
 
 ### Broker Integration Pattern
 
-All 24+ brokers follow a standardized structure in `broker/{broker_name}/`:
+All 30+ brokers follow a standardized structure in `broker/{broker_name}/`:
 
 1. `api/auth_api.py` - OAuth2 or API key based authentication
 2. `api/order_api.py` - Place, modify, cancel orders
@@ -364,7 +364,7 @@ API keys are generated at `/apikey` and hashed with pepper before storage.
 
 ### Symbol Format
 
-OpenAlgo uses a standardized symbol format across all 24+ brokers. Broker-specific symbols are mapped via `broker/*/mapping/` modules and stored in the `SymToken` table.
+OpenAlgo uses a standardized symbol format across all 30+ brokers. Broker-specific symbols are mapped via `broker/*/mapping/` modules and stored in the `SymToken` table.
 
 **Equity:** Just the base symbol — `INFY`, `SBIN`, `TATAMOTORS`
 
