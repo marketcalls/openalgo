@@ -1,6 +1,8 @@
+from broker.iiflcapital.mapping.transform_data import (
+    reverse_map_order_type,
+    reverse_map_product_type,
+)
 from database.token_db import get_symbol
-
-from broker.iiflcapital.mapping.transform_data import reverse_map_order_type, reverse_map_product_type
 
 
 def _extract_rows(payload):
@@ -51,8 +53,10 @@ def _map_status(status: str) -> str:
         return "rejected"
     if normalized in {"CANCELLED", "CANCELED"}:
         return "cancelled"
-    if normalized in {"TRIGGER_PENDING"}:
+    if normalized == "TRIGGER_PENDING":
         return "trigger pending"
+    if normalized in {"OPEN", "PENDING", "PARTIALLY_FILLED", "NEW", "PUT ORDER REQ RECEIVED"}:
+        return "open"
     return "open"
 
 
@@ -73,6 +77,25 @@ def _to_float(value, default=0.0):
         return float(value or 0)
     except (TypeError, ValueError):
         return default
+
+
+def _first_present(row: dict, *keys: str):
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _resolve_order_quantity(row: dict) -> int:
+    quantity = _first_present(row, "quantity", "orderQuantity")
+    if quantity not in (None, ""):
+        return int(float(quantity or 0))
+
+    filled_qty = _to_float(row.get("filledQuantity"))
+    pending_qty = _to_float(row.get("pendingQuantity"))
+    cancelled_qty = _to_float(row.get("cancelledQuantity"))
+    return int(filled_qty + pending_qty + cancelled_qty)
 
 
 def _resolve_holding_quantity(row: dict) -> float:
@@ -183,16 +206,20 @@ def transform_order_data(orders):
                 "symbol": _resolve_symbol(row, exchange),
                 "exchange": exchange,
                 "action": (row.get("transactionType") or "").upper(),
-                "quantity": int(float(row.get("quantity", 0) or 0)),
-                "price": float(row.get("price", 0) or 0),
-                "trigger_price": float(row.get("slTriggerPrice", 0) or 0),
-                "pricetype": reverse_map_order_type(row.get("orderType", "MARKET")),
-                "product": reverse_map_product_type(row.get("product", "INTRADAY")),
-                "orderid": str(row.get("brokerOrderId", "")),
-                "order_status": _map_status(row.get("orderStatus", "")),
-                "timestamp": row.get("exchangeTimestamp")
-                or row.get("exchangeUpdateTime")
-                or row.get("brokerUpdateTime")
+                "quantity": _resolve_order_quantity(row),
+                "price": _to_float(row.get("price")),
+                "trigger_price": _to_float(_first_present(row, "slTriggerPrice", "triggerPrice")),
+                "pricetype": reverse_map_order_type(str(row.get("orderType", "MARKET"))),
+                "product": reverse_map_product_type(str(row.get("product", "INTRADAY"))),
+                "orderid": str(_first_present(row, "brokerOrderId", "exchangeOrderId", "orderId") or ""),
+                "order_status": _map_status(str(row.get("orderStatus", ""))),
+                "rejection_reason": str(row.get("rejectionReason", "") or ""),
+                "timestamp": _first_present(
+                    row,
+                    "exchangeTimestamp",
+                    "exchangeUpdateTime",
+                    "brokerUpdateTime",
+                )
                 or "",
             }
         )
@@ -212,20 +239,27 @@ def transform_tradebook_data(tradebook_data):
         broker_exchange = row.get("exchange", "")
         exchange = _map_exchange(broker_exchange)
 
-        qty = int(float(row.get("filledQuantity", row.get("quantity", 0)) or 0))
-        avg_price = float(row.get("tradedPrice", row.get("averageTradedPrice", 0)) or 0)
+        qty = int(float(_first_present(row, "filledQuantity", "quantity", "filledQty") or 0))
+        avg_price = _to_float(_first_present(row, "tradedPrice", "averageTradedPrice", "price"))
 
         transformed.append(
             {
                 "symbol": _resolve_symbol(row, exchange),
                 "exchange": exchange,
-                "product": reverse_map_product_type(row.get("product", "INTRADAY")),
+                "product": reverse_map_product_type(str(row.get("product", "INTRADAY"))),
                 "action": (row.get("transactionType") or "").upper(),
                 "quantity": qty,
                 "average_price": avg_price,
                 "trade_value": qty * avg_price,
-                "orderid": str(row.get("brokerOrderId", "")),
-                "timestamp": row.get("fillTimestamp") or row.get("exchangeTimestamp") or "",
+                "orderid": str(_first_present(row, "brokerOrderId", "exchangeOrderId", "orderId") or ""),
+                "timestamp": _first_present(
+                    row,
+                    "fillTimestamp",
+                    "exchangeTimestamp",
+                    "exchangeUpdateTime",
+                    "brokerUpdateTime",
+                )
+                or "",
             }
         )
 
