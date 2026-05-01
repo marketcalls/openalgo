@@ -400,15 +400,47 @@ def _generate_keys_on_first_run(env_path: str) -> None:
         try:
             _atomic_rewrite_dotenv(env_path, pairs)
         except OSError as e:
-            sys.stderr.write(
-                "\n\033[91m\033[1m[OpenAlgo security]\033[0m\n"
-                "\033[91mDetected publicly-known APP_KEY/API_KEY_PEPPER in .env, but\n"
-                f"could not rewrite the file ({e}).\n"
-                "\n"
-                "Generate fresh values manually and paste them into .env:\n"
-                '  python -c "import secrets; print(secrets.token_hex(32))"\n'
-                "\033[0m\n"
-            )
+            # Manual-rotation guidance must be DB-aware. Telling a user with a
+            # populated DB to "regenerate API_KEY_PEPPER" would invalidate every
+            # Argon2 password hash (database/user_db.py) and every Fernet ciphertext
+            # for broker tokens / TradingView keys (database/auth_db.py). The
+            # _generate_keys_on_first_run logic above already gates PEPPER rotation
+            # on db_populated; the error path must mirror that gate.
+            if db_populated:
+                # Populated DB: ONLY APP_KEY is safe to rotate manually. PEPPER
+                # rotation requires re-encryption + password reset via the
+                # dedicated upgrade/rotate_pepper.py script.
+                sys.stderr.write(
+                    "\n\033[91m\033[1m[OpenAlgo security]\033[0m\n"
+                    "\033[91mDetected publicly-known APP_KEY in .env, but could not\n"
+                    f"rewrite the file ({e}).\n"
+                    "\n"
+                    "Manually rotate ONLY the APP_KEY:\n"
+                    '  python -c "import secrets; print(secrets.token_hex(32))"\n'
+                    "Replace the APP_KEY value in .env with the new one and restart.\n"
+                    "Active browser sessions will need to log in again.\n"
+                    "\n"
+                    "\033[1mDO NOT change API_KEY_PEPPER on this populated install.\033[0m\033[91m\n"
+                    "Doing so would invalidate every stored password hash and every\n"
+                    "Fernet-encrypted broker auth/feed token in the database.\n"
+                    "If you must rotate the pepper, use the dedicated migration:\n"
+                    "  uv run python upgrade/rotate_pepper.py\n"
+                    "which handles re-encryption and the required password reset.\n"
+                    "\033[0m\n"
+                )
+            else:
+                # Fresh DB (no users yet): both can be safely regenerated.
+                sys.stderr.write(
+                    "\n\033[91m\033[1m[OpenAlgo security]\033[0m\n"
+                    "\033[91mDetected publicly-known APP_KEY/API_KEY_PEPPER in .env, but\n"
+                    f"could not rewrite the file ({e}).\n"
+                    "\n"
+                    "This is a fresh install (no users in the database yet), so both\n"
+                    "values can be safely regenerated. Generate fresh values manually\n"
+                    "and paste them into .env:\n"
+                    '  python -c "import secrets; print(secrets.token_hex(32))"\n'
+                    "\033[0m\n"
+                )
             sys.exit(1)
 
     # User-facing reporting.

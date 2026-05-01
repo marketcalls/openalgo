@@ -225,38 +225,57 @@ if [ -f "/app/.env" ]; then
             cat <<'PREFLIGHT_ERR' >&2
 
 ============================================================
-[OpenAlgo] STARTUP BLOCKED — compromised keys detected
+[OpenAlgo] STARTUP BLOCKED — compromised APP_KEY detected
 ============================================================
 
-Your .env contains the publicly-known sample APP_KEY and/or
-API_KEY_PEPPER. OpenAlgo v2.0.0.6+ tries to auto-rotate these,
-but the .env file is not writable from inside the container,
-so the rotation cannot run.
+Your .env contains the publicly-known sample APP_KEY (and
+possibly API_KEY_PEPPER). OpenAlgo v2.0.0.6+ tries to
+auto-rotate these on first run, but the .env file is not
+writable from inside the container, so the rotation cannot
+run.
 
 This typically happens when upgrading a Docker install from
-v2.0.0.5 or earlier. Fix on the HOST machine (not inside the
-container):
+v2.0.0.5 or earlier.
+
+Fix on the HOST machine (not inside the container):
 
   cd /path/to/openalgo
   docker compose down
 
-  # Generate fresh values
+  # 1. Generate a fresh APP_KEY only
   APP_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-  PEPPER=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-
-  # Replace in .env
   sed -i "s|^APP_KEY *=.*|APP_KEY = '$APP_KEY'|" .env
-  sed -i "s|^API_KEY_PEPPER *=.*|API_KEY_PEPPER = '$PEPPER'|" .env
 
-  # Make .env writable by the container's appuser (UID 1000)
+  # 2. Make .env writable by the container's appuser (UID 1000)
   sudo chown 1000:1000 .env
   sudo chmod 600 .env
 
   docker compose up -d
 
 After this, OpenAlgo will start cleanly. Existing browser
-sessions will need to log in again (APP_KEY rotation
-invalidates session cookies, by design).
+sessions will need to log in again — APP_KEY rotation
+invalidates session cookies, by design.
+
+============================================================
+[OpenAlgo] DO NOT regenerate API_KEY_PEPPER
+============================================================
+
+If you have ANY existing data (users, broker logins,
+TradingView API keys), do NOT change API_KEY_PEPPER. The
+pepper feeds Argon2 password hashing and the Fernet KDF for
+encrypting broker auth/feed tokens. Rotating it invalidates
+every stored password hash AND every encrypted token in the
+database — none of which can be recovered.
+
+If you genuinely need to rotate the pepper, use the dedicated
+migration which handles re-encryption + password reset:
+
+  uv run python upgrade/rotate_pepper.py
+
+The auto-rotation built into the app already declines to
+rotate PEPPER on a populated database for the same reason.
+Only rotate it manually if your install is fresh and has no
+users yet.
 
 ============================================================
 PREFLIGHT_ERR
