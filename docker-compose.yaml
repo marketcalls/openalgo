@@ -12,11 +12,11 @@ services:
 
     # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
     volumes:
-      - openalgo_db:/app/db
-      - openalgo_log:/app/log            # Application logs (named volume)
-      - openalgo_strategies:/app/strategies  # Python strategies (named volume)
-      - openalgo_keys:/app/keys          # API keys/certificates (named volume)
-      - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
+      - ./db:/app/db
+      - ./log:/app/log # Application logs
+      - ./strategies:/app/strategies # Python strategies
+      - ./keys:/app/keys # API keys/certificates
+      - ./tmp:/app/tmp # Temporary directory for numba/scipy
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
@@ -42,23 +42,10 @@ services:
     shm_size: ${SHM_SIZE:-512m}
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
+      test: [ "CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
     restart: unless-stopped
-
-# Define named volumes for persistence
-volumes:
-  openalgo_db:
-    driver: local
-  openalgo_log:
-    driver: local
-  openalgo_strategies:
-    driver: local
-  openalgo_keys:
-    driver: local
-  openalgo_tmp:
-    driver: local
