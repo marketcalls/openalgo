@@ -81,9 +81,9 @@ function adjustPrice(price: number, tickSize: number, direction: 'up' | 'down'):
 
 // Check if exchange is F&O/Commodity/Currency (uses NRML/MIS)
 // NSE, BSE = Equity → CNC/MIS
-// NFO, BFO, CDS, BCD, MCX, NCDEX = F&O/Currency/Commodity → NRML/MIS
+// NFO, BFO, CDS, BCD, MCX, NCDEX, NCO = F&O/Currency/Commodity → NRML/MIS
 function isFnOExchange(exchange: string): boolean {
-  return ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX'].includes(exchange)
+  return ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX', 'NCO'].includes(exchange)
 }
 
 export function PlaceOrderDialog({

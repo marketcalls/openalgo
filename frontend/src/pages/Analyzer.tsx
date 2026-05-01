@@ -68,6 +68,10 @@ const EXCHANGE_COLORS: Record<string, string> = {
   BCD: 'bg-red-500/10 text-red-600 border-red-500/30',
   MCX: 'bg-primary/10 text-primary border-primary/30',
   NCDEX: 'bg-green-500/10 text-green-600 border-green-500/30',
+  NCO: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30',
+  NSE_INDEX: 'bg-cyan-500/10 text-cyan-600 border-cyan-500/30',
+  BSE_INDEX: 'bg-gray-500/10 text-gray-600 border-gray-500/30',
+  GLOBAL_INDEX: 'bg-indigo-500/10 text-indigo-600 border-indigo-500/30',
 }
 
 export default function Analyzer() {

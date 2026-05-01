@@ -67,6 +67,7 @@ MIGRATIONS = [
     ("migrate_market_holidays.py", "2026 Market Holiday Calendar Update"),
     ("migrate_leverage.py", "Leverage Configuration for Crypto"),
     ("migrate_samco_auth.py", "Samco 2FA Authentication"),
+    ("migrate_zerodha_new_exchanges.py", "Zerodha NCO/GLOBAL_INDEX & GIFTNIFTY Cleanup"),
 ]
 
 

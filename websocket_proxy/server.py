@@ -1530,8 +1530,15 @@ class WebSocketProxy:
                 mode_str = parts[-1]
                 remaining = parts[:-1]  # everything except mode
 
-                # Detect NSE_INDEX / BSE_INDEX exchange prefix (two segments)
-                if len(remaining) >= 2 and remaining[0] in ("NSE", "BSE") and remaining[1] == "INDEX":
+                # Detect two-segment exchange prefixes (NSE_INDEX, BSE_INDEX,
+                # GLOBAL_INDEX, NSEIX_INDEX). Add new index/multi-segment
+                # exchanges here when introducing them.
+                _MULTI_SEGMENT_EXCHANGE_PREFIXES = (
+                    ("NSE", "INDEX"),
+                    ("BSE", "INDEX"),
+                    ("GLOBAL", "INDEX"),
+                )
+                if len(remaining) >= 2 and (remaining[0], remaining[1]) in _MULTI_SEGMENT_EXCHANGE_PREFIXES:
                     exchange = f"{remaining[0]}_{remaining[1]}"
                     symbol = "_".join(remaining[2:])
                 else:

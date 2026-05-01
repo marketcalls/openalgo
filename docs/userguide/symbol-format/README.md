@@ -203,6 +203,7 @@ OpenAlgo uses standardized exchange codes to identify trading venues.
 | Exchange | Code | Description |
 |----------|------|-------------|
 | Multi Commodity Exchange | `MCX` | Commodities trading |
+| NSE Commodities | `NCO` | NSE commodity futures and options (currently Zerodha only) |
 
 ### Index Symbols
 
@@ -210,6 +211,7 @@ OpenAlgo uses standardized exchange codes to identify trading venues.
 |----------|------|-------------|
 | NSE Index | `NSE_INDEX` | NSE index values |
 | BSE Index | `BSE_INDEX` | BSE index values |
+| Global Index | `GLOBAL_INDEX` | Global indices feed (US30, JAPAN225, HANGSENG, FRANCE40, GIFTNIFTY, ...). Quote-only, no trading. Currently Zerodha only. |
 
 ## Common Index Symbols
 

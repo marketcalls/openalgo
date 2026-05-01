@@ -41,6 +41,7 @@ from database.historify_db import bulk_delete_market_data as db_bulk_delete_mark
 from database.token_db_enhanced import get_symbol_info
 from services.history_service import get_history
 from services.intervals_service import get_intervals
+from utils.constants import FNO_EXCHANGES as _CENTRAL_FNO_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -1035,8 +1036,9 @@ def upload_parquet_data(
 # FNO Discovery Operations
 # =============================================================================
 
-# FNO Exchanges for derivatives
-FNO_EXCHANGES = ["NFO", "BFO", "MCX", "CDS"]
+# FNO Exchanges for derivatives — sourced from utils.constants so adding a new
+# F&O exchange (e.g. NCO) is a single-place change.
+FNO_EXCHANGES = sorted(_CENTRAL_FNO_EXCHANGES)
 
 
 def get_fno_underlyings(exchange: str = None) -> tuple[bool, dict[str, Any], int]:

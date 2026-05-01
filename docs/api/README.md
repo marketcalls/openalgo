@@ -131,8 +131,10 @@ Real-time market data streaming.
 | CDS | Currency Derivatives (NSE) |
 | BCD | Currency Derivatives (BSE) |
 | MCX | Multi Commodity Exchange |
+| NCO | NSE Commodities (futures + options, Zerodha only) |
 | NSE_INDEX | NSE Index (for options trading) |
 | BSE_INDEX | BSE Index (for options trading) |
+| GLOBAL_INDEX | Global indices (US30, JAPAN225, HANGSENG, GIFTNIFTY, etc.) — quote-only, Zerodha only |
 
 ### Product Types
 | Code | Description |

@@ -118,6 +118,7 @@ export default function MarketTimingsPage() {
       NFO: 'bg-green-500',
       BFO: 'bg-yellow-500',
       MCX: 'bg-purple-500',
+      NCO: 'bg-emerald-500',
       CDS: 'bg-orange-500',
       BCD: 'bg-pink-500',
     }

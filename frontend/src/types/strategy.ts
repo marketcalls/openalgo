@@ -66,11 +66,11 @@ export const PLATFORMS: { value: Platform; label: string }[] = [
   { value: 'others', label: 'Others' },
 ]
 
-export const EXCHANGES = ['NSE', 'BSE', 'NFO', 'CDS', 'BFO', 'BCD', 'MCX', 'NCDEX'] as const
+export const EXCHANGES = ['NSE', 'BSE', 'NFO', 'CDS', 'BFO', 'BCD', 'MCX', 'NCDEX', 'NCO'] as const
 export type Exchange = (typeof EXCHANGES)[number]
 
 export const EQUITY_EXCHANGES = ['NSE', 'BSE'] as const
-export const DERIVATIVE_EXCHANGES = ['NFO', 'CDS', 'BFO', 'BCD', 'MCX', 'NCDEX'] as const
+export const DERIVATIVE_EXCHANGES = ['NFO', 'CDS', 'BFO', 'BCD', 'MCX', 'NCDEX', 'NCO'] as const
 
 export function getProductTypes(exchange: string): string[] {
   if (EQUITY_EXCHANGES.includes(exchange as (typeof EQUITY_EXCHANGES)[number])) {

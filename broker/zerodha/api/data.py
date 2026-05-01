@@ -14,6 +14,30 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# OpenAlgo→Kite exchange-prefix translation for /quote, /quote/ltp, /quote/ohlc.
+# Kite uses NSE/BSE/NFO/BFO/MCX/NCO/CDS/BCD/GLOBAL/NSEIX as the prefix in
+# `i=EXCHANGE:tradingsymbol`. NSE_INDEX/BSE_INDEX use NSE/BSE on the broker
+# side. GLOBAL_INDEX folds two Kite feeds (GLOBAL + NSEIX) — the per-row
+# brexchange column carries the original Kite exchange code.
+_OA_INDEX_TO_KITE = {
+    "NSE_INDEX": "NSE",
+    "BSE_INDEX": "BSE",
+}
+
+
+def _kite_quote_exchange(oa_exchange: str, brexchange: str | None) -> str:
+    """Resolve the OpenAlgo exchange + per-row brexchange to the Kite-side
+    exchange prefix used in /quote* endpoints."""
+    if oa_exchange == "GLOBAL_INDEX":
+        # brexchange holds the original Kite exchange code (GLOBAL or NSEIX).
+        # Fall back to GLOBAL for legacy rows where the loader set brexchange
+        # to the OA-side code.
+        if brexchange and brexchange != "GLOBAL_INDEX":
+            return brexchange
+        return "GLOBAL"
+    return _OA_INDEX_TO_KITE.get(oa_exchange, oa_exchange)
+
+
 class ZerodhaPermissionError(Exception):
     """Custom exception for Zerodha API permission errors"""
 
@@ -181,11 +205,9 @@ class BrokerData:
 
                 # Split token to get exchange_token for quotes
                 exchange_token = symbol_info.token.split("::::")[1]
+                row_brexchange = symbol_info.brexchange
 
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
+            exchange = _kite_quote_exchange(exchange, row_brexchange)
 
             # URL encode the symbol to handle special characters
             encoded_symbol = urllib.parse.quote(f"{exchange}:{br_symbol}")
@@ -300,12 +322,16 @@ class BrokerData:
                 )
                 continue
 
-            # Normalize exchange for indices
-            api_exchange = exchange
-            if exchange == "NSE_INDEX":
-                api_exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                api_exchange = "BSE"
+            # Normalize exchange for indices and GLOBAL_INDEX (uses brexchange to
+            # disambiguate between Kite's GLOBAL and NSEIX feeds).
+            with db_session() as session:
+                row = (
+                    session.query(SymToken.brexchange)
+                    .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
+                    .first()
+                )
+                row_brexchange = row[0] if row else None
+            api_exchange = _kite_quote_exchange(exchange, row_brexchange)
 
             instrument_key = f"{api_exchange}:{br_symbol}"
             instruments.append(instrument_key)
@@ -428,11 +454,9 @@ class BrokerData:
 
                 # Split token to get instrument_token for historical data
                 instrument_token = symbol_info.token.split("::::")[0]
+                row_brexchange = symbol_info.brexchange
 
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
+            exchange = _kite_quote_exchange(exchange, row_brexchange)
 
             # Convert dates to datetime objects
             start_date = pd.to_datetime(from_date)
@@ -548,11 +572,9 @@ class BrokerData:
 
                 # Split token to get exchange_token for quotes
                 exchange_token = symbol_info.token.split("::::")[1]
+                row_brexchange = symbol_info.brexchange
 
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
+            exchange = _kite_quote_exchange(exchange, row_brexchange)
 
             # URL encode the symbol to handle special characters
             encoded_symbol = urllib.parse.quote(f"{exchange}:{br_symbol}")

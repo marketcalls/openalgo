@@ -162,6 +162,8 @@ def process_zerodha_csv(path):
     df = pd.read_csv(path)
 
     # Map exchange names
+    # Any Zerodha exchange code missing here would silently become NaN/NULL.
+    # Keep this list in sync with utils/constants.VALID_EXCHANGES.
     exchange_map = {
         "NSE": "NSE",
         "NFO": "NFO",
@@ -171,10 +173,17 @@ def process_zerodha_csv(path):
         "BSE": "BSE",
         "BFO": "BFO",
         "BCD": "BCD",
-        "MCX": "MCX"
-
+        "MCX": "MCX",
+        "NCO": "NCO",            # NSE Commodities (futures + options + underlyings)
+        "GLOBAL": "GLOBAL_INDEX",  # Zerodha global indices feed (US30, JAPAN225, HANGSENG, ...)
+        "NSEIX": "GLOBAL_INDEX",  # NSE IFSC (single GIFT NIFTY row) folded into GLOBAL_INDEX
     }
-    
+
+    # Capture the raw Kite-side exchange code (NSE/BSE/NFO/.../GLOBAL/NSEIX)
+    # BEFORE we remap to OpenAlgo names, so brexchange retains the broker's
+    # exchange code. This matters for /quote calls which use NSE/BSE for
+    # indices and GLOBAL/NSEIX for the foreign-index feeds.
+    df['_kite_exchange'] = df['exchange']
     df['exchange'] = df['exchange'].map(exchange_map)
 
     # Update exchange names based on the instrument type
@@ -190,9 +199,9 @@ def process_zerodha_csv(path):
     df['token'] = df['instrument_token'].astype(str) + '::::' + df['exchange_token'].astype(str)
 
     # Select and rename columns
-    df = df[['token', 'tradingsymbol', 'name', 'expiry', 
-             'strike', 'lot_size', 'instrument_type', 'exchange', 
-             'tick_size']].rename(columns={
+    df = df[['token', 'tradingsymbol', 'name', 'expiry',
+             'strike', 'lot_size', 'instrument_type', 'exchange',
+             'tick_size', '_kite_exchange']].rename(columns={
         'tradingsymbol': 'symbol',
         'name': 'name',
         'expiry': 'expiry',
@@ -205,7 +214,8 @@ def process_zerodha_csv(path):
 
     df['brsymbol'] = df['symbol']
     df['symbol'] = df.apply(reformat_symbol, axis=1)
-    df['brexchange'] = df['exchange']
+    df['brexchange'] = df['_kite_exchange']
+    df = df.drop(columns=['_kite_exchange'])
 
     # Fill NaN values in the 'expiry' column with an empty string
     df['expiry'] = df['expiry'].fillna('')
@@ -331,6 +341,14 @@ def process_zerodha_csv(path):
         'SMEIPO': 'BSESMEIPO',
         'TECK': 'BSETECK',
         'TELCOM': 'BSETELECOM',
+    })
+
+    # GLOBAL_INDEX symbol normalisation (currently the lone NSE-IFSC GIFT NIFTY
+    # row, which Zerodha ships with a literal space in the tradingsymbol).
+    # Strip the space so users can call it as a single-token symbol.
+    global_idx_mask = df['exchange'] == 'GLOBAL_INDEX'
+    df.loc[global_idx_mask, 'symbol'] = df.loc[global_idx_mask, 'symbol'].replace({
+        'GIFT NIFTY': 'GIFTNIFTY',
     })
 
     return df

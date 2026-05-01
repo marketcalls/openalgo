@@ -12,6 +12,10 @@
 * BCD: BSE Currency
 * MCX: MCX Commodity
 * NCDEX: NCDEX Commodity
+* NCO: NSE Commodities (futures + options) — Zerodha only
+* NSE_INDEX: NSE Index (quote-only)
+* BSE_INDEX: BSE Index (quote-only)
+* GLOBAL_INDEX: Global indices like US30, JAPAN225, HANGSENG, GIFTNIFTY (quote-only) — Zerodha only
 
 ### Product Type
 

@@ -16,6 +16,10 @@ class ZerodhaExchangeMapper:
     """Maps exchange codes between Zerodha and OpenAlgo formats"""
 
     # Map OpenAlgo exchange codes to Zerodha exchange codes
+    # NOTE: GLOBAL_INDEX is the OA umbrella for both Zerodha "GLOBAL" and "NSEIX"
+    # feeds. Forward direction picks GLOBAL as the canonical broker code; the
+    # NSEIX → GLOBAL_INDEX direction is handled below in _ZERODHA_TO_OA so the
+    # adapter can still recognise NSEIX ticks coming back from Zerodha.
     _OA_TO_ZERODHA = {
         "NSE": "NSE",
         "NFO": "NFO",
@@ -23,12 +27,16 @@ class ZerodhaExchangeMapper:
         "BSE": "BSE",
         "BFO": "BFO",
         "MCX": "MCX",
+        "NCO": "NCO",
         "NSE_INDEX": "NSE_INDEX",
         "BSE_INDEX": "BSE_INDEX",
+        "GLOBAL_INDEX": "GLOBAL",
     }
 
     # Map Zerodha exchange codes to OpenAlgo exchange codes
     _ZERODHA_TO_OA = {v: k for k, v in _OA_TO_ZERODHA.items()}
+    # NSEIX rows fold into GLOBAL_INDEX on the OA side.
+    _ZERODHA_TO_OA["NSEIX"] = "GLOBAL_INDEX"
 
     @classmethod
     def to_zerodha_exchange(cls, oa_exchange: str) -> str:
