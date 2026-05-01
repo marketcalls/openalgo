@@ -265,16 +265,18 @@ $SUDO sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_K
 # proxy's X-Forwarded-For / X-Real-IP so IP-based features see the real client.
 $SUDO sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" .env
 
-# .env is bind-mounted read-only into the container at /app/.env.
-# The container runs as `appuser` (UID 1000 from the Dockerfile); a
-# chmod 600 + root-owned host file would make .env unreadable to the
-# container, causing start.sh to exit with "Error: .env file not found."
-# (See https://github.com/marketcalls/openalgo/issues/960.)
-# Mode 644 keeps the file readable to UID 1000 while still scoping write
-# access to the host owner. The Docker install runs in /opt/openalgo
-# which is typically root-only directory traversal anyway, so the host
-# threat surface is small.
-$SUDO chmod 644 .env
+# .env is bind-mounted read+write into the container at /app/.env so the
+# auto-rotation in utils/env_check.py can replace publicly-known APP_KEY /
+# API_KEY_PEPPER values on first run (see issue #1039 follow-up). The
+# container runs as `appuser` (UID 1000 from the Dockerfile), so chown the
+# file to UID 1000 and tighten to 0600 — only appuser can read or write it
+# from inside the container, and the file is no longer world-readable on
+# the host. Earlier versions used mode 644 because the mount was :ro and
+# 600 + root ownership made it unreadable to UID 1000 (issue #960). With
+# the mount switched to read-write and the file owned by UID 1000, 600 is
+# both safe and necessary.
+$SUDO chown 1000:1000 .env
+$SUDO chmod 600 .env
 
 # Update XTS market data credentials if applicable
 if is_xts_broker "$BROKER_NAME"; then
@@ -366,7 +368,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     environment:
       - FLASK_ENV=production

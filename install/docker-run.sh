@@ -182,13 +182,23 @@ do_setup() {
         sed -i "s/OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE/$APP_KEY/g" "$OPENALGO_DIR/$ENV_FILE"
         sed -i "s/OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
     fi
-    # Note: deliberately NOT chmod 600 here. The container runs as appuser
-    # (UID 1000) and bind-mounts $ENV_FILE read-only into /app/.env; mode
-    # 600 owned by the host user (who is typically not UID 1000 on a desktop
-    # Mac/Linux box) would make the file unreadable inside the container,
-    # crash-looping the container with "Error: .env file not found."
-    # See https://github.com/marketcalls/openalgo/issues/960.
-    # The default cp mode (644) is what we want for Docker bind-mounts.
+    # .env is now bind-mounted read+write into the container so auto-rotation
+    # of compromised APP_KEY/API_KEY_PEPPER (utils/env_check.py) can run.
+    # Container runs as appuser (UID 1000); chown UID 1000 + chmod 600 gives
+    # appuser read+write while keeping the file private on the host.
+    # On Linux this needs sudo if the script wasn't run as root; on macOS
+    # Docker Desktop handles UID mapping in its VM so chown is a no-op.
+    if [ "$(uname)" = "Linux" ]; then
+        if [ "$EUID" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+            sudo chown 1000:1000 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+            sudo chmod 600 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+        else
+            chown 1000:1000 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+            chmod 600 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+        fi
+    else
+        chmod 600 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+    fi
     log_ok "Secure keys generated and saved."
 
     # Get broker configuration
@@ -435,7 +445,7 @@ do_start() {
         -v "$OPENALGO_DIR/log:/app/log" \
         -v "$OPENALGO_DIR/keys:/app/keys" \
         -v "$OPENALGO_DIR/tmp:/app/tmp" \
-        -v "$OPENALGO_DIR/.env:/app/.env:ro" \
+        -v "$OPENALGO_DIR/.env:/app/.env" \
         --restart unless-stopped \
         "$IMAGE"; then
 

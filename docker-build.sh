@@ -175,7 +175,7 @@ start_container() {
             -v openalgo_log:/app/log \
             -v openalgo_strategies:/app/strategies \
             -v openalgo_keys:/app/keys \
-            -v "$(pwd)/.env:/app/.env:ro" \
+            -v "$(pwd)/.env:/app/.env" \
             --tmpfs /app/tmp:size=1g,mode=1777 \
             --restart unless-stopped \
             ${IMAGE_NAME}:${IMAGE_TAG}

@@ -193,6 +193,80 @@ export PYTHONDONTWRITEBYTECODE=1
 cd /app
 
 # ============================================
+# PRE-FLIGHT: COMPROMISED-KEY DETECTION
+# ============================================
+# Issue context: every Docker user installed before v2.0.0.6 has the publicly
+# known sample APP_KEY / API_KEY_PEPPER baked into their host .env (the install
+# script didn't rewrite those fields until 0162ce3a5). v2.0.0.6+ ships an
+# auto-rotation in utils/env_check.py that fixes this in-place — but if the
+# .env mount is read-only or the file isn't owned by appuser (UID 1000), the
+# rotation crashes the worker with `Permission denied: .env.tmp` and gunicorn
+# enters a restart loop. Catch that here, before gunicorn starts, with an
+# unmissable message instead of a buried 12-line stack trace.
+PLACEHOLDER_APP_KEY="OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE"
+PLACEHOLDER_PEPPER="OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE"
+LEAKED_APP_KEY="3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952729a991d8e2417"
+LEAKED_PEPPER="a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772"
+
+if [ -f "/app/.env" ]; then
+    CURRENT_APP_KEY=$(grep '^APP_KEY' /app/.env 2>/dev/null | sed -E "s/.*=\s*'([^']*)'.*/\1/" | head -n1)
+    CURRENT_PEPPER=$(grep '^API_KEY_PEPPER' /app/.env 2>/dev/null | sed -E "s/.*=\s*'([^']*)'.*/\1/" | head -n1)
+
+    KEY_COMPROMISED=0
+    case "$CURRENT_APP_KEY" in
+        "$PLACEHOLDER_APP_KEY"|"$LEAKED_APP_KEY") KEY_COMPROMISED=1 ;;
+    esac
+    case "$CURRENT_PEPPER" in
+        "$PLACEHOLDER_PEPPER"|"$LEAKED_PEPPER") KEY_COMPROMISED=1 ;;
+    esac
+
+    if [ "$KEY_COMPROMISED" -eq 1 ]; then
+        if ! touch /app/.env.permcheck 2>/dev/null; then
+            cat <<'PREFLIGHT_ERR' >&2
+
+============================================================
+[OpenAlgo] STARTUP BLOCKED — compromised keys detected
+============================================================
+
+Your .env contains the publicly-known sample APP_KEY and/or
+API_KEY_PEPPER. OpenAlgo v2.0.0.6+ tries to auto-rotate these,
+but the .env file is not writable from inside the container,
+so the rotation cannot run.
+
+This typically happens when upgrading a Docker install from
+v2.0.0.5 or earlier. Fix on the HOST machine (not inside the
+container):
+
+  cd /path/to/openalgo
+  docker compose down
+
+  # Generate fresh values
+  APP_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+  PEPPER=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+
+  # Replace in .env
+  sed -i "s|^APP_KEY *=.*|APP_KEY = '$APP_KEY'|" .env
+  sed -i "s|^API_KEY_PEPPER *=.*|API_KEY_PEPPER = '$PEPPER'|" .env
+
+  # Make .env writable by the container's appuser (UID 1000)
+  sudo chown 1000:1000 .env
+  sudo chmod 600 .env
+
+  docker compose up -d
+
+After this, OpenAlgo will start cleanly. Existing browser
+sessions will need to log in again (APP_KEY rotation
+invalidates session cookies, by design).
+
+============================================================
+PREFLIGHT_ERR
+            exit 1
+        fi
+        rm -f /app/.env.permcheck
+    fi
+fi
+
+# ============================================
 # DATABASE MIGRATIONS
 # ============================================
 # Run migrations automatically on startup (idempotent - safe to run multiple times)

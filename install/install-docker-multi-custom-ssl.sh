@@ -836,11 +836,12 @@ for i in "${!CONF_DOMAINS[@]}"; do
         # Each instance is published only on 127.0.0.1 with nginx in front;
         # trust the proxy's X-Forwarded-For / X-Real-IP.
         sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
-        # .env is bind-mounted read-only into the container; it must remain
-        # readable to the container's appuser (UID 1000). chmod 600 with a
-        # root-owned host file makes start.sh exit with "Error: .env file
-        # not found." See https://github.com/marketcalls/openalgo/issues/960.
-        chmod 644 "$ENV_FILE"
+        # .env is bind-mounted read+write into the container so auto-rotation
+        # of compromised APP_KEY/API_KEY_PEPPER (utils/env_check.py) can run.
+        # Container runs as appuser (UID 1000); chown to UID 1000 + chmod 600
+        # gives appuser read+write while keeping the file private on the host.
+        chown 1000:1000 "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
         
         # XTS
         if [ ! -z "$M_KEY" ]; then
@@ -883,7 +884,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
     environment:
       - FLASK_ENV=production
       - FLASK_DEBUG=0

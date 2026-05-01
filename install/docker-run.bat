@@ -381,7 +381,7 @@ docker run -d ^
     -v "%OPENALGO_DIR%\log:/app/log" ^
     -v "%OPENALGO_DIR%\keys:/app/keys" ^
     -v "%OPENALGO_DIR%\tmp:/app/tmp" ^
-    -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
+    -v "%OPENALGO_DIR%\.env:/app/.env" ^
     --restart unless-stopped ^
     %IMAGE%
 
