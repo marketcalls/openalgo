@@ -2297,13 +2297,24 @@ def export_to_parquet(
     """
     Export market data to Parquet format with ZSTD compression.
 
-    DuckDB has native Parquet support, making this very efficient
-    for large datasets and ideal for backtesting tools.
+    Mirrors export_to_zip's three-branch interval handling so that computed
+    intervals (5m/15m/30m/1h, custom intraday, W/M/Q/Y) aggregate from stored
+    1m or D data on the fly instead of returning empty:
+
+    - Daily-aggregated (W, M, Q, Y, multi-D): aggregated from D via
+      _get_daily_aggregated_ohlcv()
+    - Intraday computed (5m/15m/30m/1h, plus custom intraday like 25m, 2h):
+      aggregated from 1m using DuckDB time-bucket SQL
+    - Stored intervals (1m, D): direct query against market_data
+
+    All symbols/rows are concatenated into a single Parquet file with columns:
+    symbol, exchange, interval, timestamp, open, high, low, close, volume, oi,
+    datetime.
 
     Args:
         output_path: Path to save the Parquet file
         symbols: List of dicts with 'symbol' and 'exchange' keys (optional - all if None)
-        interval: Filter by interval (optional)
+        interval: Interval to export (required for aggregation correctness)
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
         compression: Compression codec ('zstd', 'snappy', 'gzip', 'none')
@@ -2314,94 +2325,205 @@ def export_to_parquet(
     import tempfile
 
     try:
-        # Build WHERE clause
-        conditions = []
-        params = []
-
-        if symbols and len(symbols) > 0:
-            symbol_conditions = []
-            for sym in symbols:
-                symbol_conditions.append("(symbol = ? AND exchange = ?)")
-                params.extend([sym["symbol"].upper(), sym["exchange"].upper()])
-            conditions.append(f"({' OR '.join(symbol_conditions)})")
-
-        if interval:
-            conditions.append("interval = ?")
-            params.append(interval)
-        if start_timestamp:
-            conditions.append("timestamp >= ?")
-            params.append(start_timestamp)
-        if end_timestamp:
-            conditions.append("timestamp <= ?")
-            params.append(end_timestamp)
-
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-
         # Validate output path - must be within temp directory
         temp_dir = tempfile.gettempdir()
         abs_output = os.path.abspath(output_path)
         if not abs_output.startswith(os.path.abspath(temp_dir)):
             return False, "Invalid output path: must be within temp directory", 0
 
-        # Get record count first
-        count_query = f"SELECT COUNT(*) FROM market_data WHERE {where_clause}"
+        # IST timezone offset from UTC (5 hours 30 minutes = 19800 seconds)
+        ist_offset = 19800
+
+        skipped_intervals: list[str] = []
+        frames: list[pd.DataFrame] = []
 
         with get_connection() as conn:
-            record_count = conn.execute(count_query, params).fetchone()[0]
-
-            if record_count == 0:
-                return False, "No data matching the criteria", 0
-
-            # Export using DuckDB's native COPY TO PARQUET
-            # Build the query string for COPY - need to embed values for COPY command
-            export_query = f"""
-                COPY (
-                    SELECT
-                        symbol, exchange, interval, timestamp,
-                        open, high, low, close, volume, oi,
-                        to_timestamp(timestamp) as datetime
-                    FROM market_data
-                    WHERE {where_clause}
-                    ORDER BY symbol, exchange, interval, timestamp
-                ) TO '{abs_output}'
-                (FORMAT PARQUET, COMPRESSION '{compression}')
-            """
-
-            # For COPY command, we need to execute without parameters
-            # Build the full query with values embedded safely
-            if params:
-                # Re-execute with DataFrame approach for safety
-                select_query = f"""
-                    SELECT
-                        symbol, exchange, interval, timestamp,
-                        open, high, low, close, volume, oi
-                    FROM market_data
-                    WHERE {where_clause}
-                    ORDER BY symbol, exchange, interval, timestamp
-                """
-                df = conn.execute(select_query, params).fetchdf()
-                df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
-                df.to_parquet(abs_output, compression=compression, index=False)
+            # Resolve symbol list — explicit, or every symbol in the catalog
+            if symbols and len(symbols) > 0:
+                symbols_list = [(s["symbol"].upper(), s["exchange"].upper()) for s in symbols]
             else:
-                # No params - can use COPY directly
-                conn.execute(f"""
-                    COPY (
-                        SELECT
-                            symbol, exchange, interval, timestamp,
-                            open, high, low, close, volume, oi,
-                            to_timestamp(timestamp) as datetime
-                        FROM market_data
-                        ORDER BY symbol, exchange, interval, timestamp
-                    ) TO '{abs_output}'
-                    (FORMAT PARQUET, COMPRESSION '{compression}')
-                """)
+                symbols_df = conn.execute("""
+                    SELECT DISTINCT symbol, exchange FROM data_catalog
+                    ORDER BY symbol, exchange
+                """).fetchdf()
+                symbols_list = [(row["symbol"], row["exchange"]) for _, row in symbols_df.iterrows()]
 
+            if not symbols_list:
+                return False, "No symbols found to export", 0
+
+            # Single-interval export. interval=None falls back to "D" (matches export_to_zip default).
+            target_interval = interval if interval else "D"
+
+            is_daily_agg = is_daily_aggregated_interval(target_interval)
+            is_intraday_computed = (
+                target_interval in COMPUTED_INTERVALS or is_custom_interval(target_interval)
+            )
+
+            for sym, exch in symbols_list:
+                df: pd.DataFrame | None = None
+
+                if is_daily_agg:
+                    # Aggregate from stored D rows
+                    check_query = """
+                        SELECT COUNT(*) FROM market_data
+                        WHERE symbol = ? AND exchange = ? AND interval = 'D'
+                    """
+                    check_params: list[Any] = [sym, exch]
+                    if start_timestamp:
+                        check_query += " AND timestamp >= ?"
+                        check_params.append(start_timestamp)
+                    if end_timestamp:
+                        check_query += " AND timestamp <= ?"
+                        check_params.append(end_timestamp)
+                    if conn.execute(check_query, check_params).fetchone()[0] == 0:
+                        logger.warning(
+                            f"No D data for {sym}:{exch}, skipping daily-aggregated interval {target_interval}"
+                        )
+                        skipped_intervals.append(f"{sym}:{exch}:{target_interval}")
+                        continue
+
+                    df = _get_daily_aggregated_ohlcv(
+                        symbol=sym,
+                        exchange=exch,
+                        target_interval=target_interval,
+                        start_timestamp=start_timestamp,
+                        end_timestamp=end_timestamp,
+                    )
+
+                elif is_intraday_computed:
+                    # Aggregate from stored 1m rows via DuckDB time-bucket
+                    check_query = """
+                        SELECT COUNT(*) FROM market_data
+                        WHERE symbol = ? AND exchange = ? AND interval = '1m'
+                    """
+                    check_params = [sym, exch]
+                    if start_timestamp:
+                        check_query += " AND timestamp >= ?"
+                        check_params.append(start_timestamp)
+                    if end_timestamp:
+                        check_query += " AND timestamp <= ?"
+                        check_params.append(end_timestamp)
+                    if conn.execute(check_query, check_params).fetchone()[0] == 0:
+                        logger.warning(
+                            f"No 1m data for {sym}:{exch}, skipping computed interval {target_interval}"
+                        )
+                        skipped_intervals.append(f"{sym}:{exch}:{target_interval}")
+                        continue
+
+                    minutes = INTERVAL_MINUTES.get(target_interval)
+                    if minutes is None:
+                        parsed = parse_interval(target_interval)
+                        if parsed and parsed["type"] == "intraday":
+                            minutes = parsed["minutes"]
+                        else:
+                            logger.warning(
+                                f"Cannot parse interval {target_interval}, skipping"
+                            )
+                            skipped_intervals.append(f"{sym}:{exch}:{target_interval}")
+                            continue
+                    interval_seconds = minutes * 60
+                    market_open_seconds = _get_market_open_seconds(exch)
+
+                    query = f"""
+                        SELECT
+                            (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                            {market_open_seconds} +
+                            FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                            as ts,
+                            FIRST(open ORDER BY timestamp) as open,
+                            MAX(high) as high,
+                            MIN(low) as low,
+                            LAST(close ORDER BY timestamp) as close,
+                            SUM(volume) as volume,
+                            LAST(oi ORDER BY timestamp) as oi
+                        FROM market_data
+                        WHERE symbol = ? AND exchange = ? AND interval = '1m'
+                        AND ((timestamp + {ist_offset}) % 86400) >= {market_open_seconds}
+                    """
+                    params: list[Any] = [sym, exch]
+                    if start_timestamp:
+                        query += " AND timestamp >= ?"
+                        params.append(start_timestamp)
+                    if end_timestamp:
+                        query += " AND timestamp <= ?"
+                        params.append(end_timestamp)
+                    query += f"""
+                        GROUP BY (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                                 {market_open_seconds} +
+                                 FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                        ORDER BY ts ASC
+                    """
+
+                    df = conn.execute(query, params).fetchdf()
+                    if not df.empty:
+                        df = df.rename(columns={"ts": "timestamp"})
+
+                else:
+                    # Stored interval (1m, D) — direct read
+                    query = """
+                        SELECT timestamp, open, high, low, close, volume, oi
+                        FROM market_data
+                        WHERE symbol = ? AND exchange = ? AND interval = ?
+                    """
+                    params = [sym, exch, target_interval]
+                    if start_timestamp:
+                        query += " AND timestamp >= ?"
+                        params.append(start_timestamp)
+                    if end_timestamp:
+                        query += " AND timestamp <= ?"
+                        params.append(end_timestamp)
+                    query += " ORDER BY timestamp"
+                    df = conn.execute(query, params).fetchdf()
+
+                if df is None or df.empty:
+                    continue
+
+                # Decorate with symbol metadata + datetime so the parquet schema matches
+                # the original export contract (symbol, exchange, interval, timestamp,
+                # OHLCV+oi, datetime) regardless of which branch produced the rows.
+                df = df.assign(symbol=sym, exchange=exch, interval=target_interval)
+                df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
+                df = df[
+                    [
+                        "symbol", "exchange", "interval", "timestamp",
+                        "open", "high", "low", "close", "volume", "oi",
+                        "datetime",
+                    ]
+                ]
+                frames.append(df)
+
+        if not frames:
+            if skipped_intervals:
+                return (
+                    False,
+                    f"No data exported. Missing source data for computed interval: {len(skipped_intervals)} symbol(s)",
+                    0,
+                )
+            return False, "No data matching the criteria", 0
+
+        combined = pd.concat(frames, ignore_index=True)
+        combined = combined.sort_values(["symbol", "exchange", "interval", "timestamp"])
+
+        # pyarrow's "none" isn't a valid codec — translate the API value
+        pq_compression = None if compression == "none" else compression
+        combined.to_parquet(abs_output, compression=pq_compression, index=False)
+
+        record_count = len(combined)
         file_size = os.path.getsize(abs_output) / (1024 * 1024)  # MB
-        logger.info(f"Exported {record_count} records to Parquet ({file_size:.2f} MB)")
-        return True, f"Exported {record_count} records ({file_size:.2f} MB)", record_count
+        message = f"Exported {record_count} records ({file_size:.2f} MB)"
+        if skipped_intervals:
+            message += f". Note: {len(skipped_intervals)} symbol(s) skipped due to missing source data."
+        logger.info(message)
+        return True, message, record_count
 
     except Exception as e:
         logger.exception(f"Error exporting to Parquet: {e}")
+        # Clean up partial file on error
+        if "abs_output" in locals() and os.path.exists(abs_output):
+            try:
+                os.remove(abs_output)
+            except Exception:
+                pass
         return False, str(e), 0
 
 
