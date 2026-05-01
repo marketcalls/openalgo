@@ -129,7 +129,7 @@ def authenticate_with_totp(password, totp_code):
             error_detail = e.response.json()
             error_msg += f" - {error_detail.get('message', e.response.text)}"
             logger.error(f"HTTP Error: {e.response.status_code}, Details: {error_detail}")
-        except:
+        except Exception:
             error_msg += f" - {e.response.text}"
             logger.error(f"HTTP Error: {e.response.status_code}, Raw: {e.response.text}")
         return None, None, error_msg
@@ -212,7 +212,7 @@ def send_otp(password):
             error_detail = e.response.json()
             error_msg += f" - {error_detail.get('message', e.response.text)}"
             logger.error(f"HTTP Error: {e.response.status_code}, Details: {error_detail}")
-        except:
+        except Exception:
             error_msg += f" - {e.response.text}"
             logger.error(f"HTTP Error: {e.response.status_code}, Raw: {e.response.text}")
         return None, None, error_msg
@@ -295,7 +295,7 @@ def verify_otp(otp_code, refresh_token):
             error_detail = e.response.json()
             error_msg += f" - {error_detail.get('message', e.response.text)}"
             logger.error(f"HTTP Error: {e.response.status_code}, Details: {error_detail}")
-        except:
+        except Exception:
             error_msg += f" - {e.response.text}"
             logger.error(f"HTTP Error: {e.response.status_code}, Raw: {e.response.text}")
         return None, None, error_msg

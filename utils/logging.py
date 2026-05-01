@@ -232,7 +232,7 @@ class ColoredFormatter(logging.Formatter):
                 )
                 if result.returncode == 0 and "VirtualTerminalLevel" in result.stdout:
                     return True
-            except:
+            except Exception:
                 pass
 
             # Check if running in Windows Terminal, VS Code, or similar

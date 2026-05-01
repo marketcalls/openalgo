@@ -143,12 +143,12 @@ def convert_timestamp_to_ist(df, symbol=""):
             try:
                 df["datetime"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
                 df["datetime"] = df["datetime"].dt.tz_convert(ist)
-            except:
+            except Exception:
                 # Try as milliseconds
                 try:
                     df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
                     df["datetime"] = df["datetime"].dt.tz_convert(ist)
-                except:
+                except Exception:
                     # Try as string datetime
                     df["datetime"] = pd.to_datetime(df["timestamp"])
                     if df["datetime"].dt.tz is None:
@@ -1044,7 +1044,7 @@ def get_pnl_data():
                 if not portfolio_pnl.empty
                 else None
             )
-        except:
+        except Exception:
             max_mtm_time = None
             min_mtm_time = None
 

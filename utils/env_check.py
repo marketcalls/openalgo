@@ -528,7 +528,7 @@ def load_and_check_env_variables() -> None:
         match = re.search(r"/([^/]+)/callback$", redirect_url)
         if match:
             broker_name = match.group(1).lower()
-    except:
+    except Exception:
         pass
 
     # Validate 5paisa API key format

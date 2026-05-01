@@ -303,7 +303,7 @@ def async_master_contract_download(broker):
             from database.token_db import get_symbol_count
 
             total_symbols = get_symbol_count()
-        except:
+        except Exception:
             total_symbols = None
 
         # Since socketio.emit doesn't return a meaningful value, we check if no exception was raised

@@ -54,7 +54,7 @@ def authenticate_broker(request_token):
                 if hasattr(e, "response") and e.response is not None:
                     error_detail = e.response.json()
                     error_message = error_detail.get("message", str(e))
-            except:
+            except Exception:
                 pass
 
             return None, f"API error: {error_message}"

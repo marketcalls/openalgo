@@ -1142,7 +1142,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if hasattr(self, "tbt_client") and self.tbt_client:
                 try:
                     self.tbt_client.disconnect()
-                except:
+                except Exception:
                     pass
                 self.tbt_client = None
 
@@ -1156,7 +1156,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if hasattr(self, "fyers_adapter") and self.fyers_adapter:
                 try:
                     self.fyers_adapter.disconnect(clear_mappings=True)
-                except:
+                except Exception:
                     pass
                 self.fyers_adapter = None
 
@@ -1168,10 +1168,10 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if hasattr(self, "zmq_port"):
                     with self._port_lock:
                         self._bound_ports.discard(self.zmq_port)
-            except:
+            except Exception:
                 pass
 
             # print("Force cleanup completed")
 
-        except:
+        except Exception:
             pass  # Suppress all errors in force cleanup

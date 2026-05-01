@@ -110,7 +110,7 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
             if hasattr(e, "response") and e.response is not None:
                 error_detail = e.response.json()
                 error_msg = error_detail.get("message", error_msg)
-        except:
+        except Exception:
             pass
 
         raise ZerodhaAPIError(f"API request failed: {error_msg}")

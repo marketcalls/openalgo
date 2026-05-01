@@ -1171,5 +1171,5 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Destructor to ensure proper cleanup."""
         try:
             self.disconnect()
-        except:
+        except Exception:
             pass

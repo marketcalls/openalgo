@@ -46,7 +46,7 @@ def on_message(ws, message):
             else:
                 # If no mode in JSON, try binary parsing
                 mode = struct.unpack(">b", message[0:1])[0]
-        except:
+        except Exception:
             # If JSON parsing fails, assume binary
             mode = struct.unpack(">b", message[0:1])[0]
 

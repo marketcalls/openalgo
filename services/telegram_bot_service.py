@@ -633,7 +633,7 @@ class TelegramBotService:
             try:
                 if self.http_client:
                     loop.run_until_complete(self.http_client.aclose())
-            except:
+            except Exception:
                 pass
             loop.close()
             self.bot_loop = None  # Clear the reference
@@ -665,7 +665,7 @@ class TelegramBotService:
                     chat_id=update.effective_chat.id,
                     text="⚠️ An error occurred. Please try again later.",
                 )
-            except:
+            except Exception:
                 pass  # If we can't send the message, just ignore
 
     async def _start_bot_isolated(self):
@@ -1080,7 +1080,7 @@ class TelegramBotService:
                         status = "🟢 Connected"
                     else:
                         status = "🔴 Connection Failed"
-                except:
+                except Exception:
                     status = "🔴 Connection Failed"
             else:
                 status = "🔴 Client Error"
@@ -1833,7 +1833,7 @@ class TelegramBotService:
             logger.exception(f"Error generating charts: {e}")
             try:
                 await loading_msg.delete()
-            except:
+            except Exception:
                 pass
             await update.message.reply_text(f"❌ Error generating charts: {str(e)}")
 
@@ -1904,11 +1904,11 @@ class TelegramBotService:
             try:
                 price = float(order.get("price", 0))
                 price_str = "Market" if price == 0 else f"{cs}{price}"
-            except:
+            except Exception:
                 price_str = f"{cs}{order.get('price', 0)}"
             try:
                 quantity = int(order.get("quantity", 0))
-            except:
+            except Exception:
                 quantity = order.get("quantity", 0)
             message += (
                 f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
@@ -1933,12 +1933,12 @@ class TelegramBotService:
             action_emoji = "📈" if trade.get("action") == "BUY" else "📉"
             try:
                 quantity = int(trade.get("quantity", 0))
-            except:
+            except Exception:
                 quantity = trade.get("quantity", 0)
             try:
                 avg_price = float(trade.get("average_price", 0))
                 avg_price_str = f"{cs}{avg_price:,.2f}"
-            except:
+            except Exception:
                 avg_price_str = f"{cs}{trade.get('average_price', 0)}"
             message += (
                 f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
@@ -1963,7 +1963,7 @@ class TelegramBotService:
         for pos in active_positions[:10]:
             try:
                 quantity = int(pos.get("quantity", 0))
-            except:
+            except Exception:
                 quantity = 0
             position_emoji = "🟢" if quantity > 0 else "🔴"
             position_type = "LONG 📈" if quantity > 0 else "SHORT 📉"
@@ -1990,7 +1990,7 @@ class TelegramBotService:
             try:
                 pnl = float(holding.get("pnl", 0))
                 pnl_percent = float(holding.get("pnlpercent", 0))
-            except:
+            except Exception:
                 pnl, pnl_percent = 0.0, 0.0
             pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
             message += f"{pnl_emoji} *{holding.get('symbol', 'N/A')}*\n"
@@ -2009,7 +2009,7 @@ class TelegramBotService:
             available = float(funds.get("availablecash", 0))
             collateral = float(funds.get("collateral", 0))
             utilized = float(funds.get("utiliseddebits", 0))
-        except:
+        except Exception:
             available, collateral, utilized = 0.0, 0.0, 0.0
 
         return (
@@ -2031,7 +2031,7 @@ class TelegramBotService:
             try:
                 pnl = float(pos.get("pnl", 0))
                 total_pnl += pnl
-            except:
+            except Exception:
                 pass
 
         pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"

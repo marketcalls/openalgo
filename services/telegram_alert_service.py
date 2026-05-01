@@ -385,7 +385,7 @@ class TelegramAlertService:
                     if has_request_context() and session.get("user"):
                         username = session.get("user")
                         logger.info(f"Using username from session: {username}")
-                except:
+                except Exception:
                     pass
 
                 if not username:

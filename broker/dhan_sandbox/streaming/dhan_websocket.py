@@ -875,7 +875,7 @@ class DhanWebSocket:
                 """Converts EPOCH time to UTC time."""
                 try:
                     return datetime.fromtimestamp(epoch_time).strftime("%H:%M:%S")
-                except:
+                except Exception:
                     return datetime.now().strftime("%H:%M:%S")
 
             # Create tick format matching your expected output structure
@@ -1423,7 +1423,7 @@ class DhanWebSocket:
                 """Converts EPOCH time to UTC time."""
                 try:
                     return datetime.fromtimestamp(epoch_time).strftime("%H:%M:%S")
-                except:
+                except Exception:
                     return datetime.now().strftime("%H:%M:%S")
 
             # Create tick format matching your expected output structure
@@ -2480,10 +2480,10 @@ class DhanWebSocket:
             # Try different approaches to extract the token
             try:
                 security_id_int = struct.unpack("<I", header[4:8])[0]  # Little-endian
-            except:
+            except Exception:
                 try:
                     security_id_int = struct.unpack(">I", header[4:8])[0]  # Big-endian
-                except:
+                except Exception:
                     # Default to the passed token or RELIANCE
                     security_id_int = token or 2885
 
@@ -2667,10 +2667,10 @@ class DhanWebSocket:
             # Try different approaches to extract the token
             try:
                 security_id_int = struct.unpack("<I", header[4:8])[0]  # Little-endian
-            except:
+            except Exception:
                 try:
                     security_id_int = struct.unpack(">I", header[4:8])[0]  # Big-endian
-                except:
+                except Exception:
                     # Default to the passed token or RELIANCE
                     security_id_int = token or 2885
 

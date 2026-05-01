@@ -843,7 +843,7 @@ def validate_config(config_key, config_value):
                 hours, minutes = config_value.split(":")
                 if not (0 <= int(hours) <= 23 and 0 <= int(minutes) <= 59):
                     return "Invalid time format"
-            except:
+            except Exception:
                 return "Time must be in HH:MM format"
 
         # Validate day of week

@@ -221,7 +221,7 @@ class WebSocketProxy:
                             # Force close the server without waiting
                             try:
                                 self.server.close()
-                            except:
+                            except Exception:
                                 pass
                         else:
                             raise
@@ -451,7 +451,7 @@ class WebSocketProxy:
                     # Send error to client but don't disconnect
                     try:
                         await self.send_error(client_id, "PROCESSING_ERROR", str(e))
-                    except:
+                    except Exception:
                         pass
         except websockets.exceptions.ConnectionClosed as e:
             logger.info(f"Client disconnected: {client_id}, code: {e.code}, reason: {e.reason}")

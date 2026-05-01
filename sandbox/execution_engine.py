@@ -416,7 +416,7 @@ class ExecutionEngine:
                 order.rejection_reason = f"Execution error: {str(e)}"
                 order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
                 db_session.commit()
-            except:
+            except Exception:
                 db_session.rollback()
 
     def _update_position(self, order, execution_price):

@@ -126,7 +126,7 @@ def download_csv_zerodha_data(output_path):
             if hasattr(e, 'response') and e.response is not None:
                 error_detail = e.response.json()
                 error_message = error_detail.get('message', str(e))
-        except:
+        except Exception:
             pass
             
         logger.error(f"Error downloading Zerodha instruments: {error_message}")

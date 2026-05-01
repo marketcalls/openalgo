@@ -1027,12 +1027,12 @@ class BrokerData:
             if "m" in interval.lower():
                 try:
                     interval_minutes = int(interval.lower().replace("m", ""))
-                except:
+                except Exception:
                     interval_minutes = 5
             elif "h" in interval.lower():
                 try:
                     interval_minutes = int(interval.lower().replace("h", "")) * 60
-                except:
+                except Exception:
                     interval_minutes = 60
 
         # Create new timestamps dictionary by date

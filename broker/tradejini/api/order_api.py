@@ -983,7 +983,7 @@ def place_order_api(data, auth):
                 try:
                     error_data = e.response.json()
                     error_msg = error_data.get("d", {}).get("msg", error_msg)
-                except:
+                except Exception:
                     error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
             logger.error(f"place_order_api - {error_msg}")
             return None, {"status": "error", "message": error_msg}, None

@@ -111,7 +111,7 @@ def get_broker_from_redirect_url(redirect_url: str) -> str:
         match = re.search(r"/([^/]+)/callback$", redirect_url)
         if match:
             return match.group(1).lower()
-    except:
+    except Exception:
         pass
     return ""
 

@@ -552,7 +552,7 @@ def main():
         # Clean up all subscriptions
         try:
             client.unsubscribe_all()
-        except:
+        except Exception:
             pass
 
         # Disconnect

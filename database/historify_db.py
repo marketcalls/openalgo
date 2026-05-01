@@ -1855,7 +1855,8 @@ def _safe_timestamp(val) -> str | None:
         if hasattr(val, "isoformat"):
             return val.isoformat()
         return str(val)
-    except:
+    except Exception as e:
+        logger.warning(f"Failed to convert timestamp {val!r} to ISO format: {e}")
         return None
 
 

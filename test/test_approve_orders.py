@@ -45,7 +45,7 @@ def test_order_execution():
         try:
             order_data = json.loads(order.order_data)
             print(f"Order Data: {json.dumps(order_data, indent=2)}")
-        except:
+        except Exception:
             print(f"Order Data (raw): {order.order_data}")
 
         print("-" * 80)
@@ -59,7 +59,7 @@ def test_order_execution():
 
     try:
         order_id = int(order_id_to_test)
-    except:
+    except Exception:
         print("Invalid order ID")
         return
 

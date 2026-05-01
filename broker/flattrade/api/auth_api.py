@@ -64,7 +64,7 @@ def authenticate_broker(code, password=None, totp_code=None):
             try:
                 error_detail = response.json()
                 error_msg = f"API error: {error_detail.get('emsg', 'Unknown error')}"
-            except:
+            except Exception:
                 error_msg = f"API error: Status {response.status_code}, Response: {response.text}"
             logger.error(f"Request Error: {error_msg}")  # Debug print
             return None, error_msg
