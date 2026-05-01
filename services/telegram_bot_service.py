@@ -702,6 +702,7 @@ class TelegramBotService:
                 self.application.add_handler(CommandHandler("quote", self.cmd_quote))
                 self.application.add_handler(CommandHandler("chart", self.cmd_chart))
                 self.application.add_handler(CommandHandler("closeall", self.cmd_closeall))
+                self.application.add_handler(CommandHandler("stoppython", self.cmd_stoppython))
                 self.application.add_handler(CommandHandler("mode", self.cmd_mode))
                 self.application.add_handler(CommandHandler("menu", self.cmd_menu))
 
@@ -918,6 +919,7 @@ class TelegramBotService:
 
 *Remote Actions:*
 /closeall - Close all open positions (with confirmation)
+/stoppython - Stop running Python strategies (with confirmation)
 /mode - View or toggle trading mode (Live / Analyze)
 
 *Navigation:*
@@ -2052,8 +2054,16 @@ class TelegramBotService:
         keyboard = [
             [
                 InlineKeyboardButton("✅ Yes, close all", callback_data="confirm_closeall"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "⚠️ Close all + Stop strategies",
+                    callback_data="confirm_closeall_with_strategies",
+                ),
+            ],
+            [
                 InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"),
-            ]
+            ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -2061,11 +2071,65 @@ class TelegramBotService:
             "⚠️ *Close All Positions*\n"
             "━━━━━━━━━━━━━━━\n\n"
             "This will close ALL open positions across all strategies.\n\n"
+            "Choose *Close all + Stop strategies* to also stop every running "
+            "Python strategy after closing positions.\n\n"
             "Are you sure?",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN,
         )
         log_command(user.id, "closeall", update.effective_chat.id)
+
+    async def cmd_stoppython(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /stoppython command — list running Python strategies and stop selected/all"""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        from telegram.constants import ParseMode
+
+        user = update.effective_user
+        telegram_user = get_telegram_user(user.id)
+
+        if not telegram_user:
+            await update.message.reply_text("❌ Please link your account first using /link")
+            return
+
+        from blueprints.python_strategy import RUNNING_STRATEGIES, STRATEGY_CONFIGS
+
+        # Snapshot the running strategies (id, display name) at the moment of invocation.
+        # Using user_data for index→id mapping keeps callback_data within Telegram's 64-byte cap.
+        running = [
+            (sid, STRATEGY_CONFIGS.get(sid, {}).get("name", sid))
+            for sid in list(RUNNING_STRATEGIES.keys())
+        ]
+
+        if not running:
+            await update.message.reply_text(
+                "ℹ️ *No Python strategies running.*",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            log_command(user.id, "stoppython", update.effective_chat.id)
+            return
+
+        context.user_data["stoppy_list"] = running
+
+        keyboard = [
+            [InlineKeyboardButton(f"🐍 {name}", callback_data=f"spy_{idx}")]
+            for idx, (_, name) in enumerate(running)
+        ]
+        keyboard.append(
+            [InlineKeyboardButton("🛑 Stop All", callback_data="spy_all")]
+        )
+        keyboard.append(
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
+        )
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            f"🐍 *Running Python Strategies* ({len(running)})\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            "Select a strategy to stop, or *Stop All* to stop every running strategy.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        log_command(user.id, "stoppython", update.effective_chat.id)
 
     async def cmd_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /mode command — view or toggle trading mode (Live / Analyze)"""
@@ -2161,6 +2225,200 @@ class TelegramBotService:
                     chat_id=chat_id, text="❌ Error closing positions. Check server logs."
                 )
             log_command(user.id, "confirm_closeall", chat_id)
+            return
+
+        # Handle close all + stop strategies
+        if callback_data == "confirm_closeall_with_strategies":
+            telegram_user = get_telegram_user(user.id)
+            if not telegram_user:
+                await query.edit_message_text("❌ Please link your account first using /link")
+                return
+
+            client = self._get_sdk_client(user.id)
+            if not client:
+                await query.edit_message_text("❌ Failed to connect to OpenAlgo")
+                return
+
+            await query.edit_message_text("⏳ Closing all positions and stopping strategies...")
+
+            close_msg = ""
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(None, client.closeposition)
+                if response and response.get("status") == "success":
+                    close_msg = f"✅ {response.get('message', 'All positions closed')}"
+                else:
+                    err = response.get("message", "Unknown error") if response else "No response"
+                    close_msg = f"❌ Failed to close positions: {err}"
+            except Exception as e:
+                logger.exception(f"Error in confirm_closeall_with_strategies (close): {e}")
+                close_msg = "❌ Error closing positions. Check server logs."
+
+            stop_msg = ""
+            try:
+                from blueprints.python_strategy import RUNNING_STRATEGIES, stop_strategy_process
+
+                running_ids = list(RUNNING_STRATEGIES.keys())
+                if not running_ids:
+                    stop_msg = "ℹ️ No Python strategies were running."
+                else:
+                    loop = asyncio.get_event_loop()
+                    stopped, failed = 0, 0
+                    for sid in running_ids:
+                        try:
+                            ok, _ = await loop.run_in_executor(None, stop_strategy_process, sid)
+                            if ok:
+                                stopped += 1
+                            else:
+                                failed += 1
+                        except Exception:
+                            logger.exception(f"Error stopping strategy {sid}")
+                            failed += 1
+                    stop_msg = f"🛑 Strategies stopped: {stopped}"
+                    if failed:
+                        stop_msg += f" (failed: {failed})"
+            except Exception as e:
+                logger.exception(f"Error in confirm_closeall_with_strategies (stop): {e}")
+                stop_msg = "❌ Error stopping strategies. Check server logs."
+
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"*Close All + Stop Strategies*\n━━━━━━━━━━━━━━━\n\n{close_msg}\n\n{stop_msg}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            log_command(user.id, "confirm_closeall_with_strategies", chat_id)
+            return
+
+        # Handle /stoppython single-strategy selection → confirmation
+        if callback_data.startswith("spy_") and callback_data != "spy_all":
+            try:
+                idx = int(callback_data.removeprefix("spy_"))
+            except ValueError:
+                await query.edit_message_text("❌ Invalid selection.")
+                return
+
+            stoppy_list = context.user_data.get("stoppy_list", [])
+            if idx < 0 or idx >= len(stoppy_list):
+                await query.edit_message_text(
+                    "❌ Selection expired. Please run /stoppython again."
+                )
+                return
+
+            sid, name = stoppy_list[idx]
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Yes, stop", callback_data=f"csy_{idx}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"),
+                ]
+            ]
+            await query.edit_message_text(
+                f"⚠️ *Stop Strategy*\n━━━━━━━━━━━━━━━\n\nStop *{name}*?",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        # Handle /stoppython "Stop All" → confirmation
+        if callback_data == "spy_all":
+            stoppy_list = context.user_data.get("stoppy_list", [])
+            count = len(stoppy_list)
+            if count == 0:
+                await query.edit_message_text(
+                    "❌ Selection expired. Please run /stoppython again."
+                )
+                return
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Yes, stop all", callback_data="csy_all"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"),
+                ]
+            ]
+            await query.edit_message_text(
+                f"⚠️ *Stop All Strategies*\n━━━━━━━━━━━━━━━\n\n"
+                f"This will stop *{count}* running Python "
+                f"{'strategy' if count == 1 else 'strategies'}.\n\nAre you sure?",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        # Handle confirmed stop of a single strategy
+        if callback_data.startswith("csy_") and callback_data != "csy_all":
+            try:
+                idx = int(callback_data.removeprefix("csy_"))
+            except ValueError:
+                await query.edit_message_text("❌ Invalid selection.")
+                return
+
+            stoppy_list = context.user_data.get("stoppy_list", [])
+            if idx < 0 or idx >= len(stoppy_list):
+                await query.edit_message_text(
+                    "❌ Selection expired. Please run /stoppython again."
+                )
+                return
+
+            sid, name = stoppy_list[idx]
+            await query.edit_message_text(f"⏳ Stopping *{name}*...", parse_mode=ParseMode.MARKDOWN)
+            try:
+                from blueprints.python_strategy import stop_strategy_process
+
+                loop = asyncio.get_event_loop()
+                ok, msg = await loop.run_in_executor(None, stop_strategy_process, sid)
+                emoji = "✅" if ok else "❌"
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"{emoji} *{name}*\n{msg}",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            except Exception as e:
+                logger.exception(f"Error stopping strategy {sid}: {e}")
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ Error stopping *{name}*. Check server logs.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            log_command(user.id, "confirm_stoppython", chat_id)
+            return
+
+        # Handle confirmed stop of all strategies
+        if callback_data == "csy_all":
+            await query.edit_message_text("⏳ Stopping all running strategies...")
+            try:
+                from blueprints.python_strategy import RUNNING_STRATEGIES, stop_strategy_process
+
+                running_ids = list(RUNNING_STRATEGIES.keys())
+                if not running_ids:
+                    await context.bot.send_message(
+                        chat_id=chat_id, text="ℹ️ No Python strategies were running."
+                    )
+                else:
+                    loop = asyncio.get_event_loop()
+                    stopped, failed = 0, 0
+                    for sid in running_ids:
+                        try:
+                            ok, _ = await loop.run_in_executor(None, stop_strategy_process, sid)
+                            if ok:
+                                stopped += 1
+                            else:
+                                failed += 1
+                        except Exception:
+                            logger.exception(f"Error stopping strategy {sid}")
+                            failed += 1
+                    summary = f"🛑 *Strategies Stopped*\n━━━━━━━━━━━━━━━\n\nStopped: {stopped}"
+                    if failed:
+                        summary += f"\nFailed: {failed}"
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=summary,
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+            except Exception as e:
+                logger.exception(f"Error in csy_all: {e}")
+                await context.bot.send_message(
+                    chat_id=chat_id, text="❌ Error stopping strategies. Check server logs."
+                )
+            log_command(user.id, "confirm_stoppython_all", chat_id)
             return
 
         # Handle remote logout confirmation
