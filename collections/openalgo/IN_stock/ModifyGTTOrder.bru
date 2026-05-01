@@ -1,0 +1,31 @@
+meta {
+  name: ModifyGTTOrder
+  type: http
+  seq: 66
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/modifygttorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "32000a64b815aab3cfa1fec36aac7732ce3474381cd0b7607fde446335a3ea61",
+      "strategy": "My GTT Strategy",
+      "trigger_id": "123456",
+      "trigger_type": "SINGLE",
+      "exchange": "NSE",
+      "symbol": "IDEA",
+      "action": "BUY",
+      "product": "CNC",
+      "quantity": 1,
+      "pricetype": "LIMIT",
+      "price": "0",
+      "triggerprice_sl": "0",
+      "stoploss": "",
+      "triggerprice_tg": "0",
+      "target": ""
+  }
+}

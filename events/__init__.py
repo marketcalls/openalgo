@@ -9,6 +9,14 @@ from events.batch_events import (
     SplitCompletedEvent,
 )
 from events.order_events import (
+    GTTCancelFailedEvent,
+    GTTCancelledEvent,
+    GTTExpiredEvent,
+    GTTFailedEvent,
+    GTTModifiedEvent,
+    GTTModifyFailedEvent,
+    GTTPlacedEvent,
+    GTTTriggeredEvent,
     OrderCancelFailedEvent,
     OrderCancelledEvent,
     OrderFailedEvent,
@@ -43,4 +51,12 @@ __all__ = [
     "SandboxOrderFilledEvent",
     "SandboxAutoSquareOffEvent",
     "SandboxT1SettlementEvent",
+    "GTTPlacedEvent",
+    "GTTFailedEvent",
+    "GTTModifiedEvent",
+    "GTTModifyFailedEvent",
+    "GTTCancelledEvent",
+    "GTTCancelFailedEvent",
+    "GTTTriggeredEvent",
+    "GTTExpiredEvent",
 ]

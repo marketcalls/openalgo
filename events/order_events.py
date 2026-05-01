@@ -76,3 +76,91 @@ class OrderCancelFailedEvent(OrderEvent):
     topic: str = "order.cancel_failed"
     orderid: str = ""
     error_message: str = ""
+
+
+# -----------------------------------------------------------------------------
+# GTT (Good Till Triggered) events
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class GTTPlacedEvent(OrderEvent):
+    """Fired when a GTT trigger is successfully placed (live or analyze)."""
+
+    topic: str = "gtt.placed"
+    strategy: str = ""
+    symbol: str = ""
+    exchange: str = ""
+    trigger_type: str = ""  # "single" or "two-leg"
+    trigger_id: str = ""
+    trigger_prices: list = field(default_factory=list)
+
+
+@dataclass
+class GTTFailedEvent(OrderEvent):
+    """Fired when GTT placement fails (broker rejection, validation, module missing)."""
+
+    topic: str = "gtt.failed"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_type: str = ""
+    error_message: str = ""
+
+
+@dataclass
+class GTTModifiedEvent(OrderEvent):
+    """Fired when an active GTT is successfully modified."""
+
+    topic: str = "gtt.modified"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_id: str = ""
+
+
+@dataclass
+class GTTModifyFailedEvent(OrderEvent):
+    """Fired when a GTT modification fails."""
+
+    topic: str = "gtt.modify_failed"
+    symbol: str = ""
+    trigger_id: str = ""
+    error_message: str = ""
+
+
+@dataclass
+class GTTCancelledEvent(OrderEvent):
+    """Fired when an active GTT is successfully cancelled."""
+
+    topic: str = "gtt.cancelled"
+    trigger_id: str = ""
+    status: str = ""
+
+
+@dataclass
+class GTTCancelFailedEvent(OrderEvent):
+    """Fired when a GTT cancellation fails."""
+
+    topic: str = "gtt.cancel_failed"
+    trigger_id: str = ""
+    error_message: str = ""
+
+
+@dataclass
+class GTTTriggeredEvent(OrderEvent):
+    """Fired when a GTT trigger condition is met and the underlying order is placed."""
+
+    topic: str = "gtt.triggered"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_id: str = ""
+    triggered_order_id: str = ""
+
+
+@dataclass
+class GTTExpiredEvent(OrderEvent):
+    """Fired when a GTT expires without firing (beyond expires_at)."""
+
+    topic: str = "gtt.expired"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_id: str = ""

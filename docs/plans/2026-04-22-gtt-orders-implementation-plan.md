@@ -1,10 +1,10 @@
 # GTT (Good Till Triggered) Orders — Phased Implementation Plan
 
-**Status:** Draft
+**Status:** Phase 2 + early Phase 6 (Dhan) shipped; Phase 3 (sandbox) and Phases 4–5 in progress
 **Owner:** Rajandran R
 **Created:** 2026-04-22
 **Companion doc:** Product Design Report (conversation artifact)
-**Reference broker spec:** `zerodha-api-docs/06-gtt.md`
+**Reference broker specs:** `zerodha-api-docs/06-gtt.md`, `dhan-api-v2-docs/05-forever-order.md`
 
 ---
 
@@ -51,7 +51,7 @@ Phases ship independently. Each phase ends in a mergeable state; nothing half-bu
 
 ## Phase 1 — Foundation / Plumbing
 
-**Goal:** land the data model, validation schemas, event vocabulary, and broker capability flag. Nothing user-visible; nothing functionally live.
+**Goal:** land the data model, validation schemas, and event vocabulary. Nothing user-visible; nothing functionally live.
 
 **Prereqs:** Phase 0 closed.
 
@@ -75,8 +75,8 @@ Phases ship independently. Each phase ends in a mergeable state; nothing half-bu
    - (E) `events/order_events.py` — add `GTTPlacedEvent`, `GTTFailedEvent`, `GTTModifiedEvent`, `GTTModifyFailedEvent`, `GTTCancelledEvent`, `GTTCancelFailedEvent`, `GTTTriggeredEvent`, `GTTExpiredEvent`.
    - (E) `events/__init__.py` — export + add to `__all__`.
 
-5. **Broker capability registry**
-   - (E) `broker/__init__.py` — dict `BROKER_GTT_SUPPORT = {"zerodha": True, ...False}` + helper `broker_gtt_supported(broker_name) -> bool`.
+5. **Broker capability detection**
+   - No explicit registry. Follow the existing regular-order pattern: services call `importlib.import_module("broker.<name>.api.gtt_api")` and a `None` result means "this broker does not ship GTT yet" → service returns `501 {"status":"error","message":"GTT orders are not supported for broker '<name>' yet"}`. Module presence *is* the capability test.
 
 6. **Logging vocabulary**
    - No code change. Reserve `api_type` values: `placegttorder`, `modifygttorder`, `cancelgttorder`, `gttorderbook`, `gtttriggered`, `gttexpired`. Document in `database/apilog_db.py` docstring.
@@ -84,14 +84,14 @@ Phases ship independently. Each phase ends in a mergeable state; nothing half-bu
 ### Files touched
 
 - **New:** `database/gtt_db.py`, `upgrade/migrate_gtt.py`
-- **Edited:** `upgrade/migrate_all.py`, `restx_api/schemas.py`, `events/order_events.py`, `events/__init__.py`, `broker/__init__.py`
+- **Edited:** `upgrade/migrate_all.py`, `restx_api/schemas.py`, `events/order_events.py`, `events/__init__.py`
 
 ### Acceptance
 
 - `python upgrade/migrate_all.py` runs twice on a fresh DB with no errors; tables exist after first run, no-op on second.
 - Unit tests for schemas: single-leg accepts 1-leg list; two-leg requires 2 legs with opposite-direction triggers relative to `last_price`; crypto quantity float-accepted.
 - `from events import GTTPlacedEvent` imports; publishing a dummy event doesn't explode the bus.
-- `broker_gtt_supported("zerodha")` returns `True`; `broker_gtt_supported("unknown")` returns `False`.
+- Calling `importlib.import_module("broker.zerodha.api.gtt_api")` succeeds; calling it for a broker without a `gtt_api.py` raises `ImportError` and the service returns 501.
 
 ### Exit
 
@@ -240,7 +240,7 @@ DB has GTT tables; validators + events exist as importable symbols; nothing else
 
 ### Exit
 
-Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from `broker_gtt_supported` check in services. Analyze mode: 501 from service layer.
+Live GTT fully usable via REST + Playground on Zerodha. Other brokers: 501 from the ImportError path in services when no `broker/<name>/api/gtt_api.py` exists. Analyze mode: 501 from service layer.
 
 ---
 
@@ -350,7 +350,7 @@ Analyze ↔ live functional parity for GTT. Users can test GTT strategies entire
    - Wrap existing table in `<Tabs defaultValue="orders">`.
    - New `<GttTab />` component renders columns per design §14.3.
    - Listen for `gtt_event` and `gtt_triggered` via `socketio`; auto-refresh.
-   - Gate "+ Place GTT" button on `broker_gtt_supported` (exposed via an existing `/api/v1/session` or similar; add a small endpoint if absent).
+   - Gate "+ Place GTT" button on a capability flag exposed via an existing `/api/v1/session` or similar — derive the flag server-side from `importlib.util.find_spec("broker.<name>.api.gtt_api") is not None`; add a small endpoint if absent.
 8. (N) `frontend/src/components/orders/GttTab.tsx`
 9. (N) `frontend/src/components/orders/PlaceGttModal.tsx` — single / two-leg sub-tabs, auto-filled `last_price` via a quote call on symbol blur.
 10. (N) `frontend/src/components/orders/ModifyGttModal.tsx`
@@ -448,8 +448,7 @@ Docs + tests complete. Feature is ready to ship for Zerodha users.
 
 1. (N) `broker/<name>/api/gtt_api.py` — same four functions as Zerodha module, mapped to broker's native GTT / OCO / Price-Alert API.
 2. (N) `broker/<name>/mapping/gtt_data.py` — request/response transform.
-3. (E) `broker/__init__.py` — flip `BROKER_GTT_SUPPORT[<name>] = True`.
-4. (E) `docs/api/order-management/gtt_concepts.md` — update support matrix row.
+3. (E) `docs/api/order-management/gtt_concepts.md` — update support matrix row. No registry flip needed: services detect capability by `importlib.import_module("broker.<name>.api.gtt_api")`.
 
 ### Per-broker acceptance
 
@@ -458,10 +457,10 @@ Docs + tests complete. Feature is ready to ship for Zerodha users.
 
 ### Suggested order
 
-1. Fyers
-2. Upstox
-3. Angel One
-4. Dhan
+1. ~~Dhan~~ — **shipped** (2026-04-29; see Change Log)
+2. Fyers
+3. Upstox
+4. Angel One
 5. 5Paisa / others
 
 Parallelisable across contributors; no cross-dependency.
@@ -497,7 +496,8 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 | DB | `database/gtt_db.py`, `upgrade/migrate_gtt.py` | `upgrade/migrate_all.py` |
 | REST | `restx_api/{place,modify,cancel}_gtt_order.py`, `restx_api/gtt_orderbook.py` | `restx_api/__init__.py`, `restx_api/schemas.py` |
 | Services | `services/{place,modify,cancel}_gtt_order_service.py`, `services/gtt_orderbook_service.py` | `services/sandbox_service.py`, `services/order_router_service.py`, `services/telegram_alert_service.py`, `services/flow_openalgo_client.py`, `services/flow_executor_service.py` |
-| Broker (Zerodha) | `broker/zerodha/api/gtt_api.py`, `broker/zerodha/mapping/gtt_data.py` | `broker/__init__.py` |
+| Broker (Zerodha) | `broker/zerodha/api/gtt_api.py`, `broker/zerodha/mapping/gtt_data.py` | — |
+| Broker (Dhan) | `broker/dhan/api/gtt_api.py`, `broker/dhan/mapping/gtt_data.py` | — |
 | Events | — | `events/order_events.py`, `events/__init__.py` |
 | Subscribers | — | `subscribers/__init__.py`, `subscribers/log_subscriber.py`, `subscribers/socketio_subscriber.py`, `subscribers/telegram_subscriber.py` |
 | Sandbox | `sandbox/gtt_manager.py` | `sandbox/execution_engine.py`, `sandbox/websocket_execution_engine.py`, `sandbox/catch_up_processor.py`, `sandbox/execution_thread.py`, `sandbox/fund_manager.py` |
@@ -506,7 +506,7 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 | Jinja | `templates/gtt_orderbook.html` | `templates/orderbook.html` |
 | Playground | 4 `.bru` files under `collections/openalgo/IN_stock/orders/` | `blueprints/playground.py` |
 | SDK | — | `src/openalgo/orders.py` (or client module) |
-| Docs | 5 new md files under `docs/api/` + `docs/userguide/gtt-orders.md` + `docs/test/gtt-test-plan.md` | `docs/api/*/README.md`, root `README.md`, `CLAUDE.md`, `docs/CHANGELOG.md` |
+| Docs | `docs/api/order-management/{placegttorder,modifygttorder,cancelgttorder,gttorderbook}.md` + (Phase 5 pending) `docs/userguide/gtt-orders.md`, `docs/test/gtt-test-plan.md`. (Gitbook-ready paste copies live outside the repo at `../gitbook/`.) | `docs/api/README.md`, root `README.md`, `CLAUDE.md`, `docs/CHANGELOG.md` |
 
 ---
 
@@ -517,3 +517,12 @@ GTT supported on all brokers that expose a GTT-equivalent API. Brokers without n
 | 2026-04-22 | Claude (Opus 4.7) | Initial draft. |
 | 2026-04-22 | Claude (Opus 4.7) | Addressed cubic-dev-ai review. **P1:** introduced leg-level atomic-claim (`try_claim_trigger`) as the single fire path for polling, WebSocket, and catch-up evaluators; added `triggering` intermediate state on `SandboxGTTLeg.leg_status` and `SandboxGTT.gtt_status`; added concurrent-path and OCO sibling-race acceptance tests; rewrote the corresponding Risk row. **P2:** removed the inaccurate "mirrors existing `execution_engine` behaviour" claim — sandbox engine does not call `is_market_open()`, so the GTT monitor explicitly does not gate on market hours (catch-up especially must not, per the original off-hours-restart recovery intent). |
 | 2026-04-22 | Claude (Opus 4.7) | Addressed second cubic-dev-ai review. **P1 (portability):** replaced `now()` in the claim UPDATE with `CURRENT_TIMESTAMP` (SQL-standard; `now()` fails on SQLite, which is the default sandbox DB). **P1 (stranded-leg reclaim):** added `_fire_leg` try/except/finally that CAS-reverts on any failure, plus a `reclaim_stranded_legs()` reaper gated on a new `SandboxConfig.gtt_claim_timeout_sec` (default 60 s) called from every polling tick and at the start of catch-up. Added `claimed_at` column to `SandboxGTTLeg`, expanded the `(leg_status, claimed_at)` index, added four acceptance tests (place-order exception revert, broker-error revert, post-crash reclaim, reclaim-does-not-race-live-worker), and two new Risk rows (stranded-triggering recovery; post-`place_order` crash corner case flagged as a post-v1 follow-up with a correlation-id mitigation sketch). |
+| 2026-04-24 | Claude (Opus 4.7) | Removed the `BROKER_GTT_SUPPORT` registry and `broker_gtt_supported()` helper. Rationale: GTT is broadly available across Indian brokers, and OpenAlgo's existing regular-order convention detects capability purely by module presence (`importlib.import_module("broker.<name>.api.order_api")`). Matching that pattern means one fewer place to touch when onboarding a new broker, and an ImportError from `import_broker_gtt_module` already yields a clean 501 with the message `GTT orders are not supported for broker '<name>' yet`. Updated Phase 1 Task 5 (capability detection), Phase 1 acceptance, Phase 2 exit, Phase 4 frontend gate, Phase 6 per-broker template, and the Cross-Phase File Index accordingly. |
+| 2026-04-29 | Claude (Opus 4.7) | **Schema field rename — `trigger_price` → `triggerprice_sl` + `triggerprice_tg`.** The original single `trigger_price` field was ambiguous for OCO; replaced with explicit stoploss-side and target-side trigger fields. SINGLE accepts exactly one of the two as the trigger; OCO requires both alongside `stoploss` (sl-leg limit) and `target` (tg-leg limit). The schema's `_validate_gtt_place_request` populates an internal `trigger_price` alias for backward compat with broker mappers. Empty strings are coerced to `null` / `0` in `@pre_load`. Affected: `restx_api/schemas.py` (`PlaceGTTOrderSchema`, `ModifyGTTOrderSchema`), broker mappers (`broker/zerodha/mapping/gtt_data.py`, `broker/dhan/mapping/gtt_data.py`), services, blueprints (UI modify route forwards new fields), frontend `GttTab.tsx` (modify dialog inputs, `openModify` derivation, `saveModify` validation), `frontend/src/api/trading.ts` types, Bruno samples. |
+| 2026-04-29 | Claude (Opus 4.7) | **Removed `mode` from GTT success responses.** Place/modify/cancel responses no longer include `"mode": "live"`. Event payloads also dropped the field. Affected: all four GTT service files. |
+| 2026-04-29 | Claude (Opus 4.7) | **Tightened `product` validation — MIS rejected for GTT.** GTTs can sit for days/weeks, so an intraday-squared product makes no sense. `PlaceGTTOrderSchema` and `ModifyGTTOrderSchema` now constrain `product` to `["NRML", "CNC"]` with a custom error message: *"GTT supports only CNC (delivery) or NRML (overnight F&O); MIS is intraday-only."* Schema-level rejection happens before any broker call. |
+| 2026-04-29 | Claude (Opus 4.7) | **Phase 6 — Dhan GTT (Forever Orders) integrated** ahead of original "fan-out" sequencing. Added `broker/dhan/api/gtt_api.py` and `broker/dhan/mapping/gtt_data.py`. Bruno samples added. Notable broker-specific quirks absorbed in the broker layer (callers see clean broker-neutral behaviour): (a) Dhan's published GET endpoint `/v2/forever/all` returns 404 — the SDK's `/v2/forever/orders` is what actually works. (b) Dhan's AWS ELB returns spurious 301 redirects (`Location: https://api.dhan.co:443/v2/`) on HTTP/2 POST/PUT/DELETE to `/v2/forever/orders`; mitigated with a dedicated `httpx.Client(http2=False)` for all Dhan GTT calls. (c) Dhan stores SINGLE GTTs internally as `STOP_LOSS_LEG` / `TARGET_LEG` / `ENTRY_LEG` depending on action+trigger relative to LTP at place-time; modify endpoint requires the actual stored `legName`, so `modify_gtt_order` does a `/v2/forever/orders` lookup before each PUT and uses the resolved tag. (d) `transform_modify_gtt` now dispatches by `trigger_type` (not `leg_name`) for SINGLE so any Dhan tag still resolves to the SINGLE field set. (e) SINGLE-only safety net in modify: coerce `pricetype=LIMIT` with `price=0` to `pricetype=MARKET` (Dhan rejects the LIMIT+0 combo with DH-905). (f) `map_gtt_book` infers per-leg pricetype from the price field (Dhan's GET response doesn't include LIMIT/MARKET) and exposes Dhan's `legName` as `leg_name` for diagnostics. |
+| 2026-04-29 | Claude (Opus 4.7) | **Phase 2 — Zerodha MARKET → MPP-protected LIMIT auto-conversion.** Kite GTT only accepts `order_type=LIMIT`. The Zerodha GTT API layer now intercepts `pricetype=MARKET` and applies the existing `utils/mpp_slab.calculate_protected_price()` helper using LTP (for SINGLE) or each leg's trigger (for OCO), forcing `pricetype=LIMIT` before relaying to Kite. Tick-size and instrument type are pulled from `SymToken` via `get_symbol_info()`, with a fallback to symbol-suffix detection. Mirrors the flattrade/shoonya MARKET-protection pattern, scoped to GTT only — regular Zerodha orders still send native MARKET. |
+| 2026-04-29 | Claude (Opus 4.7) | **GTT orderbook now active-only at the broker mapper.** Triggered/cancelled/expired/rejected/disabled/deleted GTTs are filtered out before the response leaves the broker layer, so the orderbook (UI + API) shows only triggers that can still fire. Both `broker/zerodha/mapping/gtt_data.py` and `broker/dhan/mapping/gtt_data.py` updated. |
+| 2026-04-29 | Claude (Opus 4.7) | **Broker mappers self-sufficient for SINGLE trigger resolution.** Added `_resolve_single_trigger(data)` to both Zerodha and Dhan mappers — falls back to `triggerprice_sl` / `triggerprice_tg` when the legacy `trigger_price` alias isn't pre-populated by the schema (e.g., when the UI modify route bypasses `ModifyGTTOrderSchema`). Fixes a `KeyError: 'trigger_price'` that surfaced on UI-driven modifies. |
+| 2026-04-29 | Claude (Opus 4.7) | **API documentation — `docs/api/gtt-orders/` created.** Four new docs (placegttorder, modifygttorder, cancelgttorder, gttorderbook) added with intent-led structure: *"Use SINGLE when…"* / *"Use OCO when…"*, a directional rule for picking `triggerprice_sl` vs `triggerprice_tg` (below LTP vs above LTP), an explicit naming-semantics callout (in SINGLE the suffix is just a directional hint; in OCO it's a real role), and intent-driven sample headings (*"Buy IDEA if it dips to 9.55, place LIMIT order at 9.50"* etc.). Broker-specific callouts removed — broker quirks remain absorbed in the broker layer per OpenAlgo's broker-agnostic API contract. `docs/api/README.md` updated with a GTT section linking the four endpoints. |

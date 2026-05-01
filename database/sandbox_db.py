@@ -11,6 +11,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -19,7 +20,7 @@ from sqlalchemy import (
     create_engine,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
@@ -261,6 +262,137 @@ class SandboxConfig(Base):
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
 
+class SandboxGTT(Base):
+    """A single GTT (Good Till Triggered) trigger - single-leg or two-leg OCO.
+
+    State machine: active -> triggered | cancelled | expired | rejected.
+    Children (legs) carry the order payloads and the per-leg ``triggering``
+    intermediate state used by the atomic-claim concurrency pattern.
+    """
+
+    __tablename__ = "sandbox_gtt"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Broker-neutral OpenAlgo-side ID (sandbox-minted). Format:
+    # ``GTT-YYMMDD-<8hex>`` - parallels the sandbox orderid scheme but prefixed
+    # to make origin obvious in logs.
+    gtt_id = Column(String(50), unique=True, nullable=False, index=True)
+
+    user_id = Column(String(50), nullable=False, index=True)
+    strategy = Column(String(100), nullable=True)
+
+    # "single" | "two-leg"
+    trigger_type = Column(String(10), nullable=False)
+
+    symbol = Column(String(50), nullable=False, index=True)
+    exchange = Column(String(20), nullable=False, index=True)
+
+    # Snapshot of the instrument's LTP at the time the GTT was placed. Kept for
+    # broker parity (Kite's /gtt/triggers echoes it back) and monitor diagnostics.
+    last_price = Column(DECIMAL(10, 2), nullable=False)
+
+    # active -> triggered | cancelled | expired | rejected
+    gtt_status = Column(String(20), nullable=False, default="active", index=True)
+
+    # Authoritative margin blocked for this GTT. ``max(legs)`` in ``max`` mode
+    # (default) or ``sum(legs)`` in ``sum`` mode per
+    # ``SandboxConfig.gtt_oco_margin_mode``. Equals the leg's margin for single-leg.
+    margin_blocked = Column(DECIMAL(15, 2), nullable=False, default=0.00)
+
+    # Wall-clock expiry (Zerodha parity: default 365d from placement). Nullable.
+    expires_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+
+    legs = relationship(
+        "SandboxGTTLeg",
+        back_populates="gtt",
+        cascade="all, delete-orphan",
+        order_by="SandboxGTTLeg.leg_number",
+    )
+
+    __table_args__ = (
+        Index("idx_gtt_user_status", "user_id", "gtt_status"),
+        Index("idx_gtt_symbol_exchange", "symbol", "exchange"),
+        CheckConstraint("trigger_type IN ('single', 'two-leg')", name="check_gtt_trigger_type"),
+        CheckConstraint(
+            "gtt_status IN ('active', 'triggered', 'cancelled', 'expired', 'rejected')",
+            name="check_gtt_status",
+        ),
+    )
+
+
+class SandboxGTTLeg(Base):
+    """One leg (order payload + trigger price) belonging to a GTT.
+
+    State machine: pending -> triggering -> triggered | cancelled.
+    The ``triggering`` intermediate state is the atomic-claim target: evaluators
+    CAS-flip the row from ``pending`` to ``triggering`` in a single conditional
+    UPDATE; only the winner proceeds to ``_fire_leg``. ``claimed_at`` lets the
+    stranded-leg reaper reclaim rows stuck in ``triggering`` after a crash.
+    """
+
+    __tablename__ = "sandbox_gtt_legs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    gtt_id = Column(
+        String(50),
+        ForeignKey("sandbox_gtt.gtt_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # 1 for single-leg GTTs; 1 or 2 for two-leg OCO. Preserves pairing order
+    # with the parent GTT's ``trigger_values`` list.
+    leg_number = Column(Integer, nullable=False)
+
+    trigger_price = Column(DECIMAL(10, 2), nullable=False)
+
+    action = Column(String(10), nullable=False)  # BUY | SELL
+    quantity = Column(Integer, nullable=False)
+    price = Column(DECIMAL(10, 2), nullable=False)
+    pricetype = Column(String(10), nullable=False, default="LIMIT")
+    product = Column(String(10), nullable=False)  # CNC | NRML | MIS
+
+    # pending -> triggering -> triggered | cancelled
+    leg_status = Column(String(20), nullable=False, default="pending")
+
+    # Orderid of the sandbox_orders row inserted when this leg fired.
+    triggered_order_id = Column(String(50), nullable=True)
+
+    # Per-leg margin captured at GTT placement. Exact amount to release from
+    # ``SandboxGTT.margin_blocked`` when this leg fires (sum mode) or the anchor
+    # to compare against the blocked-max when releasing (max mode). Stored here
+    # so release is deterministic even if the user flips
+    # ``gtt_oco_margin_mode`` mid-flight.
+    leg_margin = Column(DECIMAL(15, 2), nullable=False, default=0.00)
+
+    # Set to CURRENT_TIMESTAMP on the CAS claim UPDATE; cleared (NULL) on revert
+    # or any final transition. The stranded-leg reaper reads this column to
+    # find legs stuck in ``triggering`` after a worker crash.
+    claimed_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+
+    gtt = relationship("SandboxGTT", back_populates="legs")
+
+    __table_args__ = (
+        # Covers both the active-trigger scan (leg_status='pending') and the
+        # reaper's stale-claim query (leg_status='triggering' AND claimed_at < cutoff).
+        Index("idx_gtt_leg_status_claimed", "leg_status", "claimed_at"),
+        CheckConstraint(
+            "leg_status IN ('pending', 'triggering', 'triggered', 'cancelled')",
+            name="check_gtt_leg_status",
+        ),
+        CheckConstraint("action IN ('BUY', 'SELL')", name="check_gtt_leg_action"),
+        CheckConstraint("product IN ('CNC', 'NRML', 'MIS')", name="check_gtt_leg_product"),
+    )
+
+
 def init_db():
     """Initialize sandbox database and tables"""
     from database.db_init_helper import init_db_with_logging
@@ -365,6 +497,16 @@ def init_default_config():
             "config_key": "smart_order_delay",
             "config_value": "0.5",
             "description": "Delay between multi-leg smart orders - Range: 0.1-10 seconds (for future use)",
+        },
+        {
+            "config_key": "gtt_oco_margin_mode",
+            "config_value": "max",
+            "description": "OCO GTT margin mode: 'max' (block only the larger leg) or 'sum'",
+        },
+        {
+            "config_key": "gtt_claim_timeout_sec",
+            "config_value": "60",
+            "description": "Seconds after which a GTT leg stuck in 'triggering' is reclaimed to 'pending'",
         },
     ]
 

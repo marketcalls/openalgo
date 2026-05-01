@@ -26,6 +26,11 @@ IMMEDIATE_EXECUTION_OPERATIONS = {
     "holdings",
     "funds",
     "openposition",
+    # GTT: place is queueable; modify/cancel bypass the queue because a stale
+    # queued action against an already-triggered GTT is unsafe (Phase 0.3).
+    "modifygttorder",
+    "cancelgttorder",
+    "gttorderbook",
 }
 
 

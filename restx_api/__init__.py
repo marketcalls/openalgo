@@ -14,12 +14,14 @@ api = Api(
 from .analyzer import api as analyzer_ns
 from .basket_order import api as basket_order_ns
 from .cancel_all_order import api as cancel_all_order_ns
+from .cancel_gtt_order import api as cancel_gtt_order_ns
 from .cancel_order import api as cancel_order_ns
 from .chart_api import api as chart_ns
 from .close_position import api as close_position_ns
 from .depth import api as depth_ns
 from .expiry import api as expiry_ns
 from .funds import api as funds_ns
+from .gtt_orderbook import api as gtt_orderbook_ns
 from .history import api as history_ns
 from .holdings import api as holdings_ns
 from .instruments import api as instruments_ns
@@ -27,6 +29,7 @@ from .intervals import api as intervals_ns
 from .margin import api as margin_ns
 from .market_holidays import api as market_holidays_ns
 from .market_timings import api as market_timings_ns
+from .modify_gtt_order import api as modify_gtt_order_ns
 from .modify_order import api as modify_order_ns
 from .multi_option_greeks import api as multi_option_greeks_ns
 from .multiquotes import api as multiquotes_ns
@@ -39,6 +42,7 @@ from .options_order import api as options_order_ns
 from .orderbook import api as orderbook_ns
 from .orderstatus import api as orderstatus_ns
 from .ping import api as ping_ns
+from .place_gtt_order import api as place_gtt_order_ns
 from .place_order import api as place_order_ns
 from .place_smart_order import api as place_smart_order_ns
 from .pnl_symbols import api as pnl_symbols_ns
@@ -93,3 +97,7 @@ api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
 api.add_namespace(market_timings_ns, path="/market/timings")
 api.add_namespace(pnl_symbols_ns, path="/pnl")
+api.add_namespace(place_gtt_order_ns, path="/placegttorder")
+api.add_namespace(modify_gtt_order_ns, path="/modifygttorder")
+api.add_namespace(cancel_gtt_order_ns, path="/cancelgttorder")
+api.add_namespace(gtt_orderbook_ns, path="/gttorderbook")

@@ -67,7 +67,16 @@ def async_log_order(api_type, request_data, response_data):
     request thread.
 
     Args:
-        api_type: The type of API call (e.g. ``'placeorder'``, ``'cancelorder'``).
+        api_type: The type of API call. Reserved values include:
+            - Regular orders: ``placeorder``, ``placesmartorder``, ``modifyorder``,
+              ``cancelorder``, ``cancelallorder``, ``closeposition``, ``basketorder``,
+              ``splitorder``, ``optionsorder``, ``optionsmultiorder``.
+            - GTT orders: ``placegttorder``, ``modifygttorder``, ``cancelgttorder``,
+              ``gttorderbook``, ``gtttriggered`` (auto-emitted when a GTT leg fires),
+              ``gttexpired`` (auto-emitted when a GTT passes ``expires_at``).
+            - Data reads: ``orderbook``, ``tradebook``, ``positionbook``, ``holdings``,
+              ``funds``, ``orderstatus``, ``openposition``, ``quotes``, ``depth``,
+              ``history``, ``chart``, etc.
         request_data: Dictionary of the original request payload.
         response_data: Dictionary of the broker/service response.
     """

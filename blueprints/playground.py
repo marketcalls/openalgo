@@ -181,6 +181,10 @@ def categorize_endpoint(path):
         for x in [
             "/placeorder",
             "/placesmartorder",
+            "/placegttorder",
+            "/modifygttorder",
+            "/cancelgttorder",
+            "/gttorderbook",
             "/optionsorder",
             "/optionsmultiorder",
             "/basketorder",
