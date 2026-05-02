@@ -9,6 +9,8 @@ import type {
   FreezeQty,
   Holiday,
   HolidaysResponse,
+  MCPAuditResponse,
+  OAuthClientsResponse,
   SystemInfo,
   TimingsResponse,
   TodayTiming,
@@ -208,5 +210,55 @@ export const adminApi = {
   downloadReport: (format: 'md' | 'txt' = 'md'): void => {
     const fmt = format === 'txt' ? 'txt' : 'md'
     window.location.href = `/admin/api/system/report?format=${fmt}`
+  },
+
+  // ============================================================================
+  // Remote MCP admin APIs
+  // ============================================================================
+
+  getOAuthClients: async (): Promise<OAuthClientsResponse> => {
+    const response = await webClient.get<OAuthClientsResponse>('/admin/api/oauth/clients')
+    return response.data
+  },
+
+  approveOAuthClient: async (clientId: string): Promise<{ status: string }> => {
+    const response = await webClient.post<{ status: string }>(
+      `/admin/api/oauth/clients/${clientId}/approve`
+    )
+    return response.data
+  },
+
+  revokeOAuthClient: async (
+    clientId: string
+  ): Promise<{ status: string; tokens_revoked: number }> => {
+    const response = await webClient.post<{ status: string; tokens_revoked: number }>(
+      `/admin/api/oauth/clients/${clientId}/revoke`,
+      { confirm: true }
+    )
+    return response.data
+  },
+
+  getMCPAudit: async (params?: {
+    limit?: number
+    tool?: string
+    scope?: string
+    outcome?: string
+  }): Promise<MCPAuditResponse> => {
+    const search = new URLSearchParams()
+    if (params?.limit) search.set('limit', String(params.limit))
+    if (params?.tool) search.set('tool', params.tool)
+    if (params?.scope) search.set('scope', params.scope)
+    if (params?.outcome) search.set('outcome', params.outcome)
+    const qs = search.toString() ? `?${search.toString()}` : ''
+    const response = await webClient.get<MCPAuditResponse>(`/admin/api/mcp/audit${qs}`)
+    return response.data
+  },
+
+  triggerMCPKillSwitch: async (): Promise<{ status: string; tokens_revoked: number }> => {
+    const response = await webClient.post<{ status: string; tokens_revoked: number }>(
+      '/admin/api/mcp/kill-switch',
+      { confirm: 'REVOKE_ALL_MCP_TOKENS' }
+    )
+    return response.data
   },
 }

@@ -4,6 +4,7 @@ import {
   Calendar,
   Clock,
   Gauge,
+  Globe,
   Settings,
   Shield,
   Snowflake,
@@ -93,6 +94,14 @@ export default function AdminIndex() {
       href: '/admin/diagnostics',
       countLabel: 'troubleshoot',
       color: 'bg-indigo-500',
+    },
+    {
+      title: 'Remote MCP',
+      description: 'Approve OAuth clients, browse tool-call audit log, kill switch',
+      icon: Globe,
+      href: '/admin/remote-mcp',
+      countLabel: 'AI clients',
+      color: 'bg-teal-500',
     },
   ]
 

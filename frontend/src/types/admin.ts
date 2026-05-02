@@ -237,3 +237,52 @@ export interface ErrorGroupsResponse {
   total_entries: number
   total_groups: number
 }
+
+// ============================================================================
+// Remote MCP — admin types
+// ============================================================================
+
+export interface OAuthClient {
+  client_id: string
+  client_name: string
+  redirect_uris: string[]
+  scopes_requested: string[]
+  is_public: boolean
+  approved: boolean
+  approved_at: string | null
+  revoked_at: string | null
+  created_at: string | null
+  last_used_at: string | null
+}
+
+export interface OAuthClientsResponse {
+  status: string
+  mcp_enabled: boolean
+  clients: OAuthClient[]
+  summary: {
+    pending: number
+    approved: number
+    revoked: number
+  }
+}
+
+export interface MCPAuditEntry {
+  ts?: string
+  jti?: string
+  client_id?: string
+  tool?: string
+  scope?: string
+  params_hash?: string
+  duration_ms?: number
+  outcome?: string
+  request_ip?: string
+}
+
+export interface MCPAuditResponse {
+  status: string
+  mcp_enabled: boolean
+  data: MCPAuditEntry[]
+  count: number
+  scanned?: number
+  total_in_window: number
+}

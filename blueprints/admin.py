@@ -1738,3 +1738,310 @@ def api_system_report():
     except Exception as e:
         logger.exception(f"Error generating system report: {e}")
         return jsonify({"status": "error", "message": "Failed to generate report"}), 500
+
+
+# ============================================================================
+# Remote MCP admin endpoints
+# ============================================================================
+# These endpoints surface only when MCP_HTTP_ENABLED=True. When the feature
+# is off, every endpoint returns a clean empty payload so the React page can
+# render an "MCP is disabled" hint without lighting up errors.
+#
+# Security:
+#   - All endpoints @check_session_validity (admin session required)
+#   - Rate-limited the same as other admin/api/* endpoints
+#   - Kill switch and revoke require explicit ``confirm`` parameter so an
+#     accidental form submit can't disconnect every active token
+#   - Audit log path resolved via _errors_file_path-style guard so a
+#     misconfigured LOG_DIR can't be coerced into reading another file
+
+
+def _mcp_enabled() -> bool:
+    return os.getenv("MCP_HTTP_ENABLED", "False").lower() == "true"
+
+
+def _mcp_audit_path():
+    """Return the resolved log/mcp.jsonl path or None if outside LOG_DIR."""
+    log_dir = Path(os.getenv("LOG_DIR", "log")).resolve()
+    target = (log_dir / "mcp.jsonl").resolve()
+    try:
+        target.relative_to(log_dir)
+    except ValueError:
+        return None
+    return target
+
+
+def _serialize_oauth_client(c) -> dict:
+    """Compact, secret-free shape for the React table."""
+    redirects: list[str] = []
+    try:
+        redirects = json.loads(c.redirect_uris) if c.redirect_uris else []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        redirects = []
+    return {
+        "client_id": c.client_id,
+        "client_name": c.client_name,
+        "redirect_uris": redirects,
+        "scopes_requested": (c.scopes_requested or "").split(),
+        "is_public": c.client_secret_hash is None,
+        "approved": bool(c.approved),
+        "approved_at": c.approved_at.isoformat() if c.approved_at else None,
+        "revoked_at": c.revoked_at.isoformat() if c.revoked_at else None,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "last_used_at": c.last_used_at.isoformat() if c.last_used_at else None,
+    }
+
+
+@admin_bp.route("/api/oauth/clients", methods=["GET"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_oauth_clients_list():
+    """List every DCR-registered OAuth client.
+
+    The React page splits these into pending / approved / revoked
+    client-side. We return everything in one call to keep the page
+    snappy without polling.
+    """
+    if not _mcp_enabled():
+        return jsonify(
+            {
+                "status": "success",
+                "mcp_enabled": False,
+                "clients": [],
+                "summary": {"pending": 0, "approved": 0, "revoked": 0},
+            }
+        )
+
+    try:
+        from database.oauth_db import OAuthClient
+
+        rows = OAuthClient.query.order_by(OAuthClient.created_at.desc()).all()
+        clients = [_serialize_oauth_client(c) for c in rows]
+
+        summary = {
+            "pending": sum(1 for c in clients if not c["approved"] and not c["revoked_at"]),
+            "approved": sum(1 for c in clients if c["approved"] and not c["revoked_at"]),
+            "revoked": sum(1 for c in clients if c["revoked_at"]),
+        }
+        return jsonify(
+            {
+                "status": "success",
+                "mcp_enabled": True,
+                "clients": clients,
+                "summary": summary,
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error listing OAuth clients: {e}")
+        return jsonify({"status": "error", "message": "Failed to list clients"}), 500
+
+
+@admin_bp.route("/api/oauth/clients/<client_id>/approve", methods=["POST"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_oauth_client_approve(client_id):
+    """Approve a pending DCR client so it can complete the OAuth flow."""
+    if not _mcp_enabled():
+        return jsonify({"status": "error", "message": "Remote MCP is not enabled."}), 400
+
+    try:
+        from database.oauth_db import OAuthClient, db_session as oauth_session
+
+        client = OAuthClient.query.filter_by(client_id=client_id).first()
+        if client is None:
+            return jsonify({"status": "error", "message": "Client not found."}), 404
+        if client.revoked_at:
+            return jsonify({"status": "error", "message": "Client is revoked."}), 400
+        if client.approved:
+            return jsonify({"status": "success", "message": "Already approved."})
+
+        client.approved = True
+        client.approved_at = datetime.now()
+        oauth_session.commit()
+
+        logger.info(
+            f"[OAuth admin] approved client_id={client_id} "
+            f"by user={request.headers.get('X-Forwarded-User') or 'session'}"
+        )
+        return jsonify(
+            {"status": "success", "client": _serialize_oauth_client(client)}
+        )
+    except Exception as e:
+        logger.exception(f"Error approving OAuth client: {e}")
+        return jsonify({"status": "error", "message": "Failed to approve."}), 500
+
+
+@admin_bp.route("/api/oauth/clients/<client_id>/revoke", methods=["POST"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_oauth_client_revoke(client_id):
+    """Revoke a client and every refresh token it owns.
+
+    Requires ``confirm=true`` in the body — guards against accidental
+    form submits hitting this endpoint.
+    """
+    if not _mcp_enabled():
+        return jsonify({"status": "error", "message": "Remote MCP is not enabled."}), 400
+
+    data = request.get_json(silent=True) or {}
+    if data.get("confirm") is not True:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Revocation requires confirm=true in the request body.",
+            }
+        ), 400
+
+    try:
+        from database.oauth_db import OAuthClient, revoke_client
+
+        client = OAuthClient.query.filter_by(client_id=client_id).first()
+        if client is None:
+            return jsonify({"status": "error", "message": "Client not found."}), 404
+        if client.revoked_at:
+            return jsonify({"status": "success", "message": "Already revoked."})
+
+        revoked_count = revoke_client(client_id, "admin_revoke")
+        logger.warning(
+            f"[OAuth admin] REVOKE client_id={client_id} "
+            f"({revoked_count} tokens) by session"
+        )
+        return jsonify(
+            {
+                "status": "success",
+                "client": _serialize_oauth_client(client),
+                "tokens_revoked": revoked_count,
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error revoking OAuth client: {e}")
+        return jsonify({"status": "error", "message": "Failed to revoke."}), 500
+
+
+# ----------------------------------------------------------------------------
+# MCP audit viewer
+# ----------------------------------------------------------------------------
+
+
+_MCP_AUDIT_MAX_LIMIT = 500
+
+
+@admin_bp.route("/api/mcp/audit", methods=["GET"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_mcp_audit():
+    """Tail log/mcp.jsonl. Mirrors the /admin/api/errors design.
+
+    Query params:
+        limit  — int, clamped to [1, 500]
+        tool   — optional substring match on the tool field
+        scope  — optional exact match
+        outcome — optional exact match (success, error, bad_arguments)
+    """
+    if not _mcp_enabled():
+        return jsonify(
+            {
+                "status": "success",
+                "mcp_enabled": False,
+                "data": [],
+                "count": 0,
+                "total_in_window": 0,
+            }
+        )
+
+    try:
+        try:
+            limit = int(request.args.get("limit", 100))
+        except (TypeError, ValueError):
+            limit = 100
+        limit = max(1, min(limit, _MCP_AUDIT_MAX_LIMIT))
+
+        tool = (request.args.get("tool") or "").strip()[:100]
+        scope = (request.args.get("scope") or "").strip()[:50]
+        outcome = (request.args.get("outcome") or "").strip()[:50]
+
+        path = _mcp_audit_path()
+        if path is None or not path.exists():
+            return jsonify(
+                {
+                    "status": "success",
+                    "mcp_enabled": True,
+                    "data": [],
+                    "count": 0,
+                    "total_in_window": 0,
+                }
+            )
+
+        raw_lines = _tail_jsonl(path)
+
+        results: list[dict] = []
+        scanned = 0
+        for entry in _parse_jsonl_lines(reversed(raw_lines)):
+            scanned += 1
+            if tool and tool.lower() not in str(entry.get("tool", "")).lower():
+                continue
+            if scope and entry.get("scope") != scope:
+                continue
+            if outcome and entry.get("outcome") != outcome:
+                continue
+            results.append(entry)
+            if len(results) >= limit:
+                break
+        results.reverse()
+
+        total = sum(1 for _ in _parse_jsonl_lines(raw_lines))
+
+        resp = jsonify(
+            {
+                "status": "success",
+                "mcp_enabled": True,
+                "data": results,
+                "count": len(results),
+                "scanned": scanned,
+                "total_in_window": total,
+            }
+        )
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
+    except Exception as e:
+        logger.exception(f"Error reading MCP audit log: {e}")
+        return jsonify({"status": "error", "message": "Failed to read audit log."}), 500
+
+
+# ----------------------------------------------------------------------------
+# Kill switch
+# ----------------------------------------------------------------------------
+
+
+@admin_bp.route("/api/mcp/kill-switch", methods=["POST"])
+@check_session_validity
+@limiter.limit("10/minute")
+def api_mcp_kill_switch():
+    """Atomic revoke of every refresh token. Requires explicit confirmation.
+
+    The kill switch is the panic button — it terminates every MCP
+    client's ability to refresh and forces them through a fresh
+    /authorize round trip when they next try. Active access tokens
+    expire on their own short TTL (15 min).
+    """
+    if not _mcp_enabled():
+        return jsonify({"status": "error", "message": "Remote MCP is not enabled."}), 400
+
+    data = request.get_json(silent=True) or {}
+    if data.get("confirm") != "REVOKE_ALL_MCP_TOKENS":
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Kill switch requires confirm=\"REVOKE_ALL_MCP_TOKENS\".",
+            }
+        ), 400
+
+    try:
+        from database.oauth_db import revoke_all_tokens
+
+        revoked = revoke_all_tokens("admin_kill_switch")
+        logger.warning(f"[MCP kill-switch] revoked {revoked} refresh tokens via admin UI")
+        return jsonify({"status": "success", "tokens_revoked": revoked})
+    except Exception as e:
+        logger.exception(f"Error executing MCP kill switch: {e}")
+        return jsonify({"status": "error", "message": "Failed to execute kill switch."}), 500
