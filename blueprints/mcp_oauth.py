@@ -561,8 +561,40 @@ _CONSENT_TEMPLATE = """\
 """
 
 
-def _render_consent(**ctx) -> str:
-    return render_template_string(_CONSENT_TEMPLATE, **ctx)
+def _render_consent(**ctx):
+    """Render the consent page with a CSP that permits the OAuth redirect.
+
+    The strict global CSP sets ``form-action 'self'``. When the user
+    clicks Approve, the form POSTs to /oauth/authorize and the server
+    responds with a 302 to the registered redirect_uri (typically
+    chatgpt.com / claude.ai). The browser evaluates ``form-action`` on
+    the *containing page's* CSP against the entire redirect chain — so
+    the consent page itself needs an allowance for the cross-origin
+    redirect target. The redirect_uri has already been exact-matched
+    against the client's registered list at this point, so allowing
+    its origin here is safe.
+    """
+    body = render_template_string(_CONSENT_TEMPLATE, **ctx)
+    from flask import make_response
+
+    response = make_response(body)
+    redirect_uri = ctx.get("redirect_uri") or ""
+    origin = _origin_of(redirect_uri)
+    # Build a per-page CSP that mirrors the strict defaults but with
+    # form-action expanded to include this single, validated origin.
+    # We don't touch the global CSP middleware's other directives
+    # (script-src, style-src, etc.) — they continue to apply via the
+    # default header set by csp_middleware.
+    if origin:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'none'; "  # no inline JS in the consent page
+            "style-src 'self' 'unsafe-inline'; "
+            f"form-action 'self' {origin}; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'"
+        )
+    return response
 
 
 @mcp_oauth_bp.route("/authorize", methods=["GET", "POST"])
