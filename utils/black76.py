@@ -44,9 +44,7 @@ def implied_volatility(price, F, K, r, t, flag):
     else:
         intrinsic = df * max(K - F, 0.0)
     if price < intrinsic - 1e-12:
-        raise BelowIntrinsicException(
-            f"Option price {price} is below intrinsic value {intrinsic}"
-        )
+        raise BelowIntrinsicException(f"Option price {price} is below intrinsic value {intrinsic}")
 
     def objective(sigma):
         return _price(flag, F, K, t, r, sigma) - price
@@ -54,7 +52,7 @@ def implied_volatility(price, F, K, r, t, flag):
     try:
         return brentq(objective, 1e-6, 5.0, xtol=1e-8, rtol=1e-8, maxiter=100)
     except ValueError as e:
-        raise ValueError(f"IV convergence failed: {e}")
+        raise ValueError(f"IV convergence failed: {e}") from e
 
 
 def delta(flag, F, K, t, r, sigma):

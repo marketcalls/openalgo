@@ -13,10 +13,20 @@ from typing import Any, Dict, Optional, Tuple
 
 from utils.black76 import (
     delta as black_delta,
+)
+from utils.black76 import (
     gamma as black_gamma,
+)
+from utils.black76 import (
     implied_volatility as black_iv,
+)
+from utils.black76 import (
     rho as black_rho,
+)
+from utils.black76 import (
     theta as black_theta,
+)
+from utils.black76 import (
     vega as black_vega,
 )
 from utils.constants import CRYPTO_EXCHANGES
@@ -647,24 +657,30 @@ def get_multi_option_greeks(
         symbol = sym_req.get("symbol")
         exchange = sym_req.get("exchange")
         try:
-            base_symbol, expiry, strike, opt_type = parse_option_symbol(symbol, exchange, expiry_time)
+            base_symbol, expiry, strike, opt_type = parse_option_symbol(
+                symbol, exchange, expiry_time
+            )
             parsed_symbols[symbol] = (base_symbol, expiry, strike, opt_type)
 
             # Determine spot symbol/exchange for this option
             spot_symbol = sym_req.get("underlying_symbol") or base_symbol
-            spot_exchange = sym_req.get("underlying_exchange") or get_underlying_exchange(base_symbol, exchange)
+            spot_exchange = sym_req.get("underlying_exchange") or get_underlying_exchange(
+                base_symbol, exchange
+            )
             spot_key = (spot_symbol, spot_exchange)
             spot_keys[spot_key] = None  # will be filled with price
             symbol_to_spot_key[symbol] = spot_key
         except Exception as e:
             logger.warning(f"Failed to parse symbol {symbol}: {e}")
             failed_count += 1
-            results.append({
-                "status": "error",
-                "symbol": symbol,
-                "exchange": exchange,
-                "message": f"Failed to parse option symbol: {str(e)}",
-            })
+            results.append(
+                {
+                    "status": "error",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "message": f"Failed to parse option symbol: {str(e)}",
+                }
+            )
 
     # Step 2: Fetch spot prices — one API call per unique underlying
     for spot_key in spot_keys:
@@ -679,7 +695,9 @@ def get_multi_option_greeks(
                 else:
                     logger.warning(f"No LTP in spot response for {spot_symbol}")
             else:
-                logger.warning(f"Failed to fetch spot for {spot_symbol}: {spot_response.get('message')}")
+                logger.warning(
+                    f"Failed to fetch spot for {spot_symbol}: {spot_response.get('message')}"
+                )
         except Exception as e:
             logger.warning(f"Error fetching spot for {spot_symbol}: {e}")
 
@@ -688,10 +706,12 @@ def get_multi_option_greeks(
     for sym_req in symbols:
         symbol = sym_req.get("symbol")
         if symbol in parsed_symbols:  # only if parsing succeeded
-            option_symbols_to_fetch.append({
-                "symbol": symbol,
-                "exchange": sym_req.get("exchange"),
-            })
+            option_symbols_to_fetch.append(
+                {
+                    "symbol": symbol,
+                    "exchange": sym_req.get("exchange"),
+                }
+            )
 
     option_prices = {}  # symbol -> ltp
     if option_symbols_to_fetch:
@@ -724,24 +744,28 @@ def get_multi_option_greeks(
         spot_price = spot_keys.get(spot_key) if spot_key else None
         if not spot_price:
             failed_count += 1
-            results.append({
-                "status": "error",
-                "symbol": symbol,
-                "exchange": exchange,
-                "message": f"Failed to fetch underlying price for {spot_key[0] if spot_key else 'unknown'}",
-            })
+            results.append(
+                {
+                    "status": "error",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "message": f"Failed to fetch underlying price for {spot_key[0] if spot_key else 'unknown'}",
+                }
+            )
             continue
 
         # Get option price
         option_price = option_prices.get(symbol)
         if not option_price:
             failed_count += 1
-            results.append({
-                "status": "error",
-                "symbol": symbol,
-                "exchange": exchange,
-                "message": "Option LTP not available",
-            })
+            results.append(
+                {
+                    "status": "error",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "message": "Option LTP not available",
+                }
+            )
             continue
 
         # Calculate Greeks (pure math, no API calls)
@@ -765,12 +789,14 @@ def get_multi_option_greeks(
         except Exception as e:
             logger.exception(f"Error calculating Greeks for {symbol}: {e}")
             failed_count += 1
-            results.append({
-                "status": "error",
-                "symbol": symbol,
-                "exchange": exchange,
-                "message": str(e),
-            })
+            results.append(
+                {
+                    "status": "error",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "message": str(e),
+                }
+            )
 
     # Sort results to maintain original order
     symbol_order = {sym["symbol"]: idx for idx, sym in enumerate(symbols)}
