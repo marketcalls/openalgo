@@ -418,7 +418,7 @@ websocket_proxy/
 
 ### `/sandbox/` - Sandbox Trading Engine
 
-Virtual trading environment for testing.
+Sandbox trading environment for testing.
 
 ```
 sandbox/
@@ -636,5 +636,5 @@ test/
 4. **Broker-specific code**: Navigate to `/broker/{broker_name}/`
 5. **Frontend components**: Explore `/frontend/src/components/` and `/frontend/src/pages/`
 6. **Real-time features**: See `/websocket_proxy/` for market data streaming
-7. **Sandbox mode**: Check `/sandbox/` for virtual trading logic
+7. **Sandbox mode**: Check `/sandbox/` for sandbox trading logic
 8. **Order side-effects**: Check `/events/` for event types, `/subscribers/` for handlers

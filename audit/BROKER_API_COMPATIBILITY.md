@@ -294,7 +294,7 @@ Most brokers provide only 5-level market depth via WebSocket. Only Dhan supports
 | `/api/v1/chart` | GET/POST | Chart preferences (TradingView) |
 | `/api/v1/market/timings` | POST | Market open/close times |
 | `/api/v1/market/holidays` | POST | Market holidays calendar |
-| `/api/v1/analyzer` | GET/POST | Analyzer (paper trading) mode |
+| `/api/v1/analyzer` | GET/POST | Analyzer (sandbox trading) mode |
 | `/api/v1/pnl/symbols` | POST | P&L breakdown by symbol |
 | `/api/v1/telegram/*` | Various | Telegram bot integration |
 
@@ -380,7 +380,7 @@ The following brokers do not have the `get_intervals` method defined at all:
 |--------|--------|
 | Dhan (Sandbox) | Missing |
 
-> **Note**: Dhan (Sandbox) is a paper trading environment.
+> **Note**: Dhan (Sandbox) is a sandbox trading environment.
 
 ---
 

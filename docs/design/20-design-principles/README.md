@@ -110,7 +110,7 @@ def service_function(data, api_key=None, auth_token=None, broker=None):
 ```python
 def process_order(data, api_key):
     if get_analyze_mode():
-        # Route to sandbox (virtual trading)
+        # Route to sandbox (sandbox trading)
         return sandbox_place_order(api_key, data)
     else:
         # Route to live broker
@@ -120,7 +120,7 @@ def process_order(data, api_key):
 ### Benefits
 - Same API for both modes
 - Risk-free testing
-- Isolated virtual capital
+- Isolated sandbox capital
 
 ## 5. Async Non-Blocking Operations
 

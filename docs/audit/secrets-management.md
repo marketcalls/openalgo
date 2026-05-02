@@ -158,7 +158,7 @@ Your databases in `db/` directory:
 |------|----------|-------------|
 | `openalgo.db` | Users, orders, settings | High |
 | `logs.db` | API request logs | Medium |
-| `sandbox.db` | Paper trading data | Low |
+| `sandbox.db` | Sandbox trading data | Low |
 | `latency.db` | Performance metrics | Low |
 | `historify.duckdb` | Historical prices | Low |
 

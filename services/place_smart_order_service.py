@@ -145,7 +145,7 @@ def place_smart_order_with_auth(
         ))
         return False, error_response, 400
 
-    # If in analyze mode, route to sandbox for virtual trading
+    # If in analyze mode, route to sandbox for sandbox trading
     if get_analyze_mode():
         from services.sandbox_service import sandbox_place_smart_order
 

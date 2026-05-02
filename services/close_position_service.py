@@ -216,7 +216,7 @@ def close_position(
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         # Check if user is in semi-auto mode (closeposition is blocked in semi-auto)
-        # BUT allow execution in analyze/sandbox mode (virtual trading should always work)
+        # BUT allow execution in analyze/sandbox mode (sandbox trading should always work)
         from database.auth_db import get_order_mode, verify_api_key
 
         # Check analyze mode first - if in analyze mode, allow execution

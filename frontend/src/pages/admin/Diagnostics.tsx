@@ -224,7 +224,7 @@ export default function Diagnostics() {
             </div>
             <div className="text-sm text-muted-foreground max-w-md text-right">
               {isAnalyze
-                ? 'Sandbox mode — orders use virtual capital and never reach the broker.'
+                ? 'Sandbox mode — orders use sandbox capital and never reach the broker.'
                 : 'Live mode — orders are routed to the real broker account.'}
             </div>
           </CardContent>

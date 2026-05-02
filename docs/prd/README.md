@@ -79,7 +79,7 @@ A unified API layer that:
 - [UI Components](./flow-ui-components.md) - React components guide
 - [Execution Engine](./flow-execution.md) - Backend execution details
 
-### Sandbox - Paper Trading Environment
+### Sandbox - Sandbox Trading Environment
 - [Sandbox PRD](./sandbox.md) - Main product requirements
 - [Architecture](./sandbox-architecture.md) - System architecture
 - [Execution Engine](./sandbox-execution-engine.md) - Order matching engine

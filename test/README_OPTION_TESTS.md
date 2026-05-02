@@ -72,7 +72,7 @@ API_KEY = "your_api_key_here"        # Replace with your actual API key
 
 1. Enable **Analyze Mode** in OpenAlgo settings
 2. Run the tests
-3. Orders will be placed in sandbox (virtual trading)
+3. Orders will be placed in sandbox (sandbox trading)
 4. Check sandbox dashboard for results
 5. Response will include `"mode": "analyze"`
 

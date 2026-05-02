@@ -28,7 +28,7 @@ OpenAlgo uses **5 separate databases** for data isolation, performance optimizat
 │                                                                              │
 │  ┌─────────────────┐  ┌─────────────────┐                                   │
 │  │   sandbox.db    │  │ historify.duckdb│                                   │
-│  │  (Paper Trade)  │  │ (Market Data)   │                                   │
+│  │  (Sandbox Trade)  │  │ (Market Data)   │                                   │
 │  │                 │  │                 │                                   │
 │  │  - Virtual ₹1Cr │  │  - OHLCV data   │                                   │
 │  │  - Positions    │  │  - Watchlists   │                                   │
@@ -281,7 +281,7 @@ db/sandbox.db
 ```
 
 ### Purpose
-Isolated paper trading with ₹1 Crore virtual capital.
+Isolated sandbox trading with ₹1 Crore sandbox capital.
 
 ### Tables
 

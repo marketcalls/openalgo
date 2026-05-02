@@ -52,10 +52,10 @@ OpenAlgo is a production-ready algorithmic trading platform built with Flask (ba
 |--------|-------------|
 | [15-UI Elements](./15-basic-ui/) | Trading UI and analytics tools (GEX, IV Smile, OI Profile, etc.) |
 
-### Paper Trading
+### Sandbox Trading
 | Module | Description |
 |--------|-------------|
-| [07-Sandbox](./07-sandbox/) | Analyzer mode with virtual capital |
+| [07-Sandbox](./07-sandbox/) | Analyzer mode with sandbox capital |
 
 ### Monitoring & Logs
 | Module | Description |

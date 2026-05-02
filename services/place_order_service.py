@@ -145,7 +145,7 @@ def place_order_with_auth(
 
     api_key = original_data.get("apikey", "")
 
-    # If in analyze mode, route to sandbox for virtual trading
+    # If in analyze mode, route to sandbox for sandbox trading
     if get_analyze_mode():
         from services.sandbox_service import sandbox_place_order
 

@@ -77,9 +77,9 @@ const faqData = [
           'OpenAlgo integrates with TradingView (via webhooks), Amibroker (via AFL), GoCharting, ChartInk, MetaTrader, Excel, Google Sheets, Python, Node.js, Go, N8N, and any platform that can send HTTP webhooks. You can also use the REST API directly from any programming language.',
       },
       {
-        question: 'Does OpenAlgo support paper trading?',
+        question: 'Does OpenAlgo support sandbox trading?',
         answer:
-          'Yes! OpenAlgo includes an Analyzer/Sandbox mode with virtual capital of Rs. 1 Crore. This allows you to test strategies in a realistic environment with proper margin calculations, auto square-off at exchange timings, and complete isolation from live trading. Perfect for testing before going live.',
+          'Yes! OpenAlgo includes an Analyzer/Sandbox mode with sandbox capital of Rs. 1 Crore. This allows you to test strategies in a realistic environment with proper margin calculations, auto square-off at exchange timings, and complete isolation from live trading. Perfect for testing before going live.',
       },
       {
         question: 'Can I run multiple strategies simultaneously?',

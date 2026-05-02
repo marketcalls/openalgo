@@ -65,7 +65,7 @@ The PlaceOrder API is the core order execution endpoint in OpenAlgo. It handles 
 │  │                                                                      │    │
 │  │  if get_analyze_mode() == True:                                     │    │
 │  │      → Route to sandbox_place_order()                               │    │
-│  │      → Virtual trading with ₹1 Crore capital                        │    │
+│  │      → Sandbox trading with ₹1 Crore capital                        │    │
 │  │  else:                                                              │    │
 │  │      → Continue to live broker                                      │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │

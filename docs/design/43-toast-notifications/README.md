@@ -51,7 +51,7 @@ The following categories are available for toast notifications:
 | Category | Description | Use Cases |
 |----------|-------------|-----------|
 | `orders` | Order-related notifications | Order placed, cancelled, modified, rejected |
-| `analyzer` | Sandbox/analyzer mode operations | Mode toggle, paper trading actions |
+| `analyzer` | Sandbox/analyzer mode operations | Mode toggle, sandbox trading actions |
 | `system` | System-wide notifications | Login, logout, password change, theme |
 | `actionCenter` | Semi-auto order approval | Pending order alerts |
 | `historify` | Historical data operations | Download jobs, schedules, uploads |

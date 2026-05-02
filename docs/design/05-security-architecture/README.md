@@ -429,7 +429,7 @@ Five separate databases prevent cross-contamination:
 | `openalgo.db` | Users, auth tokens, orders | High |
 | `logs.db` | Traffic logs, IP bans | Medium |
 | `latency.db` | Performance metrics | Low |
-| `sandbox.db` | Paper trading data | Medium |
+| `sandbox.db` | Sandbox trading data | Medium |
 | `historify.duckdb` | Historical market data | Low |
 
 ### Sensitive Data Protection

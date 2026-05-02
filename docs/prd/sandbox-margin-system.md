@@ -4,7 +4,7 @@ Complete documentation for margin calculation, blocking, and fund management in 
 
 ## Overview
 
-The Sandbox margin system replicates real exchange margin requirements with configurable leverage for paper trading.
+The Sandbox margin system replicates real exchange margin requirements with configurable leverage for sandbox trading.
 
 ## Fund Structure
 

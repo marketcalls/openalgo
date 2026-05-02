@@ -1574,7 +1574,7 @@ export default function ProfilePage() {
                 <p className="font-medium text-foreground mb-2">Real-time Notifications (High Priority)</p>
                 <ul className="list-disc list-inside space-y-1 ml-2">
                   <li><strong>Orders:</strong> BUY/SELL alerts from Socket.IO - highest frequency during trading</li>
-                  <li><strong>Analyzer:</strong> Sandbox mode operations - can spam during paper trading</li>
+                  <li><strong>Analyzer:</strong> Sandbox mode operations - can spam during sandbox trading</li>
                   <li><strong>System:</strong> Password changes, master contracts - infrequent but important</li>
                   <li><strong>Action Center:</strong> Semi-auto pending orders - high frequency in managed accounts</li>
                 </ul>
@@ -1608,7 +1608,7 @@ export default function ProfilePage() {
                 <p className="font-medium text-foreground mb-2">Tips for Power Users</p>
                 <ul className="list-disc list-inside space-y-1 ml-2">
                   <li>Running 5+ strategies? Set max visible to <strong>2-3</strong> and duration to <strong>2 seconds</strong></li>
-                  <li>Disable <strong>Analyzer</strong> when not paper trading to reduce spam</li>
+                  <li>Disable <strong>Analyzer</strong> when not sandbox trading to reduce spam</li>
                   <li>Disable <strong>Orders</strong> if you prefer checking the order book manually</li>
                   <li>Disable <strong>Historify</strong> during large data imports to avoid notification flood</li>
                   <li>Keep <strong>System</strong> enabled for critical security alerts</li>

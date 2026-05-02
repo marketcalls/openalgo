@@ -25,7 +25,7 @@ OpenAlgo is no longer just "an API layer in front of your broker." Today it is *
 | **Flow — No-Code Strategy Builder** | `/flow` | Traders who don't code — drag-and-drop nodes for market data, indicators, conditions, order execution, and notifications. Webhook triggers for TradingView and external signals built in. JSON import/export for sharing strategies. |
 | **Options Trading Suite** | `/tools` | Options traders — twelve built-in analytical tools (Strategy Builder with payoff diagrams & live Greeks, Option Chain, IV Smile, Max Pain, Vol Surface, GEX dashboard, OI Tracker, OI Profile, Straddle Chart, Straddle PnL simulator, Option Greeks history). Each one streams from your connected broker. |
 
-Every surface above runs on the same Sandbox engine (₹1 Crore virtual capital, exchange-aligned auto square-off) so you can paper-trade *any* of these flows before going live. Real-time dashboards, PnL tracker, latency monitor, Telegram alerts, and the AI / MCP server work uniformly across all four.
+Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital, exchange-aligned auto square-off) so you can sandbox-trade *any* of these flows before going live. Real-time dashboards, PnL tracker, latency monitor, Telegram alerts, and the AI / MCP server work uniformly across all four.
 
 ## Video Tutorial
 
@@ -130,7 +130,7 @@ A complete suite of twelve built-in analytical tools for options trading and mar
 All tools stream live from your connected broker via the unified WebSocket feed and work identically across every supported broker.
 
 ### API Analyzer Mode
-Complete testing environment with ₹1 Crore virtual capital:
+Complete testing environment with ₹1 Crore sandbox capital:
 - Test strategies with real market data without risking money
 - Pre-deployment testing for strategy validation
 - Supports all order types (Market, Limit, SL, SL-M)

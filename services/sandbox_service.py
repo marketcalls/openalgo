@@ -4,7 +4,7 @@ Sandbox Service - Routes analyzer mode requests to sandbox implementation
 
 This service acts as a bridge between existing services and the sandbox mode.
 When analyzer mode is enabled, all trading operations are routed to the sandbox
-virtual trading environment instead of the live broker.
+sandbox trading environment instead of the live broker.
 """
 
 from typing import Any, Dict, Optional, Tuple

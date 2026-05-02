@@ -1,6 +1,6 @@
 # Sandbox Mode Test Suite
 
-This directory contains comprehensive tests for the OpenAlgo sandbox (virtual trading) mode.
+This directory contains comprehensive tests for the OpenAlgo sandbox (sandbox trading) mode.
 
 ## Test Files
 
