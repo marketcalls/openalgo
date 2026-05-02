@@ -70,6 +70,39 @@ class User(Base):
     totp_secret = Column(String(255), nullable=False)  # Fernet-encrypted at rest
     is_admin = Column(Boolean, default=False)
 
+    # ----- 2FA (TOTP) controls -----
+    # ``totp_enabled`` is the master switch. When False, every per-purpose
+    # flag below is ignored and the install behaves exactly as it did
+    # before this feature landed (password-only login, existing reset
+    # options, no extra MCP gate). When True, the user picks which
+    # purposes the second factor applies to.
+    #
+    # Defaults are False so existing installs are not silently locked out.
+    # The settings UI surfaces the three purpose toggles together when the
+    # master is on; flipping master off does NOT clear the purpose flags
+    # so the user's preferences are remembered if they re-enable later.
+    totp_enabled = Column(Boolean, default=False, nullable=False)
+    totp_required_for_login = Column(Boolean, default=False, nullable=False)
+    totp_required_for_mcp = Column(Boolean, default=False, nullable=False)
+    totp_required_for_password_reset = Column(Boolean, default=False, nullable=False)
+
+    def is_totp_required_for(self, purpose: str) -> bool:
+        """Return True if 2FA is enabled AND required for this purpose.
+
+        ``purpose`` must be one of: ``"login"``, ``"mcp"``,
+        ``"password_reset"``. Unknown purposes return False (fail-open
+        for purposes the caller hasn't explicitly opted in — defense
+        against drift between callers and config).
+        """
+        if not self.totp_enabled:
+            return False
+        flag = {
+            "login": self.totp_required_for_login,
+            "mcp": self.totp_required_for_mcp,
+            "password_reset": self.totp_required_for_password_reset,
+        }.get(purpose, False)
+        return bool(flag)
+
     def get_totp_secret(self):
         """Return the user's TOTP secret in plaintext.
 

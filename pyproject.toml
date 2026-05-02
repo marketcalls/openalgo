@@ -11,6 +11,7 @@ dependencies = [
   "APScheduler==3.11.2",
   "argon2-cffi==23.1.0",
   "argon2-cffi-bindings==21.2.0",
+  "authlib==1.7.0",
   "asttokens==3.0.1",
   "attrs==24.2.0",
   "bcrypt==5.0.0",
