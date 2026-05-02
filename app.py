@@ -285,11 +285,20 @@ def create_app():
                 "Debug-mode tracebacks leak bearer tokens. Disable one of them."
             )
         from blueprints.mcp_http import mcp_http_bp
-        from blueprints.mcp_oauth import mcp_oauth_bp
+        from blueprints.mcp_oauth import mcp_oauth_bp, mcp_wellknown_bp
+        from database.oauth_db import init_db as init_oauth_db
+        from utils.oauth_keys import ensure_signing_key
+
+        # Idempotent: tables created if missing, signing key generated on
+        # first run. Ordering matters — ensure_signing_key writes a row
+        # to oauth_signing_keys, so the table must exist first.
+        init_oauth_db()
+        ensure_signing_key()
 
         app.register_blueprint(mcp_oauth_bp)
+        app.register_blueprint(mcp_wellknown_bp)
         app.register_blueprint(mcp_http_bp)
-        logger.info("Remote MCP blueprints registered (scaffold-only on this commit).")
+        logger.info("Remote MCP blueprints registered (OAuth discovery + JWKS + DCR live).")
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
