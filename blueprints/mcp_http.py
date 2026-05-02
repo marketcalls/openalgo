@@ -36,6 +36,7 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
+from limiter import limiter
 from utils.logging import get_logger
 from utils.oauth_tokens import AccessTokenError, claims_have_scope, verify_access_token
 
@@ -45,9 +46,116 @@ logger = get_logger(__name__)
 mcp_http_bp = Blueprint("mcp_http_bp", __name__, url_prefix="/mcp")
 
 
+@mcp_http_bp.after_request
+def _mcp_after_request(response: Response) -> Response:
+    """Apply CORS allowlist to every response from this blueprint.
+
+    Hosted MCP clients (claude.ai, chatgpt.com) reach /mcp from a
+    different origin. Without these headers their browsers block the
+    response. The mismatched-origin path returns no headers, so the
+    browser refuses — which is what we want.
+    """
+    return _apply_cors(response, request.headers.get("Origin"))
+
+
 # Keepalive cadence for the SSE stream. SSE comment lines (starting with
 # ":") are NOT delivered to the client app but keep the TCP socket warm.
 _SSE_KEEPALIVE_SECONDS = 15
+
+
+# Per-token rate limits, configurable via env. Defaults match the PRD:
+# 60/min for read scopes, 5/min for write scope. The keying function
+# below extracts the JTI from the bearer token so a single token can't
+# exceed its quota by hopping IPs.
+_RATE_LIMIT_READ = os.getenv("MCP_RATE_LIMIT_READ", "60 per minute")
+_RATE_LIMIT_WRITE = os.getenv("MCP_RATE_LIMIT_WRITE", "5 per minute")
+# A coarser ceiling on the dispatcher itself, applied per JTI/IP so a
+# single token can't fire reads at unlimited speed even before scope
+# enforcement happens.
+_DISPATCH_RATE_LIMIT = "120 per minute"
+_SSE_RATE_LIMIT = "5 per minute"
+
+
+# CORS allowlist — read at module load. Empty list means no Origin is
+# advertised back; hosted clients (claude.ai, chatgpt.com) need to be
+# in this list for browser-side OAuth flows to work.
+def _cors_allowed_origins() -> list[str]:
+    raw = os.getenv("MCP_HTTP_CORS_ORIGINS", "")
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def _parse_rate_spec(spec: str) -> tuple[int, int]:
+    """Parse a 'N per minute' / 'N per hour' / 'N per second' spec.
+
+    Returns (count, window_seconds). Defaults to 60/min on a parse
+    failure so misconfiguration fails closed enough to be visible.
+    """
+    parts = (spec or "").lower().replace("per ", "per_").split()
+    try:
+        count = int(parts[0])
+    except (ValueError, IndexError):
+        return (60, 60)
+    unit = parts[-1] if len(parts) > 1 else "per_minute"
+    return {
+        "per_second": (count, 1),
+        "per_minute": (count, 60),
+        "per_hour": (count, 3600),
+    }.get(unit, (count, 60))
+
+
+# In-memory sliding window per (jti, scope). Single eventlet worker, so
+# no shared-state concerns. Cleaned opportunistically — a long-quiet
+# token's entries naturally expire on next access.
+_scope_quota: dict[str, list[float]] = {}
+
+
+def _within_scope_quota(*, jti: str | None, scope: str) -> bool:
+    """True if (jti, scope) is below its configured per-window quota.
+
+    The dispatcher-level Flask-Limiter still applies — this is a
+    second, tighter check specifically for the write scope.
+    """
+    if not jti:
+        return False
+    spec = _RATE_LIMIT_WRITE if "write:" in scope else _RATE_LIMIT_READ
+    count, window = _parse_rate_spec(spec)
+    now = time.time()
+    cutoff = now - window
+    key = f"{jti}|{scope}"
+    bucket = _scope_quota.setdefault(key, [])
+    # Drop expired hits.
+    while bucket and bucket[0] < cutoff:
+        bucket.pop(0)
+    if len(bucket) >= count:
+        return False
+    bucket.append(now)
+    return True
+
+
+def _apply_cors(response: Response, origin: str | None) -> Response:
+    """Add CORS headers if the request origin is on the allowlist.
+
+    Mismatches return without CORS headers — the browser will then
+    refuse the response, which is the desired behavior. We never
+    leak the allowlist on a mismatch.
+    """
+    if not origin:
+        return response
+    if origin in _cors_allowed_origins():
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, X-Requested-With"
+        )
+        # Browser-side OAuth clients need to read the discovery hint
+        # from the 401 response. Without this header the WWW-Authenticate
+        # value is hidden by CORS and the client reports "no OAuth".
+        response.headers["Access-Control-Expose-Headers"] = (
+            "WWW-Authenticate, Link, Content-Type"
+        )
+        response.headers["Access-Control-Max-Age"] = "600"
+        response.headers["Vary"] = "Origin"
+    return response
 
 
 # Audit log path. Same directory as the rest of the structured logs so
@@ -260,7 +368,17 @@ def _notify_pre_write(
 # --------------------------------------------------------------------
 
 
+@mcp_http_bp.route("", methods=["OPTIONS"], strict_slashes=False)
+def mcp_preflight():
+    """CORS preflight handler. Returns 204 with allow headers when the
+    Origin is on the MCP_HTTP_CORS_ORIGINS allowlist, 403 otherwise."""
+    origin = request.headers.get("Origin")
+    response = Response(status=204)
+    return _apply_cors(response, origin)
+
+
 @mcp_http_bp.route("", methods=["POST"], strict_slashes=False)
+@limiter.limit(_DISPATCH_RATE_LIMIT, key_func=_rate_limit_key)
 def mcp_dispatch():
     """JSON-RPC 2.0 endpoint for MCP."""
     init_http_transport()  # idempotent
@@ -396,6 +514,23 @@ def _dispatch_tool_call(
     if fn is None:
         return _jsonrpc_error(rpc_id, -32601, f"Tool not implemented: {tool_name}")
 
+    # Per-token-per-scope rate limit (security review finding C-2).
+    # The dispatcher-level @limiter.limit on mcp_dispatch caps the
+    # gross rate per JTI; this adds a tighter cap specifically on
+    # write:orders so a stolen write token can't spam orders inside
+    # its 15-minute TTL window. Values configurable via
+    # MCP_RATE_LIMIT_READ / MCP_RATE_LIMIT_WRITE.
+    if not _within_scope_quota(jti=jti, scope=needed):
+        return _jsonrpc_error(
+            rpc_id,
+            -32000,
+            "rate_limited",
+            data={
+                "scope": needed,
+                "limit": _RATE_LIMIT_WRITE if needed == SCOPE_WRITE_ORDERS else _RATE_LIMIT_READ,
+            },
+        )
+
     # Pre-write notification — fires BEFORE the broker call so the
     # admin sees the impending write even if the call later succeeds.
     if needed == SCOPE_WRITE_ORDERS:
@@ -438,7 +573,16 @@ def _dispatch_tool_call(
     )
 
     if outcome != "success":
-        return _jsonrpc_error(rpc_id, -32603, outcome, data={"detail": error_detail})
+        # Do NOT echo error_detail back to the client — it can carry SQL
+        # error messages, internal paths, or function-signature reveals
+        # (security review finding H-4). The full detail is in the
+        # audit log + log/errors.jsonl for the admin to triage. We
+        # surface only a coarse outcome category to the client.
+        client_message = {
+            "bad_arguments": "Invalid arguments. Check the tool schema.",
+            "error": "Tool execution failed. See server audit log.",
+        }.get(outcome, "Tool execution failed.")
+        return _jsonrpc_error(rpc_id, -32603, "tool_error", data={"reason": client_message})
 
     # MCP content blocks per spec — tools return a string per OpenAlgo
     # convention (_to_json wraps SDK responses).
@@ -454,6 +598,7 @@ def _dispatch_tool_call(
 
 
 @mcp_http_bp.route("", methods=["GET"], strict_slashes=False)
+@limiter.limit(_SSE_RATE_LIMIT, key_func=_rate_limit_key)
 def mcp_sse():
     """Server-Sent Events stream. Sends keepalive comments every 15s.
 
@@ -502,3 +647,18 @@ def mcp_sse():
 def healthz():
     """Liveness probe for nginx / monitors. No auth; returns minimal info."""
     return jsonify({"status": "ok", "service": "openalgo-mcp"}), 200
+
+
+@mcp_http_bp.route("/.well-known/oauth-protected-resource", methods=["GET"])
+def mcp_resource_metadata_alias():
+    """Path-relative discovery alias for ``/mcp/.well-known/oauth-protected-resource``.
+
+    Some MCP client implementations (notably ChatGPT) follow the
+    convention of fetching ``<resource_url>/.well-known/oauth-protected-resource``
+    rather than the host-root form. Without this alias the request
+    falls through to the React SPA fallback and returns HTML, which
+    the client interprets as "this server does not implement OAuth".
+    """
+    from blueprints.mcp_oauth import _build_protected_resource_metadata
+
+    return _build_protected_resource_metadata()

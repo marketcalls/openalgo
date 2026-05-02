@@ -27,8 +27,9 @@ import time
 from datetime import datetime, timedelta
 from typing import Iterable, NamedTuple
 
-from authlib.jose import JsonWebKey, jwt
-from authlib.jose.errors import JoseError
+from joserfc import jwt
+from joserfc.errors import JoseError
+from joserfc.jwk import KeySet, RSAKey
 
 from database.oauth_db import (
     OAuthRefreshToken,
@@ -99,6 +100,12 @@ def issue_access_token(
     ttl = _access_ttl()
     jti = secrets.token_urlsafe(16)
 
+    # joserfc wants a Key object, not raw PEM bytes. Importing the
+    # PEM gives us an RSAKey we can pass to jwt.encode. The kid we
+    # set on import surfaces in the token header automatically when
+    # included in the explicit header dict below.
+    signing_key = RSAKey.import_key(private_pem, parameters={"kid": key.kid})
+
     header = {"alg": "RS256", "kid": key.kid, "typ": "JWT"}
     payload = {
         "iss": _issuer(),
@@ -110,8 +117,7 @@ def issue_access_token(
         "client_id": client_id,
         "scope": scope,
     }
-    token_bytes = jwt.encode(header, payload, private_pem)
-    token_str = token_bytes.decode("ascii") if isinstance(token_bytes, bytes) else token_bytes
+    token_str = jwt.encode(header, payload, signing_key)
     return token_str, ttl, jti
 
 
@@ -217,10 +223,31 @@ def rotate_refresh_token(
     if matched.expires_at < now:
         return None
 
-    # Healthy rotation path. Mark old revoked, issue successor.
-    matched.revoked_at = now
-    matched.last_used_at = now
-    matched.revoke_reason = "rotated"
+    # Healthy rotation path. Atomic claim-and-mark via UPDATE ... WHERE
+    # revoked_at IS NULL — protects against the race where two
+    # concurrent /token requests with the same refresh both see it as
+    # un-revoked and issue duplicate successors (security review
+    # finding H-2). The WHERE clause means only one of the racing
+    # requests will affect 1 row; the other affects 0 and bails.
+    rows_updated = (
+        OAuthRefreshToken.query.filter_by(id=matched.id, revoked_at=None)
+        .update(
+            {
+                "revoked_at": now,
+                "last_used_at": now,
+                "revoke_reason": "rotated",
+            }
+        )
+    )
+    if rows_updated == 0:
+        # Lost the race — another request already consumed this token.
+        # Treat as if it had been used: don't issue a successor.
+        db_session.commit()
+        logger.info(
+            f"[OAuth refresh] rotation race lost for client_id={client_id} "
+            f"family={matched.family_id}; concurrent request won the claim"
+        )
+        return None
 
     plaintext = _new_refresh_value()
     ttl = _refresh_ttl()
@@ -294,14 +321,14 @@ def verify_access_token(token_str: str) -> dict:
     if not token_str:
         raise AccessTokenError("invalid_request")
 
-    # Build a JWKS object from every known signing key. ``public_jwks``
+    # Build a KeySet from every known signing key. ``public_jwks``
     # already exposes both the active and the in-flight predecessor
     # during a rotation window, so freshly issued tokens AND tokens
     # signed by the previous key both validate for one TTL window.
     from utils.oauth_keys import public_jwks  # avoid import cycle
 
     try:
-        jwks = JsonWebKey.import_key_set(public_jwks())
+        key_set = KeySet.import_key_set(public_jwks())
     except Exception as e:
         logger.exception(f"JWKS import failed: {e}")
         raise AccessTokenError("invalid_token") from e
@@ -309,28 +336,30 @@ def verify_access_token(token_str: str) -> dict:
     expected_iss = _issuer()
     expected_aud = _audience()
 
-    claims_options = {
-        "iss": {"essential": True, "value": expected_iss},
-        "aud": {"essential": True, "value": expected_aud},
-        "exp": {"essential": True},
-    }
-
     try:
-        claims = jwt.decode(token_str, jwks, claims_options=claims_options)
-        # Validates iss/aud/exp/nbf/iat per the options above.
-        claims.validate()
+        # joserfc validates the signature + alg here. We pin the
+        # algorithm allowlist to ["RS256"] so an attacker cannot
+        # downgrade to alg=none or trick us into HMAC-with-public-key.
+        token = jwt.decode(token_str, key_set, algorithms=["RS256"])
+        # Per-claim validation (iss / aud / exp / nbf) goes through
+        # the JWTClaimsRegistry — separate step in joserfc.
+        registry = jwt.JWTClaimsRegistry(
+            iss={"essential": True, "value": expected_iss},
+            aud={"essential": True, "value": expected_aud},
+            exp={"essential": True},
+        )
+        registry.validate(token.claims)
     except JoseError as e:
-        # Authlib's error message is log-worthy but never returned to the
-        # client (would leak details about why a token is bad).
+        # joserfc error message is log-worthy but never returned to
+        # the client (would leak details about why a token is bad).
         logger.info(f"[OAuth verify] token rejected: {type(e).__name__}: {e}")
         raise AccessTokenError("invalid_token") from e
     except Exception as e:
         logger.exception(f"[OAuth verify] unexpected verification error: {e}")
         raise AccessTokenError("invalid_token") from e
 
-    # claims is a CombinedClaims object — return as a plain dict so the
-    # caller can do regular .get() lookups.
-    return dict(claims)
+    # token.claims is already a plain dict on joserfc.
+    return dict(token.claims)
 
 
 def claims_have_scope(claims: dict, required: str) -> bool:

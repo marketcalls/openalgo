@@ -285,6 +285,17 @@ def create_app():
                 "Debug-mode tracebacks leak bearer tokens. Disable one of them."
             )
 
+        # Hard requirement: MCP_PUBLIC_URL anchors the JWT iss/aud claims.
+        # Without it, tokens issued by two unconfigured instances would
+        # validate against each other (security review finding H-1).
+        if not os.getenv("MCP_PUBLIC_URL"):
+            raise RuntimeError(
+                "MCP_HTTP_ENABLED=True requires MCP_PUBLIC_URL to be set to "
+                "the canonical HTTPS origin (e.g. https://mcp.yourdomain.com). "
+                "Without it, JWT iss/aud claims collapse to empty strings and "
+                "tokens become portable across instances."
+            )
+
         # Crucial ordering: set OPENALGO_MCP_HTTP_BOOT BEFORE importing the
         # MCP HTTP blueprint. The blueprint transitively imports
         # mcp.mcpserver, which checks this env var to skip the stdio
@@ -306,6 +317,42 @@ def create_app():
         app.register_blueprint(mcp_oauth_bp)
         app.register_blueprint(mcp_wellknown_bp)
         app.register_blueprint(mcp_http_bp)
+
+        # Externally-facing OAuth endpoints and the MCP transport are
+        # called by hosted clients (claude.ai etc.) that have NO
+        # OpenAlgo session cookie. Flask-WTF's global CSRFProtect would
+        # 400 every request without these exemptions (security review
+        # finding C-1). Authentication on these endpoints is via
+        # Bearer token (transport) or client_secret + PKCE (token /
+        # revoke) — CSRF cookie protection doesn't apply.
+        # /oauth/authorize POST is intentionally NOT exempted: it's
+        # browser-driven from the OpenAlgo session and uses the
+        # rendered consent form's csrf_token field.
+        with app.app_context():
+            for endpoint in (
+                "mcp_oauth_bp.token_endpoint",
+                "mcp_oauth_bp.revoke_endpoint",
+                "mcp_oauth_bp.register_client",
+                "mcp_http_bp.mcp_dispatch",
+                "mcp_http_bp.mcp_sse",
+            ):
+                view = app.view_functions.get(endpoint)
+                if view is not None:
+                    csrf.exempt(view)
+
+        # Boot warnings for non-default security postures so an admin
+        # who flipped these months ago and forgot is reminded on every
+        # restart (security review finding L-3).
+        if os.getenv("MCP_OAUTH_WRITE_SCOPE_ENABLED", "False").lower() == "true":
+            logger.warning(
+                "[MCP] write:orders scope is ENABLED — MCP clients can place real orders."
+            )
+        if os.getenv("MCP_OAUTH_REQUIRE_APPROVAL", "True").lower() != "true":
+            logger.warning(
+                "[MCP] DCR auto-approval is ENABLED — any DCR registration "
+                "can immediately complete OAuth without admin review."
+            )
+
         logger.info(
             "Remote MCP blueprints registered (OAuth + JSON-RPC dispatch + SSE)."
         )

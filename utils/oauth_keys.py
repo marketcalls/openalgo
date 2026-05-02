@@ -159,11 +159,66 @@ def load_private_pem(key: OAuthSigningKey) -> bytes:
 
 
 def public_jwks() -> dict[str, list[dict[str, Any]]]:
-    """All non-revoked signing keys, formatted for the /oauth/jwks.json endpoint."""
+    """All currently-relevant signing keys for the /oauth/jwks.json endpoint.
+
+    Returns:
+      * The active key
+      * Plus any key rotated within the last access-token TTL window
+        (so freshly issued tokens that were signed by the predecessor
+        still validate during the rotation overlap)
+
+    Older keys are excluded so the JWKS doesn't grow unbounded across
+    rotations (security review finding M-1).
+    """
+    from datetime import datetime, timedelta
+
+    # Match the access TTL ceiling so the window covers any in-flight
+    # token signed by a recently-demoted key.
+    overlap_window = timedelta(seconds=3600)  # ACCESS_TTL_MAX
+    cutoff = datetime.utcnow() - overlap_window
+
     keys: list[dict[str, Any]] = []
-    for row in OAuthSigningKey.query.order_by(OAuthSigningKey.created_at.desc()).all():
+    rows = OAuthSigningKey.query.order_by(OAuthSigningKey.created_at.desc()).all()
+    for row in rows:
+        # Always include the active row.
+        if not row.is_active:
+            # Skip demoted rows older than the overlap window.
+            rotated = row.rotated_at or row.created_at
+            if rotated and rotated < cutoff:
+                continue
         try:
             keys.append(json.loads(row.public_jwk))
         except json.JSONDecodeError:
             logger.warning(f"Bad public_jwk JSON for kid={row.kid}; skipping.")
     return {"keys": keys}
+
+
+def cleanup_stale_signing_keys() -> int:
+    """Delete on-disk private PEMs for signing keys outside the JWKS window.
+
+    The DB row stays — JWKS already filters by recency — but the
+    private file is removed so a later filesystem compromise can't
+    forge tokens for an arbitrarily old period.
+
+    Safe to call from a startup hook or periodic cleanup. Returns
+    count of files deleted.
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.utcnow() - timedelta(seconds=3600)
+    removed = 0
+    for row in OAuthSigningKey.query.filter_by(is_active=False).all():
+        rotated = row.rotated_at or row.created_at
+        if rotated and rotated < cutoff:
+            try:
+                p = Path(row.private_path)
+                if p.is_file():
+                    p.unlink()
+                    removed += 1
+                    logger.info(
+                        f"[OAuth keys] removed stale private file kid={row.kid} "
+                        f"path={row.private_path}"
+                    )
+            except OSError as e:
+                logger.warning(f"Could not remove {row.private_path}: {e}")
+    return removed

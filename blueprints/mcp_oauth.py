@@ -53,6 +53,44 @@ mcp_oauth_bp = Blueprint("mcp_oauth_bp", __name__, url_prefix="/oauth")
 mcp_wellknown_bp = Blueprint("mcp_wellknown_bp", __name__, url_prefix="")
 
 
+def _cors_allowed_origins() -> list[str]:
+    raw = os.getenv("MCP_HTTP_CORS_ORIGINS", "")
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def _apply_cors_to_response(response):
+    """Echo CORS headers for the configured allowlist origins.
+
+    Hosted OAuth clients (claude.ai, chatgpt.com) post to
+    /oauth/token from a browser context with a different Origin.
+    Without these headers the browser blocks the response.
+    """
+    origin = request.headers.get("Origin")
+    if not origin or origin not in _cors_allowed_origins():
+        return response
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = (
+        "Authorization, Content-Type, X-Requested-With"
+    )
+    response.headers["Access-Control-Expose-Headers"] = (
+        "WWW-Authenticate, Link, Content-Type"
+    )
+    response.headers["Access-Control-Max-Age"] = "600"
+    response.headers["Vary"] = "Origin"
+    return response
+
+
+@mcp_oauth_bp.after_request
+def _oauth_after_request(response):
+    return _apply_cors_to_response(response)
+
+
+@mcp_wellknown_bp.after_request
+def _wellknown_after_request(response):
+    return _apply_cors_to_response(response)
+
+
 # Rate limits per the PRD. Per-IP for the un-authenticated DCR and token
 # endpoints; per-token rate limits land in Phase 2d once tokens exist.
 DCR_RATE_LIMIT = "10 per hour"
@@ -131,6 +169,11 @@ def _validate_redirect_uri(uri: Any) -> tuple[bool, str]:
         return False, "redirect_uri must include a host"
     if "#" in uri:
         return False, "redirect_uri must not contain a fragment"
+    # Reject userinfo (user:pass@host) — RFC 3986 allows it but it's
+    # confusing in browser contexts and some parsers disagree on which
+    # part is the host (security review finding M-2).
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+        return False, "redirect_uri must not contain userinfo"
     return True, ""
 
 
@@ -172,14 +215,7 @@ def discovery_authorization_server():
     )
 
 
-@mcp_wellknown_bp.route("/.well-known/oauth-protected-resource")
-def discovery_protected_resource():
-    """RFC 9728 — protected-resource metadata.
-
-    Tells a client where to find the authorization server when it sees
-    a 401 from /mcp. We point back at the same host since OpenAlgo is
-    both AS and RS for this deployment.
-    """
+def _build_protected_resource_metadata():
     base = _public_url() or request.host_url.rstrip("/")
     return jsonify(
         {
@@ -190,6 +226,31 @@ def discovery_protected_resource():
             "resource_documentation": "https://docs.openalgo.in/remote-mcp",
         }
     )
+
+
+@mcp_wellknown_bp.route("/.well-known/oauth-protected-resource")
+def discovery_protected_resource():
+    """RFC 9728 — protected-resource metadata at the host root.
+
+    Tells a client where to find the authorization server when it sees
+    a 401 from /mcp. We point back at the same host since OpenAlgo is
+    both AS and RS for this deployment.
+    """
+    return _build_protected_resource_metadata()
+
+
+@mcp_wellknown_bp.route("/.well-known/oauth-protected-resource/mcp")
+@mcp_wellknown_bp.route("/.well-known/oauth-protected-resource/<path:resource_path>")
+def discovery_protected_resource_for_path(resource_path: str = "mcp"):
+    """Path-suffixed variant per RFC 9728 §3.1.
+
+    Some clients (notably ChatGPT's MCP integration) construct the
+    metadata URL as ``<resource>/.well-known/oauth-protected-resource``
+    or use a path-suffix variant rather than the host-root form. We
+    serve the same payload on the suffixed path so both discovery
+    styles work.
+    """
+    return _build_protected_resource_metadata()
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +422,42 @@ def _client_redirect_uri_allowed(client: OAuthClient, candidate: str) -> bool:
     return candidate in registered
 
 
+def _origin_of(uri: str) -> str:
+    """Extract scheme://host[:port] from a redirect_uri (for CSP form-action)."""
+    p = urlparse(uri)
+    if not p.scheme or not p.netloc:
+        return ""
+    return f"{p.scheme}://{p.netloc}"
+
+
+def _oauth_redirect(redirect_uri: str, query_params: dict[str, str]):
+    """Build a 302 to the OAuth client with a relaxed form-action CSP.
+
+    The global Flask CSP sets ``form-action 'self'`` (defense-in-depth
+    against forms posting outside the dashboard). The OAuth consent
+    form intentionally posts to ``/oauth/authorize`` and gets a 302 to
+    the registered ``redirect_uri`` — a cross-origin destination that
+    the strict CSP would otherwise block. We override the header on
+    just this response to include the redirect target's origin, which
+    has already been exact-matched against the client's registered
+    list at this point.
+    """
+    sep = "&" if urlparse(redirect_uri).query else "?"
+    target = f"{redirect_uri}{sep}{urlencode(query_params)}"
+    response = redirect(target)
+    origin = _origin_of(redirect_uri)
+    if origin:
+        # Replace the inherited CSP header so the redirect chain is
+        # allowed by the browser. We keep 'self' so any in-page forms
+        # also work, but add the specific origin we're about to send
+        # the user to. This is per-response only; the rest of the app
+        # still gets the strict policy.
+        response.headers["Content-Security-Policy"] = (
+            f"form-action 'self' {origin}"
+        )
+    return response
+
+
 def _redirect_with_error(
     redirect_uri: str, error: str, description: str, state: str | None
 ) -> Any:
@@ -373,8 +470,7 @@ def _redirect_with_error(
     params = {"error": error, "error_description": description}
     if state:
         params["state"] = state
-    sep = "&" if urlparse(redirect_uri).query else "?"
-    return redirect(f"{redirect_uri}{sep}{urlencode(params)}")
+    return _oauth_redirect(redirect_uri, params)
 
 
 _CONSENT_TEMPLATE = """\
@@ -471,6 +567,7 @@ def _render_consent(**ctx) -> str:
 
 @mcp_oauth_bp.route("/authorize", methods=["GET", "POST"])
 @check_session_validity
+@limiter.limit("30 per minute;200 per hour")
 def authorize_endpoint():
     """RFC 6749 §4.1 authorization endpoint with PKCE.
 
@@ -491,6 +588,13 @@ def authorize_endpoint():
     response_type = src.get("response_type", "code").strip()
     scope = src.get("scope", "").strip()
     state = src.get("state")
+    # Cap state length so a malicious client can't make us render a
+    # huge consent page or build a 10MB redirect URL (security review
+    # finding L-1).
+    if state is not None and len(state) > 512:
+        return _oauth_error(
+            "invalid_request", "state parameter too long (max 512 chars).", 400
+        )
     code_challenge = src.get("code_challenge", "").strip()
     code_challenge_method = src.get("code_challenge_method", "").strip()
 
@@ -608,8 +712,7 @@ def authorize_endpoint():
     params = {"code": code_entry.code}
     if state:
         params["state"] = state
-    sep = "&" if urlparse(redirect_uri).query else "?"
-    return redirect(f"{redirect_uri}{sep}{urlencode(params)}")
+    return _oauth_redirect(redirect_uri, params)
 
 
 # ---------------------------------------------------------------------------

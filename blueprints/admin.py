@@ -1974,6 +1974,19 @@ def api_mcp_audit():
 
         raw_lines = _tail_jsonl(path)
 
+        # Whitelist the fields surfaced to the admin viewer. mcp.jsonl is
+        # server-generated so the keys are known, but defense-in-depth:
+        # if a future change adds a sensitive field by mistake, the
+        # whitelist stops it from leaking through this endpoint
+        # (security review finding M-3).
+        _AUDIT_KEYS = frozenset(
+            {"ts", "jti", "client_id", "tool", "scope", "params_hash",
+             "duration_ms", "outcome", "request_ip"}
+        )
+
+        def _sanitize_audit(entry: dict) -> dict:
+            return {k: entry[k] for k in _AUDIT_KEYS if k in entry}
+
         results: list[dict] = []
         scanned = 0
         for entry in _parse_jsonl_lines(reversed(raw_lines)):
@@ -1984,7 +1997,7 @@ def api_mcp_audit():
                 continue
             if outcome and entry.get("outcome") != outcome:
                 continue
-            results.append(entry)
+            results.append(_sanitize_audit(entry))
             if len(results) >= limit:
                 break
         results.reverse()
