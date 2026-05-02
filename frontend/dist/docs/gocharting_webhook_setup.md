@@ -446,7 +446,7 @@ curl -X POST https://yourdomain.com/api/v1/placeorder \
 - Use Analyze Mode to debug webhook payloads
 - Review Traffic Monitor for unusual activity
 
-### 4. Test in Sandbox/Paper Trading
+### 4. Test in Sandbox/Sandbox Trading
 
 ⚠️ **CRITICAL**: Always test in sandbox mode before live trading!
 
