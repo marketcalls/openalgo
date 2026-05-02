@@ -22,6 +22,7 @@ from database.user_db import (  # Import the function
     authenticate_user,
     db_session,
     find_user_by_email,
+    find_user_by_exact_username,
     find_user_by_username,
 )
 from extensions import socketio
@@ -255,7 +256,7 @@ def login():
             # with only the password from progressing to broker login. We park
             # the username on a transient key that POST /auth/login/totp will
             # consume on success, and clear on failure or timeout.
-            user = find_user_by_username(username)
+            user = find_user_by_exact_username(username)
             if user is not None and user.is_totp_required_for("login"):
                 session.pop("user", None)
                 session["pending_totp_user"] = username
@@ -339,7 +340,7 @@ def login_totp():
     if not totp_code:
         return jsonify({"status": "error", "message": "TOTP code is required."}), 400
 
-    user = find_user_by_username(pending_username)
+    user = find_user_by_exact_username(pending_username)
     if user is None or not user.verify_totp(totp_code):
         from database.auth_db import log_login_attempt
 
@@ -382,7 +383,7 @@ def login_totp():
 @check_session_validity
 def two_factor_status():
     """Return the signed-in user's current 2FA configuration."""
-    user = find_user_by_username(session["user"])
+    user = find_user_by_exact_username(session["user"])
     if user is None:
         return jsonify({"status": "error", "message": "User not found."}), 404
     return jsonify(
@@ -413,7 +414,7 @@ def two_factor_configure():
     if not totp_code:
         return jsonify({"status": "error", "message": "TOTP code is required to change 2FA settings."}), 400
 
-    user = find_user_by_username(session["user"])
+    user = find_user_by_exact_username(session["user"])
     if user is None:
         return jsonify({"status": "error", "message": "User not found."}), 404
 

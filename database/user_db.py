@@ -224,6 +224,13 @@ def find_user_by_username():
     return User.query.filter_by(is_admin=True).first()
 
 
+def find_user_by_exact_username(username):
+    """Look up a user by exact username match. Returns None if not found."""
+    if not username:
+        return None
+    return User.query.filter_by(username=username).first()
+
+
 def rehash_all_passwords():
     """
     Utility function to rehash all existing passwords with Argon2.
