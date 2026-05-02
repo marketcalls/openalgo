@@ -182,7 +182,7 @@ Common error messages:
 │         ▼                                                                    │
 │  3. Check Analyzer Mode                                                     │
 │         │                                                                    │
-│         ├──→ ON?  Execute in sandbox (virtual)                              │
+│         ├──→ ON?  Execute in sandbox (sandbox)                              │
 │         │                                                                    │
 │         ▼                                                                    │
 │  4. Check Order Mode                                                        │

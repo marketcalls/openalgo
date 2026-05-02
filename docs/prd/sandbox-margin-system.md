@@ -10,7 +10,7 @@ The Sandbox margin system replicates real exchange margin requirements with conf
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Virtual Account                              │
+│                     Sandbox Account                              │
 ├─────────────────────────────────────────────────────────────────┤
 │  Starting Capital      │  ₹1,00,00,000 (1 Crore)               │
 ├─────────────────────────────────────────────────────────────────┤

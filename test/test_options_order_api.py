@@ -6,7 +6,7 @@ The API automatically resolves the option symbol based on underlying and offset,
 
 Works in both:
 - Live Mode: Places real orders with the broker
-- Analyze Mode (Sandbox): Places virtual orders for testing
+- Analyze Mode (Sandbox): Places sandbox orders for testing
 
 Make sure the OpenAlgo application is running before executing this script.
 
@@ -316,7 +316,7 @@ if __name__ == "__main__":
     print(f"API Key: {API_KEY[:10]}..." if len(API_KEY) > 10 else f"API Key: {API_KEY}")
     print("\nNote: Replace API_KEY in this script with your actual API key")
     print("\nAnalyze Mode Status:")
-    print("  - If Analyze Mode is ON: Orders will be placed in sandbox (virtual)")
+    print("  - If Analyze Mode is ON: Orders will be placed in sandbox (sandbox)")
     print("  - If Analyze Mode is OFF: Orders will be placed with live broker")
     print("=" * 60)
 

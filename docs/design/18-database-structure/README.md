@@ -30,7 +30,7 @@ OpenAlgo uses **5 separate databases** for data isolation, performance optimizat
 │  │   sandbox.db    │  │ historify.duckdb│                                   │
 │  │  (Sandbox Trade)  │  │ (Market Data)   │                                   │
 │  │                 │  │                 │                                   │
-│  │  - Virtual ₹1Cr │  │  - OHLCV data   │                                   │
+│  │  - Sandbox ₹1Cr │  │  - OHLCV data   │                                   │
 │  │  - Positions    │  │  - Watchlists   │                                   │
 │  │  - Holdings     │  │                 │                                   │
 │  │  - Trades       │  │  DuckDB format  │                                   │

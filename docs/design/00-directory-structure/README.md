@@ -429,7 +429,7 @@ sandbox/
 ├── catch_up_processor.py     # Catch-up order processing
 ├── order_manager.py          # Order management
 ├── position_manager.py       # Position tracking
-├── fund_manager.py           # Virtual fund management
+├── fund_manager.py           # Sandbox fund management
 ├── holdings_manager.py       # Holdings tracking
 ├── squareoff_manager.py      # Square-off logic
 └── squareoff_thread.py       # Background square-off thread
