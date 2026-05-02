@@ -2,8 +2,8 @@
 IV Chart Service
 Calculates intraday Implied Volatility time series for option symbols.
 
-Uses historical OHLCV candle data and Black-76 model to compute IV at each
-candle's close price. Returns IV time series suitable for charting.
+Uses historical OHLCV candle data and Black-76 model (utils.black76) to compute
+IV at each candle's close price. Returns IV time series suitable for charting.
 """
 
 from datetime import datetime, timedelta
@@ -29,11 +29,15 @@ from services.option_symbol_service import (
 )
 from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_quotes
+from utils.black76 import (
+    delta as black_delta,
+    gamma as black_gamma,
+    implied_volatility as black_iv,
+    theta as black_theta,
+    vega as black_vega,
+)
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
-
-# py_vollib is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data()
-# to avoid loading scipy/numba/llvmlite at startup
 
 logger = get_logger(__name__)
 
@@ -155,18 +159,6 @@ def get_iv_chart_data(
     Returns:
         Tuple of (success, response_dict, status_code)
     """
-    try:
-        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
-    except ImportError:
-        return (
-            False,
-            {
-                "status": "error",
-                "message": "py_vollib library required for IV calculation. Install with: pip install py_vollib",
-            },
-            500,
-        )
-
     try:
         ist = pytz.timezone("Asia/Kolkata")
         # Generous calendar window; the returned IV series is post-filtered
@@ -378,12 +370,6 @@ def _calculate_iv_series(df_option, df_underlying, strike, expiry_dt, flag, inte
     Returns:
         List of dicts with time (unix seconds), iv, option_price, underlying_price
     """
-    from py_vollib.black.greeks.analytical import delta as black_delta
-    from py_vollib.black.greeks.analytical import gamma as black_gamma
-    from py_vollib.black.greeks.analytical import theta as black_theta
-    from py_vollib.black.greeks.analytical import vega as black_vega
-    from py_vollib.black.implied_volatility import implied_volatility as black_iv
-
     iv_data = []
 
     # Align on common timestamps using inner join

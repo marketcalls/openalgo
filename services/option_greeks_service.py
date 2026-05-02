@@ -3,7 +3,7 @@ Option Greeks Service
 Calculates option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility
 for options across all supported exchanges (NFO, BFO, CDS, MCX)
 
-Uses Black-76 model (py_vollib) - appropriate for options on futures/forwards
+Uses Black-76 model (utils.black76) - appropriate for options on futures/forwards
 which is the correct model for Indian F&O markets (NFO, BFO, MCX, CDS)
 """
 
@@ -11,11 +11,16 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+from utils.black76 import (
+    delta as black_delta,
+    gamma as black_gamma,
+    implied_volatility as black_iv,
+    rho as black_rho,
+    theta as black_theta,
+    vega as black_vega,
+)
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
-
-# py_vollib is lazy-loaded inside calculate_greeks() and check_pyvollib_availability()
-# to avoid loading scipy/numba/llvmlite at startup
 
 logger = get_logger(__name__)
 
@@ -62,24 +67,6 @@ DEFAULT_INTEREST_RATES = {
     "CDS": 0,  # Currency derivatives
     "MCX": 0,  # Commodities
 }
-
-
-def check_pyvollib_availability():
-    """Check if py_vollib library is available"""
-    try:
-        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
-
-        return True, None, None
-    except ImportError:
-        logger.error("py_vollib library not installed. Install with: pip install py_vollib")
-        return (
-            False,
-            {
-                "status": "error",
-                "message": "Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib",
-            },
-            500,
-        )
 
 
 def parse_option_symbol(
@@ -220,9 +207,9 @@ def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
 
 def calculate_time_to_expiry(expiry: datetime) -> tuple[float, float]:
     """
-    Calculate time to expiry in years (for py_vollib Black-76 model)
+    Calculate time to expiry in years (for Black-76 model)
 
-    py_vollib expects time to expiry in YEARS.
+    Black-76 expects time to expiry in YEARS.
     Also returns days for display purposes.
 
     Returns:
@@ -260,7 +247,7 @@ def calculate_greeks(
     api_key: str = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
-    Calculate Option Greeks using Black-76 model (py_vollib)
+    Calculate Option Greeks using Black-76 model (utils.black76)
 
     Black-76 is the appropriate model for options on futures/forwards,
     which includes Indian F&O markets (NFO, BFO, MCX, CDS).
@@ -278,25 +265,6 @@ def calculate_greeks(
         Tuple of (success, response_dict, status_code)
     """
     try:
-        # Check if py_vollib is available and import (lazy-loaded to avoid startup overhead)
-        try:
-            from py_vollib.black.greeks.analytical import delta as black_delta
-            from py_vollib.black.greeks.analytical import gamma as black_gamma
-            from py_vollib.black.greeks.analytical import rho as black_rho
-            from py_vollib.black.greeks.analytical import theta as black_theta
-            from py_vollib.black.greeks.analytical import vega as black_vega
-            from py_vollib.black.implied_volatility import implied_volatility as black_iv
-        except ImportError:
-            logger.error("py_vollib library not installed.")
-            return (
-                False,
-                {
-                    "status": "error",
-                    "message": "Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib",
-                },
-                500,
-            )
-
         # Parse option symbol with custom expiry time if provided
         base_symbol, expiry, strike, opt_type = parse_option_symbol(
             option_symbol, exchange, expiry_time
@@ -320,7 +288,7 @@ def calculate_greeks(
             interest_rate = DEFAULT_INTEREST_RATES.get(exchange, 0)
 
         # Convert interest rate from percentage to decimal
-        # py_vollib expects decimal (0.065 for 6.5%)
+        # Black-76 expects decimal (0.065 for 6.5%)
         interest_rate_decimal = interest_rate / 100.0
 
         # Validate inputs
@@ -334,7 +302,7 @@ def calculate_greeks(
         if strike <= 0:
             return False, {"status": "error", "message": "Strike price must be positive"}, 400
 
-        # Set option flag for py_vollib ('c' for call, 'p' for put)
+        # Set option flag ('c' for call, 'p' for put)
         flag = "c" if opt_type == "CE" else "p"
 
         # Calculate intrinsic value to validate option price
@@ -478,7 +446,7 @@ def calculate_greeks(
                 implied_volatility_decimal,
             )
 
-            # Note: py_vollib Black model returns Greeks in trader-friendly units:
+            # Note: utils.black76 returns Greeks in trader-friendly units:
             # - theta: already daily theta (no conversion needed)
             # - vega: already per 1% vol change (no conversion needed)
 

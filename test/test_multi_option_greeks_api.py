@@ -5,9 +5,8 @@ This script demonstrates how to use the /api/v1/multioptiongreeks endpoint
 to calculate option Greeks for multiple symbols in a single request.
 
 Prerequisites:
-1. Install py_vollib library: pip install py_vollib
-2. OpenAlgo must be running
-3. Markets should be open for live prices
+1. OpenAlgo must be running (Black-76 math is built-in via utils.black76)
+2. Markets should be open for live prices
 
 Usage:
     cd c:\\Users\\Karthik\\Downloads\\openalgo-chart\\openalgo\\test
@@ -217,10 +216,9 @@ if __name__ == "__main__":
     print(f"\nBase URL: {BASE_URL}")
     print(f"API Key: {API_KEY[:10]}..." if len(API_KEY) > 10 else f"API Key: {API_KEY}")
     print("\n⚠️  Prerequisites:")
-    print("  1. Install py_vollib: pip install py_vollib")
-    print("  2. OpenAlgo must be running")
-    print("  3. Markets should be open for live prices")
-    print("  4. Update symbols to current/future expiry dates")
+    print("  1. OpenAlgo must be running (Black-76 math is built-in)")
+    print("  2. Markets should be open for live prices")
+    print("  3. Update symbols to current/future expiry dates")
     print("=" * 60)
 
     # Run tests

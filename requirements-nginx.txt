@@ -68,8 +68,6 @@ marshmallow==3.26.2
 matplotlib-inline==0.2.1
 mcp==1.27.0
 mdurl==0.1.2
-py_lets_be_rational==1.0.1
-py_vollib==1.0.1
 narwhals==2.19.0
 nbformat==5.10.4
 nest-asyncio==1.6.0

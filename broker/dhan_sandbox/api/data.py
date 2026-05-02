@@ -600,7 +600,7 @@ class BrokerData:
                                     "oi": raw_oi,
                                 }
                                 
-                                # Inject mathematically sound realism so py_vollib doesn't crash in standard services
+                                # Inject mathematically sound realism so the Black-76 IV solver doesn't fail in standard services
                                 realistic_quote = self._apply_sandbox_mock_realism(
                                     symbol,
                                     quote,
@@ -1006,7 +1006,7 @@ class BrokerData:
                 "prev_close": 0,
             }
             
-            # Inject mathematically sound realism so py_vollib doesn't crash in standard services
+            # Inject mathematically sound realism so the Black-76 IV solver doesn't fail in standard services
             quote_seed = str(int(time.time() // 60))
             return self._apply_sandbox_mock_realism(symbol, quote, seed=quote_seed)
 
