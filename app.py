@@ -275,6 +275,22 @@ def create_app():
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
 
+    # Remote MCP (HTTP + OAuth) — opt-in via MCP_HTTP_ENABLED. Off by default.
+    # Pre-flight refusal: must NEVER coexist with FLASK_DEBUG=True (debug-mode
+    # tracebacks would leak bearer tokens). See docs/prd/remote-mcp.md.
+    if os.getenv("MCP_HTTP_ENABLED", "False").lower() == "true":
+        if os.getenv("FLASK_DEBUG", "False").lower() == "true":
+            raise RuntimeError(
+                "MCP_HTTP_ENABLED=True is not allowed with FLASK_DEBUG=True. "
+                "Debug-mode tracebacks leak bearer tokens. Disable one of them."
+            )
+        from blueprints.mcp_http import mcp_http_bp
+        from blueprints.mcp_oauth import mcp_oauth_bp
+
+        app.register_blueprint(mcp_oauth_bp)
+        app.register_blueprint(mcp_http_bp)
+        logger.info("Remote MCP blueprints registered (scaffold-only on this commit).")
+
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
         # Exempt webhook endpoints from CSRF protection
