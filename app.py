@@ -284,6 +284,14 @@ def create_app():
                 "MCP_HTTP_ENABLED=True is not allowed with FLASK_DEBUG=True. "
                 "Debug-mode tracebacks leak bearer tokens. Disable one of them."
             )
+
+        # Crucial ordering: set OPENALGO_MCP_HTTP_BOOT BEFORE importing the
+        # MCP HTTP blueprint. The blueprint transitively imports
+        # mcp.mcpserver, which checks this env var to skip the stdio
+        # argv requirement. Stdio launches never set this var, so their
+        # behavior is unaffected.
+        os.environ["OPENALGO_MCP_HTTP_BOOT"] = "1"
+
         from blueprints.mcp_http import mcp_http_bp
         from blueprints.mcp_oauth import mcp_oauth_bp, mcp_wellknown_bp
         from database.oauth_db import init_db as init_oauth_db
@@ -298,7 +306,9 @@ def create_app():
         app.register_blueprint(mcp_oauth_bp)
         app.register_blueprint(mcp_wellknown_bp)
         app.register_blueprint(mcp_http_bp)
-        logger.info("Remote MCP blueprints registered (OAuth discovery + JWKS + DCR live).")
+        logger.info(
+            "Remote MCP blueprints registered (OAuth + JSON-RPC dispatch + SSE)."
+        )
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():

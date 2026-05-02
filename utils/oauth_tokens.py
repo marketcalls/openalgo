@@ -27,7 +27,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Iterable, NamedTuple
 
-from authlib.jose import jwt
+from authlib.jose import JsonWebKey, jwt
+from authlib.jose.errors import JoseError
 
 from database.oauth_db import (
     OAuthRefreshToken,
@@ -261,3 +262,78 @@ def revoke_presented_refresh(
     # RFC 7009 §2.2 — unknown tokens still respond 200; no information
     # leak about whether the token ever existed.
     return True
+
+
+# ---------------------------------------------------------------------------
+# Access token verification (used by the MCP HTTP transport)
+# ---------------------------------------------------------------------------
+
+
+class AccessTokenError(Exception):
+    """Single error type for the resource-server token check.
+
+    The string value is what we surface to the client in the
+    ``WWW-Authenticate: Bearer error="..."`` header. Mapping per
+    RFC 6750 §3.1: ``invalid_token``, ``insufficient_scope``,
+    ``invalid_request``.
+    """
+
+
+def verify_access_token(token_str: str) -> dict:
+    """Validate an RS256 JWT access token.
+
+    Returns the claims dict on success. Raises AccessTokenError with a
+    spec-compliant ``error`` string ("invalid_token" / "invalid_request")
+    on failure. Scope checks are the caller's responsibility — this
+    function only validates the signature, exp, iss, and aud claims.
+
+    Verification is stateless: no DB hit per request. The kid is
+    matched against JWKS (cached in-process via the active signing key
+    + any in-flight predecessor during rotation).
+    """
+    if not token_str:
+        raise AccessTokenError("invalid_request")
+
+    # Build a JWKS object from every known signing key. ``public_jwks``
+    # already exposes both the active and the in-flight predecessor
+    # during a rotation window, so freshly issued tokens AND tokens
+    # signed by the previous key both validate for one TTL window.
+    from utils.oauth_keys import public_jwks  # avoid import cycle
+
+    try:
+        jwks = JsonWebKey.import_key_set(public_jwks())
+    except Exception as e:
+        logger.exception(f"JWKS import failed: {e}")
+        raise AccessTokenError("invalid_token") from e
+
+    expected_iss = _issuer()
+    expected_aud = _audience()
+
+    claims_options = {
+        "iss": {"essential": True, "value": expected_iss},
+        "aud": {"essential": True, "value": expected_aud},
+        "exp": {"essential": True},
+    }
+
+    try:
+        claims = jwt.decode(token_str, jwks, claims_options=claims_options)
+        # Validates iss/aud/exp/nbf/iat per the options above.
+        claims.validate()
+    except JoseError as e:
+        # Authlib's error message is log-worthy but never returned to the
+        # client (would leak details about why a token is bad).
+        logger.info(f"[OAuth verify] token rejected: {type(e).__name__}: {e}")
+        raise AccessTokenError("invalid_token") from e
+    except Exception as e:
+        logger.exception(f"[OAuth verify] unexpected verification error: {e}")
+        raise AccessTokenError("invalid_token") from e
+
+    # claims is a CombinedClaims object — return as a plain dict so the
+    # caller can do regular .get() lookups.
+    return dict(claims)
+
+
+def claims_have_scope(claims: dict, required: str) -> bool:
+    """True if ``required`` is in the token's space-delimited scope claim."""
+    granted = (claims.get("scope") or "").split()
+    return required in granted
