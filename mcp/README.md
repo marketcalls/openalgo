@@ -2,6 +2,17 @@
 
 This is a Model Context Protocol (MCP) server that provides trading and market data functionality through the OpenAlgo platform. It enables AI assistants to execute trades, manage positions, and retrieve market data directly from supported brokers.
 
+## Two transports
+
+| Transport | Audience | Status |
+|---|---|---|
+| **stdio** (this guide) | Claude Desktop, Cursor, Windsurf — local processes spawning `mcp/mcpserver.py` | shipped, stable |
+| **HTTP / SSE with OAuth** | claude.ai, chatgpt.com, claude mobile — hosted clients reaching your install over HTTPS | available on the `remotemcp` branch — see [`install/Remote-MCP-readme.md`](../install/Remote-MCP-readme.md) |
+
+Both transports share the same tool registry. Enabling the remote
+transport does not change anything about the local stdio setup
+documented below.
+
 ## Prerequisites
 
 ### 1. OpenAlgo Server Setup
