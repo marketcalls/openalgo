@@ -105,95 +105,123 @@ def search():
     return render_template("search.html", results=results_dicts)
 
 
+def _parse_multi(value: str | None) -> list[str]:
+    """Split a comma-separated query parameter into a clean uppercase list."""
+    if not value:
+        return []
+    return [v.strip().upper() for v in value.split(",") if v.strip()]
+
+
+def _fno_to_api_dict(r: dict) -> dict:
+    """Reduce an FNO cache result to the public API shape."""
+    return {
+        "symbol": r["symbol"],
+        "brsymbol": r["brsymbol"],
+        "name": r["name"],
+        "exchange": r["exchange"],
+        "brexchange": r.get("brexchange", ""),
+        "token": r["token"],
+        "expiry": r["expiry"],
+        "strike": r["strike"],
+        "lotsize": r.get("lotsize"),
+        "contract_value": r.get("contract_value"),
+        "instrumenttype": r["instrumenttype"],
+        "freeze_qty": r.get("freeze_qty", 1),
+    }
+
+
 @search_bp.route("/api/search")
 @check_session_validity
 def api_search():
-    """API endpoint for AJAX search suggestions with FNO filters"""
-    query = request.args.get("q", "").strip() or None
-    exchange = request.args.get("exchange")
+    """API endpoint for AJAX search suggestions with FNO filters.
 
-    # FNO filter parameters
+    Accepts comma-separated values for ``exchange`` and ``instrumenttype`` so
+    callers can request multiple exchanges (e.g. ``NSE,BSE``) or instrument
+    types (e.g. ``FUT,CE``) in a single request. Single-value callers continue
+    to work — a bare value is treated as a one-element list.
+    """
+    query = request.args.get("q", "").strip() or None
+
+    exchanges = _parse_multi(request.args.get("exchange"))
+    inst_types = _parse_multi(request.args.get("instrumenttype"))
+
     expiry = request.args.get("expiry", "").strip() or None
-    instrumenttype = request.args.get("instrumenttype", "").strip() or None
     underlying = request.args.get("underlying", "").strip() or None
     strike_min_str = request.args.get("strike_min", "").strip()
     strike_max_str = request.args.get("strike_max", "").strip()
 
-    # Parse strike range
     strike_min = float(strike_min_str) if strike_min_str else None
     strike_max = float(strike_max_str) if strike_max_str else None
 
-    # Check if any FNO filters are applied
-    has_fno_filters = any([expiry, instrumenttype, underlying, strike_min, strike_max])
+    has_fno_filters = any([expiry, inst_types, underlying, strike_min, strike_max])
 
-    # Search is allowed if a query is provided OR an exchange is selected.
-    # Exchange-only browse works for any exchange (NSE/BSE/NFO/BFO/MCX/CDS/BCD/
-    # NCDEX/NCO/NSE_INDEX/BSE_INDEX/GLOBAL_INDEX/crypto). FNO filters still drive
-    # the more advanced cache path below.
-    if not query and not exchange:
+    # Refuse to scan everything: require either a query or at least one exchange.
+    if not query and not exchanges:
         logger.debug("Empty API search query received without exchange filter")
         return jsonify({"results": [], "total": 0})
 
-    # Use FNO search if any FNO filters are applied
-    if has_fno_filters or exchange in FNO_EXCHANGES:
-        logger.debug(
-            f"FNO API search: query={query}, exchange={exchange}, filters={has_fno_filters}"
-        )
-        # fno_search_symbols returns list of dicts directly (cache-based)
-        results_dicts = fno_search_symbols(
-            query=query,
-            exchange=exchange,
-            expiry=expiry,
-            instrumenttype=instrumenttype,
-            strike_min=strike_min,
-            strike_max=strike_max,
-            underlying=underlying,
-        )
-        # Reduce fields for API response (freeze_qty already in results)
-        results_dicts = [
-            {
-                "symbol": r["symbol"],
-                "brsymbol": r["brsymbol"],
-                "name": r["name"],
-                "exchange": r["exchange"],
-                "brexchange": r.get("brexchange", ""),
-                "token": r["token"],
-                "expiry": r["expiry"],
-                "strike": r["strike"],
-                "lotsize": r.get("lotsize"),
-                "contract_value": r.get("contract_value"),
-                "instrumenttype": r["instrumenttype"],
-                "freeze_qty": r.get("freeze_qty", 1),
-            }
-            for r in results_dicts
-        ]
-    else:
-        logger.debug(f"Standard API search: query={query}, exchange={exchange}")
-        results = enhanced_search_symbols(query, exchange)
-        # Import freeze qty function for non-FNO exchanges
-        from database.qty_freeze_db import get_freeze_qty_for_option
+    from database.qty_freeze_db import get_freeze_qty_for_option
 
-        # Convert SymToken objects to dicts
-        results_dicts = [
-            {
-                "symbol": result.symbol,
-                "brsymbol": result.brsymbol,
-                "name": result.name,
-                "exchange": result.exchange,
-                "brexchange": result.brexchange,
-                "token": result.token,
-                "expiry": result.expiry,
-                "strike": result.strike,
-                "lotsize": result.lotsize,
-                "contract_value": result.contract_value,
-                "instrumenttype": result.instrumenttype,
-                "freeze_qty": get_freeze_qty_for_option(result.symbol, result.exchange),
-            }
-            for result in results
-        ]
+    # Outer loop iterates exchanges (may be a single None for "all"); inner loop
+    # iterates instrument types so multi-value combinations are evaluated as
+    # the union. We dedup by (symbol, exchange) so overlapping filters do not
+    # produce duplicate rows.
+    exch_iter = exchanges or [None]
+    inst_iter = inst_types or [None]
 
-    logger.debug(f"API search found {len(results_dicts)} results")
-    return jsonify({"results": results_dicts, "total": len(results_dicts)})
+    seen: set[tuple] = set()
+    aggregated: list[dict] = []
+
+    for exch in exch_iter:
+        # Decide which engine handles this exchange. The FNO engine fires when
+        # any FNO-specific filter is set, OR the exchange itself is FNO.
+        is_fno_path = has_fno_filters or (exch is not None and exch in FNO_EXCHANGES)
+
+        for inst in inst_iter:
+            if is_fno_path:
+                rows = fno_search_symbols(
+                    query=query,
+                    exchange=exch,
+                    expiry=expiry,
+                    instrumenttype=inst,
+                    strike_min=strike_min,
+                    strike_max=strike_max,
+                    underlying=underlying,
+                )
+                for r in rows:
+                    key = (r.get("symbol"), r.get("exchange"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    aggregated.append(_fno_to_api_dict(r))
+            else:
+                rows = enhanced_search_symbols(query, exch)
+                for result in rows:
+                    key = (result.symbol, result.exchange)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    aggregated.append(
+                        {
+                            "symbol": result.symbol,
+                            "brsymbol": result.brsymbol,
+                            "name": result.name,
+                            "exchange": result.exchange,
+                            "brexchange": result.brexchange,
+                            "token": result.token,
+                            "expiry": result.expiry,
+                            "strike": result.strike,
+                            "lotsize": result.lotsize,
+                            "contract_value": result.contract_value,
+                            "instrumenttype": result.instrumenttype,
+                            "freeze_qty": get_freeze_qty_for_option(
+                                result.symbol, result.exchange
+                            ),
+                        }
+                    )
+
+    logger.debug(f"API search found {len(aggregated)} results across {len(exch_iter)} exchange(s)")
+    return jsonify({"results": aggregated, "total": len(aggregated)})
 
 
 @search_bp.route("/api/expiries")

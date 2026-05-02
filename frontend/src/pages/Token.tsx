@@ -1,18 +1,13 @@
-import { History, Info, Search, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, History, Info, Search, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 
 interface SearchResult {
@@ -26,9 +21,11 @@ interface SearchResult {
 
 interface SearchHistoryEntry {
   symbol: string
+  // Comma-joined for backwards compat with older entries that used a single string
   exchange: string
   underlying?: string
   expiry?: string
+  // Comma-joined ("FUT", "FUT,CE")
   instrumentType?: string
   strikeMin?: string
   strikeMax?: string
@@ -89,9 +86,9 @@ export default function Token() {
   const { allExchanges, fnoExchanges, isCrypto } = useSupportedExchanges()
   const navigate = useNavigate()
   const [symbol, setSymbol] = useState('')
-  const [exchange, setExchange] = useState('')
+  const [exchanges, setExchanges] = useState<string[]>([])
   const [underlying, setUnderlying] = useState('')
-  const [instrumentType, setInstrumentType] = useState('')
+  const [instrumentTypes, setInstrumentTypes] = useState<string[]>([])
   const [expiry, setExpiry] = useState('')
   const [strikeMin, setStrikeMin] = useState('')
   const [strikeMax, setStrikeMax] = useState('')
@@ -109,13 +106,29 @@ export default function Token() {
   const inputWrapperRef = useRef<HTMLDivElement>(null)
   const fnoRequestIdRef = useRef(0)
 
-  const isFnoExchange = fnoExchanges.some((ex) => ex.value === exchange)
+  // FNO filter section is enabled only when a SINGLE exchange is selected and
+  // it's an F&O exchange. Multi-exchange selections suppress these filters
+  // because expiries/underlyings are exchange-specific.
+  const exchange = exchanges.length === 1 ? exchanges[0] : ''
+  const isFnoExchange = exchanges.length === 1 && fnoExchanges.some((ex) => ex.value === exchange)
+  const exchangeCsv = exchanges.join(',')
+  const instrumentTypeCsv = instrumentTypes.join(',')
 
-  const hasFnoFilters = underlying || expiry || instrumentType || strikeMin || strikeMax
+  const toggleExchange = (value: string) => {
+    setExchanges((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+    )
+  }
+
+  const toggleInstrumentType = (value: string) => {
+    setInstrumentTypes((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+    )
+  }
 
   const resetFnoFilters = useCallback(() => {
     setUnderlying('')
-    setInstrumentType('')
+    setInstrumentTypes([])
     setExpiry('')
     setStrikeMin('')
     setStrikeMax('')
@@ -193,7 +206,12 @@ export default function Token() {
   // Debounced search for autocomplete
   const performAutocompleteSearch = useCallback(
     async (query: string, exch: string) => {
-      if (query.length < 2 && !(isFnoExchange && hasFnoFilters)) {
+      // Autocomplete is driven exclusively by the Symbol input. Selecting an
+      // exchange or toggling F&O filters never fires the dropdown — that was
+      // an annoying side-effect users complained about. The filters are still
+      // sent along with the query so suggestions stay scoped, but they don't
+      // trigger a fetch on their own.
+      if (query.length < 2) {
         setSearchResults([])
         setShowResults(false)
         return
@@ -202,11 +220,11 @@ export default function Token() {
       setIsLoading(true)
       try {
         const params = new URLSearchParams()
-        if (query) params.append('q', query)
+        params.append('q', query)
         if (exch) params.append('exchange', exch)
         if (underlying) params.append('underlying', underlying)
         if (expiry) params.append('expiry', expiry)
-        if (instrumentType) params.append('instrumenttype', instrumentType)
+        if (instrumentTypeCsv) params.append('instrumenttype', instrumentTypeCsv)
         if (strikeMin) params.append('strike_min', strikeMin)
         if (strikeMax) params.append('strike_max', strikeMax)
 
@@ -222,18 +240,19 @@ export default function Token() {
         setIsLoading(false)
       }
     },
-    [underlying, expiry, instrumentType, strikeMin, strikeMax, isFnoExchange, hasFnoFilters]
+    [underlying, expiry, instrumentTypeCsv, strikeMin, strikeMax]
   )
 
-  // Debounced input handler
+  // Debounced input handler — fires ONLY when the user types in the Symbol
+  // box. Exchange and FNO filter changes do not trigger the dropdown.
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (symbol.length >= 2 || (isFnoExchange && hasFnoFilters)) {
+      if (symbol.length >= 2) {
         performAutocompleteSearch(symbol, exchange)
       }
     }, 300)
     return () => clearTimeout(timer)
-  }, [symbol, exchange, performAutocompleteSearch, hasFnoFilters, isFnoExchange])
+  }, [symbol, exchange, performAutocompleteSearch])
 
   // Click-outside handler to close dropdown
   useEffect(() => {
@@ -261,38 +280,30 @@ export default function Token() {
     setShowResults(false)
     setSymbolError('')
 
-    // Exchange is required
-    if (!exchange) {
+    // At least one exchange must be selected.
+    if (exchanges.length === 0) {
+      setSymbolError('Select at least one exchange')
       return
     }
 
-    // Symbol is now optional whenever an exchange is selected — the user can
-    // browse a whole exchange. We still nudge for at least one criterion when
-    // both symbol and FNO filters are empty on a non-FNO exchange.
-    if (!symbol && !hasFnoFilters && !exchange) {
-      setSymbolError('Enter a search term or select an exchange')
-      return
-    }
-
-    // Save to local history
+    // Save to local history (exchange and instrumentType stored as comma-joined CSVs)
     persistToHistory({
       symbol,
-      exchange,
+      exchange: exchangeCsv,
       underlying: underlying || undefined,
       expiry: expiry || undefined,
-      instrumentType: instrumentType || undefined,
+      instrumentType: instrumentTypeCsv || undefined,
       strikeMin: strikeMin || undefined,
       strikeMax: strikeMax || undefined,
       ts: Date.now(),
     })
 
-    // Navigate to search results page with query params
     const params = new URLSearchParams()
     if (symbol) params.append('symbol', symbol)
-    if (exchange) params.append('exchange', exchange)
+    if (exchangeCsv) params.append('exchange', exchangeCsv)
     if (underlying) params.append('underlying', underlying)
     if (expiry) params.append('expiry', expiry)
-    if (instrumentType) params.append('instrumenttype', instrumentType)
+    if (instrumentTypeCsv) params.append('instrumenttype', instrumentTypeCsv)
     if (strikeMin) params.append('strike_min', strikeMin)
     if (strikeMax) params.append('strike_max', strikeMax)
 
@@ -301,14 +312,23 @@ export default function Token() {
 
   const applyHistoryEntry = (entry: SearchHistoryEntry) => {
     setSymbol(entry.symbol)
-    setExchange(entry.exchange)
+    setExchanges(
+      (entry.exchange || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
     setUnderlying(entry.underlying || '')
     setExpiry(entry.expiry || '')
-    setInstrumentType(entry.instrumentType || '')
+    setInstrumentTypes(
+      (entry.instrumentType || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
     setStrikeMin(entry.strikeMin || '')
     setStrikeMax(entry.strikeMax || '')
     setSymbolError('')
-    // Re-emit at top of stack so most-recent ordering reflects this click
     persistToHistory({ ...entry, ts: Date.now() })
     const params = new URLSearchParams()
     if (entry.symbol) params.append('symbol', entry.symbol)
@@ -336,11 +356,11 @@ export default function Token() {
 
   const handleResultClick = (result: SearchResult) => {
     setSymbol(result.symbol)
-    setExchange(result.exchange)
+    setExchanges([result.exchange])
     setShowResults(false)
   }
 
-  const showStrikeRange = instrumentType === 'CE' || instrumentType === 'PE'
+  const showStrikeRange = instrumentTypes.includes('CE') || instrumentTypes.includes('PE')
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
@@ -361,10 +381,12 @@ export default function Token() {
               <div className="flex justify-between">
                 <Label htmlFor="symbol">Symbol, Name, or Token</Label>
                 <span
-                  className={`text-xs ${symbolError ? 'text-red-500' : exchange ? 'text-green-600' : 'text-muted-foreground'}`}
+                  className={`text-xs ${symbolError ? 'text-red-500' : exchanges.length > 0 ? 'text-green-600' : 'text-muted-foreground'}`}
                 >
                   {symbolError ||
-                    (exchange ? '(Optional — browse selected exchange)' : '(Or pick an exchange)')}
+                    (exchanges.length > 0
+                      ? '(Optional — browse selected exchange)'
+                      : '(Or pick an exchange)')}
                 </span>
               </div>
               <div className="relative" ref={inputWrapperRef}>
@@ -380,7 +402,9 @@ export default function Token() {
                     setSymbolError('')
                   }}
                   onFocus={() => {
-                    if (symbol.length >= 2 || (isFnoExchange && hasFnoFilters)) {
+                    // Re-open the dropdown only if there's already a typed
+                    // query and matching results — never on filter state alone.
+                    if (symbol.length >= 2 && searchResults.length > 0) {
                       setShowResults(true)
                     }
                   }}
@@ -434,21 +458,86 @@ export default function Token() {
               </div>
             </div>
 
-            {/* Exchange Select */}
+            {/* Exchange multi-select */}
             <div className="space-y-2">
-              <Label htmlFor="exchange">Exchange</Label>
-              <Select value={exchange} onValueChange={setExchange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select Exchange" />
-                </SelectTrigger>
-                <SelectContent>
-                  {allExchanges.map((ex) => (
-                    <SelectItem key={ex.value} value={ex.value}>
-                      {ex.label}
-                    </SelectItem>
+              <Label>Exchange</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-between font-normal"
+                  >
+                    <span className="truncate text-left">
+                      {exchanges.length === 0
+                        ? 'Select Exchange(s)'
+                        : exchanges.length === 1
+                          ? (allExchanges.find((ex) => ex.value === exchanges[0])?.label ??
+                            exchanges[0])
+                          : `${exchanges.length} exchanges selected`}
+                    </span>
+                    <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-2 max-h-80 overflow-auto" align="start">
+                  <div className="flex items-center justify-between px-2 py-1 text-xs text-muted-foreground">
+                    <span>Pick one or more</span>
+                    {exchanges.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setExchanges([])}
+                        className="hover:text-foreground"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="space-y-1">
+                    {allExchanges.map((ex) => {
+                      const checked = exchanges.includes(ex.value)
+                      return (
+                        <label
+                          key={ex.value}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => toggleExchange(ex.value)}
+                          />
+                          <span className="flex-1">{ex.label}</span>
+                          {checked ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
+              {exchanges.length > 1 ? (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {exchanges.map((ex) => (
+                    <span
+                      key={ex}
+                      className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs"
+                    >
+                      {ex}
+                      <button
+                        type="button"
+                        onClick={() => toggleExchange(ex)}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label={`Remove ${ex}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
                   ))}
-                </SelectContent>
-              </Select>
+                </div>
+              ) : null}
+              {exchanges.length > 1 ? (
+                <p className="text-xs text-muted-foreground">
+                  F&O filters (underlying, expiry) are hidden when more than one exchange is
+                  selected — pick one F&O exchange to use them.
+                </p>
+              ) : null}
             </div>
 
             {/* F&O Filters */}
@@ -488,20 +577,27 @@ export default function Token() {
 
                   <div className="space-y-2">
                     <Label>Instrument Type</Label>
-                    <Select
-                      value={instrumentType || '_all'}
-                      onValueChange={(v) => setInstrumentType(v === '_all' ? '' : v)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="All Types" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_all">All Types</SelectItem>
-                        <SelectItem value="FUT">Futures</SelectItem>
-                        <SelectItem value="CE">Call Options (CE)</SelectItem>
-                        <SelectItem value="PE">Put Options (PE)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="flex flex-wrap gap-3 h-10 items-center">
+                      {[
+                        { value: 'FUT', label: 'Futures' },
+                        { value: 'CE', label: 'Calls' },
+                        { value: 'PE', label: 'Puts' },
+                      ].map((opt) => (
+                        <label
+                          key={opt.value}
+                          className="flex items-center gap-1.5 text-sm cursor-pointer"
+                        >
+                          <Checkbox
+                            checked={instrumentTypes.includes(opt.value)}
+                            onCheckedChange={() => toggleInstrumentType(opt.value)}
+                          />
+                          {opt.label}
+                        </label>
+                      ))}
+                      {instrumentTypes.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">(All)</span>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
 
