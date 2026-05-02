@@ -537,7 +537,7 @@ _CONSENT_TEMPLATE = """\
       <input type="hidden" name="state" value="{{ state }}">
       <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
       <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token_value }}">
 
       {% if requires_fresh_totp %}
       <input type="text" name="totp_code" autocomplete="one-time-code"
@@ -561,6 +561,24 @@ _CONSENT_TEMPLATE = """\
 """
 
 
+def _csrf_token_value() -> str:
+    """Generate a CSRF token without relying on a Jinja global.
+
+    Flask-WTF normally registers ``csrf_token()`` as a Jinja global at
+    ``CSRFProtect.init_app``. If WTF_CSRF_ENABLED is False at config
+    time the registration order can leave the global unset, breaking
+    template renders that reference ``csrf_token()``. Calling
+    ``generate_csrf()`` directly sidesteps that — the function is safe
+    to call regardless of whether validation is on.
+    """
+    try:
+        from flask_wtf.csrf import generate_csrf
+
+        return generate_csrf()
+    except Exception:
+        return ""
+
+
 def _render_consent(**ctx):
     """Render the consent page with a CSP that permits the OAuth redirect.
 
@@ -574,6 +592,7 @@ def _render_consent(**ctx):
     against the client's registered list at this point, so allowing
     its origin here is safe.
     """
+    ctx.setdefault("csrf_token_value", _csrf_token_value())
     body = render_template_string(_CONSENT_TEMPLATE, **ctx)
     from flask import make_response
 

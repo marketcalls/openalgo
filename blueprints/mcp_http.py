@@ -427,17 +427,7 @@ def mcp_dispatch():
         from utils.mcp_tool_registry import list_tools_for_scopes
 
         names = list_tools_for_scopes(granted_scopes)
-        # Tool descriptors per MCP spec — we don't yet expose JSON-Schema
-        # input schemas (FastMCP generates them but we'd need to reach
-        # into private internals). v1 returns name + minimal description.
-        tools = [
-            {
-                "name": n,
-                "description": _docstring_summary(n),
-                "inputSchema": {"type": "object", "properties": {}, "additionalProperties": True},
-            }
-            for n in names
-        ]
+        tools = [_tool_descriptor(n) for n in names]
         return _jsonrpc_result(rpc_id, {"tools": tools})
 
     if method == "tools/call":
@@ -473,6 +463,50 @@ def _docstring_summary(name: str) -> str:
     except Exception:
         pass
     return ""
+
+
+def _tool_descriptor(name: str) -> dict[str, Any]:
+    """Build a full MCP tool descriptor: name, description, JSON-Schema.
+
+    Pulls the input schema FastMCP generated from the function's type
+    hints. Without this, MCP clients (ChatGPT) have to guess parameter
+    names — which is how we ended up with calls using ``product_type``
+    instead of the actual ``product`` parameter.
+    """
+    descriptor: dict[str, Any] = {
+        "name": name,
+        "description": _docstring_summary(name) or name,
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": True},
+    }
+
+    try:
+        from utils.mcp_tool_registry import _load_mcpserver_module
+
+        mod = _load_mcpserver_module()
+        if mod is None:
+            return descriptor
+        tool_manager = getattr(getattr(mod, "mcp", None), "_tool_manager", None)
+        if tool_manager is None:
+            return descriptor
+        tools_dict = getattr(tool_manager, "_tools", None)
+        if not isinstance(tools_dict, dict):
+            return descriptor
+        tool = tools_dict.get(name)
+        if tool is None:
+            return descriptor
+        # FastMCP stores the JSON schema under .parameters (Pydantic-built)
+        params = getattr(tool, "parameters", None)
+        if isinstance(params, dict) and params.get("type") == "object":
+            descriptor["inputSchema"] = params
+        # Use the full FastMCP description if available — usually richer
+        # than the docstring summary because it includes Args block.
+        full_desc = getattr(tool, "description", None)
+        if isinstance(full_desc, str) and full_desc.strip():
+            descriptor["description"] = full_desc.strip()
+    except Exception as e:  # never block tools/list on a metadata bug
+        logger.warning(f"[MCP tools/list] failed to build descriptor for {name}: {e}")
+
+    return descriptor
 
 
 def _dispatch_tool_call(
