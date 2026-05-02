@@ -2,9 +2,14 @@ import type {
   AddFreezeQtyRequest,
   AddHolidayRequest,
   AdminStats,
+  DiagnosticsResponse,
+  ErrorGroupsResponse,
+  ErrorsListResponse,
+  ErrorsStats,
   FreezeQty,
   Holiday,
   HolidaysResponse,
+  SystemInfo,
   TimingsResponse,
   TodayTiming,
   UpdateFreezeQtyRequest,
@@ -151,5 +156,57 @@ export const adminApi = {
       { date }
     )
     return { date: response.data.date, timings: response.data.timings }
+  },
+
+  // ============================================================================
+  // Diagnostics APIs
+  // ============================================================================
+
+  getErrors: async (params?: {
+    limit?: number
+    level?: string
+    q?: string
+  }): Promise<ErrorsListResponse> => {
+    const search = new URLSearchParams()
+    if (params?.limit) search.set('limit', String(params.limit))
+    if (params?.level) search.set('level', params.level)
+    if (params?.q) search.set('q', params.q)
+    const qs = search.toString() ? `?${search.toString()}` : ''
+    const response = await webClient.get<ErrorsListResponse>(`/admin/api/errors${qs}`)
+    return response.data
+  },
+
+  getErrorStats: async (): Promise<ErrorsStats> => {
+    const response = await webClient.get<ErrorsStats>('/admin/api/errors/stats')
+    return response.data
+  },
+
+  getErrorGroups: async (limit = 50): Promise<ErrorGroupsResponse> => {
+    const response = await webClient.get<ErrorGroupsResponse>(
+      `/admin/api/errors/groups?limit=${limit}`
+    )
+    return response.data
+  },
+
+  getSystemInfo: async (): Promise<SystemInfo> => {
+    const response = await webClient.get<ApiResponse<SystemInfo>>('/admin/api/system')
+    if (!response.data.data) {
+      throw new Error(response.data.message || 'Failed to load system info')
+    }
+    return response.data.data
+  },
+
+  runDiagnostics: async (): Promise<DiagnosticsResponse> => {
+    const response = await webClient.post<DiagnosticsResponse>('/admin/api/system/diagnostics')
+    return response.data
+  },
+
+  /**
+   * Trigger a browser download of the system report.
+   * The server enforces filename and content-disposition; we just navigate to the URL.
+   */
+  downloadReport: (format: 'md' | 'txt' = 'md'): void => {
+    const fmt = format === 'txt' ? 'txt' : 'md'
+    window.location.href = `/admin/api/system/report?format=${fmt}`
   },
 }

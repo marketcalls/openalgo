@@ -85,3 +85,155 @@ export interface AdminStats {
   freeze_count: number
   holiday_count: number
 }
+
+// ============================================================================
+// Diagnostics types
+// ============================================================================
+
+export interface ErrorEntry {
+  ts?: string
+  level?: string
+  logger?: string
+  module?: string
+  file?: string
+  message?: string
+  exception?: string[] | string
+  request?: { method?: string; path?: string; ip?: string }
+}
+
+export interface ErrorsListResponse {
+  status: string
+  data: ErrorEntry[]
+  count: number
+  scanned: number
+  total_in_window: number
+}
+
+export interface ErrorsStats {
+  status: string
+  total: number
+  by_level: Record<string, number>
+  last_24h: number
+  last_1h: number
+}
+
+export interface SystemMode {
+  analyze_mode: boolean | null
+  label: string
+}
+
+export interface SystemHost {
+  system?: string
+  release?: string
+  version?: string
+  machine?: string
+  platform?: string
+  distro?: { name?: string; id?: string; version_id?: string } | null
+  in_docker?: boolean
+  is_raspberry_pi?: boolean
+  rpi_model?: string | null
+  is_termux?: boolean
+  is_android?: boolean
+}
+
+export interface SystemRuntime {
+  python_version?: string
+  python_implementation?: string
+  eventlet_active?: boolean
+  wsgi_hint?: string
+  process_uptime_seconds?: number | null
+}
+
+export interface SystemHardware {
+  cpu_count?: number | null
+  cpu_model?: string | null
+  memory_total_mb?: number | null
+  memory_available_mb?: number | null
+  memory_percent?: number | null
+  disk_log?: { total_gb: number; free_gb: number; used_percent: number } | null
+  disk_db?: { total_gb: number; free_gb: number; used_percent: number } | null
+}
+
+export interface SystemBuild {
+  openalgo_version?: string | null
+  openalgo_sdk_version?: string | null
+  git_branch?: string | null
+  git_commit?: string | null
+  frontend_build_time?: string | null
+}
+
+export interface SystemConfig {
+  valid_brokers: string[]
+  log_level: string
+  log_to_file: boolean
+  log_dir: string
+  websocket_host: string
+  websocket_port: string
+  max_symbols_per_websocket: string
+  max_websocket_connections: string
+  api_rate_limit: string
+  flask_debug: boolean
+  secrets_present: Record<string, boolean>
+}
+
+export interface SystemBrokers {
+  configured_brokers: string[]
+  active_broker: string | null
+  user_logged_in: boolean
+}
+
+export interface SystemDatabase {
+  name: string
+  exists: boolean
+  size_mb: number
+  modified: string | null
+}
+
+export interface SystemTime {
+  server_time: string
+  server_tz: string | null
+  ist_time: string | null
+}
+
+export interface SystemInfo {
+  mode: SystemMode
+  host: SystemHost
+  runtime: SystemRuntime
+  hardware: SystemHardware
+  build: SystemBuild
+  config: SystemConfig
+  brokers: SystemBrokers
+  databases: SystemDatabase[]
+  time: SystemTime
+}
+
+export interface DiagnosticCheck {
+  name: string
+  ok: boolean
+  ms: number | null
+  detail: string
+}
+
+export interface DiagnosticsResponse {
+  status: string
+  ran_at: string
+  checks: DiagnosticCheck[]
+}
+
+export interface ErrorGroup {
+  fingerprint: string
+  count: number
+  level?: string
+  logger?: string
+  module?: string
+  first_seen?: string
+  last_seen?: string
+  sample: ErrorEntry
+}
+
+export interface ErrorGroupsResponse {
+  status: string
+  groups: ErrorGroup[]
+  total_entries: number
+  total_groups: number
+}

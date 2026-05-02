@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Calendar,
   Clock,
+  Gauge,
   Settings,
   Shield,
   Snowflake,
@@ -84,6 +85,14 @@ export default function AdminIndex() {
       href: '/logs/latency',
       countLabel: 'monitoring',
       color: 'bg-orange-500',
+    },
+    {
+      title: 'Diagnostics',
+      description: 'System info, errors, latency probes, and downloadable report for support',
+      icon: Gauge,
+      href: '/admin/diagnostics',
+      countLabel: 'troubleshoot',
+      color: 'bg-indigo-500',
     },
   ]
 
