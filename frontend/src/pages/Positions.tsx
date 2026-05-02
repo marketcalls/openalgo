@@ -129,11 +129,7 @@ const EXCHANGE_COLORS: Record<string, string> = {
   NFO: 'bg-purple-500/20 text-purple-600 border-purple-500/30',
   BFO: 'bg-amber-500/20 text-amber-600 border-amber-500/30',
   MCX: 'bg-blue-500/20 text-blue-600 border-blue-500/30',
-  NCO: 'bg-emerald-500/20 text-emerald-600 border-emerald-500/30',
   CDS: 'bg-teal-500/20 text-teal-600 border-teal-500/30',
-  NSE_INDEX: 'bg-cyan-500/20 text-cyan-600 border-cyan-500/30',
-  BSE_INDEX: 'bg-slate-500/20 text-slate-600 border-slate-500/30',
-  GLOBAL_INDEX: 'bg-indigo-500/20 text-indigo-600 border-indigo-500/30',
 }
 
 const PRODUCT_COLORS: Record<string, string> = {
@@ -859,7 +855,7 @@ export default function Positions() {
 
       {/* Positions Table */}
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="py-0">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin" />
