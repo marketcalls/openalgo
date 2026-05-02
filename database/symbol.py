@@ -54,21 +54,33 @@ class SymToken(Base):
     )
 
 
-def enhanced_search_symbols(query: str, exchange: str = None) -> list[SymToken]:
+def enhanced_search_symbols(
+    query: str | None, exchange: str | None = None, limit: int | None = None
+) -> list[SymToken]:
     """
     Enhanced search function that searches across multiple fields
-    and supports partial matching with multiple terms
+    and supports partial matching with multiple terms.
+
+    If both query and exchange are empty, returns no results to avoid full-table scans.
+    If query is empty/None but exchange is provided, returns all rows for that exchange
+    (subject to limit) — useful for "show me everything in NSE" workflows.
 
     Args:
-        query (str): Search query string
-        exchange (str, optional): Exchange to filter by
+        query: Search query string (may be None/empty for exchange-only search)
+        exchange: Exchange to filter by
+        limit: Optional cap on number of results (None = no cap)
 
     Returns:
         List[SymToken]: List of matching SymToken objects
     """
     try:
         # Split the query into terms and clean them
-        terms = [term.strip().upper() for term in query.split() if term.strip()]
+        terms = [term.strip().upper() for term in (query or "").split() if term.strip()]
+
+        # Refuse to scan the full table without any filter — caller must scope by exchange
+        # if there is no query.
+        if not terms and not exchange:
+            return []
 
         # Base query
         base_query = SymToken.query
@@ -106,8 +118,11 @@ def enhanced_search_symbols(query: str, exchange: str = None) -> list[SymToken]:
         else:
             final_query = base_query
 
-        # Execute query - no limit to show all matching results
-        results = final_query.all()
+        # Execute query — apply limit if caller specified one
+        if limit is not None and limit > 0:
+            results = final_query.limit(limit).all()
+        else:
+            results = final_query.all()
         return results
 
     except Exception as e:
@@ -123,7 +138,7 @@ def fno_search_symbols_db(
     strike_min: float = None,
     strike_max: float = None,
     underlying: str = None,
-    limit: int = 500,
+    limit: int = 10000,
 ) -> list[dict]:
     """
     FNO-specific search function using direct database queries.

@@ -413,7 +413,7 @@ class BrokerSymbolCache:
         return results
 
     def search_symbols(
-        self, query: str, exchange: str | None = None, limit: int = 50
+        self, query: str, exchange: str | None = None, limit: int = 10000
     ) -> list[SymbolData]:
         """
         Search symbols by partial match with multi-term support.
@@ -481,7 +481,7 @@ class BrokerSymbolCache:
         strike_min: float | None = None,
         strike_max: float | None = None,
         underlying: str | None = None,
-        limit: int = 500,
+        limit: int = 10000,
     ) -> list[SymbolData]:
         """
         FNO-specific search with advanced filters - in-memory cache search
@@ -926,7 +926,7 @@ def get_symbols_bulk(token_exchange_pairs: list[tuple[str, str]]) -> list[str | 
 
 
 # Search functionality
-def search_symbols(query: str, exchange: str | None = None, limit: int = 50) -> list[dict]:
+def search_symbols(query: str, exchange: str | None = None, limit: int = 10000) -> list[dict]:
     """
     Search symbols with cache support
     Returns list of symbol dictionaries
@@ -980,7 +980,7 @@ def fno_search_symbols(
     strike_min: float | None = None,
     strike_max: float | None = None,
     underlying: str | None = None,
-    limit: int = 500,
+    limit: int = 10000,
 ) -> list[dict]:
     """
     FNO-specific search with advanced filters - uses cache for fast in-memory search

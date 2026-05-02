@@ -43,11 +43,15 @@ def search():
     # Check if any FNO filters are applied
     has_fno_filters = any([expiry, instrumenttype, underlying, strike_min, strike_max])
 
-    # For non-FNO exchanges, query is required
-    # For FNO exchanges with filters, query is optional
-    if not query and not (exchange in FNO_EXCHANGES and has_fno_filters):
-        logger.info("Empty search query received without FNO filters")
-        flash("Please enter a search term or select FNO filters.", "error")
+    # Search is allowed when:
+    #   1) a query is provided, OR
+    #   2) an exchange is selected (exchange-only browse for ANY exchange — NSE, BSE,
+    #      NFO, BFO, MCX, CDS, BCD, NCDEX, NCO, NSE_INDEX, BSE_INDEX, GLOBAL_INDEX,
+    #      and crypto exchanges).
+    # Without either, refuse — full-table scans aren't useful and are slow.
+    if not query and not exchange:
+        logger.info("Empty search query received without exchange filter")
+        flash("Please enter a search term or select an exchange.", "error")
         return render_template("token.html")
 
     # Use FNO search if any FNO filters are applied or it's an FNO exchange
@@ -122,10 +126,13 @@ def api_search():
     # Check if any FNO filters are applied
     has_fno_filters = any([expiry, instrumenttype, underlying, strike_min, strike_max])
 
-    # Allow filter-only search for FNO exchanges
-    if not query and not (exchange in FNO_EXCHANGES and has_fno_filters):
-        logger.debug("Empty API search query received without FNO filters")
-        return jsonify({"results": []})
+    # Search is allowed if a query is provided OR an exchange is selected.
+    # Exchange-only browse works for any exchange (NSE/BSE/NFO/BFO/MCX/CDS/BCD/
+    # NCDEX/NCO/NSE_INDEX/BSE_INDEX/GLOBAL_INDEX/crypto). FNO filters still drive
+    # the more advanced cache path below.
+    if not query and not exchange:
+        logger.debug("Empty API search query received without exchange filter")
+        return jsonify({"results": [], "total": 0})
 
     # Use FNO search if any FNO filters are applied
     if has_fno_filters or exchange in FNO_EXCHANGES:
@@ -186,7 +193,7 @@ def api_search():
         ]
 
     logger.debug(f"API search found {len(results_dicts)} results")
-    return jsonify({"results": results_dicts})
+    return jsonify({"results": results_dicts, "total": len(results_dicts)})
 
 
 @search_bp.route("/api/expiries")

@@ -1,7 +1,6 @@
 import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Search as SearchIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -20,6 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { showToast } from '@/utils/toast'
 
 interface SearchResult {
   symbol: string
@@ -49,6 +49,7 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500, 'all'] as const
 export default function Search() {
   const [searchParams] = useSearchParams()
   const [results, setResults] = useState<SearchResult[]>([])
+  const [total, setTotal] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
@@ -91,7 +92,9 @@ export default function Search() {
 
       if (response.ok) {
         const data = await response.json()
-        setResults(data.results || [])
+        const rows = data.results || []
+        setResults(rows)
+        setTotal(typeof data.total === 'number' ? data.total : rows.length)
       } else if (response.status === 401 || response.status === 403) {
         setError('Session expired. Please log in again.')
         showToast.error('Session expired. Please log in again.', 'system')
@@ -204,7 +207,9 @@ export default function Search() {
           </div>
           <div className="inline-flex flex-col items-center bg-muted p-4 rounded-lg">
             <div className="text-sm text-muted-foreground">Found</div>
-            <div className="text-3xl font-bold text-primary">{results.length}</div>
+            <div className="text-3xl font-bold text-primary">
+              {total !== null ? total.toLocaleString() : results.length.toLocaleString()}
+            </div>
             <div className="text-sm text-muted-foreground">matching symbols</div>
           </div>
         </CardContent>
@@ -266,7 +271,11 @@ export default function Search() {
                         <Badge variant="secondary">{row.brexchange}</Badge>
                       </TableCell>
                       <TableCell className="font-mono text-sm">{row.token}</TableCell>
-                      <TableCell>{row.contract_value != null && row.contract_value !== 1 ? row.contract_value : (row.lotsize ?? '-')}</TableCell>
+                      <TableCell>
+                        {row.contract_value != null && row.contract_value !== 1
+                          ? row.contract_value
+                          : (row.lotsize ?? '-')}
+                      </TableCell>
                       <TableCell>{row.freeze_qty ?? '-'}</TableCell>
                     </TableRow>
                   ))

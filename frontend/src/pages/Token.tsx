@@ -1,7 +1,6 @@
-import { Info, Search } from 'lucide-react'
+import { History, Info, Search, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -14,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 
 interface SearchResult {
   symbol: string
@@ -22,6 +22,65 @@ interface SearchResult {
   token: string
   expiry?: string
   strike?: number
+}
+
+interface SearchHistoryEntry {
+  symbol: string
+  exchange: string
+  underlying?: string
+  expiry?: string
+  instrumentType?: string
+  strikeMin?: string
+  strikeMax?: string
+  ts: number
+}
+
+const HISTORY_KEY = 'openalgo:search-history'
+const HISTORY_MAX = 10
+
+function loadHistory(): SearchHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.slice(0, HISTORY_MAX)
+  } catch {
+    return []
+  }
+}
+
+function saveHistory(entries: SearchHistoryEntry[]): void {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, HISTORY_MAX)))
+  } catch {
+    // ignore quota / privacy errors
+  }
+}
+
+function historyKey(e: SearchHistoryEntry): string {
+  return [
+    e.symbol,
+    e.exchange,
+    e.underlying || '',
+    e.expiry || '',
+    e.instrumentType || '',
+    e.strikeMin || '',
+    e.strikeMax || '',
+  ].join('|')
+}
+
+function formatHistoryLabel(e: SearchHistoryEntry): string {
+  const parts: string[] = []
+  if (e.symbol) parts.push(e.symbol)
+  if (e.exchange) parts.push(e.exchange)
+  const filters: string[] = []
+  if (e.underlying) filters.push(e.underlying)
+  if (e.instrumentType) filters.push(e.instrumentType)
+  if (e.expiry) filters.push(e.expiry)
+  if (e.strikeMin || e.strikeMax) filters.push(`${e.strikeMin || '*'}-${e.strikeMax || '*'}`)
+  if (filters.length) parts.push(`[${filters.join(' ')}]`)
+  return parts.join(' · ') || '(empty)'
 }
 
 // EXCHANGES and FNO_EXCHANGES are now dynamic — provided by useSupportedExchanges() hook
@@ -44,6 +103,7 @@ export default function Token() {
   const [isLoading, setIsLoading] = useState(false)
   const [isFnoLoading, setIsFnoLoading] = useState(false)
   const [symbolError, setSymbolError] = useState('')
+  const [history, setHistory] = useState<SearchHistoryEntry[]>(() => loadHistory())
 
   // Refs for click-outside handling and request tracking
   const inputWrapperRef = useRef<HTMLDivElement>(null)
@@ -124,8 +184,7 @@ export default function Token() {
             setExpiries(data.expiries)
           }
         }
-      } catch (error) {
-      }
+      } catch (error) {}
     }
 
     fetchExpiriesForUnderlying()
@@ -187,21 +246,45 @@ export default function Token() {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [])
 
+  const persistToHistory = useCallback((entry: SearchHistoryEntry) => {
+    setHistory((prev) => {
+      const key = historyKey(entry)
+      const filtered = prev.filter((e) => historyKey(e) !== key)
+      const next = [entry, ...filtered].slice(0, HISTORY_MAX)
+      saveHistory(next)
+      return next
+    })
+  }, [])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setShowResults(false)
     setSymbolError('')
 
-    // Validate: symbol is required unless FNO filters are applied
-    if (!symbol && !(isFnoExchange && hasFnoFilters)) {
-      setSymbolError('Required - enter a search term')
-      return
-    }
-
     // Exchange is required
     if (!exchange) {
       return
     }
+
+    // Symbol is now optional whenever an exchange is selected — the user can
+    // browse a whole exchange. We still nudge for at least one criterion when
+    // both symbol and FNO filters are empty on a non-FNO exchange.
+    if (!symbol && !hasFnoFilters && !exchange) {
+      setSymbolError('Enter a search term or select an exchange')
+      return
+    }
+
+    // Save to local history
+    persistToHistory({
+      symbol,
+      exchange,
+      underlying: underlying || undefined,
+      expiry: expiry || undefined,
+      instrumentType: instrumentType || undefined,
+      strikeMin: strikeMin || undefined,
+      strikeMax: strikeMax || undefined,
+      ts: Date.now(),
+    })
 
     // Navigate to search results page with query params
     const params = new URLSearchParams()
@@ -214,6 +297,41 @@ export default function Token() {
     if (strikeMax) params.append('strike_max', strikeMax)
 
     navigate(`/search?${params.toString()}`)
+  }
+
+  const applyHistoryEntry = (entry: SearchHistoryEntry) => {
+    setSymbol(entry.symbol)
+    setExchange(entry.exchange)
+    setUnderlying(entry.underlying || '')
+    setExpiry(entry.expiry || '')
+    setInstrumentType(entry.instrumentType || '')
+    setStrikeMin(entry.strikeMin || '')
+    setStrikeMax(entry.strikeMax || '')
+    setSymbolError('')
+    // Re-emit at top of stack so most-recent ordering reflects this click
+    persistToHistory({ ...entry, ts: Date.now() })
+    const params = new URLSearchParams()
+    if (entry.symbol) params.append('symbol', entry.symbol)
+    if (entry.exchange) params.append('exchange', entry.exchange)
+    if (entry.underlying) params.append('underlying', entry.underlying)
+    if (entry.expiry) params.append('expiry', entry.expiry)
+    if (entry.instrumentType) params.append('instrumenttype', entry.instrumentType)
+    if (entry.strikeMin) params.append('strike_min', entry.strikeMin)
+    if (entry.strikeMax) params.append('strike_max', entry.strikeMax)
+    navigate(`/search?${params.toString()}`)
+  }
+
+  const removeHistoryEntry = (key: string) => {
+    setHistory((prev) => {
+      const next = prev.filter((e) => historyKey(e) !== key)
+      saveHistory(next)
+      return next
+    })
+  }
+
+  const clearHistory = () => {
+    setHistory([])
+    saveHistory([])
   }
 
   const handleResultClick = (result: SearchResult) => {
@@ -243,17 +361,19 @@ export default function Token() {
               <div className="flex justify-between">
                 <Label htmlFor="symbol">Symbol, Name, or Token</Label>
                 <span
-                  className={`text-xs ${symbolError ? 'text-red-500' : isFnoExchange && hasFnoFilters ? 'text-green-600' : 'text-muted-foreground'}`}
+                  className={`text-xs ${symbolError ? 'text-red-500' : exchange ? 'text-green-600' : 'text-muted-foreground'}`}
                 >
                   {symbolError ||
-                    (isFnoExchange && hasFnoFilters ? '(Optional with filters)' : '(Required)')}
+                    (exchange ? '(Optional — browse selected exchange)' : '(Or pick an exchange)')}
                 </span>
               </div>
               <div className="relative" ref={inputWrapperRef}>
                 <Input
                   id="symbol"
                   type="text"
-                  placeholder={isCrypto ? 'e.g., BTC, BTCUSDFUT, ETH' : 'e.g., nifty, RELIANCE, 2885'}
+                  placeholder={
+                    isCrypto ? 'e.g., BTC, BTCUSDFUT, ETH' : 'e.g., nifty, RELIANCE, 2885'
+                  }
                   value={symbol}
                   onChange={(e) => {
                     setSymbol(e.target.value)
@@ -437,6 +557,58 @@ export default function Token() {
         </CardContent>
       </Card>
 
+      {/* Recent Searches */}
+      {history.length > 0 ? (
+        <Card className="mb-6">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <History className="h-4 w-4" />
+                Recent Searches
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={clearHistory}
+                className="text-muted-foreground hover:text-foreground h-7 px-2"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" /> Clear
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {history.map((entry) => {
+                const key = historyKey(entry)
+                return (
+                  <div
+                    key={key}
+                    className="inline-flex items-center gap-1 rounded-full bg-muted hover:bg-muted/70 transition-colors text-xs"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => applyHistoryEntry(entry)}
+                      className="px-3 py-1 font-mono"
+                      title="Click to re-run this search"
+                    >
+                      {formatHistoryLabel(entry)}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeHistoryEntry(key)}
+                      className="pr-2 text-muted-foreground hover:text-foreground"
+                      title="Remove from history"
+                      aria-label="Remove from history"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Search Tips */}
       <Alert>
         <Info className="h-4 w-4" />
@@ -448,7 +620,8 @@ export default function Token() {
                 <div className="font-semibold mb-1">Crypto Search:</div>
                 <ul className="ml-2 space-y-0.5 text-sm">
                   <li>
-                    Perpetual Futures: <code className="bg-muted px-2 py-0.5 rounded">BTCUSDFUT</code>,{' '}
+                    Perpetual Futures:{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">BTCUSDFUT</code>,{' '}
                     <code className="bg-muted px-2 py-0.5 rounded">ETHUSDFUT</code>
                   </li>
                   <li>
@@ -462,7 +635,8 @@ export default function Token() {
                 </ul>
               </div>
               <div className="text-xs text-muted-foreground mt-2">
-                <strong>Tip:</strong> Use F&O filters to narrow by underlying, expiry, and strike price
+                <strong>Tip:</strong> Use F&O filters to narrow by underlying, expiry, and strike
+                price
               </div>
             </>
           ) : (
@@ -491,16 +665,18 @@ export default function Token() {
                     <code className="bg-muted px-2 py-0.5 rounded">banknifty dec fut</code>
                   </li>
                   <li>
-                    Call Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 25000 ce</code>
+                    Call Options:{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">nifty 25000 ce</code>
                   </li>
                   <li>
-                    Put Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 24000 pe</code>
+                    Put Options:{' '}
+                    <code className="bg-muted px-2 py-0.5 rounded">nifty 24000 pe</code>
                   </li>
                 </ul>
               </div>
               <div className="text-xs text-muted-foreground mt-2">
-                <strong>Tip:</strong> Select the appropriate exchange (NFO for F&O, NSE for stocks) for
-                accurate results
+                <strong>Tip:</strong> Select the appropriate exchange (NFO for F&O, NSE for stocks)
+                for accurate results
               </div>
             </>
           )}
