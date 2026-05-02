@@ -43,6 +43,38 @@ RESET_RATE_LIMIT = os.getenv("RESET_RATE_LIMIT", "15 per hour")  # Password rese
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 
+def _utcnow_iso() -> str:
+    """ISO timestamp used for TOTP freshness markers in the session."""
+    from datetime import datetime
+
+    return datetime.utcnow().isoformat()
+
+
+# How long the password→TOTP step is allowed to dawdle before the pending
+# session marker is expired. Short window — we want a stolen browser session
+# without the TOTP app to time out, not allow indefinite retry.
+_PENDING_TOTP_MAX_AGE_SECS = 300  # 5 minutes
+
+
+def _pending_totp_is_fresh() -> bool:
+    """True if the password step happened within the last 5 minutes."""
+    started = session.get("pending_totp_started_at")
+    if not started:
+        return False
+    try:
+        from datetime import datetime, timedelta
+
+        ts = datetime.fromisoformat(started)
+        return datetime.utcnow() - ts <= timedelta(seconds=_PENDING_TOTP_MAX_AGE_SECS)
+    except (TypeError, ValueError):
+        return False
+
+
+def _clear_pending_totp() -> None:
+    session.pop("pending_totp_user", None)
+    session.pop("pending_totp_started_at", None)
+
+
 @auth_bp.errorhandler(429)
 def ratelimit_handler(e):
     return jsonify(status="error", message="Too many login attempts. Please wait a minute and try again."), 429
@@ -216,8 +248,24 @@ def login():
         ua = request.headers.get("User-Agent", "")
 
         if authenticate_user(username, password):
-            session["user"] = username  # Set the username in the session
             logger.info(f"[LOGIN] Password auth success for: {username}")
+
+            # If the user has 2FA enabled for login, defer setting session["user"]
+            # until TOTP is verified. This is the gate that prevents an attacker
+            # with only the password from progressing to broker login. We park
+            # the username on a transient key that POST /auth/login/totp will
+            # consume on success, and clear on failure or timeout.
+            user = find_user_by_username(username)
+            if user is not None and user.is_totp_required_for("login"):
+                session.pop("user", None)
+                session["pending_totp_user"] = username
+                session["pending_totp_started_at"] = _utcnow_iso()
+                logger.info(f"[LOGIN] TOTP required for: {username}; awaiting second factor")
+                return jsonify(
+                    {"status": "totp_required", "message": "Enter the 6-digit code from your authenticator app."}
+                ), 200
+
+            session["user"] = username  # Set the username in the session
 
             # Try to resume existing broker session (skip OAuth if token still valid)
             resumed = _try_resume_broker_session(username)
@@ -253,6 +301,158 @@ def login():
         return redirect("/dashboard")
 
     return redirect("/login")
+
+
+@auth_bp.route("/login/totp", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def login_totp():
+    """Second factor for the dashboard login flow.
+
+    Only reachable after a successful password step on a user that has
+    ``totp_required_for_login`` enabled. The password step deliberately
+    leaves ``session["user"]`` unset and parks the username on
+    ``session["pending_totp_user"]`` so an attacker with only the
+    password cannot progress.
+
+    On success: sets ``session["user"]`` and stamps
+    ``session["totp_verified_at"]`` so downstream code (notably the
+    Phase 2 OAuth ``/oauth/authorize`` endpoint) can require a fresh
+    TOTP.
+    """
+    if not _pending_totp_is_fresh():
+        _clear_pending_totp()
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Login session expired. Please sign in again.",
+                "redirect": "/login",
+            }
+        ), 401
+
+    pending_username = session.get("pending_totp_user")
+    if not pending_username:
+        return jsonify({"status": "error", "message": "No pending login. Sign in first."}), 401
+
+    data = request.get_json(silent=True) or {}
+    totp_code = (data.get("totp_code") or request.form.get("totp_code") or "").strip()
+    if not totp_code:
+        return jsonify({"status": "error", "message": "TOTP code is required."}), 400
+
+    user = find_user_by_username(pending_username)
+    if user is None or not user.verify_totp(totp_code):
+        from database.auth_db import log_login_attempt
+
+        log_login_attempt(
+            pending_username,
+            get_real_ip(),
+            request.headers.get("User-Agent", ""),
+            status="failed",
+            login_type="totp",
+            failure_reason="invalid_totp",
+        )
+        # Don't clear the pending marker on a single bad code — let the
+        # rate limiter handle brute force. The 5-min freshness window
+        # caps total attempts anyway.
+        return jsonify({"status": "error", "message": "Invalid TOTP code."}), 401
+
+    # Promote the pending login to a real session.
+    session["user"] = pending_username
+    session["totp_verified_at"] = _utcnow_iso()
+    _clear_pending_totp()
+
+    ip = get_real_ip()
+    ua = request.headers.get("User-Agent", "")
+    from database.auth_db import log_login_attempt
+
+    # Try resuming an existing broker session, same path as plain login.
+    resumed = _try_resume_broker_session(pending_username)
+    if resumed:
+        log_login_attempt(
+            pending_username, ip, ua, status="success",
+            login_type="totp_resume", broker=session.get("broker"),
+        )
+        return resumed
+
+    log_login_attempt(pending_username, ip, ua, status="success", login_type="totp")
+    return jsonify({"status": "success"}), 200
+
+
+@auth_bp.route("/2fa/status", methods=["GET"])
+@check_session_validity
+def two_factor_status():
+    """Return the signed-in user's current 2FA configuration."""
+    user = find_user_by_username(session["user"])
+    if user is None:
+        return jsonify({"status": "error", "message": "User not found."}), 404
+    return jsonify(
+        {
+            "status": "success",
+            "totp_enabled": bool(user.totp_enabled),
+            "totp_required_for_login": bool(user.totp_required_for_login),
+            "totp_required_for_mcp": bool(user.totp_required_for_mcp),
+            "totp_required_for_password_reset": bool(user.totp_required_for_password_reset),
+            "last_totp_verified_at": session.get("totp_verified_at"),
+        }
+    )
+
+
+@auth_bp.route("/2fa/configure", methods=["POST"])
+@check_session_validity
+def two_factor_configure():
+    """Enable / disable 2FA and set per-purpose flags atomically.
+
+    The user must verify a current TOTP code in the same request whether
+    they are turning the master switch on or off — both transitions are
+    sensitive enough to demand proof of TOTP-app access. If the master is
+    off in the new state, every per-purpose flag is forced to False as
+    well so the stored config is consistent.
+    """
+    data = request.get_json(silent=True) or {}
+    totp_code = (data.get("totp_code") or "").strip()
+    if not totp_code:
+        return jsonify({"status": "error", "message": "TOTP code is required to change 2FA settings."}), 400
+
+    user = find_user_by_username(session["user"])
+    if user is None:
+        return jsonify({"status": "error", "message": "User not found."}), 404
+
+    if not user.verify_totp(totp_code):
+        return jsonify({"status": "error", "message": "Invalid TOTP code."}), 401
+
+    enabled = bool(data.get("totp_enabled", False))
+    # Per-purpose flags are interpreted only when the master is on. When
+    # the master is off they are forced False to avoid stale-on-disk
+    # configuration that would silently re-engage on the next enable.
+    purpose_login = bool(data.get("totp_required_for_login", False)) if enabled else False
+    purpose_mcp = bool(data.get("totp_required_for_mcp", False)) if enabled else False
+    purpose_reset = bool(data.get("totp_required_for_password_reset", False)) if enabled else False
+
+    user.totp_enabled = enabled
+    user.totp_required_for_login = purpose_login
+    user.totp_required_for_mcp = purpose_mcp
+    user.totp_required_for_password_reset = purpose_reset
+    db_session.commit()
+
+    # Stamp the session so any downstream "fresh TOTP" check considers
+    # this verification recent. Useful in the same-page UX where a user
+    # toggles 2FA and immediately uses an OAuth flow.
+    session["totp_verified_at"] = _utcnow_iso()
+
+    logger.info(
+        f"[2FA] User {user.username} set enabled={enabled} "
+        f"login={purpose_login} mcp={purpose_mcp} reset={purpose_reset}"
+    )
+
+    return jsonify(
+        {
+            "status": "success",
+            "totp_enabled": enabled,
+            "totp_required_for_login": purpose_login,
+            "totp_required_for_mcp": purpose_mcp,
+            "totp_required_for_password_reset": purpose_reset,
+        }
+    )
 
 
 @auth_bp.route("/broker", methods=["GET", "POST"])
@@ -305,6 +505,21 @@ def reset_password():
 
     elif step == "select_email":
         user = find_user_by_email(email)
+
+        # Per-user 2FA gate: when the account has password-reset 2FA enabled,
+        # the email path is intentionally unavailable. Forces the TOTP route.
+        # The check runs ONLY for known emails — for unknown emails we fall
+        # through to the generic "email sent if account exists" response so
+        # we don't leak whether the account exists.
+        if user is not None and user.is_totp_required_for("password_reset"):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "This account requires TOTP for password reset. "
+                    "Please choose 'Authenticator app' instead.",
+                }
+            ), 400
+
         session["reset_method"] = "email"
 
         # Check if SMTP is configured
