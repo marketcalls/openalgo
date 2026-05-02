@@ -50,7 +50,7 @@ fi
 # ---------------------------------------------------------------------------
 # install.sh creates services named openalgo-<deploy-name>. We list them
 # and ask the user to pick one when there's more than one.
-log "\n[1/5] Detecting existing OpenAlgo installation..." "$BLUE"
+log "\n[1/6] Detecting existing OpenAlgo installation..." "$BLUE"
 mapfile -t SERVICES < <(systemctl list-unit-files --no-legend --type=service \
     | awk '{print $1}' | grep '^openalgo-' || true)
 
@@ -96,7 +96,7 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Determine the public URL
 # ---------------------------------------------------------------------------
-log "\n[2/5] Public MCP URL" "$BLUE"
+log "\n[2/6] Public MCP URL" "$BLUE"
 
 # Best-effort default: pull the configured HOST_SERVER from the existing
 # .env, fall back to deriving from SERVICE_NAME.
@@ -124,7 +124,7 @@ log "MCP_PUBLIC_URL = $MCP_URL" "$GREEN"
 # ---------------------------------------------------------------------------
 # 4. Confirm the security defaults
 # ---------------------------------------------------------------------------
-log "\n[3/5] Security defaults" "$BLUE"
+log "\n[3/6] Security defaults" "$BLUE"
 log "  MCP_OAUTH_REQUIRE_APPROVAL = True  (DCR clients require admin approval)" "$YELLOW"
 log "  MCP_OAUTH_WRITE_SCOPE_ENABLED = False (read-only — no order placement via MCP)" "$YELLOW"
 log "" "$NC"
@@ -139,7 +139,7 @@ esac
 # ---------------------------------------------------------------------------
 # 5. Update the .env
 # ---------------------------------------------------------------------------
-log "\n[4/5] Updating $ENV_FILE..." "$BLUE"
+log "\n[4/6] Updating $ENV_FILE..." "$BLUE"
 
 # Helper: set OR replace a key in the env file. Uses a single-quoted
 # value form (matching install.sh's existing style).
@@ -172,7 +172,33 @@ log ".env updated" "$GREEN"
 # ---------------------------------------------------------------------------
 # 6. Ensure keys/ directory exists with chmod 700
 # ---------------------------------------------------------------------------
-log "\n[5/5] Preparing keys/ directory and restarting service..." "$BLUE"
+log "\n[5/6] Running database migrations..." "$BLUE"
+# Schema additions for the 2FA flag columns and OAuth tables ride
+# upgrade/migrate_all.py. The systemd service started by install.sh
+# does NOT call migrations on every restart (only Docker's start.sh
+# does), so existing native Ubuntu users upgrading to remotemcp need
+# this step. Idempotent — every individual migration short-circuits
+# when already applied.
+if [[ -f "$BASE_PATH/upgrade/migrate_all.py" ]]; then
+    OWNER_USER="${OWNER%:*}"
+    UV_BIN="$BASE_PATH/.venv/bin/uv"
+    if [[ -x "$UV_BIN" ]]; then
+        sudo -u "$OWNER_USER" "$UV_BIN" --project "$BASE_PATH" run python \
+            "$BASE_PATH/upgrade/migrate_all.py" \
+            || log "  (migration script returned non-zero — see output above)" "$YELLOW"
+    elif command -v python3 >/dev/null 2>&1; then
+        ( cd "$BASE_PATH" && sudo -u "$OWNER_USER" python3 upgrade/migrate_all.py ) \
+            || log "  (migration script returned non-zero — see output above)" "$YELLOW"
+    else
+        log "Could not locate uv or python3 to run migrations. Skipping." "$YELLOW"
+        log "Run manually after this script: cd $BASE_PATH && uv run python upgrade/migrate_all.py" "$YELLOW"
+    fi
+else
+    log "  (migration script not found — branch may predate it)" "$YELLOW"
+fi
+
+
+log "\n[6/6] Preparing keys/ directory and restarting service..." "$BLUE"
 KEYS_DIR="$BASE_PATH/keys"
 if [[ ! -d "$KEYS_DIR" ]]; then
     sudo mkdir -p "$KEYS_DIR"

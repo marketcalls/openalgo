@@ -20,22 +20,37 @@ model.
 
 ---
 
+## Pick your install path
+
+| Your install came from | Use this enabler |
+|---|---|
+| `install/install.sh` (native Ubuntu, single domain) | `sudo ./install/enable-remote-mcp.sh` |
+| `install/install-multi.sh` (native Ubuntu, multiple domains) | `sudo ./install/enable-remote-mcp.sh` — the helper detects all `openalgo-*` services and asks which one |
+| `install/install-docker.sh` (single Docker stack) | `sudo ./install/enable-remote-mcp-docker.sh` |
+| `install/install-docker-multi-custom-ssl.sh` (multi-instance Docker) | `sudo ./install/enable-remote-mcp-docker.sh` — re-run for each domain you want to enable |
+
+Both helpers default to **same-domain mode** (MCP lives at
+`https://<your-existing-domain>/mcp` — no DNS work, no extra cert).
+Subdomain mode is documented at the bottom of this file as a manual
+recipe.
+
 ## Mode 1 — Same-domain (recommended for most users)
 
-This is the path the helper script automates. The MCP and OAuth
+This is the path the helper scripts automate. The MCP and OAuth
 endpoints live under your existing OpenAlgo dashboard hostname, e.g.
 `https://yourdomain.com/mcp`.
 
 **No nginx changes are needed.** The existing `location /` block in
-the install.sh-generated nginx config already proxies every path to
+the install scripts' nginx config already proxies every path to
 Gunicorn — `/mcp`, `/oauth/*`, and `/.well-known/oauth-*` ride that
 same proxy.
 
-### Steps
+### Steps for native Ubuntu installs (`install.sh`, `install-multi.sh`)
 
 ```bash
-# After install/install.sh has completed and your dashboard is
-# reachable, run this from the openalgo project root:
+# After install/install.sh (or install-multi.sh) has completed and
+# your dashboard is reachable, run this from the openalgo project
+# root:
 sudo ./install/enable-remote-mcp.sh
 ```
 
@@ -55,6 +70,50 @@ The script:
    respond
 
 **Total downtime:** one Gunicorn restart (~3 seconds).
+
+### Steps for Docker installs (`install-docker.sh`, `install-docker-multi-custom-ssl.sh`)
+
+```bash
+# After your container(s) are running, from the openalgo project root:
+sudo ./install/enable-remote-mcp-docker.sh
+```
+
+The script:
+
+1. Discovers Compose stacks under `/opt/openalgo/<domain>/`
+   (override with `INSTALL_BASE=/your/path` if you installed elsewhere)
+2. Picks one if multiple exist (re-run for each instance)
+3. Refuses if `FLASK_DEBUG=True` is set in the bind-mounted `.env`
+4. Backs up the per-instance `.env`, then sets the same four MCP keys
+5. `docker compose restart` for that instance — the container's
+   `start.sh` runs `migrate_all.py` automatically before gunicorn
+   comes back up, so schema changes apply
+6. Probes the discovery / JWKS / healthz endpoints over the configured
+   `MCP_PUBLIC_URL`
+
+**Multi-instance**: re-run for each domain. Each instance gets its
+own OAuth signing keys (under the per-container `keys/` volume), its
+own DCR client list, its own audit log — they're fully isolated.
+
+**Manual fallback** (if the helper doesn't fit your layout): edit the
+bind-mounted `.env` for that instance and add:
+
+```
+MCP_HTTP_ENABLED = 'True'
+MCP_PUBLIC_URL = 'https://yourdomain.com'
+MCP_OAUTH_REQUIRE_APPROVAL = 'True'
+MCP_OAUTH_WRITE_SCOPE_ENABLED = 'False'
+MCP_HTTP_CORS_ORIGINS = 'https://claude.ai,https://chatgpt.com'
+```
+
+Then `cd /opt/openalgo/<domain> && docker compose restart`.
+
+### Steps for fresh installs
+
+The four install scripts in this folder don't yet ship with an
+inline "enable MCP at install time?" prompt — that's a follow-up.
+For now: run the appropriate enabler immediately after the install
+script completes. The enablers handle everything else.
 
 ### What's NOT enabled by default
 
@@ -249,11 +308,30 @@ This is **not** automated — but it's the same pattern as the existing
 
 ## Disabling
 
+**Native Ubuntu** (`install.sh`, `install-multi.sh`):
+
 ```bash
 # Edit the .env, set:
 #   MCP_HTTP_ENABLED = 'False'
 sudo systemctl restart openalgo-<deploy-name>
 ```
 
-That's it — the OAuth and MCP routes immediately stop responding.
-Existing tokens become unreachable. Local stdio MCP is unaffected.
+**Docker** (`install-docker.sh`, `install-docker-multi-custom-ssl.sh`):
+
+```bash
+# Edit the bind-mounted .env, set:
+#   MCP_HTTP_ENABLED = 'False'
+cd /opt/openalgo/<domain> && sudo docker compose restart
+```
+
+Either way, the OAuth and MCP routes immediately stop responding.
+Existing access tokens hit 404 on the next request. Local stdio MCP
+(Claude Desktop / Cursor / Windsurf) is completely unaffected — it
+runs through `mcp/mcpserver.py` over stdin/stdout and doesn't touch
+the HTTP transport at all.
+
+For a softer takedown that keeps MCP enabled but revokes every active
+session: visit `/admin/remote-mcp` on the dashboard and click **Kill
+switch**. That sets `revoked_at` on every refresh token in the
+database. Hosted clients are forced through a fresh OAuth dance the
+next time they refresh.
