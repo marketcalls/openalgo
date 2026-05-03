@@ -415,6 +415,19 @@ if is_crypto_broker "$BROKER_NAME"; then
     DISABLE_SESSION_EXPIRY="true"
 fi
 
+# Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
+# Same-domain mode — /mcp and /oauth/* are served from the same nginx
+# vhost as the dashboard, so the existing reverse-proxy config covers it.
+# Local stdio MCP (Claude Desktop / Cursor / Windsurf) works regardless.
+log_message "\nRemote MCP lets hosted AI clients (Claude.ai, ChatGPT) connect to OpenAlgo over HTTPS." "$BLUE"
+log_message "Skip this if you only use the local MCP server with Claude Desktop / Cursor." "$YELLOW"
+read -p "Enable Remote MCP? (y/N): " enable_mcp_input
+ENABLE_REMOTE_MCP="false"
+if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
+    ENABLE_REMOTE_MCP="true"
+    log_message "Remote MCP will be enabled at https://$DOMAIN/mcp (read-only by default)" "$GREEN"
+fi
+
 # Generate random keys
 APP_KEY=$(generate_hex)
 API_KEY_PEPPER=$(generate_hex)
@@ -792,6 +805,18 @@ fi
 
 # Update WebSocket URL for production
 sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
+
+# Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
+# /oauth/* are served from the same nginx vhost as the dashboard, no
+# extra config needed. Safe defaults stay in place — admin must approve
+# hosted clients before they get any access (MCP_OAUTH_REQUIRE_APPROVAL),
+# and order placement is off until explicitly enabled in .env later
+# (MCP_OAUTH_WRITE_SCOPE_ENABLED).
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" $OPENALGO_PATH/.env
+    sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
+    log_message "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+fi
 
 # Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
 # - nginx on this host reverse-proxies /ws -> 127.0.0.1:WEBSOCKET_PORT, so the
@@ -1226,6 +1251,11 @@ if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
     log_message "Auto-Logout: Disabled (24/7 crypto market)" "$BLUE"
 else
     log_message "Auto-Logout: Enabled (3 AM IST daily)" "$BLUE"
+fi
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    log_message "Remote MCP: Enabled at https://$DOMAIN/mcp (read-only)" "$BLUE"
+else
+    log_message "Remote MCP: Disabled" "$BLUE"
 fi
 log_message "Installation Log: $LOG_FILE" "$BLUE"
 
