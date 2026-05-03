@@ -717,10 +717,19 @@ def authorize_endpoint():
         )
 
     # ---- POST = decision ----
+    # The consent form has exactly two submit buttons:
+    #   <button name="decision" value="deny">  and  value="approve">.
+    # Anything else — missing field, value="" from a bot, mistyped — is
+    # treated as a hostile/malformed POST. The previous code only
+    # branched on decision == "deny" and silently approved the rest.
     decision = request.form.get("decision")
     if decision == "deny":
         return _redirect_with_error(
             redirect_uri, "access_denied", "User denied the request.", state
+        )
+    if decision != "approve":
+        return _redirect_with_error(
+            redirect_uri, "invalid_request", "Invalid decision.", state
         )
 
     # Approve path: enforce fresh TOTP if required for this scope set.
@@ -772,12 +781,21 @@ def authorize_endpoint():
 
 
 def _verify_pkce_s256(verifier: str, challenge: str) -> bool:
-    """RFC 7636 §4.6 S256 challenge verification — constant-time compare."""
+    """RFC 7636 §4.6 S256 challenge verification — constant-time compare.
+
+    The verifier per RFC 7636 §4.1 is ASCII-only ([A-Z]/[a-z]/[0-9]/-._~).
+    We catch UnicodeEncodeError so a hostile client supplying multi-byte
+    input gets a clean PKCE failure instead of a 500.
+    """
     if not verifier or not challenge:
         return False
     if not (43 <= len(verifier) <= 128):
         return False
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    try:
+        verifier_bytes = verifier.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    digest = hashlib.sha256(verifier_bytes).digest()
     expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return secrets.compare_digest(expected, challenge)
 

@@ -10,7 +10,7 @@ import {
   RefreshCw,
   ShieldAlert,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adminApi } from '@/api/admin'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -482,7 +482,7 @@ export default function RemoteMcp() {
                   .map((entry, idx) => {
                     const isOpen = expandedAudit === idx
                     return (
-                      <>
+                      <Fragment key={`${entry.ts}-${entry.jti}-${idx}`}>
                         <TableRow
                           key={`${entry.ts}-${entry.jti}-${idx}`}
                           className="cursor-pointer hover:bg-muted/50"
@@ -538,7 +538,7 @@ export default function RemoteMcp() {
                             </TableCell>
                           </TableRow>
                         ) : null}
-                      </>
+                      </Fragment>
                     )
                   })}
               </TableBody>

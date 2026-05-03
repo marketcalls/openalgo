@@ -81,6 +81,18 @@ ENV_FILE="$BASE_PATH/.env"
 [[ -f "$ENV_FILE" ]] || fail "No .env at $ENV_FILE"
 log "Install directory: $BASE_PATH" "$GREEN"
 
+# Resolve install ownership ONCE here; we need it for migrations (run as
+# the deploy user) and again later for chown on the keys dir. Earlier
+# revisions of this script assigned OWNER only after the migrations
+# block, which made `sudo -u "$OWNER_USER"` run as no user and the
+# `|| log` swallow the failure — migrations silently didn't apply.
+OWNER=$(stat -c '%U:%G' "$BASE_PATH" 2>/dev/null || stat -f '%Su:%Sg' "$BASE_PATH" 2>/dev/null || true)
+if [[ -z "$OWNER" ]]; then
+    fail "Could not determine ownership of $BASE_PATH (neither GNU nor BSD stat worked)."
+fi
+OWNER_USER="${OWNER%:*}"
+log "Install owner: $OWNER" "$GREEN"
+
 
 # ---------------------------------------------------------------------------
 # 2. Pre-flight: refuse if FLASK_DEBUG=True
@@ -104,17 +116,29 @@ DEFAULT_URL=$(grep -E "^[[:space:]]*HOST_SERVER[[:space:]]*=" "$ENV_FILE" \
     | head -n1 | sed -E "s/.*=[[:space:]]*['\"]?([^'\"]+)['\"]?.*/\1/")
 
 if [[ -z "$DEFAULT_URL" ]]; then
-    DEFAULT_URL="https://${SERVICE_NAME#openalgo-}"
-    DEFAULT_URL="${DEFAULT_URL//-/.}"
+    # Service names are openalgo-<deploy-name> where <deploy-name> often
+    # carries a broker suffix (e.g. openalgo-myzerodha-account). The old
+    # heuristic of converting ALL dashes to dots produced nonsense URLs
+    # like https://myzerodha.account. Leave it empty and force the
+    # operator to type the right hostname rather than auto-suggest a
+    # wrong one.
+    DEFAULT_URL=""
 fi
 
 log "Same-domain mode (default): hosted MCP clients reach the server via the" "$YELLOW"
 log "  same hostname as the dashboard. No nginx changes required." "$YELLOW"
 log "Subdomain mode: see install/Remote-MCP-readme.md for the manual steps." "$YELLOW"
-read -rp "Public MCP URL [$DEFAULT_URL]: " MCP_URL
-MCP_URL="${MCP_URL:-$DEFAULT_URL}"
+if [[ -n "$DEFAULT_URL" ]]; then
+    read -rp "Public MCP URL [$DEFAULT_URL]: " MCP_URL
+    MCP_URL="${MCP_URL:-$DEFAULT_URL}"
+else
+    read -rp "Public MCP URL (e.g. https://yourdomain.com): " MCP_URL
+fi
 MCP_URL="${MCP_URL%/}"  # strip trailing slash
 
+if [[ -z "$MCP_URL" ]]; then
+    fail "MCP URL is required."
+fi
 if [[ ! "$MCP_URL" =~ ^https://[A-Za-z0-9.\-]+(/.*)?$ ]]; then
     fail "MCP URL must be HTTPS. Got: $MCP_URL"
 fi
@@ -180,7 +204,6 @@ log "\n[5/6] Running database migrations..." "$BLUE"
 # this step. Idempotent — every individual migration short-circuits
 # when already applied.
 if [[ -f "$BASE_PATH/upgrade/migrate_all.py" ]]; then
-    OWNER_USER="${OWNER%:*}"
     UV_BIN="$BASE_PATH/.venv/bin/uv"
     if [[ -x "$UV_BIN" ]]; then
         sudo -u "$OWNER_USER" "$UV_BIN" --project "$BASE_PATH" run python \
@@ -205,9 +228,8 @@ if [[ ! -d "$KEYS_DIR" ]]; then
     log "Created $KEYS_DIR" "$GREEN"
 fi
 sudo chmod 700 "$KEYS_DIR"
-# Match ownership of the install dir (install.sh uses the appropriate user).
-OWNER=$(stat -c '%U:%G' "$BASE_PATH" 2>/dev/null || stat -f '%Su:%Sg' "$BASE_PATH" 2>/dev/null)
-[[ -n "$OWNER" ]] && sudo chown "$OWNER" "$KEYS_DIR"
+# OWNER was resolved at the top of the script.
+sudo chown "$OWNER" "$KEYS_DIR"
 
 # Restart the service so Flask picks up the new env. The MCP blueprint
 # auto-generates the RS256 signing key on first request — we don't need

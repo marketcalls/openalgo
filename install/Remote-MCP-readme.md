@@ -260,24 +260,24 @@ This is **not** automated — but it's the same pattern as the existing
 
 3. **First-time approval gate** — because `MCP_OAUTH_REQUIRE_APPROVAL=True`,
    the new client lands in pending state and the OAuth flow refuses to
-   complete until you approve. Until the admin UI for this lands you
-   approve via:
+   complete until you approve. Approve via the admin console:
 
-   ```bash
-   # Lookup the pending client_id
-   sqlite3 db/openalgo.db \
-       "SELECT client_id, client_name FROM oauth_clients WHERE approved=0;"
+   - Sign in to OpenAlgo at `https://yourdomain.com`
+   - Open **Admin → Remote MCP** (`/admin/remote-mcp`)
+   - The new client appears in the **Pending approvals** card with the
+     name the hosted client supplied (e.g. *"ChatGPT MCP Connector"*)
+   - Verify the timestamp + name, then click **Approve**
 
-   # Approve it
-   sqlite3 db/openalgo.db \
-       "UPDATE oauth_clients SET approved=1 WHERE client_id='<from-above>';"
-   ```
+   The same page also lists already-approved clients, the audit log
+   over `log/mcp.jsonl`, and a **Kill switch** that revokes every
+   refresh token across every approved client.
 
 4. Sign in to your OpenAlgo dashboard if prompted, review the scopes,
    and click **Authorize**.
 
 5. The client now has an access token and can call MCP tools. Watch
-   `log/mcp.jsonl` to see every tool call audited.
+   `log/mcp.jsonl` (or the audit viewer in `/admin/remote-mcp`) to see
+   every tool call audited.
 
 ## Operational tips
 

@@ -1,8 +1,10 @@
 # PRD: Remote MCP (self-hosted, OAuth-authenticated)
 
-> **Status:** in development on branch `remotemcp`
-> **Owner:** TBD
-> **Related issue:** TBD
+> **Status:** Shipped in v2.0.1.0 on branch `remotemcp` (merged to `main`).
+> **Owner:** @marketcalls
+> **Related docs:** [`docs/userguide/remote-mcp.md`](../userguide/remote-mcp.md) (end-user guide), [`install/Remote-MCP-readme.md`](../../install/Remote-MCP-readme.md) (operator guide).
+
+> **Supersedes:** the older "MCP is local-only" guidance that referred to `mcp/mcpserver.py`. The stdio transport remains local-only; Remote MCP is a parallel, opt-in HTTP/SSE transport gated behind `MCP_HTTP_ENABLED`. Both share the same 40 tools.
 
 ## Goal
 
@@ -141,9 +143,11 @@ If we ever want a non-interactive flow (e.g. headless test scripts), the API key
 
 | Token | Format | Storage | TTL | Notes |
 |---|---|---|---|---|
-| Access | RS256 JWT, signed with key in `keys/mcp_oauth_signing.pem` | none (stateless) | **15 min** | Includes `scope`, `client_id`, `jti` |
-| Refresh | opaque random | hashed with `API_KEY_PEPPER` in `oauth_db.RefreshToken` | **30 days**, single-use, rotated | Identical hashing to API keys |
+| Access | RS256 JWT, signed with key in `keys/mcp_oauth_<kid>.pem` | none for **authentication** (stateless — verified by signature + `exp`); per-`jti` in-memory side-channels for rate limiting and write-idempotency tracking | **15 min** | Includes `scope`, `client_id`, `jti` |
+| Refresh | opaque random | hashed with `API_KEY_PEPPER` in `oauth_db.OAuthRefreshToken` | **30 days**, single-use, rotated | Identical hashing to API keys |
 | Authorization code | opaque random | in-memory (dict with TTL) | **60 sec** | PKCE-verified, single-use |
+
+The access-token model is **stateless from the authentication perspective** — verifiers don't hit the DB, only the public JWK and the `exp` claim. The in-memory state described later (per-`jti` rate-limit window, last-1000 `request_id`s per token for write idempotency) is a side-channel for rate enforcement and replay protection, not for authentication. A token that survives `exp` is unusable regardless of the side-channel state.
 
 ### Scopes
 

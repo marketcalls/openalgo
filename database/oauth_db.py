@@ -38,10 +38,18 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 PEPPER = os.getenv("API_KEY_PEPPER")
 
 if not PEPPER or len(PEPPER) < 32:
-    # Defer the failure to runtime — auth_db will already have raised on
-    # import if PEPPER is missing. Keeping the OAuth module importable
-    # (and gated by MCP_HTTP_ENABLED at the blueprint level) means tests
-    # and tooling don't trip over a missing pepper unrelated to MCP.
+    # If MCP is actually enabled and we still don't have a strong pepper,
+    # refuse to import this module rather than hashing OAuth secrets
+    # without it. When MCP is disabled, leave the module importable for
+    # tests and tooling — auth_db.py already raises on import if the
+    # pepper is missing for the real auth flow.
+    if os.getenv("MCP_HTTP_ENABLED", "False").lower() in ("true", "1", "t"):
+        raise RuntimeError(
+            "API_KEY_PEPPER must be set to >=32 chars when MCP_HTTP_ENABLED=True. "
+            "Generate one with: python -c 'import secrets; print(secrets.token_hex(32))' "
+            "and set it in .env. OAuth client secrets and refresh tokens are hashed "
+            "with this pepper; running without it would silently weaken the storage."
+        )
     PEPPER = PEPPER or ""
 
 # Argon2 hasher — same params as auth_db (library defaults at the time).

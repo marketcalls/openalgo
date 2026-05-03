@@ -82,6 +82,12 @@ if [[ ${#STACK_DIRS[@]} -gt 1 ]]; then
         printf '  [%d] %s\n' "$((i+1))" "${STACK_DIRS[$i]}"
     done
     read -rp "Pick one [1-${#STACK_DIRS[@]}]: " PICK
+    # Validate: must be a positive integer in range. Empty or non-numeric
+    # input would otherwise resolve to ${STACK_DIRS[-1]} (last element)
+    # silently selecting the wrong deployment.
+    if ! [[ "$PICK" =~ ^[1-9][0-9]*$ ]] || (( PICK > ${#STACK_DIRS[@]} )); then
+        fail "Invalid selection: $PICK. Must be 1..${#STACK_DIRS[@]}."
+    fi
     STACK_DIR="${STACK_DIRS[$((PICK-1))]}"
 else
     STACK_DIR="${STACK_DIRS[0]}"
@@ -223,15 +229,21 @@ fi
 log "\nVerifying endpoints..." "$BLUE"
 sleep 1
 
+PROBE_FAILURES=0
+
 probe() {
     local label="$1"
     local url="$2"
     local code
-    code=$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 "$url" || echo "000")
+    # Drop -k so an invalid TLS cert is reported as a smoke-probe failure
+    # rather than a silent pass. The whole point of probing the public
+    # URL is to validate that the deployment is reachable from outside.
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")
     if [[ "$code" =~ ^(200|401|403)$ ]]; then
         log "  ✓ ${label}  → ${code}" "$GREEN"
     else
         log "  ✗ ${label}  → ${code}" "$RED"
+        PROBE_FAILURES=$((PROBE_FAILURES + 1))
     fi
 }
 
@@ -245,6 +257,17 @@ probe "MCP (no token)"   "$MCP_URL/mcp"  # expect 401
 # ---------------------------------------------------------------------------
 # Closing message
 # ---------------------------------------------------------------------------
+if (( PROBE_FAILURES > 0 )); then
+    log "" "$NC"
+    log "$PROBE_FAILURES smoke probe(s) failed. Common causes:" "$RED"
+    log "  - DNS for $MCP_URL not yet resolving (or wrong hostname)" "$RED"
+    log "  - HTTPS certificate not yet issued / not trusted from this host" "$RED"
+    log "  - Reverse proxy not yet routing /mcp + /oauth/* + /.well-known/*" "$RED"
+    log "  - Container still booting; retry in a few seconds" "$RED"
+    log "Roll back .env with: cp '$BACKUP' '$ENV_FILE' && cd $STACK_DIR && docker compose restart" "$YELLOW"
+    exit 1
+fi
+
 cat <<EOF
 
 $(printf '%b' "${GREEN}=========================================================${NC}")

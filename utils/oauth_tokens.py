@@ -181,14 +181,15 @@ def rotate_refresh_token(
     if not presented_plaintext or not client_id:
         return None
 
-    # Pull every non-expired row for the client; refresh tokens are
-    # rare enough per client that this scales fine without an index
-    # on token_hash (which we can't query against by plaintext anyway —
-    # Argon2 hashes are salted).
+    # Pull every row for the client; refresh tokens are rare per client
+    # (max ~few active sessions plus their revoked predecessors) and we
+    # can't query against the salted Argon2 hash by plaintext anyway.
+    # Earlier revisions capped this at .limit(50) which could miss
+    # matches in long families — drop the cap so reuse-detection's
+    # family-revocation walk always finds the originating row.
     candidates = (
         OAuthRefreshToken.query.filter_by(client_id=client_id)
         .order_by(OAuthRefreshToken.id.desc())
-        .limit(50)  # bounded; well above any honest churn for one client
         .all()
     )
 

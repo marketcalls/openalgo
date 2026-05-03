@@ -1856,8 +1856,12 @@ def api_oauth_client_approve(client_id):
             return jsonify({"status": "success", "message": "Already approved."})
 
         client.approved = True
-        client.approved_at = datetime.now()
-        oauth_session.commit()
+        client.approved_at = datetime.utcnow()
+        try:
+            oauth_session.commit()
+        except Exception:
+            oauth_session.rollback()
+            raise
 
         logger.info(
             f"[OAuth admin] approved client_id={client_id} "

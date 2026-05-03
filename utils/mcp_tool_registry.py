@@ -210,5 +210,5 @@ def audit_registry() -> None:
         logger.warning(
             "MCP tools registered with FastMCP but missing TOOL_SCOPES "
             f"entries: {sorted(missing)}. They will not be reachable via "
-            "the HTTP transport. Add them to mcp/tool_registry.py."
+            "the HTTP transport. Add them to utils/mcp_tool_registry.py."
         )
