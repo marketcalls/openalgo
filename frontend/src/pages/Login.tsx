@@ -1,19 +1,31 @@
-import { Eye, EyeOff, Github, Info, Loader2, LogIn, MessageCircle } from 'lucide-react'
+import {
+  ArrowLeft,
+  Eye,
+  EyeOff,
+  Github,
+  Info,
+  Loader2,
+  LogIn,
+  MessageCircle,
+  ShieldCheck,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 export default function Login() {
   const navigate = useNavigate()
   const { login: setLogin } = useAuthStore()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [totpCode, setTotpCode] = useState('')
+  const [step, setStep] = useState<'password' | 'totp'>('password')
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
@@ -118,6 +130,11 @@ export default function Login() {
         if (data.redirect) {
           navigate(data.redirect)
         }
+      } else if (data.status === 'totp_required') {
+        // Server has accepted the password but won't issue a session
+        // until TOTP verifies. Switch to the second-factor step.
+        setStep('totp')
+        setError(null)
       } else {
         // Set login state (broker from response if session was resumed, empty otherwise)
         setLogin(username, data.broker || '')
@@ -130,6 +147,62 @@ export default function Login() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleTotpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const csrfResponse = await fetch('/auth/csrf-token', { credentials: 'include' })
+      if (!csrfResponse.ok) {
+        setError('Failed to verify TOTP. Please refresh the page.')
+        setIsLoading(false)
+        return
+      }
+      const { csrf_token } = await csrfResponse.json()
+
+      const response = await fetch('/auth/login/totp', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrf_token,
+        },
+        body: JSON.stringify({ totp_code: totpCode }),
+      })
+
+      const data = await response.json()
+
+      if (response.status === 401 && data.message?.toLowerCase().includes('expired')) {
+        // Pending login window timed out — bounce back to password step.
+        setError(data.message)
+        setStep('password')
+        setTotpCode('')
+        return
+      }
+
+      if (!response.ok || data.status === 'error') {
+        setError(data.message || 'Invalid TOTP code.')
+        setTotpCode('')
+        return
+      }
+
+      setLogin(username, data.broker || '')
+      showToast.success('Login successful', 'system')
+      navigate(data.redirect || '/broker')
+    } catch (err) {
+      setError('Failed to verify TOTP. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleBackToPassword = () => {
+    setStep('password')
+    setTotpCode('')
+    setError(null)
   }
 
   // Show loading while checking setup
@@ -155,80 +228,142 @@ export default function Login() {
               <CardDescription>Sign in to your OpenAlgo account</CardDescription>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="username">Username</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    placeholder="Enter your username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                    disabled={isLoading}
-                    autoComplete="username"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
-                  <div className="relative">
+              {step === 'password' ? (
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="username">Username</Label>
                     <Input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="Enter your password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      id="username"
+                      type="text"
+                      placeholder="Enter your username"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
                       required
                       disabled={isLoading}
-                      autoComplete="current-password"
-                      className="pr-10"
+                      autoComplete="username"
                     />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="password">Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        placeholder="Enter your password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        disabled={isLoading}
+                        autoComplete="current-password"
+                        className="pr-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <Eye className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </Button>
+                    </div>
+                    <div className="text-right">
+                      <Link
+                        to="/reset-password"
+                        className="text-sm text-muted-foreground hover:text-primary"
+                      >
+                        Forgot password?
+                      </Link>
+                    </div>
+                  </div>
+
+                  {error && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>
+                  )}
+
+                  <Button type="submit" className="w-full" disabled={isLoading}>
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Signing in...
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="mr-2 h-4 w-4" />
+                        Sign in
+                      </>
+                    )}
+                  </Button>
+                </form>
+              ) : (
+                <form onSubmit={handleTotpSubmit} className="space-y-4">
+                  <Alert>
+                    <ShieldCheck className="h-4 w-4" />
+                    <AlertTitle>Two-factor authentication</AlertTitle>
+                    <AlertDescription>
+                      Enter the 6-digit code from your authenticator app to complete sign-in.
+                    </AlertDescription>
+                  </Alert>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="totp_code">Authentication code</Label>
+                    <Input
+                      id="totp_code"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      pattern="[0-9]{6}"
+                      maxLength={6}
+                      placeholder="123456"
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      disabled={isLoading}
+                      autoFocus
+                      required
+                      className="font-mono text-center text-lg tracking-widest"
+                    />
+                  </div>
+
+                  {error && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>
+                  )}
+
+                  <div className="flex gap-2">
                     <Button
                       type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                      onClick={() => setShowPassword(!showPassword)}
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      variant="outline"
+                      onClick={handleBackToPassword}
+                      disabled={isLoading}
                     >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      <ArrowLeft className="mr-1 h-4 w-4" />
+                      Back
+                    </Button>
+                    <Button
+                      type="submit"
+                      className="flex-1"
+                      disabled={isLoading || totpCode.length !== 6}
+                    >
+                      {isLoading ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Verifying...
+                        </>
                       ) : (
-                        <Eye className="h-4 w-4 text-muted-foreground" />
+                        'Verify code'
                       )}
                     </Button>
                   </div>
-                  <div className="text-right">
-                    <Link
-                      to="/reset-password"
-                      className="text-sm text-muted-foreground hover:text-primary"
-                    >
-                      Forgot password?
-                    </Link>
-                  </div>
-                </div>
-
-                {error && (
-                  <Alert variant="destructive">
-                    <AlertDescription>{error}</AlertDescription>
-                  </Alert>
-                )}
-
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Signing in...
-                    </>
-                  ) : (
-                    <>
-                      <LogIn className="mr-2 h-4 w-4" />
-                      Sign in
-                    </>
-                  )}
-                </Button>
-              </form>
+                </form>
+              )}
             </CardContent>
           </Card>
 
