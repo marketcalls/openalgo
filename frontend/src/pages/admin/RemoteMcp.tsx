@@ -5,9 +5,12 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Copy,
   Globe,
   Loader2,
+  Power,
   RefreshCw,
+  Save,
   ShieldAlert,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
@@ -35,6 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -43,8 +47,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { MCPAuditEntry, OAuthClient } from '@/types/admin'
+import type { MCPAuditEntry, MCPSettings, OAuthClient } from '@/types/admin'
 import { showToast } from '@/utils/toast'
+
+const RESTART_PENDING_KEY = 'mcp_restart_pending_settings'
+
+function settingsEqual(a: MCPSettings, b: MCPSettings): boolean {
+  return (
+    a.http_enabled === b.http_enabled &&
+    a.public_url === b.public_url &&
+    a.require_approval === b.require_approval &&
+    a.write_scope_enabled === b.write_scope_enabled
+  )
+}
 
 const SCOPE_FILTERS = [
   { value: '__all', label: 'All scopes' },
@@ -167,24 +182,99 @@ export default function RemoteMcp() {
   const [killSwitchBusy, setKillSwitchBusy] = useState(false)
   const [expandedAudit, setExpandedAudit] = useState<number | null>(null)
 
+  // Settings card state — runtime values, the user's pending edits, and a
+  // "restart required" tracker that survives page reloads. We persist the
+  // settings the user last saved in localStorage; on every load we compare
+  // them with the runtime values returned by GET /admin/api/mcp/settings.
+  // If they match the runtime, the service was restarted and changes took
+  // effect — clear the banner.
+  const [settings, setSettings] = useState<MCPSettings | null>(null)
+  const [pending, setPendingSettings] = useState<MCPSettings | null>(null)
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [restartPending, setRestartPending] = useState<MCPSettings | null>(null)
+
   const loadAll = async () => {
     setLoading(true)
     try {
-      const [clientsRes, auditRes] = await Promise.all([
+      const [clientsRes, auditRes, settingsRes] = await Promise.all([
         adminApi.getOAuthClients(),
         adminApi.getMCPAudit({ limit: 100 }),
+        adminApi.getMCPSettings(),
       ])
       setMcpEnabled(clientsRes.mcp_enabled)
       setClients(clientsRes.clients)
       setSummary(clientsRes.summary)
       setAudit(auditRes.data)
       setAuditTotal(auditRes.total_in_window)
+      setSettings(settingsRes.settings)
+      setPendingSettings(settingsRes.settings)
+
+      // Reconcile saved-but-not-applied state stored in localStorage
+      // against what the running process actually reports back.
+      const stored = localStorage.getItem(RESTART_PENDING_KEY)
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored) as MCPSettings
+          if (settingsEqual(parsed, settingsRes.settings)) {
+            // Service was restarted — runtime now matches what was saved.
+            localStorage.removeItem(RESTART_PENDING_KEY)
+            setRestartPending(null)
+          } else {
+            setRestartPending(parsed)
+          }
+        } catch {
+          localStorage.removeItem(RESTART_PENDING_KEY)
+        }
+      } else {
+        setRestartPending(null)
+      }
     } catch {
       showToast.error('Failed to load Remote MCP state', 'admin')
     } finally {
       setLoading(false)
     }
   }
+
+  const handleSaveSettings = async () => {
+    if (!pending || !settings) return
+    if (settingsEqual(pending, settings)) return
+    setSavingSettings(true)
+    try {
+      const res = await adminApi.updateMCPSettings({
+        http_enabled: pending.http_enabled,
+        public_url: pending.public_url,
+        require_approval: pending.require_approval,
+        write_scope_enabled: pending.write_scope_enabled,
+      })
+      if (res.status !== 'success') {
+        showToast.error(res.message ?? 'Failed to save settings', 'admin')
+        return
+      }
+      // Persist the saved values so we can show the "restart required"
+      // banner on reloads until the running process actually picks them up.
+      localStorage.setItem(RESTART_PENDING_KEY, JSON.stringify(pending))
+      setRestartPending(pending)
+      showToast.success('Saved. Restart the openalgo service to apply.', 'admin')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        'Failed to save settings'
+      showToast.error(msg, 'admin')
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
+  const handleCopyMcpUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      showToast.success('MCP URL copied', 'admin')
+    } catch {
+      showToast.error('Copy failed — copy manually', 'admin')
+    }
+  }
+
+  const settingsDirty = !!(settings && pending && !settingsEqual(settings, pending))
 
   const reloadAudit = async () => {
     try {
@@ -260,33 +350,6 @@ export default function RemoteMcp() {
     )
   }
 
-  if (!mcpEnabled) {
-    return (
-      <div className="py-6 space-y-6">
-        <div className="flex items-center gap-3">
-          <Link to="/admin">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-1" /> Back
-            </Button>
-          </Link>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Globe className="h-6 w-6" /> Remote MCP
-          </h1>
-        </div>
-        <Alert>
-          <ShieldAlert className="h-4 w-4" />
-          <AlertTitle>Remote MCP is disabled on this install</AlertTitle>
-          <AlertDescription>
-            Set <code>MCP_HTTP_ENABLED=True</code> in <code>.env</code>, set{' '}
-            <code>MCP_PUBLIC_URL</code> to your dashboard HTTPS origin, then restart the openalgo
-            service. Local stdio MCP (Claude Desktop / Cursor / Windsurf) is unaffected and works
-            regardless of this setting.
-          </AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-
   return (
     <div className="py-6 space-y-6">
       {/* Header */}
@@ -305,17 +368,197 @@ export default function RemoteMcp() {
           <Button variant="outline" size="sm" onClick={loadAll}>
             <RefreshCw className="h-4 w-4 mr-1" /> Refresh
           </Button>
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => setKillSwitchOpen(true)}
-            title="Revoke every active refresh token"
-          >
-            <AlertTriangle className="h-4 w-4 mr-1" /> Kill switch
-          </Button>
+          {mcpEnabled ? (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setKillSwitchOpen(true)}
+              title="Revoke every active refresh token"
+            >
+              <AlertTriangle className="h-4 w-4 mr-1" /> Kill switch
+            </Button>
+          ) : null}
         </div>
       </div>
 
+      {/* Settings card (always visible) */}
+      {settings && pending ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Power className="h-5 w-5" />
+                  Remote MCP settings
+                </CardTitle>
+                <CardDescription>
+                  Toggle Remote MCP on or off and adjust its OAuth posture. Changes are written to
+                  <code className="mx-1">.env</code>; the openalgo service must be restarted before
+                  they take effect.
+                </CardDescription>
+              </div>
+              <Badge variant={mcpEnabled ? 'default' : 'secondary'}>
+                Currently {mcpEnabled ? 'enabled' : 'disabled'}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {/* MCP URL display — only when public URL is configured */}
+            {pending.mcp_url ? (
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="text-xs uppercase text-muted-foreground mb-1">MCP URL</div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 font-mono text-sm break-all">{pending.mcp_url}</code>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleCopyMcpUrl(pending.mcp_url)}
+                  >
+                    <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+                  </Button>
+                </div>
+                <div className="text-xs text-muted-foreground mt-2">
+                  Point your hosted AI client (claude.ai, chatgpt.com) at this URL.
+                </div>
+              </div>
+            ) : null}
+
+            {/* Public URL input — required when enabling */}
+            <div className="space-y-1.5">
+              <label htmlFor="mcp-public-url" className="text-sm font-medium">
+                Public HTTPS origin
+              </label>
+              <Input
+                id="mcp-public-url"
+                value={pending.public_url}
+                onChange={(e) =>
+                  setPendingSettings({ ...pending, public_url: e.target.value.trim() })
+                }
+                placeholder="https://yourdomain.com"
+              />
+              <p className="text-xs text-muted-foreground">
+                Same as your OpenAlgo dashboard URL. Required when MCP is enabled. Used as the
+                JWT issuer / audience claim — tokens are scoped to this exact origin.
+              </p>
+            </div>
+
+            {/* Toggles */}
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4 py-2 border-t pt-4">
+                <div>
+                  <div className="text-sm font-medium">Remote MCP enabled</div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Master switch for the <code>/mcp</code> and <code>/oauth/*</code> endpoints.
+                    Local stdio MCP (Claude Desktop / Cursor) is unaffected.
+                  </p>
+                </div>
+                <Switch
+                  checked={pending.http_enabled}
+                  onCheckedChange={(v) => setPendingSettings({ ...pending, http_enabled: v })}
+                />
+              </div>
+
+              <div className="flex items-start justify-between gap-4 py-2">
+                <div>
+                  <div className="text-sm font-medium">Auto-approve hosted clients</div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    When ON, DCR-registered clients can complete OAuth without admin approval.
+                    Suitable for single-trader self-hosted installs. Turn OFF on shared deployments
+                    to require manual approval per client.
+                  </p>
+                </div>
+                <Switch
+                  checked={!pending.require_approval}
+                  onCheckedChange={(v) =>
+                    setPendingSettings({ ...pending, require_approval: !v })
+                  }
+                />
+              </div>
+
+              <div className="flex items-start justify-between gap-4 py-2">
+                <div>
+                  <div className="text-sm font-medium">Allow order placement (write:orders)</div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    When ON, AI clients can place / modify / cancel orders via MCP. Turn OFF for
+                    read-only access (quotes, holdings, positions, market data only).
+                  </p>
+                </div>
+                <Switch
+                  checked={pending.write_scope_enabled}
+                  onCheckedChange={(v) =>
+                    setPendingSettings({ ...pending, write_scope_enabled: v })
+                  }
+                />
+              </div>
+            </div>
+
+            {/* Save button */}
+            <div className="flex items-center justify-between pt-2 border-t">
+              <div className="text-xs text-muted-foreground">
+                {settingsDirty ? 'Unsaved changes' : 'No pending changes'}
+              </div>
+              <div className="flex gap-2">
+                {settingsDirty ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPendingSettings(settings)}
+                    disabled={savingSettings}
+                  >
+                    Discard
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  onClick={handleSaveSettings}
+                  disabled={!settingsDirty || savingSettings}
+                >
+                  {savingSettings ? (
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4 mr-1" />
+                  )}
+                  Save changes
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Restart-required banner — shown until the running process picks up the saved values */}
+      {restartPending ? (
+        <Alert variant="default" className="border-amber-300 dark:border-amber-700">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertTitle>Restart required to apply changes</AlertTitle>
+          <AlertDescription>
+            Settings saved to <code>.env</code>. Run the following on your server to load them:
+            <pre className="mt-2 rounded bg-muted px-3 py-2 text-xs font-mono">
+              sudo systemctl restart openalgo
+            </pre>
+            <span className="block mt-2 text-xs">
+              This banner clears automatically once the running service reflects the new values.
+            </span>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* Disabled state — short hint only; the toggle is in the settings card above */}
+      {!mcpEnabled ? (
+        <Alert>
+          <ShieldAlert className="h-4 w-4" />
+          <AlertTitle>Remote MCP is currently disabled</AlertTitle>
+          <AlertDescription>
+            Hosted AI clients can't reach <code>/mcp</code> right now. Enable it from the settings
+            card above, then restart the service. Local stdio MCP (Claude Desktop / Cursor /
+            Windsurf) is unaffected and works regardless.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* The dashboard sections below only make sense when MCP is running */}
+      {!mcpEnabled ? null : (
+        <>
       {/* Summary */}
       <div className="grid grid-cols-3 gap-4">
         <Card>
@@ -547,6 +790,9 @@ export default function RemoteMcp() {
           )}
         </CardContent>
       </Card>
+
+        </>
+      )}
 
       {/* Revoke confirmation dialog */}
       <AlertDialog open={!!revokeTarget} onOpenChange={(o) => !o && setRevokeTarget(null)}>

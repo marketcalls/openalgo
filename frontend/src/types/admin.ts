@@ -286,3 +286,31 @@ export interface MCPAuditResponse {
   scanned?: number
   total_in_window: number
 }
+
+export interface MCPSettings {
+  http_enabled: boolean
+  public_url: string
+  mcp_url: string
+  require_approval: boolean
+  write_scope_enabled: boolean
+}
+
+export interface MCPSettingsResponse {
+  status: string
+  settings: MCPSettings
+}
+
+export interface MCPSettingsUpdateRequest {
+  http_enabled?: boolean
+  public_url?: string
+  require_approval?: boolean
+  write_scope_enabled?: boolean
+}
+
+export interface MCPSettingsUpdateResponse {
+  status: string
+  message?: string
+  restart_required?: boolean
+  restart_command?: string
+  settings_pending?: MCPSettings
+}

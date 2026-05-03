@@ -10,6 +10,9 @@ import type {
   Holiday,
   HolidaysResponse,
   MCPAuditResponse,
+  MCPSettingsResponse,
+  MCPSettingsUpdateRequest,
+  MCPSettingsUpdateResponse,
   OAuthClientsResponse,
   SystemInfo,
   TimingsResponse,
@@ -258,6 +261,21 @@ export const adminApi = {
     const response = await webClient.post<{ status: string; tokens_revoked: number }>(
       '/admin/api/mcp/kill-switch',
       { confirm: 'REVOKE_ALL_MCP_TOKENS' }
+    )
+    return response.data
+  },
+
+  getMCPSettings: async (): Promise<MCPSettingsResponse> => {
+    const response = await webClient.get<MCPSettingsResponse>('/admin/api/mcp/settings')
+    return response.data
+  },
+
+  updateMCPSettings: async (
+    payload: MCPSettingsUpdateRequest
+  ): Promise<MCPSettingsUpdateResponse> => {
+    const response = await webClient.put<MCPSettingsUpdateResponse>(
+      '/admin/api/mcp/settings',
+      payload
     )
     return response.data
   },

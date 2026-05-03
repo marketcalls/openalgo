@@ -2062,3 +2062,205 @@ def api_mcp_kill_switch():
     except Exception as e:
         logger.exception(f"Error executing MCP kill switch: {e}")
         return jsonify({"status": "error", "message": "Failed to execute kill switch."}), 500
+
+
+# ----------------------------------------------------------------------------
+# Remote MCP settings (master switch + posture toggles)
+# ----------------------------------------------------------------------------
+# These endpoints let the operator flip MCP on/off and adjust the OAuth
+# posture from /admin/remote-mcp without SSH'ing into the server.
+#
+# IMPORTANT: changes are written to the .env file but require a service
+# restart (sudo systemctl restart openalgo) before they take effect —
+# MCP_HTTP_ENABLED is checked at app boot to register Flask blueprints,
+# and the per-request flags are read via os.getenv() at module level.
+# The PUT endpoint surfaces this clearly via restart_required=true.
+
+import re
+import stat as _stat
+
+
+_ENV_KEY_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*)$")
+
+
+def _resolve_env_path() -> Path:
+    """Return the absolute Path to .env in the running app's working dir.
+
+    systemd's WorkingDirectory points at OPENALGO_PATH for the production
+    install, so cwd is the right anchor. Local dev runs uv from repo root,
+    same answer. We resolve once and validate the file exists rather
+    than trying multiple candidates — a missing .env is a deployment bug
+    the operator needs to fix, not something we paper over.
+    """
+    return Path(os.getcwd()).resolve() / ".env"
+
+
+def _read_env_bool(key: str, default: bool) -> bool:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("true", "1", "t", "yes", "y")
+
+
+def _set_env_value(env_path: Path, key: str, value: str) -> None:
+    """Atomically update or append KEY = 'VALUE' in .env, preserving mode.
+
+    Matches the existing single-quoted style install.sh writes. Quotes
+    and backslashes inside the value are forbidden — the only callers
+    here pass booleans and a validated HTTPS URL, so escaping isn't
+    needed and rejecting odd input is safer than encoding it.
+    """
+    if not _ENV_KEY_PATTERN.match(key):
+        raise ValueError(f"Refusing to write malformed env key: {key!r}")
+    if "'" in value or "\\" in value or "\n" in value:
+        raise ValueError(f"Refusing to write env value containing quote/backslash/newline")
+
+    new_line = f"{key} = '{value}'\n"
+    if not env_path.exists():
+        raise FileNotFoundError(f".env not found at {env_path}")
+
+    text = env_path.read_text()
+    lines = text.splitlines(keepends=True)
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    found = False
+    for i, line in enumerate(lines):
+        if pattern.match(line):
+            lines[i] = new_line
+            found = True
+            break
+
+    if not found:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] = lines[-1] + "\n"
+        lines.append(new_line)
+
+    original_mode = _stat.S_IMODE(env_path.stat().st_mode)
+    tmp_path = env_path.with_name(env_path.name + ".tmp")
+    tmp_path.write_text("".join(lines))
+    try:
+        tmp_path.chmod(original_mode)
+    except OSError:
+        pass  # cross-fs or unprivileged — atomic replace below still works
+    tmp_path.replace(env_path)
+
+
+def _mcp_settings_payload() -> dict:
+    """Read the current MCP-related env values for the admin UI."""
+    public_url = (os.getenv("MCP_PUBLIC_URL") or "").rstrip("/")
+    http_enabled = _read_env_bool("MCP_HTTP_ENABLED", False)
+    return {
+        "http_enabled": http_enabled,
+        "public_url": public_url,
+        "mcp_url": f"{public_url}/mcp" if public_url else "",
+        "require_approval": _read_env_bool("MCP_OAUTH_REQUIRE_APPROVAL", False),
+        "write_scope_enabled": _read_env_bool("MCP_OAUTH_WRITE_SCOPE_ENABLED", True),
+    }
+
+
+@admin_bp.route("/api/mcp/settings", methods=["GET"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_mcp_settings_get():
+    """Return the current MCP settings (master switch + posture toggles).
+
+    Always succeeds — works whether MCP is currently enabled or not, so
+    the admin UI can render the toggles in either state.
+    """
+    return jsonify({"status": "success", "settings": _mcp_settings_payload()})
+
+
+@admin_bp.route("/api/mcp/settings", methods=["PUT"])
+@check_session_validity
+@limiter.limit("30/minute")
+def api_mcp_settings_put():
+    """Update MCP settings in .env. Returns restart_required=True.
+
+    Validations are mirror images of the boot-time checks in app.py so
+    the operator can't save a config that would refuse to boot:
+      - http_enabled=True requires MCP_PUBLIC_URL set in .env
+      - http_enabled=True forbidden when FLASK_DEBUG=True (token leak risk)
+    """
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"status": "error", "message": "Body must be JSON object."}), 400
+
+    bool_keys = ("http_enabled", "require_approval", "write_scope_enabled")
+    for k in bool_keys:
+        if k in data and not isinstance(data[k], bool):
+            return jsonify({"status": "error", "message": f"{k} must be boolean."}), 400
+
+    public_url = data.get("public_url")
+    if public_url is not None:
+        if not isinstance(public_url, str):
+            return jsonify({"status": "error", "message": "public_url must be string."}), 400
+        public_url = public_url.strip().rstrip("/")
+        if public_url and not re.match(r"^https://[A-Za-z0-9.\-]+(:\d+)?(/.*)?$", public_url):
+            return jsonify(
+                {"status": "error", "message": "public_url must be HTTPS (e.g. https://yourdomain.com)."}
+            ), 400
+
+    # Pre-flight: enabling MCP must not produce a config that refuses to boot.
+    enabling = data.get("http_enabled") is True
+    if enabling:
+        if os.getenv("FLASK_DEBUG", "False").strip().lower() in ("true", "1", "t"):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        "Cannot enable Remote MCP while FLASK_DEBUG=True — "
+                        "debug-mode tracebacks would leak bearer tokens. Disable FLASK_DEBUG first."
+                    ),
+                }
+            ), 400
+        effective_url = public_url if public_url is not None else (os.getenv("MCP_PUBLIC_URL") or "").strip()
+        if not effective_url:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        "Cannot enable Remote MCP without MCP_PUBLIC_URL. "
+                        "Set the dashboard HTTPS origin (e.g. https://yourdomain.com) and try again."
+                    ),
+                }
+            ), 400
+
+    env_path = _resolve_env_path()
+    if not env_path.exists():
+        logger.error(f"[MCP admin] .env not found at {env_path}")
+        return jsonify(
+            {"status": "error", "message": f".env not found at {env_path}"}
+        ), 500
+
+    try:
+        if "http_enabled" in data:
+            _set_env_value(env_path, "MCP_HTTP_ENABLED", "True" if data["http_enabled"] else "False")
+        if public_url is not None:
+            _set_env_value(env_path, "MCP_PUBLIC_URL", public_url)
+        if "require_approval" in data:
+            _set_env_value(
+                env_path, "MCP_OAUTH_REQUIRE_APPROVAL", "True" if data["require_approval"] else "False"
+            )
+        if "write_scope_enabled" in data:
+            _set_env_value(
+                env_path,
+                "MCP_OAUTH_WRITE_SCOPE_ENABLED",
+                "True" if data["write_scope_enabled"] else "False",
+            )
+    except (FileNotFoundError, ValueError, OSError) as e:
+        logger.exception(f"[MCP admin] failed to update .env: {e}")
+        return jsonify({"status": "error", "message": f"Failed to update .env: {e}"}), 500
+
+    logger.info(
+        f"[MCP admin] .env updated: "
+        f"http_enabled={data.get('http_enabled', '?')} "
+        f"require_approval={data.get('require_approval', '?')} "
+        f"write_scope_enabled={data.get('write_scope_enabled', '?')}"
+    )
+    return jsonify(
+        {
+            "status": "success",
+            "restart_required": True,
+            "restart_command": "sudo systemctl restart openalgo",
+            "settings_pending": _mcp_settings_payload(),  # what's in .env now
+        }
+    )
