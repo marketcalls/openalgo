@@ -237,8 +237,22 @@ def init_http_transport() -> None:
     from database.auth_db import get_first_available_api_key
 
     api_key = get_first_available_api_key()
-    flask_port = os.getenv("FLASK_PORT") or os.getenv("PORT") or "5000"
-    host = f"http://127.0.0.1:{flask_port}"
+    # Loopback target the bundled openalgo SDK uses to call back into
+    # /api/v1/*. Resolution order:
+    #   1. MCP_LOOPBACK_URL — explicit override for unusual topologies.
+    #   2. HOST_SERVER — set by every official install script
+    #      (install.sh, install-docker.sh, ...). On native installs
+    #      gunicorn binds to a Unix socket, so the public HTTPS URL
+    #      via nginx is the only loopback that actually answers.
+    #   3. http://127.0.0.1:{FLASK_PORT} — dev server / Docker port-
+    #      mapped install fallback.
+    loopback = (os.getenv("MCP_LOOPBACK_URL") or "").strip()
+    if not loopback:
+        loopback = (os.getenv("HOST_SERVER") or "").strip()
+    if not loopback:
+        flask_port = os.getenv("FLASK_PORT") or os.getenv("PORT") or "5000"
+        loopback = f"http://127.0.0.1:{flask_port}"
+    host = loopback.rstrip("/")
 
     if api_key is None:
         logger.warning(
