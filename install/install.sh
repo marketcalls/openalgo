@@ -425,7 +425,7 @@ read -p "Enable Remote MCP? (y/N): " enable_mcp_input
 ENABLE_REMOTE_MCP="false"
 if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
     ENABLE_REMOTE_MCP="true"
-    log_message "Remote MCP will be enabled at https://$DOMAIN/mcp (read-only by default)" "$GREEN"
+    log_message "Remote MCP will be enabled at https://$DOMAIN/mcp" "$GREEN"
 fi
 
 # Generate random keys
@@ -813,10 +813,9 @@ sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_
 
 # Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
 # /oauth/* are served from the same nginx vhost as the dashboard, no
-# extra config needed. Safe defaults stay in place — admin must approve
-# hosted clients before they get any access (MCP_OAUTH_REQUIRE_APPROVAL),
-# and order placement is off until explicitly enabled in .env later
-# (MCP_OAUTH_WRITE_SCOPE_ENABLED).
+# extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
+# allowlist) inherit their defaults from .sample.env — flip them later
+# in .env if you want stricter behavior on a shared deployment.
 if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
     sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" $OPENALGO_PATH/.env
     sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
@@ -1261,7 +1260,7 @@ else
     log_message "Auto-Logout: Enabled (3 AM IST daily)" "$BLUE"
 fi
 if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
-    log_message "Remote MCP: Enabled at https://$DOMAIN/mcp (read-only)" "$BLUE"
+    log_message "Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
 else
     log_message "Remote MCP: Disabled" "$BLUE"
 fi

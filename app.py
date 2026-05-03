@@ -346,11 +346,11 @@ def create_app():
         # Boot warnings for non-default security postures so an admin
         # who flipped these months ago and forgot is reminded on every
         # restart (security review finding L-3).
-        if os.getenv("MCP_OAUTH_WRITE_SCOPE_ENABLED", "False").lower() == "true":
+        if os.getenv("MCP_OAUTH_WRITE_SCOPE_ENABLED", "True").lower() == "true":
             logger.warning(
                 "[MCP] write:orders scope is ENABLED — MCP clients can place real orders."
             )
-        if os.getenv("MCP_OAUTH_REQUIRE_APPROVAL", "True").lower() != "true":
+        if os.getenv("MCP_OAUTH_REQUIRE_APPROVAL", "False").lower() != "true":
             logger.warning(
                 "[MCP] DCR auto-approval is ENABLED — any DCR registration "
                 "can immediately complete OAuth without admin review."

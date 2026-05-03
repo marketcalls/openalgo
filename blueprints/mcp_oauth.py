@@ -130,14 +130,14 @@ def _supported_scopes() -> list[str]:
     DCR or token request that asks for it returns ``invalid_scope``.
     """
     scopes = [SCOPE_READ_MARKET, SCOPE_READ_ACCOUNT]
-    if os.getenv("MCP_OAUTH_WRITE_SCOPE_ENABLED", "False").lower() == "true":
+    if os.getenv("MCP_OAUTH_WRITE_SCOPE_ENABLED", "True").lower() == "true":
         scopes.append(SCOPE_WRITE_ORDERS)
     return scopes
 
 
 def _require_approval() -> bool:
     """Whether DCR-registered clients must be approved by the admin first."""
-    return os.getenv("MCP_OAUTH_REQUIRE_APPROVAL", "True").lower() == "true"
+    return os.getenv("MCP_OAUTH_REQUIRE_APPROVAL", "False").lower() == "true"
 
 
 def _oauth_error(error_code: str, description: str, status: int):
@@ -292,11 +292,11 @@ def register_client():
     - ``token_endpoint_auth_method`` must be one of the three we
       explicitly support; default ``client_secret_basic``
 
-    When ``MCP_OAUTH_REQUIRE_APPROVAL=True`` (the default per the PRD),
-    the new client lands with ``approved=False`` and the OAuth flow at
-    ``/oauth/authorize`` must reject it until the admin approves on the
-    forthcoming admin UI. Until that lands the admin can flip the flag
-    via ``database/oauth_db.py`` directly.
+    When ``MCP_OAUTH_REQUIRE_APPROVAL=True`` the new client lands with
+    ``approved=False`` and the OAuth flow at ``/oauth/authorize`` must
+    reject it until the admin approves at /admin/remote-mcp. The default
+    is False (auto-approve) on single-trader self-hosted installs; flip
+    the env var on shared / public deployments.
     """
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
