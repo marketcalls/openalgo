@@ -479,7 +479,15 @@ _CONSENT_TEMPLATE = """\
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="referrer" content="no-referrer">
+  <!--
+    Referrer-Policy: 'same-origin' sends the full Referer on the same-origin
+    POST back to /oauth/authorize (required by Flask-WTF's WTF_CSRF_SSL_STRICT
+    check on HTTPS — without it the POST is rejected with "The referrer
+    header is missing.") but strips it on the cross-origin 302 to the OAuth
+    client's redirect_uri, so authorization codes / state never leak to the
+    third-party origin via Referer.
+  -->
+  <meta name="referrer" content="same-origin">
   <title>Authorize {{ client_name }} — OpenAlgo</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #f9fafb;
