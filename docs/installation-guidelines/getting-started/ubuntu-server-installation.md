@@ -1,7 +1,5 @@
 # Ubuntu Server Installation
 
-{% embed url="https://www.youtube.com/watch?v=f3csMe2n4ho" %}
-
 ### Prerequisites
 
 #### System Requirements
