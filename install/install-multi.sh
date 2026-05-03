@@ -127,6 +127,7 @@ declare -a API_SECRETS
 declare -a API_KEYS_MARKET
 declare -a API_SECRETS_MARKET
 declare -a IS_XTS
+declare -a MCP_ENABLED_LIST
 
 # Collect information for all instances
 log_message "\n=== COLLECTING INSTANCE CONFIGURATIONS ===" "$YELLOW"
@@ -198,6 +199,20 @@ for ((i=1; i<=INSTANCES; i++)); do
         API_SECRETS_MARKET+=("")
     fi
 
+    # Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
+    # Same-domain mode — /mcp and /oauth/* are served from the same nginx
+    # vhost as this instance's dashboard, so no extra config is required.
+    # Local stdio MCP (Claude Desktop / Cursor / Windsurf) works regardless.
+    log_message "\nRemote MCP lets hosted AI clients (Claude.ai, ChatGPT) connect to OpenAlgo over HTTPS." "$BLUE"
+    log_message "Skip this if you only use the local MCP server with Claude Desktop / Cursor." "$YELLOW"
+    read -p "Enable Remote MCP for instance $i? (y/N): " enable_mcp_input
+    if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
+        MCP_ENABLED_LIST+=("true")
+        log_message "Remote MCP will be enabled at https://$domain/mcp" "$GREEN"
+    else
+        MCP_ENABLED_LIST+=("false")
+    fi
+
     log_message "✅ Instance $i configuration collected" "$GREEN"
 done
 
@@ -253,6 +268,7 @@ for ((i=1; i<=INSTANCES; i++)); do
     API_KEY_MARKET="${API_KEYS_MARKET[$idx]}"
     API_SECRET_MARKET="${API_SECRETS_MARKET[$idx]}"
     IS_XTS_INSTANCE="${IS_XTS[$idx]}"
+    ENABLE_REMOTE_MCP="${MCP_ENABLED_LIST[$idx]}"
 
     log_message "\n--- Installing Instance $i: $DOMAIN ($BROKER) ---" "$BLUE"
 
@@ -370,6 +386,16 @@ for ((i=1; i<=INSTANCES; i++)); do
 
     # 10. Update Flask host IP binding (internal only)
     sudo sed -i "s|FLASK_HOST_IP='.*'|FLASK_HOST_IP='127.0.0.1'|g" "$ENV_FILE"
+
+    # 11. Enable Remote MCP if the operator opted in for this instance.
+    # Same-domain mode: /mcp and /oauth/* are served from the same nginx
+    # vhost as the dashboard. Other MCP_* keys (auto-approve, write scope,
+    # CORS allowlist) inherit their defaults from .sample.env — flip them
+    # later in the per-instance .env if you want stricter behavior.
+    if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+        sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" "$ENV_FILE"
+        sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" "$ENV_FILE"
+    fi
 
     # XTS broker credentials
     if [ "$IS_XTS_INSTANCE" = "true" ]; then
@@ -602,6 +628,11 @@ EOL
     log_message "   URL: https://$DOMAIN" "$BLUE"
     log_message "   Flask:$FLASK_PORT | WS:$WS_PORT | ZMQ:$ZMQ_PORT" "$BLUE"
     log_message "   Service: $SERVICE_NAME" "$BLUE"
+    if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+        log_message "   Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
+    else
+        log_message "   Remote MCP: Disabled" "$BLUE"
+    fi
 done
 
 # Final Nginx reload
@@ -621,6 +652,11 @@ for ((i=1; i<=INSTANCES; i++)); do
     log_message "  Broker: ${BROKERS[$idx]}" "$BLUE"
     log_message "  Service: openalgo$i" "$BLUE"
     log_message "  Directory: $BASE_DIR/openalgo$i" "$BLUE"
+    if [ "${MCP_ENABLED_LIST[$idx]}" = "true" ]; then
+        log_message "  Remote MCP: Enabled at https://${DOMAINS[$idx]}/mcp" "$BLUE"
+    else
+        log_message "  Remote MCP: Disabled" "$BLUE"
+    fi
 done
 
 log_message "\n📚 USEFUL COMMANDS:" "$YELLOW"

@@ -162,6 +162,19 @@ if [ -z "$ADMIN_EMAIL" ]; then
     ADMIN_EMAIL="admin@${DOMAIN#*.}"
 fi
 
+# Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
+# Same-domain mode — /mcp and /oauth/* are served from the same nginx
+# vhost as the dashboard, so the existing reverse-proxy config covers it.
+# Local stdio MCP (Claude Desktop / Cursor / Windsurf) works regardless.
+log "\nRemote MCP lets hosted AI clients (Claude.ai, ChatGPT) connect to OpenAlgo over HTTPS." "$BLUE"
+log "Skip this if you only use the local MCP server with Claude Desktop / Cursor." "$YELLOW"
+read -p "Enable Remote MCP? (y/N): " enable_mcp_input
+ENABLE_REMOTE_MCP="false"
+if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
+    ENABLE_REMOTE_MCP="true"
+    log "Remote MCP will be enabled at https://$DOMAIN/mcp" "$GREEN"
+fi
+
 # Generate security keys
 log "\nGenerating security keys..." "$BLUE"
 APP_KEY=$(generate_hex)
@@ -310,6 +323,17 @@ fi
 # See: https://github.com/marketcalls/openalgo/issues/938
 $SUDO sed -i '/^CSP_CONNECT_SRC/d' .env
 echo "CSP_CONNECT_SRC = \"'self' wss: ws: https://cdn.socket.io https://$DOMAIN wss://$DOMAIN\"" | $SUDO tee -a .env > /dev/null
+
+# Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
+# /oauth/* are served from the same nginx vhost as the dashboard, no
+# extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
+# allowlist) inherit their defaults from .sample.env — flip them later
+# in .env if you want stricter behavior on a shared deployment.
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    $SUDO sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" .env
+    $SUDO sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" .env
+    log "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+fi
 
 check_status "Environment configuration failed"
 
@@ -795,6 +819,11 @@ log "Domain: https://$DOMAIN" "$BLUE"
 log "Broker: $BROKER_NAME" "$BLUE"
 log "Installation Path: $INSTALL_PATH" "$BLUE"
 log "Container: openalgo-web" "$BLUE"
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    log "Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
+else
+    log "Remote MCP: Disabled" "$BLUE"
+fi
 
 log "\nNext Steps:" "$YELLOW"
 log "1. Visit https://$DOMAIN to access OpenAlgo" "$GREEN"
