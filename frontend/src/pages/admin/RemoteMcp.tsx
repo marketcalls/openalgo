@@ -189,7 +189,7 @@ export default function RemoteMcp() {
   // If they match the runtime, the service was restarted and changes took
   // effect — clear the banner.
   const [settings, setSettings] = useState<MCPSettings | null>(null)
-  const [pending, setPendingSettings] = useState<MCPSettings | null>(null)
+  const [pendingSettings, setPendingSettings] = useState<MCPSettings | null>(null)
   const [savingSettings, setSavingSettings] = useState(false)
   const [restartPending, setRestartPending] = useState<MCPSettings | null>(null)
 
@@ -236,15 +236,15 @@ export default function RemoteMcp() {
   }
 
   const handleSaveSettings = async () => {
-    if (!pending || !settings) return
-    if (settingsEqual(pending, settings)) return
+    if (!pendingSettings || !settings) return
+    if (settingsEqual(pendingSettings, settings)) return
     setSavingSettings(true)
     try {
       const res = await adminApi.updateMCPSettings({
-        http_enabled: pending.http_enabled,
-        public_url: pending.public_url,
-        require_approval: pending.require_approval,
-        write_scope_enabled: pending.write_scope_enabled,
+        http_enabled: pendingSettings.http_enabled,
+        public_url: pendingSettings.public_url,
+        require_approval: pendingSettings.require_approval,
+        write_scope_enabled: pendingSettings.write_scope_enabled,
       })
       if (res.status !== 'success') {
         showToast.error(res.message ?? 'Failed to save settings', 'admin')
@@ -252,8 +252,8 @@ export default function RemoteMcp() {
       }
       // Persist the saved values so we can show the "restart required"
       // banner on reloads until the running process actually picks them up.
-      localStorage.setItem(RESTART_PENDING_KEY, JSON.stringify(pending))
-      setRestartPending(pending)
+      localStorage.setItem(RESTART_PENDING_KEY, JSON.stringify(pendingSettings))
+      setRestartPending(pendingSettings)
       showToast.success('Saved. Restart the openalgo service to apply.', 'admin')
     } catch (err: unknown) {
       const msg =
@@ -274,7 +274,11 @@ export default function RemoteMcp() {
     }
   }
 
-  const settingsDirty = !!(settings && pending && !settingsEqual(settings, pending))
+  const settingsDirty = !!(
+    settings &&
+    pendingSettings &&
+    !settingsEqual(settings, pendingSettings)
+  )
 
   const reloadAudit = async () => {
     try {
@@ -382,7 +386,7 @@ export default function RemoteMcp() {
       </div>
 
       {/* Settings card (always visible) */}
-      {settings && pending ? (
+      {settings && pendingSettings ? (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-3">
@@ -404,15 +408,17 @@ export default function RemoteMcp() {
           </CardHeader>
           <CardContent className="space-y-5">
             {/* MCP URL display — only when public URL is configured */}
-            {pending.mcp_url ? (
+            {pendingSettings.mcp_url ? (
               <div className="rounded-lg border bg-muted/30 p-3">
                 <div className="text-xs uppercase text-muted-foreground mb-1">MCP URL</div>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 font-mono text-sm break-all">{pending.mcp_url}</code>
+                  <code className="flex-1 font-mono text-sm break-all">
+                    {pendingSettings.mcp_url}
+                  </code>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleCopyMcpUrl(pending.mcp_url)}
+                    onClick={() => handleCopyMcpUrl(pendingSettings.mcp_url)}
                   >
                     <Copy className="h-3.5 w-3.5 mr-1" /> Copy
                   </Button>
@@ -430,9 +436,9 @@ export default function RemoteMcp() {
               </label>
               <Input
                 id="mcp-public-url"
-                value={pending.public_url}
+                value={pendingSettings.public_url}
                 onChange={(e) =>
-                  setPendingSettings({ ...pending, public_url: e.target.value.trim() })
+                  setPendingSettings({ ...pendingSettings, public_url: e.target.value.trim() })
                 }
                 placeholder="https://yourdomain.com"
               />
@@ -453,8 +459,10 @@ export default function RemoteMcp() {
                   </p>
                 </div>
                 <Switch
-                  checked={pending.http_enabled}
-                  onCheckedChange={(v) => setPendingSettings({ ...pending, http_enabled: v })}
+                  checked={pendingSettings.http_enabled}
+                  onCheckedChange={(v) =>
+                    setPendingSettings({ ...pendingSettings, http_enabled: v })
+                  }
                 />
               </div>
 
@@ -468,9 +476,9 @@ export default function RemoteMcp() {
                   </p>
                 </div>
                 <Switch
-                  checked={!pending.require_approval}
+                  checked={!pendingSettings.require_approval}
                   onCheckedChange={(v) =>
-                    setPendingSettings({ ...pending, require_approval: !v })
+                    setPendingSettings({ ...pendingSettings, require_approval: !v })
                   }
                 />
               </div>
@@ -484,9 +492,9 @@ export default function RemoteMcp() {
                   </p>
                 </div>
                 <Switch
-                  checked={pending.write_scope_enabled}
+                  checked={pendingSettings.write_scope_enabled}
                   onCheckedChange={(v) =>
-                    setPendingSettings({ ...pending, write_scope_enabled: v })
+                    setPendingSettings({ ...pendingSettings, write_scope_enabled: v })
                   }
                 />
               </div>
