@@ -197,6 +197,15 @@ export default function Home() {
         {/* Hero Section */}
         <section className="container mx-auto px-4 pt-20 pb-16 sm:pt-28 sm:pb-20">
           <div className="text-center max-w-4xl mx-auto">
+            <Link
+              to="/tools"
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] mb-8 shadow-sm transition-colors hover:border-emerald-500/40 hover:bg-card"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60" />
+              <span className="text-amber-500">New in V2</span>
+              <span className="text-muted-foreground">- 12-Tool Options Analytics Suite</span>
+              <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+            </Link>
             <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
               <span className="block text-foreground">Your Personal</span>
               <span className="block bg-gradient-to-r from-purple-400 via-sky-400 to-emerald-300 bg-clip-text text-transparent">
