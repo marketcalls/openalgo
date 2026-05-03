@@ -488,51 +488,282 @@ _CONSENT_TEMPLATE = """\
     third-party origin via Referer.
   -->
   <meta name="referrer" content="same-origin">
+  <meta name="color-scheme" content="light dark">
   <title>Authorize {{ client_name }} — OpenAlgo</title>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f9fafb;
-           margin: 0; padding: 0; min-height: 100vh; display: flex;
-           align-items: center; justify-content: center; }
-    .card { background: white; border-radius: 12px; padding: 32px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.08); max-width: 480px;
-            width: 92%; }
-    h1 { margin: 0 0 8px; font-size: 22px; }
-    p { color: #4b5563; line-height: 1.5; }
-    .scopes { background: #f3f4f6; border-radius: 8px; padding: 12px;
-              margin: 16px 0; font-family: monospace; }
-    .scopes li { margin: 4px 0; }
-    .row { display: flex; gap: 12px; margin-top: 24px; }
-    button { flex: 1; padding: 12px; border-radius: 8px; border: 0;
-             font-size: 14px; font-weight: 600; cursor: pointer; }
-    .approve { background: #10b981; color: white; }
-    .deny { background: #f3f4f6; color: #374151; }
-    .totp { margin: 16px 0; padding: 12px; background: #fef3c7;
-            border-left: 4px solid #f59e0b; border-radius: 4px; }
-    input[type=text] { padding: 10px; font-size: 16px; width: 100%;
-                       box-sizing: border-box; border: 1px solid #d1d5db;
-                       border-radius: 6px; font-family: monospace;
-                       letter-spacing: 4px; text-align: center; }
-    .err { color: #b91c1c; font-size: 13px; margin-top: 8px; }
-    .meta { color: #6b7280; font-size: 12px; margin-top: 16px; }
+    /* Matches the React dashboard's shadcn/Tailwind design tokens so the
+       OAuth consent flow visually belongs to OpenAlgo. Pure CSS variables —
+       no JS toggles — so prefers-color-scheme drives light/dark. */
+    :root {
+      --bg:            #f8fafc;
+      --card:          #ffffff;
+      --border:        #e2e8f0;
+      --border-strong: #cbd5e1;
+      --text:          #0f172a;
+      --text-muted:    #475569;
+      --text-subtle:   #64748b;
+      --code-bg:       #f1f5f9;
+      --primary:       #10b981;
+      --primary-hover: #059669;
+      --neutral:       #f1f5f9;
+      --neutral-hover: #e2e8f0;
+      --warn-bg:       #fef3c7;
+      --warn-border:   #f59e0b;
+      --warn-text:     #78350f;
+      --danger-bg:     #fee2e2;
+      --danger-border: #ef4444;
+      --danger-text:   #991b1b;
+      --shadow:        0 10px 32px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.04);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:            #0b1220;
+        --card:          #111827;
+        --border:        #1f2937;
+        --border-strong: #334155;
+        --text:          #f1f5f9;
+        --text-muted:    #cbd5e1;
+        --text-subtle:   #94a3b8;
+        --code-bg:       #0f172a;
+        --neutral:       #1f2937;
+        --neutral-hover: #334155;
+        --warn-bg:       #422006;
+        --warn-border:   #d97706;
+        --warn-text:     #fde68a;
+        --danger-bg:     #450a0a;
+        --danger-border: #ef4444;
+        --danger-text:   #fecaca;
+        --shadow:        0 10px 32px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 28px;
+      box-shadow: var(--shadow);
+      max-width: 480px;
+      width: 100%;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-subtle);
+      margin-bottom: 18px;
+    }
+    .brand-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .lede {
+      margin: 0 0 22px;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-subtle);
+      margin: 0 0 10px;
+    }
+    .scopes {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .scope {
+      display: flex;
+      align-items: stretch;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--code-bg);
+    }
+    .scope.write {
+      border-color: var(--warn-border);
+      background: var(--warn-bg);
+    }
+    .scope-bar {
+      flex-shrink: 0;
+      width: 3px;
+      align-self: stretch;
+      background: var(--primary);
+      border-radius: 3px;
+    }
+    .scope.write .scope-bar { background: var(--warn-border); }
+    .scope-body { min-width: 0; }
+    .scope-name {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .scope.write .scope-name { color: var(--warn-text); }
+    .scope-desc {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      margin-top: 3px;
+      line-height: 1.45;
+    }
+    .scope.write .scope-desc { color: var(--warn-text); opacity: 0.92; }
+    .totp {
+      margin: 0 0 18px;
+      padding: 12px 14px;
+      background: var(--warn-bg);
+      border-left: 3px solid var(--warn-border);
+      border-radius: 8px;
+      color: var(--warn-text);
+    }
+    .totp strong { font-weight: 700; }
+    .totp p { margin: 6px 0 12px; font-size: 13px; line-height: 1.45; }
+    .totp code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      padding: 1px 5px;
+      background: rgba(0, 0, 0, 0.06);
+      border-radius: 4px;
+    }
+    .err {
+      margin: 0 0 16px;
+      padding: 10px 14px;
+      background: var(--danger-bg);
+      border-left: 3px solid var(--danger-border);
+      border-radius: 8px;
+      color: var(--danger-text);
+      font-size: 13px;
+    }
+    input[type=text] {
+      padding: 11px 14px;
+      font-size: 18px;
+      width: 100%;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      letter-spacing: 6px;
+      text-align: center;
+      background: var(--card);
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    input[type=text]:focus {
+      outline: 2px solid var(--primary);
+      outline-offset: 1px;
+      border-color: var(--primary);
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    button {
+      flex: 1;
+      padding: 11px 14px;
+      border-radius: 8px;
+      border: 0;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background-color 0.15s ease;
+    }
+    button.approve {
+      background: var(--primary);
+      color: #ffffff;
+    }
+    button.approve:hover { background: var(--primary-hover); }
+    button.deny {
+      background: var(--neutral);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    button.deny:hover { background: var(--neutral-hover); }
+    button:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+    .meta {
+      margin-top: 22px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      column-gap: 14px;
+      row-gap: 6px;
+      align-items: baseline;
+      font-size: 11px;
+    }
+    .meta-label {
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-subtle);
+    }
+    .meta code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      word-break: break-all;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
+  <main class="card">
+    <div class="brand"><span class="brand-dot"></span>OpenAlgo</div>
     <h1>Authorize {{ client_name }}</h1>
-    <p>This MCP client is requesting access to your OpenAlgo install.</p>
+    <p class="lede">This MCP client is requesting access to your OpenAlgo install.</p>
 
-    <p><strong>Scopes requested:</strong></p>
+    <div class="section-label">Permissions requested</div>
     <ul class="scopes">
-      {% for s in scopes %}<li>{{ s }}</li>{% endfor %}
+      {% for s in scopes %}
+      <li class="scope{% if s == 'write:orders' %} write{% endif %}">
+        <span class="scope-bar" aria-hidden="true"></span>
+        <div class="scope-body">
+          <div class="scope-name">{{ s }}</div>
+          <div class="scope-desc">{% if s == 'read:market' %}Read live and historical market data — quotes, depth, history.{% elif s == 'read:account' %}Read your portfolio — orders, holdings, positions, funds.{% elif s == 'write:orders' %}Place, modify and cancel real orders on your behalf.{% else %}{{ s }}{% endif %}</div>
+        </div>
+      </li>
+      {% endfor %}
     </ul>
 
     {% if requires_fresh_totp %}
     <div class="totp">
       <strong>2FA confirmation required</strong>
-      <p style="margin: 8px 0 0; font-size: 13px;">
-        This client wants <code>write:orders</code>. Enter the 6-digit code
-        from your authenticator app to authorize order-placement.
-      </p>
+      <p>This client wants <code>write:orders</code>. Enter the 6-digit code from your authenticator app to authorize order placement.</p>
     </div>
     {% endif %}
 
@@ -550,7 +781,7 @@ _CONSENT_TEMPLATE = """\
       {% if requires_fresh_totp %}
       <input type="text" name="totp_code" autocomplete="one-time-code"
              inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
-             placeholder="123456" autofocus required>
+             placeholder="000000" autofocus required>
       {% endif %}
 
       <div class="row">
@@ -560,10 +791,10 @@ _CONSENT_TEMPLATE = """\
     </form>
 
     <div class="meta">
-      Client: <code>{{ client_id }}</code><br>
-      Redirect: <code>{{ redirect_uri }}</code>
+      <span class="meta-label">Client</span><code>{{ client_id }}</code>
+      <span class="meta-label">Redirect</span><code>{{ redirect_uri }}</code>
     </div>
-  </div>
+  </main>
 </body>
 </html>
 """
