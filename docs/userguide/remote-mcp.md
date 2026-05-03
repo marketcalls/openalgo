@@ -322,9 +322,10 @@ Claude shows tool-call cards you can expand to inspect the exact parameters. If 
 ##### Claude.ai — recommended posture for write tools
 
 * Start in **Sandbox / Analyzer mode** in OpenAlgo to dry-run prompts (toggle at `/analyzer`)
-* Set `MCP_MAX_ORDER_QTY` to a sane cap (e.g. `10` for equity, `1` for a Nifty lot) so a model error can't place an outsized order
 * Keep MCP 2FA on for the MCP purpose — every fresh authorization demands a TOTP code
+* Set tight `MCP_RATE_LIMIT_WRITE` (e.g. `5 per minute`) so a runaway model can't fire a flurry of orders before you intervene
 * Tail `log/mcp.jsonl` while testing — every tool call is recorded with timestamp, scope, outcome, latency
+* Use the **Kill switch** at `/admin/remote-mcp` if you see anything unexpected — atomically revokes every refresh token across every approved client
 
 ##### Claude.ai — useful prompts
 
@@ -424,7 +425,7 @@ All of these go in your `.env` (native) or the bind-mounted `.env` (Docker). The
 | `MCP_OAUTH_CODE_TTL` | `60` | Authorization-code TTL (capped at 300) |
 | `MCP_RATE_LIMIT_READ` | `60 per minute` | Per-token rate limit for read scopes |
 | `MCP_RATE_LIMIT_WRITE` | `50 per minute` | Per-token rate limit for `write:orders` |
-| `MCP_MAX_ORDER_QTY` | `0` | Hard cap on order quantity placed via MCP. `0` = no cap |
+| `MCP_OAUTH_KEYS_DIR` | `keys` | Directory for RS256 signing keys |
 
 ***
 

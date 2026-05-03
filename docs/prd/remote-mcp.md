@@ -264,10 +264,10 @@ Internet → Cloudflare/WAF (recommended) → nginx → Flask
 ### SHOULD-HAVE for v1 (default-on, configurable)
 
 19. **Optional IP allowlist for `/mcp`.** `MCP_HTTP_IP_ALLOWLIST=1.2.3.4,5.6.7.0/24`. When set, all MCP requests are rejected unless the source IP matches. Empty (default) = no IP filtering. Useful if the user's MCP client lives on a known fixed egress.
-20. **Kill switch on session timeout.** If the OpenAlgo admin hasn't logged in for the configurable session inactivity window (`MCP_INACTIVITY_REVOKE_DAYS`, default 7), all refresh tokens are revoked. A live admin must re-authorize the MCP client. Catches the "user forgot they enabled this" failure mode.
-21. **Inbound order quantity cap.** `MCP_MAX_ORDER_QTY` (default `0` = no cap). When set, any tool placing an order with `quantity > cap` is rejected at the dispatcher before reaching the broker.
-22. **Confirmation token for high-value writes.** Optional `MCP_CONFIRM_WRITES=True`. When set, write tools require an additional `confirm_token` parameter that the client obtains from a separate `/oauth/confirm-write` endpoint, which displays an admin consent prompt for that single tool call. Adds a per-trade human-in-the-loop step.
-23. **Telegram-driven kill switch.** If Telegram is configured, the user can reply `/mcp_disable` in the bot to trigger the same kill switch. Useful when away from the dashboard.
+20. **Kill switch on session timeout.** *(Not yet implemented in v2.0.1.0.)* If the OpenAlgo admin hasn't logged in for the configurable session inactivity window (`MCP_INACTIVITY_REVOKE_DAYS`, default 7), all refresh tokens are revoked. A live admin must re-authorize the MCP client. Catches the "user forgot they enabled this" failure mode.
+21. **Inbound order quantity cap.** *(Not yet implemented in v2.0.1.0.)* `MCP_MAX_ORDER_QTY` (default `0` = no cap). When set, any tool placing an order with `quantity > cap` is rejected at the dispatcher before reaching the broker.
+22. **Confirmation token for high-value writes.** *(Not yet implemented in v2.0.1.0.)* Optional `MCP_CONFIRM_WRITES=True`. When set, write tools require an additional `confirm_token` parameter that the client obtains from a separate `/oauth/confirm-write` endpoint, which displays an admin consent prompt for that single tool call. Adds a per-trade human-in-the-loop step.
+23. **Telegram-driven kill switch.** *(Not yet implemented in v2.0.1.0.)* If Telegram is configured, the user can reply `/mcp_disable` in the bot to trigger the same kill switch. Useful when away from the dashboard.
 
 ### NICE-TO-HAVE (deferred to v1.1)
 
