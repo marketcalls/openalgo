@@ -19,7 +19,14 @@ import {
 } from '@/components/ui/accordion'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet'
 import { useThemeStore } from '@/stores/themeStore'
 
 const faqData = [
@@ -147,6 +154,10 @@ export default function Faq() {
                 </Button>
               </SheetTrigger>
               <SheetContent side="left" className="w-80">
+                <SheetHeader className="sr-only">
+                  <SheetTitle>Navigation Menu</SheetTitle>
+                  <SheetDescription>Main navigation and quick access links</SheetDescription>
+                </SheetHeader>
                 <div className="flex items-center gap-2 mb-8">
                   <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
                   <span className="text-xl font-semibold">OpenAlgo</span>

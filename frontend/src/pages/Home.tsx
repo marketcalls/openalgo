@@ -1,4 +1,6 @@
 import {
+  ArrowRight,
+  Bot,
   BookOpen,
   ClipboardList,
   Download,
@@ -7,14 +9,43 @@ import {
   Menu,
   MessageCircle,
   Moon,
+  Sparkles,
   Sun,
+  Wand2,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Footer } from '@/components/layout/Footer'
 import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet'
 import { useThemeStore } from '@/stores/themeStore'
+
+const integrations = [
+  'Amibroker',
+  'TradingView',
+  'GoCharting',
+  'Python',
+  'MetaTrader',
+  'N8N',
+  'Java',
+  'Go',
+  '.NET',
+  'Node.js',
+  'Rust',
+  'ChartInk',
+  'Excel',
+  'Google Sheets',
+  'OpenClaw',
+  'Telegram',
+]
 
 export default function Home() {
   const { mode, toggleMode } = useThemeStore()
@@ -43,6 +74,10 @@ export default function Home() {
                 </Button>
               </SheetTrigger>
               <SheetContent side="left" className="w-80">
+                <SheetHeader className="sr-only">
+                  <SheetTitle>Navigation Menu</SheetTitle>
+                  <SheetDescription>Main navigation and quick access links</SheetDescription>
+                </SheetHeader>
                 <div className="flex items-center gap-2 mb-8">
                   <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
                   <span className="text-xl font-semibold">OpenAlgo</span>
@@ -158,18 +193,23 @@ export default function Home() {
         </nav>
       </header>
 
-      {/* Hero Section */}
-      <main className="flex-1 flex items-center justify-center">
-        <div className="container">
-          <div className="text-center max-w-3xl mx-auto">
-            <h1 className="text-5xl font-bold mb-8">
-              Your Personal <span className="text-primary">Algo Trading</span>{' '}
-              <span className="text-primary">Platform</span>
+      <main className="flex-1">
+        {/* Hero Section */}
+        <section className="container mx-auto px-4 pt-20 pb-16 sm:pt-28 sm:pb-20">
+          <div className="text-center max-w-4xl mx-auto">
+            <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
+              <span className="block text-foreground">Your Personal</span>
+              <span className="block bg-gradient-to-r from-purple-400 via-sky-400 to-emerald-300 bg-clip-text text-transparent">
+                Algo Trading Platform
+              </span>
             </h1>
-            <p className="text-xl mb-8 text-muted-foreground">
-              Connect your algo strategies and run from any platform - Amibroker, TradingView,
-              GoCharting, N8N, Python, GO, NodeJs, ChartInk, MetaTrader, Excel, or Google Sheets.
-              And Receive your Strategy Alerts to Telegram.
+            <p className="text-lg sm:text-xl font-semibold mb-6 bg-gradient-to-r from-purple-400 via-sky-400 to-emerald-300 bg-clip-text text-transparent">
+              Community Driven Algo Trading Platform
+            </p>
+            <p className="text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto mb-10">
+              Test and Execute your Trading ideas, Connect your favorite Trading Platforms, AI
+              Driven Strategy Development with a built-in Options Analytics Suite across 30+
+              Brokers.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button size="lg" asChild>
@@ -186,7 +226,117 @@ export default function Home() {
               </Button>
             </div>
           </div>
-        </div>
+        </section>
+
+        {/* Integrates With */}
+        <section className="container mx-auto px-4 py-12 sm:py-16">
+          <p className="text-center text-xs sm:text-sm font-semibold uppercase tracking-[0.25em] text-amber-500 mb-6">
+            Integrates With
+          </p>
+          <div className="flex flex-wrap justify-center gap-2 sm:gap-3 max-w-4xl mx-auto">
+            {integrations.map((name) => (
+              <span
+                key={name}
+                className="rounded-full border border-border bg-card/60 px-4 py-2 text-sm text-foreground/90 shadow-sm"
+              >
+                {name}
+              </span>
+            ))}
+          </div>
+        </section>
+
+        {/* Trade & Research With Your AI */}
+        <section className="container mx-auto px-4 py-16 sm:py-20">
+          <div className="text-center max-w-3xl mx-auto mb-12">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-500 mb-6">
+              <Sparkles className="h-3.5 w-3.5" />
+              Made for AI
+            </span>
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
+              Trade & Research With Your AI
+            </h2>
+            <p className="text-base sm:text-lg text-muted-foreground">
+              Two simple ways to bring AI into your trading - talk to your account like a trading
+              desk, or give your AI a toolkit to chart, scan, and backtest for you.
+            </p>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-2 max-w-6xl mx-auto">
+            {/* OpenAlgo MCP card */}
+            <Card className="group transition-colors hover:border-purple-400/40">
+              <CardContent className="space-y-4">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-purple-500/10 text-purple-400">
+                    <Bot className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      OpenAlgo MCP
+                      <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
+                    </h3>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mt-1">
+                      Trade by Chatting
+                    </p>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Connect your OpenAlgo account to Claude, Cursor, Windsurf, or ChatGPT. Place
+                  orders, check positions, and pull live prices by simply asking - no dashboards,
+                  no clicks.
+                </p>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  {['25+ built-in actions', 'Claude / Cursor / Windsurf / ChatGPT', 'Runs on your computer'].map(
+                    (tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+                      >
+                        {tag}
+                      </span>
+                    )
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* OpenAlgo Skills card */}
+            <Card className="group transition-colors hover:border-emerald-400/40">
+              <CardContent className="space-y-4">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+                    <Wand2 className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      OpenAlgo Skills
+                      <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
+                    </h3>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mt-1">
+                      Chart, Scan & Backtest
+                    </p>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Ready-made trading abilities you can drop into your AI assistant - charts,
+                  scanners, custom indicators, and backtests with real brokerage costs. Works with
+                  40+ AI apps.
+                </p>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  {['100+ indicators', '12 ready-made strategies', 'India / US / Crypto'].map(
+                    (tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+                      >
+                        {tag}
+                      </span>
+                    )
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
       </main>
 
       {/* Footer */}
