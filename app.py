@@ -279,9 +279,12 @@ def create_app():
     # Pre-flight refusal: must NEVER coexist with FLASK_DEBUG=True (debug-mode
     # tracebacks would leak bearer tokens). See docs/prd/remote-mcp.md.
     if os.getenv("MCP_HTTP_ENABLED", "False").lower() == "true":
-        if os.getenv("FLASK_DEBUG", "False").lower() == "true":
+        # Match Flask's own truthy parsing (Flask accepts "1"/"t"/"true").
+        # The narrow `== "true"` check we used to do let FLASK_DEBUG=1
+        # slip past this guard while still putting Flask in debug mode.
+        if os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t"):
             raise RuntimeError(
-                "MCP_HTTP_ENABLED=True is not allowed with FLASK_DEBUG=True. "
+                "MCP_HTTP_ENABLED=True is not allowed with FLASK_DEBUG enabled. "
                 "Debug-mode tracebacks leak bearer tokens. Disable one of them."
             )
 

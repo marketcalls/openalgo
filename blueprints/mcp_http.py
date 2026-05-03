@@ -68,7 +68,7 @@ _SSE_KEEPALIVE_SECONDS = 15
 # below extracts the JTI from the bearer token so a single token can't
 # exceed its quota by hopping IPs.
 _RATE_LIMIT_READ = os.getenv("MCP_RATE_LIMIT_READ", "60 per minute")
-_RATE_LIMIT_WRITE = os.getenv("MCP_RATE_LIMIT_WRITE", "5 per minute")
+_RATE_LIMIT_WRITE = os.getenv("MCP_RATE_LIMIT_WRITE", "50 per minute")
 # A coarser ceiling on the dispatcher itself, applied per JTI/IP so a
 # single token can't fire reads at unlimited speed even before scope
 # enforcement happens.
@@ -80,7 +80,13 @@ _SSE_RATE_LIMIT = "5 per minute"
 # advertised back; hosted clients (claude.ai, chatgpt.com) need to be
 # in this list for browser-side OAuth flows to work.
 def _cors_allowed_origins() -> list[str]:
-    raw = os.getenv("MCP_HTTP_CORS_ORIGINS", "")
+    # Default to the two hosted clients we ship support for. An operator
+    # who wants to lock this down can set MCP_HTTP_CORS_ORIGINS=""
+    # (empty) to disable browser-side OAuth flows entirely, or supply a
+    # narrower list. The native enabler doesn't write this key, so the
+    # default has to be sane on its own.
+    default = "https://claude.ai,https://chatgpt.com"
+    raw = os.getenv("MCP_HTTP_CORS_ORIGINS", default)
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
@@ -259,11 +265,21 @@ def init_http_transport() -> None:
 
 
 def _bearer_or_none() -> str | None:
-    """Extract the Bearer token from the Authorization header."""
+    """Extract the Bearer token from the Authorization header.
+
+    Resilient to malformed values: a header of exactly ``Bearer`` (or
+    ``Bearer `` with no token) returns ``None`` rather than raising
+    ``IndexError``. Anything else with a non-empty token is returned
+    after stripping surrounding whitespace.
+    """
     auth = request.headers.get("Authorization", "")
-    if auth.lower().startswith("bearer "):
-        return auth.split(None, 1)[1].strip()
-    return None
+    if not auth.lower().startswith("bearer "):
+        return None
+    parts = auth.split(None, 1)
+    if len(parts) != 2:
+        return None
+    token = parts[1].strip()
+    return token or None
 
 
 def _resource_metadata_url() -> str:
@@ -525,8 +541,15 @@ def _dispatch_tool_call(
         required_scope,
     )
 
-    tool_name = (params or {}).get("name")
-    arguments = (params or {}).get("arguments") or {}
+    # JSON-RPC 2.0 allows ``params`` to be an object OR an array; we
+    # only accept object form. Reject anything else with -32602 instead
+    # of letting ``.get`` raise AttributeError on a list/string/int.
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return _jsonrpc_error(rpc_id, -32602, "Invalid params: must be an object.")
+    tool_name = params.get("name")
+    arguments = params.get("arguments") or {}
 
     if not tool_name or not isinstance(tool_name, str):
         return _jsonrpc_error(rpc_id, -32602, "Invalid params: 'name' is required.")

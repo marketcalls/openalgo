@@ -110,19 +110,6 @@ wheels = [
 ]
 
 [[package]]
-name = "authlib"
-version = "1.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cryptography" },
-    { name = "joserfc" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/82/4d0603f30c1b4629b1f091bb266b0d7986434891d6940a8c87f8098db24e/authlib-1.7.0.tar.gz", hash = "sha256:b3e326c9aa9cc3ea95fe7d89fd880722d3608da4d00e8a27e061e64b48d801d5", size = 175890, upload-time = "2026-04-18T11:00:28.559Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/48/c954218b2a250e23f178f10167c4173fecb5a75d2c206f0a67ba58006c26/authlib-1.7.0-py2.py3-none-any.whl", hash = "sha256:e36817afb02f6f0b6bf55f150782499ddd6ddf44b402bb055d3263cc65ac9ae0", size = 258779, upload-time = "2026-04-18T11:00:26.64Z" },
-]
-
-[[package]]
 name = "bandit"
 version = "1.9.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1572,7 +1559,6 @@ dependencies = [
     { name = "argon2-cffi-bindings" },
     { name = "asttokens" },
     { name = "attrs" },
-    { name = "authlib" },
     { name = "bcrypt" },
     { name = "bidict" },
     { name = "blinker" },
@@ -1621,6 +1607,7 @@ dependencies = [
     { name = "itsdangerous" },
     { name = "jedi" },
     { name = "jinja2" },
+    { name = "joserfc" },
     { name = "jsonschema" },
     { name = "jsonschema-specifications" },
     { name = "jupyter-client" },
@@ -1732,7 +1719,6 @@ requires-dist = [
     { name = "argon2-cffi-bindings", specifier = "==21.2.0" },
     { name = "asttokens", specifier = "==3.0.1" },
     { name = "attrs", specifier = "==24.2.0" },
-    { name = "authlib", specifier = "==1.7.0" },
     { name = "bcrypt", specifier = "==5.0.0" },
     { name = "bidict", specifier = "==0.23.1" },
     { name = "blinker", specifier = "==1.9.0" },
@@ -1781,6 +1767,7 @@ requires-dist = [
     { name = "itsdangerous", specifier = "==2.2.0" },
     { name = "jedi", specifier = "==0.19.2" },
     { name = "jinja2", specifier = "==3.1.6" },
+    { name = "joserfc", specifier = "==1.6.4" },
     { name = "jsonschema", specifier = "==4.26.0" },
     { name = "jsonschema-specifications", specifier = "==2023.12.1" },
     { name = "jupyter-client", specifier = "==8.8.0" },
