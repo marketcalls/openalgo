@@ -29,7 +29,7 @@ Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital,
 
 ## Video Tutorial
 
-[![What is OpenAlgo](https://img.youtube.com/vi/LhbXWlUtCcM/0.jpg)](https://www.youtube.com/watch?v=LhbXWlUtCcM)
+[![What is OpenAlgo](https://img.youtube.com/vi/S5myMo9WUdQ/0.jpg)](https://www.youtube.com/watch?v=S5myMo9WUdQ)
 
 ## Quick Links
 
