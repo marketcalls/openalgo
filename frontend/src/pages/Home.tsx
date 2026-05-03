@@ -208,11 +208,9 @@ export default function Home() {
             </Link>
             <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
               <span className="block text-foreground">Your Personal</span>
-              <span className="block bg-gradient-to-r from-purple-400 via-sky-400 to-emerald-300 bg-clip-text text-transparent">
-                Algo Trading Platform
-              </span>
+              <span className="block text-primary">Algo Trading Platform</span>
             </h1>
-            <p className="text-lg sm:text-xl font-semibold mb-6 bg-gradient-to-r from-purple-400 via-sky-400 to-emerald-300 bg-clip-text text-transparent">
+            <p className="text-lg sm:text-xl font-semibold mb-6 text-primary">
               Community Driven Algo Trading Platform
             </p>
             <p className="text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto mb-10">
