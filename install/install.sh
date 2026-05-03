@@ -432,14 +432,19 @@ fi
 APP_KEY=$(generate_hex)
 API_KEY_PEPPER=$(generate_hex)
 
-# Installation paths with unique deployment name
-DEPLOY_NAME="${DOMAIN/./-}-${BROKER_NAME}"  # e.g., opendash-app-fyers
-BASE_PATH="/var/python/openalgo-flask/$DEPLOY_NAME"
-OPENALGO_PATH="$BASE_PATH/openalgo"
-VENV_PATH="$BASE_PATH/venv"
-SOCKET_PATH="$BASE_PATH"
+# Installation paths — single deployment per server. For 2+ deployments
+# side-by-side use install/install-multi.sh (different scheme).
+#
+#   App, venv, socket, .env all live under /var/python/openalgo
+#   systemd unit:  openalgo.service
+#   nginx vhost:   openalgo.conf
+DEPLOY_NAME="openalgo"
+OPENALGO_PATH="/var/python/openalgo"
+BASE_PATH="$OPENALGO_PATH"
+VENV_PATH="$OPENALGO_PATH/.venv"
+SOCKET_PATH="$OPENALGO_PATH"
 SOCKET_FILE="$SOCKET_PATH/openalgo.sock"
-SERVICE_NAME="openalgo-$DEPLOY_NAME"
+SERVICE_NAME="openalgo"
 
 # Set Nginx configuration paths based on OS
 case "$OS_TYPE" in
@@ -456,7 +461,7 @@ case "$OS_TYPE" in
         sudo mkdir -p "$NGINX_AVAILABLE"
         ;;
 esac
-NGINX_CONFIG_FILE="$NGINX_AVAILABLE/$DOMAIN.conf"
+NGINX_CONFIG_FILE="$NGINX_AVAILABLE/openalgo.conf"
 
 log_message "\nStarting OpenAlgo installation for $DEPLOY_NAME..." "$YELLOW"
 
@@ -946,10 +951,13 @@ fi
 
 # Configure final Nginx setup with SSL and socket
 log_message "\nConfiguring final Nginx setup..." "$BLUE"
-# Remove old config files to ensure clean write (with and without .conf extension)
+# Remove the existing openalgo nginx config and any legacy domain-keyed
+# files left over from older installs (pre-simple-paths) so the rewrite
+# below leaves exactly one openalgo vhost on disk.
 sudo rm -f $NGINX_CONFIG_FILE
-sudo rm -f ${NGINX_AVAILABLE}/${DOMAIN}
+sudo rm -f ${NGINX_AVAILABLE}/${DOMAIN} ${NGINX_AVAILABLE}/${DOMAIN}.conf
 if [ "$NGINX_CONFIG_MODE" = "sites" ]; then
+    sudo rm -f /etc/nginx/sites-enabled/openalgo.conf
     sudo rm -f /etc/nginx/sites-enabled/${DOMAIN}
     sudo rm -f /etc/nginx/sites-enabled/${DOMAIN}.conf
 fi

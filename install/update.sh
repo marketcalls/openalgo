@@ -109,6 +109,15 @@ detect_uv() {
 }
 
 # Find server deployments installed via install.sh
+#
+# Two layouts are supported:
+#   1. Simple (current install.sh)   /var/python/openalgo, service "openalgo"
+#   2. Legacy multi-deploy           /var/python/openalgo-flask/<deploy>/openalgo,
+#                                    service "openalgo-<deploy>" (still produced
+#                                    by install/install-multi.sh)
+# We try the simple layout first because it's unambiguous; only fall back
+# to scanning the legacy parent dir when the simple path is absent.
+SIMPLE_PATH="/var/python/openalgo"
 DEPLOY_BASE="/var/python/openalgo-flask"
 SERVER_MODE=false
 STASHED=false
@@ -126,12 +135,23 @@ find_deployments() {
     echo "${deployments[@]}"
 }
 
-# Check for server deployments
-DEPLOYMENTS=($(find_deployments))
-
-if [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
+if [ -d "$SIMPLE_PATH/.git" ] && [ -f "$SIMPLE_PATH/.env" ]; then
     SERVER_MODE=true
-    log_message "Found ${#DEPLOYMENTS[@]} server deployment(s):" "$GREEN"
+    SELECTED_DEPLOY="openalgo"
+    BASE_PATH="$SIMPLE_PATH"
+    OPENALGO_PATH="$SIMPLE_PATH"
+    VENV_PATH="$SIMPLE_PATH/.venv"
+    SERVICE_NAME="openalgo"
+
+    log_message "Found OpenAlgo install at $SIMPLE_PATH" "$GREEN"
+    log_message "Service: $SERVICE_NAME" "$BLUE"
+else
+    DEPLOYMENTS=($(find_deployments))
+fi
+
+if [ "$SERVER_MODE" = false ] && [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
+    SERVER_MODE=true
+    log_message "Found ${#DEPLOYMENTS[@]} legacy server deployment(s):" "$GREEN"
 
     for i in "${!DEPLOYMENTS[@]}"; do
         log_message "  $((i+1)). ${DEPLOYMENTS[$i]}" "$BLUE"
@@ -153,7 +173,7 @@ if [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
         done
     fi
 
-    # Derive paths from deployment name
+    # Derive paths from deployment name (legacy multi-deploy layout)
     BASE_PATH="$DEPLOY_BASE/$SELECTED_DEPLOY"
     OPENALGO_PATH="$BASE_PATH/openalgo"
     VENV_PATH="$BASE_PATH/venv"
@@ -162,7 +182,9 @@ if [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
     log_message "\nUpdating deployment: $SELECTED_DEPLOY" "$BLUE"
     log_message "Path: $OPENALGO_PATH" "$BLUE"
     log_message "Service: $SERVICE_NAME" "$BLUE"
-else
+fi
+
+if [ "$SERVER_MODE" = false ]; then
     # Check if we're in or near an openalgo git repo (local development)
     if [ -d ".git" ] && [ -f "app.py" ]; then
         OPENALGO_PATH="$(pwd)"

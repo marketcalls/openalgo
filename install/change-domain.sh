@@ -91,57 +91,72 @@ esac
 log_message "Detected OS: $OS_TYPE" "$GREEN"
 
 # ============================================
-# Step 2: Discover existing deployments
+# Step 2: Discover existing deployment
 # ============================================
+# Try the simple single-install layout (current install.sh) first, then
+# fall back to scanning the legacy /var/python/openalgo-flask/ tree
+# produced by older install.sh versions and install/install-multi.sh.
+SIMPLE_PATH="/var/python/openalgo"
 DEPLOY_BASE="/var/python/openalgo-flask"
 
-if [ ! -d "$DEPLOY_BASE" ]; then
-    log_message "Error: No OpenAlgo deployment directory found at $DEPLOY_BASE" "$RED"
-    log_message "This script is for server deployments installed via install.sh" "$YELLOW"
-    exit 1
-fi
-
-# Find all deployments
-DEPLOYMENTS=()
-for dir in "$DEPLOY_BASE"/*/; do
-    if [ -d "${dir}openalgo" ] && [ -f "${dir}openalgo/.env" ]; then
-        deploy_name=$(basename "$dir")
-        DEPLOYMENTS+=("$deploy_name")
-    fi
-done
-
-if [ ${#DEPLOYMENTS[@]} -eq 0 ]; then
-    log_message "Error: No OpenAlgo deployments found in $DEPLOY_BASE" "$RED"
-    exit 1
-fi
-
-log_message "Found ${#DEPLOYMENTS[@]} deployment(s):" "$GREEN"
-for i in "${!DEPLOYMENTS[@]}"; do
-    log_message "  $((i+1)). ${DEPLOYMENTS[$i]}" "$BLUE"
-done
-
-if [ ${#DEPLOYMENTS[@]} -eq 1 ]; then
-    SELECTED_DEPLOY="${DEPLOYMENTS[0]}"
-    log_message "\nAuto-selected: $SELECTED_DEPLOY" "$GREEN"
+if [ -f "$SIMPLE_PATH/.env" ]; then
+    SELECTED_DEPLOY="openalgo"
+    BASE_PATH="$SIMPLE_PATH"
+    OPENALGO_PATH="$SIMPLE_PATH"
+    SOCKET_FILE="$SIMPLE_PATH/openalgo.sock"
+    SERVICE_NAME="openalgo"
+    ENV_FILE="$OPENALGO_PATH/.env"
+    log_message "Found OpenAlgo install at $SIMPLE_PATH" "$GREEN"
 else
-    echo ""
-    while true; do
-        read -p "Select deployment to change domain for (1-${#DEPLOYMENTS[@]}): " choice
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#DEPLOYMENTS[@]} ]; then
-            SELECTED_DEPLOY="${DEPLOYMENTS[$((choice-1))]}"
-            break
-        else
-            log_message "Invalid choice." "$RED"
+    if [ ! -d "$DEPLOY_BASE" ]; then
+        log_message "Error: No OpenAlgo deployment found." "$RED"
+        log_message "Looked at $SIMPLE_PATH and $DEPLOY_BASE" "$YELLOW"
+        log_message "This script is for server deployments installed via install.sh" "$YELLOW"
+        exit 1
+    fi
+
+    # Find all legacy deployments
+    DEPLOYMENTS=()
+    for dir in "$DEPLOY_BASE"/*/; do
+        if [ -d "${dir}openalgo" ] && [ -f "${dir}openalgo/.env" ]; then
+            deploy_name=$(basename "$dir")
+            DEPLOYMENTS+=("$deploy_name")
         fi
     done
-fi
 
-# Derive paths
-BASE_PATH="$DEPLOY_BASE/$SELECTED_DEPLOY"
-OPENALGO_PATH="$BASE_PATH/openalgo"
-SOCKET_FILE="$BASE_PATH/openalgo.sock"
-SERVICE_NAME="openalgo-$SELECTED_DEPLOY"
-ENV_FILE="$OPENALGO_PATH/.env"
+    if [ ${#DEPLOYMENTS[@]} -eq 0 ]; then
+        log_message "Error: No OpenAlgo deployments found in $SIMPLE_PATH or $DEPLOY_BASE" "$RED"
+        exit 1
+    fi
+
+    log_message "Found ${#DEPLOYMENTS[@]} legacy deployment(s):" "$GREEN"
+    for i in "${!DEPLOYMENTS[@]}"; do
+        log_message "  $((i+1)). ${DEPLOYMENTS[$i]}" "$BLUE"
+    done
+
+    if [ ${#DEPLOYMENTS[@]} -eq 1 ]; then
+        SELECTED_DEPLOY="${DEPLOYMENTS[0]}"
+        log_message "\nAuto-selected: $SELECTED_DEPLOY" "$GREEN"
+    else
+        echo ""
+        while true; do
+            read -p "Select deployment to change domain for (1-${#DEPLOYMENTS[@]}): " choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#DEPLOYMENTS[@]} ]; then
+                SELECTED_DEPLOY="${DEPLOYMENTS[$((choice-1))]}"
+                break
+            else
+                log_message "Invalid choice." "$RED"
+            fi
+        done
+    fi
+
+    # Derive paths (legacy multi-deploy layout)
+    BASE_PATH="$DEPLOY_BASE/$SELECTED_DEPLOY"
+    OPENALGO_PATH="$BASE_PATH/openalgo"
+    SOCKET_FILE="$BASE_PATH/openalgo.sock"
+    SERVICE_NAME="openalgo-$SELECTED_DEPLOY"
+    ENV_FILE="$OPENALGO_PATH/.env"
+fi
 
 # ============================================
 # Step 3: Extract current domain from .env

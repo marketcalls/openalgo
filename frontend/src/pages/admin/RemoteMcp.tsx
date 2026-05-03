@@ -277,9 +277,10 @@ export default function RemoteMcp() {
           <ShieldAlert className="h-4 w-4" />
           <AlertTitle>Remote MCP is disabled on this install</AlertTitle>
           <AlertDescription>
-            Set <code>MCP_HTTP_ENABLED=True</code> in <code>.env</code> and restart, or run{' '}
-            <code>install/enable-remote-mcp.sh</code>. Local stdio MCP (Claude Desktop / Cursor /
-            Windsurf) is unaffected and works regardless of this setting.
+            Set <code>MCP_HTTP_ENABLED=True</code> in <code>.env</code>, set{' '}
+            <code>MCP_PUBLIC_URL</code> to your dashboard HTTPS origin, then restart the openalgo
+            service. Local stdio MCP (Claude Desktop / Cursor / Windsurf) is unaffected and works
+            regardless of this setting.
           </AlertDescription>
         </Alert>
       </div>
