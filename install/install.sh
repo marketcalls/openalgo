@@ -567,7 +567,8 @@ esac
 log_message "\nInstalling uv package installer..." "$BLUE"
 case "$OS_TYPE" in
     ubuntu | debian | raspbian)
-        # Use snap for Ubuntu/Debian (native support)
+        UV_INSTALLED=false
+        # 1) Try snap first (native on Ubuntu/Debian)
         if command -v snap >/dev/null 2>&1; then
             if [ ! -e /snap ] && [ -d /var/lib/snapd/snap ]; then
                 sudo ln -s /var/lib/snapd/snap /snap
@@ -575,19 +576,47 @@ case "$OS_TYPE" in
             sleep 2
             if sudo snap install astral-uv --classic 2>/dev/null; then
                 log_message "uv installed via snap" "$GREEN"
+                UV_INSTALLED=true
             else
-                log_message "Snap installation failed, using pip fallback" "$YELLOW"
-                sudo $PYTHON_CMD -m pip install uv
+                log_message "Snap installation failed (snap store unreachable or astral-uv unavailable)" "$YELLOW"
             fi
-        else
-            sudo $PYTHON_CMD -m pip install uv
+        fi
+        # 2) Astral standalone installer — required on PEP 668 systems
+        #    (Ubuntu 24.04+, Debian 12+, Python 3.12+) where 'pip install'
+        #    refuses with externally-managed-environment. Installs a single
+        #    static binary to /usr/local/bin so it is on root's PATH for the
+        #    rest of this script and on every user's PATH for later use.
+        if [ "$UV_INSTALLED" = false ]; then
+            log_message "Installing uv via astral standalone installer..." "$BLUE"
+            if curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh; then
+                log_message "uv installed to /usr/local/bin" "$GREEN"
+                UV_INSTALLED=true
+            fi
+        fi
+        # 3) Last resort: pip with --break-system-packages (PEP 668 override).
+        if [ "$UV_INSTALLED" = false ]; then
+            log_message "Astral installer failed, using pip with --break-system-packages..." "$YELLOW"
+            sudo $PYTHON_CMD -m pip install --break-system-packages uv
+            UV_INSTALLED=true
         fi
         check_status "Failed to install uv"
         ;;
     centos | fedora | rhel | amzn)
-        # Use pip for RHEL (more reliable than snap)
-        log_message "Installing uv via pip for better compatibility..." "$BLUE"
-        sudo $PYTHON_CMD -m pip install uv
+        UV_INSTALLED=false
+        # Prefer astral standalone installer — works on PEP 668 systems
+        # (Fedora 38+, RHEL/Rocky/Alma 9+ with newer Python) and avoids the
+        # 'externally-managed-environment' error from system pip.
+        log_message "Installing uv via astral standalone installer..." "$BLUE"
+        if curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh; then
+            log_message "uv installed to /usr/local/bin" "$GREEN"
+            UV_INSTALLED=true
+        fi
+        # Fallback to pip with --break-system-packages.
+        if [ "$UV_INSTALLED" = false ]; then
+            log_message "Astral installer failed, using pip fallback..." "$YELLOW"
+            sudo $PYTHON_CMD -m pip install --break-system-packages uv
+            UV_INSTALLED=true
+        fi
         check_status "Failed to install uv"
         ;;
     arch)
