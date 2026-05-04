@@ -859,7 +859,7 @@ export default function Positions() {
 
       {/* Positions Table */}
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="py-0">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin" />
