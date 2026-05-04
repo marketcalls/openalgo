@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,11 +27,73 @@ USE_ASYNC = not _is_eventlet_patched()
 
 logger = get_logger(__name__)
 
+# Global rate limiter (ported from broker/dhan/api/data.py)
+# Flattrade caps data APIs at 200 req/min (docs); some accounts are lower
+# (observed 120/min). 0.55s/req ≈ 109/min keeps us under both ceilings.
+_last_api_call_time = 0.0
+_rate_limit_lock = threading.Lock()
+FLATTRADE_MIN_REQUEST_INTERVAL = 0.55
 
-def get_api_response(endpoint, auth, method="POST", payload=None):
+
+def _apply_rate_limit():
+    """Sync rate limiter - serializes Flattrade API calls across threads.
+
+    Reserves the slot inside the lock, sleeps outside it so concurrent
+    threads queue without blocking each other on the lock itself.
     """
-    Common function to make API calls to Flattrade using httpx with connection pooling
+    global _last_api_call_time
+    sleep_time = 0.0
+
+    with _rate_limit_lock:
+        current_time = time.time()
+        time_since_last_call = current_time - _last_api_call_time
+        if time_since_last_call < FLATTRADE_MIN_REQUEST_INTERVAL:
+            sleep_time = FLATTRADE_MIN_REQUEST_INTERVAL - time_since_last_call
+        # Reserve the slot atomically
+        _last_api_call_time = current_time + sleep_time
+
+    if sleep_time > 0:
+        logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Flattrade API call")
+        time.sleep(sleep_time)
+
+
+async def _apply_rate_limit_async():
+    """Async variant - same algorithm but awaits asyncio.sleep so the event loop is not blocked."""
+    global _last_api_call_time
+    sleep_time = 0.0
+
+    with _rate_limit_lock:
+        current_time = time.time()
+        time_since_last_call = current_time - _last_api_call_time
+        if time_since_last_call < FLATTRADE_MIN_REQUEST_INTERVAL:
+            sleep_time = FLATTRADE_MIN_REQUEST_INTERVAL - time_since_last_call
+        _last_api_call_time = current_time + sleep_time
+
+    if sleep_time > 0:
+        await asyncio.sleep(sleep_time)
+
+
+def _is_rate_limit_error(response: dict) -> bool:
+    """Return True when Flattrade's response indicates a rate-limit hit."""
+    if not isinstance(response, dict):
+        return False
+    if response.get("stat") != "Not_Ok":
+        return False
+    emsg = response.get("emsg", "")
+    return "exceeds Limit" in emsg or "exceeds limit" in emsg
+
+
+def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
     """
+    Common function to make API calls to Flattrade using httpx with connection pooling.
+    Applies global rate limiting and retries with exponential backoff on rate-limit errors.
+    """
+    MAX_RETRIES = 3
+    RETRY_DELAY = 2.0  # base seconds for exponential backoff
+
+    # Apply rate limiting before making the request
+    _apply_rate_limit()
+
     AUTH_TOKEN = auth
     full_api_key = os.getenv("BROKER_API_KEY")
     api_key = full_api_key.split(":::")[0]
@@ -57,11 +120,23 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     logger.info(f"Raw Response: {data}")
 
     try:
-        return json.loads(data)
+        parsed = json.loads(data)
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding JSON: {e}")
         logger.info(f"Response data: {data}")
         raise
+
+    # Retry on rate-limit error with exponential backoff
+    if _is_rate_limit_error(parsed) and retry_count < MAX_RETRIES:
+        retry_delay = RETRY_DELAY * (2**retry_count)
+        logger.warning(
+            f"Flattrade rate limit hit ({parsed.get('emsg')}). "
+            f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
+        )
+        time.sleep(retry_delay)
+        return get_api_response(endpoint, auth, method, payload, retry_count + 1)
+
+    return parsed
 
 
 class BrokerData:
@@ -178,12 +253,25 @@ class BrokerData:
             raise Exception(f"Error fetching multiquotes: {e}")
 
     def _fetch_single_quote_sync(
-        self, symbol: str, exchange: str, api_exchange: str, token: str, api_key: str
+        self,
+        symbol: str,
+        exchange: str,
+        api_exchange: str,
+        token: str,
+        api_key: str,
+        retry_count: int = 0,
     ) -> dict:
         """
-        Fetch quote for a single symbol synchronously (for ThreadPoolExecutor)
+        Fetch quote for a single symbol synchronously (for ThreadPoolExecutor).
+        Honors the global rate limiter and retries with exponential backoff on rate-limit errors.
         """
+        MAX_RETRIES = 3
+        RETRY_DELAY = 2.0
+
         try:
+            # Serialize through the shared rate limiter
+            _apply_rate_limit()
+
             data = {"uid": api_key, "actid": api_key, "exch": api_exchange, "token": token}
 
             payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
@@ -195,6 +283,17 @@ class BrokerData:
             response = http_response.json()
 
             if response.get("stat") != "Ok":
+                # Retry on rate-limit error
+                if _is_rate_limit_error(response) and retry_count < MAX_RETRIES:
+                    retry_delay = RETRY_DELAY * (2**retry_count)
+                    logger.warning(
+                        f"Flattrade rate limit hit for {symbol}@{exchange}. "
+                        f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
+                    )
+                    time.sleep(retry_delay)
+                    return self._fetch_single_quote_sync(
+                        symbol, exchange, api_exchange, token, api_key, retry_count + 1
+                    )
                 return {
                     "symbol": symbol,
                     "exchange": exchange,
@@ -229,11 +328,19 @@ class BrokerData:
         api_exchange: str,
         token: str,
         api_key: str,
+        retry_count: int = 0,
     ) -> dict:
         """
-        Fetch quote for a single symbol asynchronously
+        Fetch quote for a single symbol asynchronously.
+        Honors the global rate limiter and retries with exponential backoff on rate-limit errors.
         """
+        MAX_RETRIES = 3
+        RETRY_DELAY = 2.0
+
         try:
+            # Serialize through the shared rate limiter (async-safe sleep)
+            await _apply_rate_limit_async()
+
             data = {"uid": api_key, "actid": api_key, "exch": api_exchange, "token": token}
 
             payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
@@ -245,6 +352,17 @@ class BrokerData:
             response = http_response.json()
 
             if response.get("stat") != "Ok":
+                # Retry on rate-limit error
+                if _is_rate_limit_error(response) and retry_count < MAX_RETRIES:
+                    retry_delay = RETRY_DELAY * (2**retry_count)
+                    logger.warning(
+                        f"Flattrade rate limit hit for {symbol}@{exchange}. "
+                        f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(retry_delay)
+                    return await self._fetch_single_quote_async(
+                        client, symbol, exchange, api_exchange, token, api_key, retry_count + 1
+                    )
                 logger.warning(
                     f"Error fetching quote for {symbol}@{exchange}: {response.get('emsg', 'Unknown error')}"
                 )

@@ -330,6 +330,12 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self._reconnect_timer = None  # Track reconnection timer for cleanup
 
+        # Batch subscription management - coalesce rapid subscribe calls into a
+        # single touchline/depth message to avoid hammering the WebSocket
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # 500ms window to collect subscriptions before flushing
+
     def _setup_normalizers(self):
         """Initialize data normalizers"""
         self.normalizers = {
@@ -401,6 +407,12 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer.cancel()
                 self._reconnect_timer = None
                 self.logger.debug("Cancelled pending reconnection timer")
+
+            # Cancel any pending batch subscription timer and drop queued items
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
 
             if self.ws_client:
                 self.ws_client.stop()
@@ -585,7 +597,13 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             )
 
     def _websocket_subscribe(self, subscription: dict) -> None:
-        """Handle WebSocket subscription with reference counting"""
+        """Handle WebSocket subscription with reference counting and batch queueing.
+
+        On the first reference (count 0 -> 1) the scrip is added to a batch queue
+        that flushes after self.batch_delay; subsequent references just bump the
+        counter so we never send a redundant subscribe to the server.
+        Caller must hold self.lock.
+        """
         scrip = subscription["scrip"]
         mode = subscription["mode"]
 
@@ -595,26 +613,87 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
             if self.ws_subscription_refs[scrip]["touchline_count"] == 0:
-                self.logger.info(f"First touchline subscription for {scrip}")
-                self.ws_client.subscribe_touchline(scrip)
-                self.ws_subscription_refs[scrip]["touchline_count"] = 1
-            else:
-                # Already subscribed, just increment the count
-                self.ws_subscription_refs[scrip]["touchline_count"] += 1
-                self.logger.info(
-                    f"Additional touchline subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['touchline_count']}"
-                )
+                self.logger.info(f"First touchline subscription for {scrip}, queueing for batch")
+                self._queue_subscription(scrip, "touchline")
+            self.ws_subscription_refs[scrip]["touchline_count"] += 1
+            self.logger.debug(
+                f"touchline_count for {scrip}: {self.ws_subscription_refs[scrip]['touchline_count']}"
+            )
         elif mode == Config.MODE_DEPTH:
             if self.ws_subscription_refs[scrip]["depth_count"] == 0:
-                self.logger.info(f"First depth subscription for {scrip}")
-                self.ws_client.subscribe_depth(scrip)
-                self.ws_subscription_refs[scrip]["depth_count"] = 1
-            else:
-                # Already subscribed, just increment the count
-                self.ws_subscription_refs[scrip]["depth_count"] += 1
-                self.logger.info(
-                    f"Additional depth subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['depth_count']}"
-                )
+                self.logger.info(f"First depth subscription for {scrip}, queueing for batch")
+                self._queue_subscription(scrip, "depth")
+            self.ws_subscription_refs[scrip]["depth_count"] += 1
+            self.logger.debug(
+                f"depth_count for {scrip}: {self.ws_subscription_refs[scrip]['depth_count']}"
+            )
+
+    def _queue_subscription(self, scrip: str, sub_type: str) -> None:
+        """Queue a scrip for batched subscription. Caller must hold self.lock."""
+        self.subscription_queue.append({"scrip": scrip, "type": sub_type})
+        if len(self.subscription_queue) == 1:
+            self._start_batch_timer()
+
+    def _start_batch_timer(self) -> None:
+        """(Re)start the timer that flushes queued subscriptions."""
+        if self.batch_timer:
+            self.batch_timer.cancel()
+
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Flush the queue: send one touchline and one depth message with all scrips joined by #."""
+        with self.lock:
+            self.batch_timer = None
+
+            if not self.subscription_queue:
+                return
+
+            # De-duplicate while preserving order in case the same scrip was queued twice
+            touchline_scrips: list[str] = []
+            depth_scrips: list[str] = []
+            seen_touchline: set[str] = set()
+            seen_depth: set[str] = set()
+
+            for sub in self.subscription_queue:
+                scrip = sub["scrip"]
+                if sub["type"] == "touchline":
+                    if scrip not in seen_touchline:
+                        seen_touchline.add(scrip)
+                        touchline_scrips.append(scrip)
+                else:
+                    if scrip not in seen_depth:
+                        seen_depth.add(scrip)
+                        depth_scrips.append(scrip)
+
+            self.subscription_queue.clear()
+
+            # Snapshot client; release the lock before doing network I/O
+            ws_client = self.ws_client
+            connected = self.connected
+
+        if not ws_client or not connected:
+            self.logger.warning(
+                "Skipping batch flush - WebSocket not connected; "
+                "_resubscribe_all() will handle these on reconnect"
+            )
+            return
+
+        if touchline_scrips:
+            try:
+                self.logger.info(f"Batch subscribing {len(touchline_scrips)} touchline scrips")
+                ws_client.subscribe_touchline("#".join(touchline_scrips))
+            except Exception as e:
+                self.logger.error(f"Batch touchline subscription failed: {e}")
+
+        if depth_scrips:
+            try:
+                self.logger.info(f"Batch subscribing {len(depth_scrips)} depth scrips")
+                ws_client.subscribe_depth("#".join(depth_scrips))
+            except Exception as e:
+                self.logger.error(f"Batch depth subscription failed: {e}")
 
     def _websocket_unsubscribe(self, subscription: dict) -> None:
         """Handle WebSocket unsubscription with reference counting"""
@@ -691,6 +770,14 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             f"Flattrade WebSocket connection closed: {close_status_code} - {close_msg}"
         )
         self.connected = False
+
+        # Drop pending batch items - _resubscribe_all() will rebuild subscriptions
+        # from self.subscriptions on reconnect, so anything still queued is stale
+        with self.lock:
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
 
         if self.running:
             self._schedule_reconnection()
@@ -1007,6 +1094,13 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     scrip_list = "#".join(depth_scrips)
                     self.logger.info(f"Unsubscribing from {len(depth_scrips)} depth scrips")
                     self.ws_client.unsubscribe_depth(scrip_list)
+
+                # Cancel any pending batch subscription timer - the items would
+                # subscribe to scrips we just cleared
+                if self.batch_timer:
+                    self.batch_timer.cancel()
+                    self.batch_timer = None
+                self.subscription_queue.clear()
 
                 # Clear all subscription tracking but keep WebSocket connection alive
                 subscription_count = len(self.subscriptions)
