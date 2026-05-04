@@ -182,7 +182,9 @@ class BrokerData:
             logger.info(f"Exchange not specified, defaulting to NSE for symbol {symbol}")
 
         # Determine segment based on exchange
-        if exchange in ["NSE", "BSE"]:
+        # Indexes (NSE_INDEX / BSE_INDEX) live in the CASH segment on Groww —
+        # mirrors the mapping in _process_quotes_batch.
+        if exchange in ["NSE", "BSE", "NSE_INDEX", "BSE_INDEX"]:
             segment = SEGMENT_CASH
             logger.debug(f"Using SEGMENT_CASH for exchange {exchange}")
         elif exchange in ["NFO", "BFO"]:
@@ -199,6 +201,12 @@ class BrokerData:
         elif exchange == "BFO":
             groww_exchange = EXCHANGE_BSE
             logger.debug("Mapped BFO to EXCHANGE_BSE")
+        elif exchange == "NSE_INDEX":
+            groww_exchange = EXCHANGE_NSE
+            logger.debug("Mapped NSE_INDEX to EXCHANGE_NSE")
+        elif exchange == "BSE_INDEX":
+            groww_exchange = EXCHANGE_BSE
+            logger.debug("Mapped BSE_INDEX to EXCHANGE_BSE")
         else:
             groww_exchange = exchange
             logger.debug(f"Using exchange as-is: {exchange}")
@@ -480,7 +488,7 @@ class BrokerData:
                             "high": float(candle[2]),
                             "low": float(candle[3]),
                             "close": float(candle[4]),
-                            "volume": int(candle[5]),
+                            "volume": int(candle[5]) if candle[5] is not None else 0,
                         }
                     elif isinstance(candle, dict):
                         if "timestamp" in candle:
@@ -494,7 +502,7 @@ class BrokerData:
                             "high": float(candle.get("high", 0)),
                             "low": float(candle.get("low", 0)),
                             "close": float(candle.get("close", 0)),
-                            "volume": int(candle.get("volume", 0)),
+                            "volume": int(candle.get("volume") or 0),
                         }
                     else:
                         row = {}
@@ -549,7 +557,7 @@ class BrokerData:
                             "high": float(candle[2]),
                             "low": float(candle[3]),
                             "close": float(candle[4]),
-                            "volume": int(candle[5]),
+                            "volume": int(candle[5]) if candle[5] is not None else 0,
                         }
                     else:
                         # For dictionary format candles
@@ -594,7 +602,7 @@ class BrokerData:
                             "high": float(candle.get("high", 0)),
                             "low": float(candle.get("low", 0)),
                             "close": float(candle.get("close", 0)),
-                            "volume": int(candle.get("volume", 0)),
+                            "volume": int(candle.get("volume") or 0),
                         }
 
                     # Apply market hours check (9:15 AM - 3:30 PM IST)
