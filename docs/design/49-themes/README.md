@@ -218,7 +218,7 @@ The theme store manages two distinct app modes with different visual states:
 │  ANALYZER MODE (sandbox):                                                   │
 │  • Theme changes are BLOCKED (setMode, setColor, toggleMode disabled)     │
 │  • Fixed dark purple theme via CSS class 'analyzer'                        │
-│  • Visual distinction for paper trading environment                        │
+│  • Visual distinction for sandbox trading environment                        │
 │  • Mode synced with backend via /auth/analyzer-mode                        │
 │                                                                             │
 │  Switching modes:                                                           │

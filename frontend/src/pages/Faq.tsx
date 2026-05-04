@@ -19,7 +19,14 @@ import {
 } from '@/components/ui/accordion'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet'
 import { useThemeStore } from '@/stores/themeStore'
 
 const faqData = [
@@ -77,9 +84,9 @@ const faqData = [
           'OpenAlgo integrates with TradingView (via webhooks), Amibroker (via AFL), GoCharting, ChartInk, MetaTrader, Excel, Google Sheets, Python, Node.js, Go, N8N, and any platform that can send HTTP webhooks. You can also use the REST API directly from any programming language.',
       },
       {
-        question: 'Does OpenAlgo support paper trading?',
+        question: 'Does OpenAlgo support sandbox trading?',
         answer:
-          'Yes! OpenAlgo includes an Analyzer/Sandbox mode with virtual capital of Rs. 1 Crore. This allows you to test strategies in a realistic environment with proper margin calculations, auto square-off at exchange timings, and complete isolation from live trading. Perfect for testing before going live.',
+          'Yes! OpenAlgo includes an Analyzer/Sandbox mode with sandbox capital of Rs. 1 Crore. This allows you to test strategies in a realistic environment with proper margin calculations, auto square-off at exchange timings, and complete isolation from live trading. Perfect for testing before going live.',
       },
       {
         question: 'Can I run multiple strategies simultaneously?',
@@ -147,6 +154,10 @@ export default function Faq() {
                 </Button>
               </SheetTrigger>
               <SheetContent side="left" className="w-80">
+                <SheetHeader className="sr-only">
+                  <SheetTitle>Navigation Menu</SheetTitle>
+                  <SheetDescription>Main navigation and quick access links</SheetDescription>
+                </SheetHeader>
                 <div className="flex items-center gap-2 mb-8">
                   <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
                   <span className="text-xl font-semibold">OpenAlgo</span>

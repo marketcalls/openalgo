@@ -41,7 +41,7 @@ logger = get_logger(__name__)
 
 
 class FundManager:
-    """Manages virtual funds for sandbox mode"""
+    """Manages sandbox funds for sandbox mode"""
 
     # Class-level lock for thread safety across all fund operations.
     # RLock (reentrant) is required because guarded methods call

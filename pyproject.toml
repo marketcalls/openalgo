@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "2.0.0.9"
+version = "2.0.1.0"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "aniso8601==9.0.1",
@@ -60,6 +60,7 @@ dependencies = [
   "itsdangerous==2.2.0",
   "jedi==0.19.2",
   "Jinja2==3.1.6",
+  "joserfc==1.6.4",
   "jsonschema==4.26.0",
   "jsonschema-specifications==2023.12.1",
   "jupyter-client==8.8.0",

@@ -113,7 +113,7 @@ OpenAlgo uses **6 separate databases** for isolation:
 - `db/logs.db` - Traffic and API logs
 - `db/latency.db` - Latency monitoring data
 - `db/health.db` - Health monitoring data
-- `db/sandbox.db` - Analyzer/sandbox mode (isolated virtual trading)
+- `db/sandbox.db` - Analyzer/sandbox mode (isolated sandbox trading)
 - `db/historify.duckdb` - Historical market data (DuckDB)
 
 Each database has its own initialization function in `/database/`.
@@ -290,9 +290,9 @@ Orders can flow through two modes:
 
 Approval workflow in `database/action_center_db.py` and `services/action_center_service.py`
 
-### Analyzer Mode (Paper Trading)
+### Analyzer Mode (Sandbox Trading)
 
-Separate database (`sandbox.db`) with ₹1 Crore virtual capital:
+Separate database (`sandbox.db`) with ₹1 Crore sandbox capital:
 - Realistic margin system with leverage
 - Auto square-off at exchange timings
 - Complete isolation from live trading

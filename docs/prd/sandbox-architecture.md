@@ -1,6 +1,6 @@
 # Sandbox Architecture
 
-Detailed architecture documentation for the Sandbox (Analyzer Mode) paper trading system.
+Detailed architecture documentation for the Sandbox (Analyzer Mode) sandbox trading system.
 
 ## System Overview
 
@@ -161,7 +161,7 @@ def calculate_mtm(position, current_ltp):
 
 ### 3. Fund Manager (`sandbox/fund_manager.py`)
 
-Tracks virtual capital with margin blocking/release.
+Tracks sandbox capital with margin blocking/release.
 
 **Fund Structure:**
 

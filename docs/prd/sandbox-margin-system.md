@@ -4,13 +4,13 @@ Complete documentation for margin calculation, blocking, and fund management in 
 
 ## Overview
 
-The Sandbox margin system replicates real exchange margin requirements with configurable leverage for paper trading.
+The Sandbox margin system replicates real exchange margin requirements with configurable leverage for sandbox trading.
 
 ## Fund Structure
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Virtual Account                              │
+│                     Sandbox Account                              │
 ├─────────────────────────────────────────────────────────────────┤
 │  Starting Capital      │  ₹1,00,00,000 (1 Crore)               │
 ├─────────────────────────────────────────────────────────────────┤

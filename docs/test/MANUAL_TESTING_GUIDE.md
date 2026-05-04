@@ -312,7 +312,7 @@ open http://127.0.0.1:5000
 | Test | Steps | Expected | Status |
 |------|-------|----------|--------|
 | Enable sandbox | Toggle to Analyzer mode | Mode switched | [ ] |
-| Place order | Place sandbox order | Virtual execution | [ ] |
+| Place order | Place sandbox order | Sandbox execution | [ ] |
 | Check funds | View sandbox funds | Margin deducted | [ ] |
 | Check positions | View sandbox positions | Position created | [ ] |
 | Real broker | Verify real broker unaffected | No real orders | [ ] |

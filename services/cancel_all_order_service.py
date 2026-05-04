@@ -83,7 +83,7 @@ def cancel_all_orders_with_auth(
     if "apikey" in order_request_data:
         order_request_data.pop("apikey", None)
 
-    # If in analyze mode, route to sandbox for virtual trading
+    # If in analyze mode, route to sandbox for sandbox trading
     if get_analyze_mode():
         from services.sandbox_service import sandbox_cancel_all_orders
 
@@ -196,7 +196,7 @@ def cancel_all_orders(
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         # Check if user is in semi-auto mode (cancelallorder is blocked in semi-auto)
-        # BUT allow execution in analyze/sandbox mode (virtual trading should always work)
+        # BUT allow execution in analyze/sandbox mode (sandbox trading should always work)
         from database.auth_db import get_order_mode, verify_api_key
 
         # Check analyze mode first - if in analyze mode, allow execution

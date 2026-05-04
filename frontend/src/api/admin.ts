@@ -2,9 +2,19 @@ import type {
   AddFreezeQtyRequest,
   AddHolidayRequest,
   AdminStats,
+  DiagnosticsResponse,
+  ErrorGroupsResponse,
+  ErrorsListResponse,
+  ErrorsStats,
   FreezeQty,
   Holiday,
   HolidaysResponse,
+  MCPAuditResponse,
+  MCPSettingsResponse,
+  MCPSettingsUpdateRequest,
+  MCPSettingsUpdateResponse,
+  OAuthClientsResponse,
+  SystemInfo,
   TimingsResponse,
   TodayTiming,
   UpdateFreezeQtyRequest,
@@ -151,5 +161,122 @@ export const adminApi = {
       { date }
     )
     return { date: response.data.date, timings: response.data.timings }
+  },
+
+  // ============================================================================
+  // Diagnostics APIs
+  // ============================================================================
+
+  getErrors: async (params?: {
+    limit?: number
+    level?: string
+    q?: string
+  }): Promise<ErrorsListResponse> => {
+    const search = new URLSearchParams()
+    if (params?.limit) search.set('limit', String(params.limit))
+    if (params?.level) search.set('level', params.level)
+    if (params?.q) search.set('q', params.q)
+    const qs = search.toString() ? `?${search.toString()}` : ''
+    const response = await webClient.get<ErrorsListResponse>(`/admin/api/errors${qs}`)
+    return response.data
+  },
+
+  getErrorStats: async (): Promise<ErrorsStats> => {
+    const response = await webClient.get<ErrorsStats>('/admin/api/errors/stats')
+    return response.data
+  },
+
+  getErrorGroups: async (limit = 50): Promise<ErrorGroupsResponse> => {
+    const response = await webClient.get<ErrorGroupsResponse>(
+      `/admin/api/errors/groups?limit=${limit}`
+    )
+    return response.data
+  },
+
+  getSystemInfo: async (): Promise<SystemInfo> => {
+    const response = await webClient.get<ApiResponse<SystemInfo>>('/admin/api/system')
+    if (!response.data.data) {
+      throw new Error(response.data.message || 'Failed to load system info')
+    }
+    return response.data.data
+  },
+
+  runDiagnostics: async (): Promise<DiagnosticsResponse> => {
+    const response = await webClient.post<DiagnosticsResponse>('/admin/api/system/diagnostics')
+    return response.data
+  },
+
+  /**
+   * Trigger a browser download of the system report.
+   * The server enforces filename and content-disposition; we just navigate to the URL.
+   */
+  downloadReport: (format: 'md' | 'txt' = 'md'): void => {
+    const fmt = format === 'txt' ? 'txt' : 'md'
+    window.location.href = `/admin/api/system/report?format=${fmt}`
+  },
+
+  // ============================================================================
+  // Remote MCP admin APIs
+  // ============================================================================
+
+  getOAuthClients: async (): Promise<OAuthClientsResponse> => {
+    const response = await webClient.get<OAuthClientsResponse>('/admin/api/oauth/clients')
+    return response.data
+  },
+
+  approveOAuthClient: async (clientId: string): Promise<{ status: string }> => {
+    const response = await webClient.post<{ status: string }>(
+      `/admin/api/oauth/clients/${clientId}/approve`
+    )
+    return response.data
+  },
+
+  revokeOAuthClient: async (
+    clientId: string
+  ): Promise<{ status: string; tokens_revoked: number }> => {
+    const response = await webClient.post<{ status: string; tokens_revoked: number }>(
+      `/admin/api/oauth/clients/${clientId}/revoke`,
+      { confirm: true }
+    )
+    return response.data
+  },
+
+  getMCPAudit: async (params?: {
+    limit?: number
+    tool?: string
+    scope?: string
+    outcome?: string
+  }): Promise<MCPAuditResponse> => {
+    const search = new URLSearchParams()
+    if (params?.limit) search.set('limit', String(params.limit))
+    if (params?.tool) search.set('tool', params.tool)
+    if (params?.scope) search.set('scope', params.scope)
+    if (params?.outcome) search.set('outcome', params.outcome)
+    const qs = search.toString() ? `?${search.toString()}` : ''
+    const response = await webClient.get<MCPAuditResponse>(`/admin/api/mcp/audit${qs}`)
+    return response.data
+  },
+
+  triggerMCPKillSwitch: async (): Promise<{ status: string; tokens_revoked: number }> => {
+    const response = await webClient.post<{ status: string; tokens_revoked: number }>(
+      '/admin/api/mcp/kill-switch',
+      { confirm: 'REVOKE_ALL_MCP_TOKENS' }
+    )
+    return response.data
+  },
+
+  getMCPSettings: async (): Promise<MCPSettingsResponse> => {
+    const response = await webClient.get<MCPSettingsResponse>('/admin/api/mcp/settings')
+    return response.data
+  },
+
+  updateMCPSettings: async (
+    payload: MCPSettingsUpdateRequest
+  ): Promise<MCPSettingsUpdateResponse> => {
+    const response = await webClient.put<MCPSettingsUpdateResponse>(
+      '/admin/api/mcp/settings',
+      payload
+    )
+    return response.data
   },
 }

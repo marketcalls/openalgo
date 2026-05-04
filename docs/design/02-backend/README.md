@@ -129,7 +129,7 @@ openalgo/
 │   ├── base_adapter.py         # Broker adapter base class
 │   └── app_integration.py      # Flask integration
 │
-├── sandbox/                    # Paper trading engine
+├── sandbox/                    # Sandbox trading engine
 │   ├── execution_engine.py
 │   ├── fund_manager.py
 │   └── ...
@@ -298,7 +298,7 @@ def place_order_service(data, auth_token, api_key=None):
 | Analytics | gex, ivchart, ivsmile, oiprofile, oitracker, straddle_chart, vol_surface | Options analytics tools |
 | Monitoring | log, traffic, latency, security, health | Logs, metrics, health |
 | Admin | admin, settings, telegram | Configuration |
-| Sandbox | analyzer, sandbox | Paper trading |
+| Sandbox | analyzer, sandbox | Sandbox trading |
 | Frontend | react_app, platforms | UI serving |
 
 ## Request Flow

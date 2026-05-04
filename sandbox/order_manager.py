@@ -1,6 +1,6 @@
 # sandbox/order_manager.py
 """
-Order Manager - Handles virtual order placement and validation
+Order Manager - Handles sandbox order placement and validation
 
 Features:
 - Order validation (symbol, quantity, price, etc.)
@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 
 class OrderManager:
-    """Manages virtual orders for sandbox mode"""
+    """Manages sandbox orders for sandbox mode"""
 
     def __init__(self, user_id):
         self.user_id = user_id

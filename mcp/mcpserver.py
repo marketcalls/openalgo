@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -6,15 +7,58 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from openalgo import api
 
-# Get API key and host from command line arguments
-if len(sys.argv) < 3:
-    raise ValueError("API key and host must be provided as command line arguments")
+# Two boot paths share this module:
+#
+# 1. Stdio (legacy / local) — Claude Desktop, Cursor, Windsurf spawn this
+#    file as `python -m mcp.mcpserver <api_key> <host>`. argv[1] and argv[2]
+#    must be present. The original MCP integration lives here unchanged.
+#
+# 2. HTTP / SSE — blueprints/mcp_http.py imports this module to access the
+#    `mcp` FastMCP instance (and every @mcp.tool decorated function), then
+#    calls init_for_http(api_key, host) once per process to wire the SDK
+#    client. The Flask app sets OPENALGO_MCP_HTTP_BOOT=1 *before* importing
+#    so the argv check is bypassed.
+#
+# The branching is at module scope rather than inside a function so the
+# FastMCP `mcp = FastMCP(...)` instance and every `@mcp.tool` decorator
+# remain top-level (FastMCP relies on import-time registration).
 
-api_key = sys.argv[1]
-host = sys.argv[2]
+if os.environ.get("OPENALGO_MCP_HTTP_BOOT") == "1":
+    # HTTP transport — Flask sets the env var before import. The SDK
+    # client is wired by init_for_http() right after import. Stdio
+    # users never hit this branch.
+    api_key: str | None = None
+    host: str | None = None
+    client = None
+else:
+    # === Original stdio behavior — preserved verbatim ===
+    # Existing Claude Desktop / Cursor / Windsurf integrations launch
+    # this file as `python -m mcp.mcpserver <api_key> <host>` and rely
+    # on this exact error path on misconfiguration. Do NOT change the
+    # check, the order, or the error message here.
+    if len(sys.argv) < 3:
+        raise ValueError("API key and host must be provided as command line arguments")
 
-# Initialize OpenAlgo client with provided arguments
-client = api(api_key=api_key, host=host)
+    api_key = sys.argv[1]
+    host = sys.argv[2]
+
+    # Initialize OpenAlgo client with provided arguments
+    client = api(api_key=api_key, host=host)
+
+
+def init_for_http(api_key_value: str, host_value: str) -> None:
+    """Wire the SDK client when running under the HTTP transport.
+
+    Called once from blueprints/mcp_http.py after the Flask app has
+    determined the admin's API key and the local OpenAlgo loopback URL.
+    Idempotent — safe to call repeatedly with the same values; later
+    calls overwrite the global so a restarted broker session can rotate
+    the underlying SDK client without restarting Gunicorn.
+    """
+    global api_key, host, client
+    api_key = api_key_value
+    host = host_value
+    client = api(api_key=api_key_value, host=host_value)
 
 # Default strategy name for all order-related calls originating from the MCP server.
 # Surfaced in OpenAlgo logs and analyzer views so MCP-driven trades are identifiable.

@@ -112,7 +112,7 @@ Located in `db/` directory:
 |------|---------|-------------|
 | `openalgo.db` | User data, orders | High |
 | `logs.db` | API logs | Medium |
-| `sandbox.db` | Paper trading | Low |
+| `sandbox.db` | Sandbox trading | Low |
 | `latency.db` | Performance | Low |
 | `historify.duckdb` | Price history | Low |
 

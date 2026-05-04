@@ -65,7 +65,7 @@ Displays all API request/response pairs for order operations.
 
 **Route:** `/analyzer-logs`
 
-Logs from sandbox/paper trading mode.
+Logs from sandbox/sandbox trading mode.
 
 ### 3. Application Logs
 

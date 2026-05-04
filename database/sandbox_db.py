@@ -52,7 +52,7 @@ Base.query = db_session.query_property()
 
 
 class SandboxOrders(Base):
-    """Sandbox orders table - all virtual orders"""
+    """Sandbox orders table - all sandbox orders"""
 
     __tablename__ = "sandbox_orders"
 
