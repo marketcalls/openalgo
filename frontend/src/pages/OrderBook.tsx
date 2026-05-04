@@ -840,6 +840,27 @@ export default function OrderBook() {
 
           {/* Editable Fields - Based on Order Type */}
           <div className="grid gap-4 py-2">
+            {/* Quantity field - shown for all modifiable order types (LIMIT, SL, SL-M) */}
+            {modifyForm.pricetype !== 'MARKET' && (
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="quantity" className="text-right">
+                  Quantity
+                </Label>
+                <Input
+                  id="quantity"
+                  type="number"
+                  step={isCrypto ? 'any' : '1'}
+                  min="0"
+                  value={modifyForm.quantity}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    const parsed = isCrypto ? parseFloat(raw) : parseInt(raw, 10)
+                    setModifyForm({ ...modifyForm, quantity: Number.isFinite(parsed) ? parsed : 0 })
+                  }}
+                  className="col-span-3"
+                />
+              </div>
+            )}
             {/* Price field - shown for LIMIT and SL orders */}
             {(modifyForm.pricetype === 'LIMIT' || modifyForm.pricetype === 'SL') && (
               <div className="grid grid-cols-4 items-center gap-4">
