@@ -29,10 +29,11 @@ import {
 } from '@/components/ui/table'
 import { showToast } from '@/utils/toast'
 
-type CopyFormat = 'exchange_symbol' | 'symbol' | 'token' | 'broker_symbol'
+type CopyFormat = 'exchange_symbol' | 'symbol_exchange' | 'symbol' | 'token' | 'broker_symbol'
 
 const COPY_FORMAT_OPTIONS: { value: CopyFormat; label: string; example: string }[] = [
   { value: 'exchange_symbol', label: 'EXCHANGE:SYMBOL', example: 'NSE:RELIANCE' },
+  { value: 'symbol_exchange', label: 'SYMBOL,EXCHANGE (Historify)', example: 'RELIANCE,NSE' },
   { value: 'symbol', label: 'SYMBOL only', example: 'RELIANCE' },
   { value: 'broker_symbol', label: 'Broker symbol', example: 'RELIANCE-EQ' },
   { value: 'token', label: 'Token', example: '2885' },
@@ -234,6 +235,8 @@ export default function Search() {
     switch (format) {
       case 'exchange_symbol':
         return `${r.exchange}:${r.symbol}`
+      case 'symbol_exchange':
+        return `${r.symbol},${r.exchange}`
       case 'symbol':
         return r.symbol
       case 'broker_symbol':
