@@ -993,6 +993,11 @@ class WebSocketProxy:
         symbols = data.get("symbols") or []  # Handle array of symbols
         raw_mode = data.get("mode", "Quote")  # Accepts 1/2/3 or LTP/Quote/Depth (any case)
         depth_level = data.get("depth", 5)  # Default to 5 levels
+        # Optional request_id (issue #1376): when the client supplies one, we
+        # echo it back in the response so the client can correlate this ack
+        # with the originating request and learn per-symbol success/failure
+        # rather than guessing from tick activity.
+        request_id = data.get("request_id")
 
         # Normalize mode through the single source of truth. Previously the
         # in-handler mapping was Title-Case-only and silently passed through
@@ -1082,16 +1087,16 @@ class WebSocketProxy:
                 )
 
         # Send combined response
-        await self.send_message(
-            client_id,
-            {
-                "type": "subscribe",
-                "status": "success" if subscription_success else "partial",
-                "subscriptions": subscription_responses,
-                "message": "Subscription processing complete",
-                "broker": broker_name,
-            },
-        )
+        response = {
+            "type": "subscribe",
+            "status": "success" if subscription_success else "partial",
+            "subscriptions": subscription_responses,
+            "message": "Subscription processing complete",
+            "broker": broker_name,
+        }
+        if request_id is not None:
+            response["request_id"] = request_id
+        await self.send_message(client_id, response)
 
     async def unsubscribe_client(self, client_id, data):
         """
@@ -1113,6 +1118,9 @@ class WebSocketProxy:
 
         # Get unsubscription parameters for specific symbols
         symbols = data.get("symbols") or []
+        # Optional request_id (issue #1376) — echoed in the response so callers
+        # can correlate this ack with the originating unsubscribe request.
+        request_id = data.get("request_id")
 
         # Handle single symbol format
         if not symbols and not is_unsubscribe_all and (data.get("symbol") and data.get("exchange")):
@@ -1297,17 +1305,17 @@ class WebSocketProxy:
         elif len(failed_unsubscriptions) > 0 and len(successful_unsubscriptions) == 0:
             status = "error"
 
-        await self.send_message(
-            client_id,
-            {
-                "type": "unsubscribe",
-                "status": status,
-                "message": "Unsubscription processing complete",
-                "successful": successful_unsubscriptions,
-                "failed": failed_unsubscriptions,
-                "broker": broker_name,
-            },
-        )
+        unsub_response = {
+            "type": "unsubscribe",
+            "status": status,
+            "message": "Unsubscription processing complete",
+            "successful": successful_unsubscriptions,
+            "failed": failed_unsubscriptions,
+            "broker": broker_name,
+        }
+        if request_id is not None:
+            unsub_response["request_id"] = request_id
+        await self.send_message(client_id, unsub_response)
 
     async def send_message(self, client_id, message):
         """
