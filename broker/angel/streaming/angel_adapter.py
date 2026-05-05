@@ -48,6 +48,16 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._reconnect_timer = None
         self._reconnecting = False
 
+        # Subscribe coalescing (issue #1352) — mirrors zerodha_adapter's
+        # subscription_queue + batch_timer pattern. Per-symbol subscribe()
+        # calls append to the queue and arm a 500ms timer; the timer drains
+        # the queue, groups by (mode, exchangeType), and emits one
+        # ws_client.subscribe() call per group. 1000 rapid subscribes
+        # collapse into a handful of broker-side messages.
+        self.subscription_queue: list[dict] = []
+        self.batch_timer: threading.Timer | None = None
+        self.batch_delay = 0.5  # seconds — matches zerodha/dhan/flattrade fleet pattern
+
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
     ) -> None:
@@ -275,6 +285,13 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer = None
                 self.logger.debug("Cancelled pending reconnection timer")
 
+            # Cancel any pending subscribe-batch flush so the timer thread
+            # cannot fire after the WebSocket has been closed.
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+
         try:
             if hasattr(self, "ws_client") and self.ws_client:
                 try:
@@ -387,12 +404,26 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "is_fallback": is_fallback,
             }
 
-        # Subscribe if connected
+        # Queue for batched subscribe (issue #1352). The actual
+        # ws_client.subscribe() call is emitted by _process_batch_subscriptions
+        # after a brief coalescing window so bursty per-symbol startups
+        # collapse into one broker-side message per (mode, exchangeType).
         if self.connected and self.ws_client:
             try:
-                self.ws_client.subscribe(correlation_id, mode, token_list)
+                with self.lock:
+                    self.subscription_queue.append(
+                        {
+                            "token": token,
+                            "mode": mode,
+                            "exchange_type": AngelExchangeMapper.get_exchange_type(brexchange),
+                            "symbol": symbol,
+                            "exchange": exchange,
+                        }
+                    )
+                    if len(self.subscription_queue) == 1:
+                        self._start_batch_timer()
             except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                self.logger.error(f"Error queuing subscription for {symbol}.{exchange}: {e}")
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
         # Return success with capability info
@@ -455,21 +486,107 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
         )
 
+    def _start_batch_timer(self) -> None:
+        """Arm the coalescing timer that drains subscription_queue.
+
+        Called from within the lock when a fresh subscription enters
+        an empty queue. Subsequent enqueues during the window join the
+        same flush.
+        """
+        if self.batch_timer:
+            self.batch_timer.cancel()
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Drain the queue and emit one ws_client.subscribe() per
+        (mode, exchangeType) group. Collapses N per-symbol subscribes
+        into ceil(modes × exchange_types) broker-side messages.
+        """
+        with self.lock:
+            if not self.subscription_queue:
+                self.batch_timer = None
+                return
+            pending = list(self.subscription_queue)
+            self.subscription_queue.clear()
+            self.batch_timer = None
+
+        if not self.connected or not self.ws_client:
+            self.logger.warning(
+                f"Dropping batch of {len(pending)} subscriptions — not connected"
+            )
+            return
+
+        # Group by mode (broker requires separate subscribe per mode), then by
+        # exchangeType (the SmartConnect token_list shape allows multiple
+        # exchange-type groups per call but tokens within a group share an
+        # exchange).
+        by_mode: dict[int, dict[int, list]] = {}
+        for sub in pending:
+            mode = sub["mode"]
+            exch_type = sub["exchange_type"]
+            by_mode.setdefault(mode, {}).setdefault(exch_type, []).append(sub["token"])
+
+        for mode, exch_groups in by_mode.items():
+            token_list = [
+                {"exchangeType": exch_type, "tokens": tokens}
+                for exch_type, tokens in exch_groups.items()
+            ]
+            total_tokens = sum(len(tokens) for tokens in exch_groups.values())
+            # Synthetic batch correlation_id — broker just echoes it back; we
+            # keep per-symbol correlation_ids in self.subscriptions for the
+            # resubscribe-on-open path elsewhere.
+            correlation_id = f"batch_{int(time.time() * 1000)}_{mode}"
+            try:
+                self.ws_client.subscribe(correlation_id, mode, token_list)
+                self.logger.info(
+                    f"Batch subscribed {total_tokens} tokens in mode {mode} "
+                    f"across {len(exch_groups)} exchange-type group(s)"
+                )
+            except Exception as e:
+                self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
+
     def _on_open(self, wsapp) -> None:
         """Callback when connection is established"""
         self.logger.info("Connected to Angel WebSocket")
         self.connected = True
 
-        # Resubscribe to existing subscriptions if reconnecting
+        # Resubscribe to existing subscriptions if reconnecting.
+        # Group by (mode, exchangeType) so a 1000-symbol resubscribe storm
+        # also collapses into a small number of broker messages instead of
+        # 1000 sequential ones.
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    self.ws_client.subscribe(correlation_id, sub["mode"], sub["token_list"])
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+            if not self.subscriptions:
+                return
+            by_mode: dict[int, dict[int, list]] = {}
+            for sub in self.subscriptions.values():
+                mode = sub["mode"]
+                # token_list[0] always has exchangeType + tokens=[token] today
+                first = sub["token_list"][0] if sub.get("token_list") else None
+                if not first:
+                    continue
+                exch_type = first.get("exchangeType")
+                token = sub.get("token")
+                if exch_type is None or token is None:
+                    continue
+                by_mode.setdefault(mode, {}).setdefault(exch_type, []).append(token)
+
+        for mode, exch_groups in by_mode.items():
+            token_list = [
+                {"exchangeType": exch_type, "tokens": tokens}
+                for exch_type, tokens in exch_groups.items()
+            ]
+            total_tokens = sum(len(tokens) for tokens in exch_groups.values())
+            correlation_id = f"resub_{int(time.time() * 1000)}_{mode}"
+            try:
+                self.ws_client.subscribe(correlation_id, mode, token_list)
+                self.logger.info(
+                    f"Resubscribed {total_tokens} tokens in mode {mode} "
+                    f"across {len(exch_groups)} exchange-type group(s)"
+                )
+            except Exception as e:
+                self.logger.error(f"Error during batched resubscribe in mode {mode}: {e}")
 
     def _on_error(self, error_type, error_msg=None) -> None:
         """
