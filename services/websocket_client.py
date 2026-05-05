@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from queue import Queue
 from typing import Any, Dict, List, Optional
@@ -73,6 +74,13 @@ class WebSocketClient:
         # Market data cache
         self.market_data_cache = {}
 
+        # Pending request acks — issue #1376. Maps request_id -> asyncio.Future.
+        # Populated by subscribe()/unsubscribe() right before the WS send,
+        # resolved by _handle_message() when a matching {type,request_id}
+        # response arrives. Both producer and consumer run inside the
+        # asyncio loop thread, so no extra locking is needed.
+        self._pending_acks: dict[str, asyncio.Future] = {}
+
     def connect(self) -> bool:
         """
         Connect to the WebSocket server and authenticate
@@ -134,54 +142,105 @@ class WebSocketClient:
         self.authenticated = False
         logger.info("Disconnected from WebSocket server")
 
+    async def _send_and_await_ack(
+        self, message: dict, request_id: str, timeout: float
+    ) -> dict:
+        """Send a message and await the proxy's matching response.
+
+        Runs inside the asyncio loop thread (called via run_coroutine_threadsafe).
+        Registers a future under request_id, sends the JSON, then awaits the
+        future — which _handle_message() resolves when the proxy's response
+        arrives carrying the same request_id.
+        """
+        fut: asyncio.Future = self.loop.create_future()
+        self._pending_acks[request_id] = fut
+        try:
+            await self.ws.send(json.dumps(message))
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            self._pending_acks.pop(request_id, None)
+
     def subscribe(self, symbols: list[dict[str, str]], mode: str = "Quote") -> dict[str, Any]:
         """
-        Subscribe to market data for symbols
+        Subscribe to market data for symbols.
+
+        Now awaits the proxy's per-symbol ack (issue #1376) so partial
+        failures (invalid tokens, broker capacity, expired F&O strikes)
+        surface to the caller rather than being silently swallowed.
+        ``active_subscriptions`` is updated only for symbols the broker
+        actually accepted.
 
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
             mode: Subscription mode - "LTP", "Quote", or "Depth"
 
         Returns:
-            Dict with subscription status
+            Dict with overall ``status`` ("success" / "partial" / "error"),
+            a per-symbol ``subscriptions`` list each carrying its own
+            status, and the originating ``mode``.
         """
         if not self.connected or not self.authenticated:
             return {"status": "error", "message": "Not connected or authenticated"}
+        if not self.loop or not self.ws:
+            return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
-            subscription_msg = {"action": "subscribe", "symbols": symbols, "mode": mode}
-
-            # Send subscription request
-            if self.loop and self.ws:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.ws.send(json.dumps(subscription_msg)), self.loop
-                )
-                future.result(timeout=5)
-
-                # Track subscriptions
-                with self.lock:
-                    for symbol_info in symbols:
-                        key = f"{symbol_info['exchange']}:{symbol_info['symbol']}"
-                        if key not in self.active_subscriptions:
-                            self.active_subscriptions[key] = set()
-                        self.active_subscriptions[key].add(mode)
-
-                return {
-                    "status": "success",
-                    "message": f"Subscribed to {len(symbols)} symbols",
-                    "symbols": symbols,
-                    "mode": mode,
-                }
-            else:
-                return {"status": "error", "message": "WebSocket connection not available"}
-
+            request_id = str(uuid.uuid4())
+            subscription_msg = {
+                "action": "subscribe",
+                "symbols": symbols,
+                "mode": mode,
+                "request_id": request_id,
+            }
+            future = asyncio.run_coroutine_threadsafe(
+                self._send_and_await_ack(subscription_msg, request_id, timeout=10),
+                self.loop,
+            )
+            # Outer timeout slightly longer than the inner ack timeout so the
+            # asyncio.wait_for fires first and produces a clean error.
+            ack = future.result(timeout=12)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                f"Subscribe timed out waiting for proxy ack (mode={mode}, "
+                f"symbols={len(symbols)})"
+            )
+            return {
+                "status": "error",
+                "message": "Timed out waiting for proxy subscribe response",
+                "mode": mode,
+            }
         except Exception as e:
             logger.exception(f"Error subscribing to symbols: {e}")
             return {"status": "error", "message": str(e)}
 
+        # Mark only the symbols the proxy/broker actually accepted.
+        per_symbol = ack.get("subscriptions", []) or []
+        with self.lock:
+            for entry in per_symbol:
+                if entry.get("status") != "success":
+                    continue
+                sym = entry.get("symbol")
+                exch = entry.get("exchange")
+                if not sym or not exch:
+                    continue
+                key = f"{exch}:{sym}"
+                if key not in self.active_subscriptions:
+                    self.active_subscriptions[key] = set()
+                self.active_subscriptions[key].add(mode)
+
+        return {
+            "status": ack.get("status", "success"),
+            "message": ack.get("message", f"Subscribed to {len(symbols)} symbols"),
+            "subscriptions": per_symbol,
+            "broker": ack.get("broker"),
+            "mode": mode,
+        }
+
     def unsubscribe(self, symbols: list[dict[str, str]], mode: str = "Quote") -> dict[str, Any]:
         """
-        Unsubscribe from market data
+        Unsubscribe from market data. Awaits the proxy's ack (issue #1376) so
+        callers see real per-symbol success/failure instead of an unconditional
+        "success" returned the moment bytes leave the local socket.
 
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
@@ -192,38 +251,58 @@ class WebSocketClient:
         """
         if not self.connected or not self.authenticated:
             return {"status": "error", "message": "Not connected or authenticated"}
+        if not self.loop or not self.ws:
+            return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
-            unsubscription_msg = {"action": "unsubscribe", "symbols": symbols, "mode": mode}
-
-            # Send unsubscription request
-            if self.loop and self.ws:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.ws.send(json.dumps(unsubscription_msg)), self.loop
-                )
-                future.result(timeout=5)
-
-                # Update subscription tracking
-                with self.lock:
-                    for symbol_info in symbols:
-                        key = f"{symbol_info['exchange']}:{symbol_info['symbol']}"
-                        if key in self.active_subscriptions:
-                            self.active_subscriptions[key].discard(mode)
-                            if not self.active_subscriptions[key]:
-                                del self.active_subscriptions[key]
-
-                return {
-                    "status": "success",
-                    "message": f"Unsubscribed from {len(symbols)} symbols",
-                    "symbols": symbols,
-                    "mode": mode,
-                }
-            else:
-                return {"status": "error", "message": "WebSocket connection not available"}
-
+            request_id = str(uuid.uuid4())
+            unsubscription_msg = {
+                "action": "unsubscribe",
+                "symbols": symbols,
+                "mode": mode,
+                "request_id": request_id,
+            }
+            future = asyncio.run_coroutine_threadsafe(
+                self._send_and_await_ack(unsubscription_msg, request_id, timeout=10),
+                self.loop,
+            )
+            ack = future.result(timeout=12)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                f"Unsubscribe timed out waiting for proxy ack (mode={mode}, "
+                f"symbols={len(symbols)})"
+            )
+            return {
+                "status": "error",
+                "message": "Timed out waiting for proxy unsubscribe response",
+                "mode": mode,
+            }
         except Exception as e:
             logger.exception(f"Error unsubscribing from symbols: {e}")
             return {"status": "error", "message": str(e)}
+
+        # Update local tracking only for symbols the proxy confirmed.
+        successful = ack.get("successful", []) or []
+        with self.lock:
+            for entry in successful:
+                sym = entry.get("symbol")
+                exch = entry.get("exchange")
+                if not sym or not exch:
+                    continue
+                key = f"{exch}:{sym}"
+                if key in self.active_subscriptions:
+                    self.active_subscriptions[key].discard(mode)
+                    if not self.active_subscriptions[key]:
+                        del self.active_subscriptions[key]
+
+        return {
+            "status": ack.get("status", "success"),
+            "message": ack.get("message", f"Unsubscribed from {len(symbols)} symbols"),
+            "successful": successful,
+            "failed": ack.get("failed", []),
+            "broker": ack.get("broker"),
+            "mode": mode,
+        }
 
     def unsubscribe_all(self) -> dict[str, Any]:
         """Unsubscribe from all symbols"""
@@ -419,6 +498,14 @@ class WebSocketClient:
 
             # Handle subscription responses
             elif msg_type == "subscribe":
+                # Resolve the pending ack future for the originating request, if any
+                # (issue #1376 — callers waiting on subscribe() will unblock here).
+                rid = data.get("request_id")
+                if rid:
+                    fut = self._pending_acks.get(rid)
+                    if fut is not None and not fut.done():
+                        fut.set_result(data)
+                # Generic subscribe-event callbacks still fire (backward compat).
                 for callback in self.callbacks["subscribe"]:
                     try:
                         callback(data)
@@ -427,6 +514,11 @@ class WebSocketClient:
 
             # Handle unsubscription responses
             elif msg_type == "unsubscribe":
+                rid = data.get("request_id")
+                if rid:
+                    fut = self._pending_acks.get(rid)
+                    if fut is not None and not fut.done():
+                        fut.set_result(data)
                 for callback in self.callbacks["unsubscribe"]:
                     try:
                         callback(data)
