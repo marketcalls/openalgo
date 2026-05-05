@@ -25,12 +25,10 @@ from .shoonya_websocket import ShoonyaWebSocket
 
 
 # Configuration constants
-# Phase 7: reconnect timings tunable via env vars per issue #1101.
-# Defaults preserve Shoonya's known-good behavior.
 class Config:
-    MAX_RECONNECT_ATTEMPTS = int(os.getenv("WS_RECONNECT_MAX_TRIES", "10"))
-    BASE_RECONNECT_DELAY = int(os.getenv("WS_RECONNECT_BASE_DELAY", "5"))
-    MAX_RECONNECT_DELAY = int(os.getenv("WS_RECONNECT_MAX_DELAY", "60"))
+    MAX_RECONNECT_ATTEMPTS = 10
+    BASE_RECONNECT_DELAY = 5
+    MAX_RECONNECT_DELAY = 60
     CACHE_COMPLETENESS_THRESHOLD = 0.3
     WEBSOCKET_TIMEOUT = 30
 
@@ -301,12 +299,18 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Subscription batch debounce — coalesce rapid subscribe()/unsubscribe()
         # calls into a single batched WS message. Pending entries are
         # (scrip, ws_call) tuples where ws_call is "touchline" or "depth".
+        # Leading-edge debounce: the FIRST call after a quiet period flushes
+        # immediately (no debounce wait), so a single-symbol UI click pays
+        # ~0ms adapter overhead. Subsequent calls within `_batch_delay` of
+        # the last flush wait it out so they coalesce — that's how the
+        # /optionchain 42-symbol burst still hits a single WS frame.
         self._sub_queue: list[tuple[str, str]] = []
         self._unsub_queue: list[tuple[str, str]] = []
         self._sub_batch_timer: threading.Timer | None = None
         self._unsub_batch_timer: threading.Timer | None = None
-        # Phase 7: tunable via env var per issue #1101
-        self._batch_delay = float(os.getenv("WS_BATCH_DEBOUNCE_DELAY", "0.5"))
+        self._last_sub_flush_at: float = 0.0
+        self._last_unsub_flush_at: float = 0.0
+        self._batch_delay = 0.5
 
     def _setup_normalizers(self):
         """Initialize data normalizers"""
@@ -618,12 +622,16 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _websocket_subscribe(self, subscription: dict) -> None:
         """Update ref counts and enqueue scrip into the subscription batch.
-        Batched WS sends are flushed by _flush_subscription_batch on a short
-        debounce timer, then chunked further by the WS layer."""
+        Leading-edge dispatch: if it's been at least `_batch_delay` since the
+        last flush, send the batch immediately so a single-symbol click pays
+        ~0ms of adapter overhead. Otherwise schedule a flush for the end of
+        the current debounce window so a burst of calls coalesces into one
+        WS frame."""
         scrip = subscription["scrip"]
         mode = subscription["mode"]
 
         ws_call = None
+        flush_now = False
         with self.lock:
             if scrip not in self.ws_subscription_refs:
                 self.ws_subscription_refs[scrip] = {"touchline_count": 0, "depth_count": 0}
@@ -639,27 +647,53 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             if ws_call:
                 self._sub_queue.append((scrip, ws_call))
-                self._start_sub_batch_timer_locked()
+                flush_now = self._schedule_sub_flush_locked()
 
-    def _start_sub_batch_timer_locked(self) -> None:
-        """Start (or restart) the subscribe-batch timer. Caller must hold self.lock."""
-        if self._sub_batch_timer:
-            self._sub_batch_timer.cancel()
-        self._sub_batch_timer = threading.Timer(
-            self._batch_delay, self._flush_subscription_batch
-        )
-        self._sub_batch_timer.daemon = True
-        self._sub_batch_timer.start()
+        if flush_now:
+            # Outside the lock — _flush_subscription_batch reacquires it.
+            self._flush_subscription_batch()
 
-    def _start_unsub_batch_timer_locked(self) -> None:
-        """Start (or restart) the unsubscribe-batch timer. Caller must hold self.lock."""
-        if self._unsub_batch_timer:
-            self._unsub_batch_timer.cancel()
-        self._unsub_batch_timer = threading.Timer(
-            self._batch_delay, self._flush_unsubscription_batch
-        )
-        self._unsub_batch_timer.daemon = True
-        self._unsub_batch_timer.start()
+    def _schedule_sub_flush_locked(self) -> bool:
+        """Decide whether to flush the subscribe queue now (leading edge) or
+        schedule a timer for the end of the current debounce window.
+        Caller must hold self.lock. Returns True if the caller should call
+        _flush_subscription_batch synchronously after releasing the lock."""
+        elapsed = time.time() - self._last_sub_flush_at
+        if elapsed >= self._batch_delay:
+            # Quiet window — flush immediately. Mark the time now so any
+            # racing call within _batch_delay schedules a timer instead.
+            self._last_sub_flush_at = time.time()
+            if self._sub_batch_timer:
+                self._sub_batch_timer.cancel()
+                self._sub_batch_timer = None
+            return True
+        # In the debounce window — ensure a timer is scheduled to flush
+        # at the end of it. Don't restart an already-running timer (that
+        # would push the deadline back indefinitely under sustained load).
+        if self._sub_batch_timer is None:
+            delay = max(0.0, self._batch_delay - elapsed)
+            self._sub_batch_timer = threading.Timer(delay, self._flush_subscription_batch)
+            self._sub_batch_timer.daemon = True
+            self._sub_batch_timer.start()
+        return False
+
+    def _schedule_unsub_flush_locked(self) -> bool:
+        """Mirror of _schedule_sub_flush_locked for the unsubscribe queue."""
+        elapsed = time.time() - self._last_unsub_flush_at
+        if elapsed >= self._batch_delay:
+            self._last_unsub_flush_at = time.time()
+            if self._unsub_batch_timer:
+                self._unsub_batch_timer.cancel()
+                self._unsub_batch_timer = None
+            return True
+        if self._unsub_batch_timer is None:
+            delay = max(0.0, self._batch_delay - elapsed)
+            self._unsub_batch_timer = threading.Timer(
+                delay, self._flush_unsubscription_batch
+            )
+            self._unsub_batch_timer.daemon = True
+            self._unsub_batch_timer.start()
+        return False
 
     def _flush_subscription_batch(self) -> None:
         """Drain _sub_queue, group by ws_call type, and hand off to the WS
@@ -670,6 +704,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return
             queue_snapshot = self._sub_queue
             self._sub_queue = []
+            self._last_sub_flush_at = time.time()
             ws = self.ws_client
 
         if not ws:
@@ -713,11 +748,11 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _websocket_unsubscribe(self, subscription: dict) -> None:
         """Update ref counts and enqueue scrip into the unsubscribe batch.
-        Actual WS sends are flushed by _flush_unsubscription_batch on a short
-        debounce timer."""
+        Same leading-edge dispatch as _websocket_subscribe."""
         scrip = subscription["scrip"]
         mode = subscription["mode"]
 
+        flush_now = False
         with self.lock:
             if scrip not in self.ws_subscription_refs:
                 return
@@ -745,7 +780,10 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             if ws_call:
                 self._unsub_queue.append((scrip, ws_call))
-                self._start_unsub_batch_timer_locked()
+                flush_now = self._schedule_unsub_flush_locked()
+
+        if flush_now:
+            self._flush_unsubscription_batch()
 
     def _flush_unsubscription_batch(self) -> None:
         """Drain _unsub_queue and hand off to the WS-layer batched API."""
@@ -755,6 +793,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return
             queue_snapshot = self._unsub_queue
             self._unsub_queue = []
+            self._last_unsub_flush_at = time.time()
             ws = self.ws_client
 
         if not ws:

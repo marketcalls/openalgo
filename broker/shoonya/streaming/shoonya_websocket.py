@@ -5,7 +5,6 @@ Handles connection to Shoonya's market data streaming API
 
 import json
 import logging
-import os
 import threading
 import time
 from collections import deque
@@ -20,32 +19,29 @@ class ShoonyaWebSocket:
 
     # Connection constants
     WS_URL = "wss://api.shoonya.com/NorenWSAPI/"
-    # Phase 7: keepalive/reconnect timings are tunable via env vars
-    # (issue #1101). Defaults preserve Shoonya's known-good behavior.
-    CONNECTION_TIMEOUT = int(os.getenv("WS_CONNECTION_TIMEOUT", "15"))
+    CONNECTION_TIMEOUT = 15
     THREAD_JOIN_TIMEOUT = 5
 
-    # Heartbeat constants
-    HEARTBEAT_INTERVAL = int(os.getenv("WS_APP_HEARTBEAT_INTERVAL", "30"))
-    HEARTBEAT_TIMEOUT = int(os.getenv("WS_DATA_TIMEOUT", "120"))
-    PING_INTERVAL = int(os.getenv("WS_PING_INTERVAL", "30"))
-    PING_TIMEOUT = int(os.getenv("WS_PING_TIMEOUT", "10"))
-    # websocket-client strictly requires ping_interval > ping_timeout
-    # (ValueError: "Ensure ping_interval > ping_timeout"). If a deployment
-    # has inherited values from the proxy server's WS config (which is
-    # tolerated by the `websockets` library used there), bump interval
-    # above timeout so Shoonya doesn't fail to connect. We add 5s headroom
-    # so there's a meaningful pong-wait window.
-    if PING_INTERVAL <= PING_TIMEOUT:
-        PING_INTERVAL = PING_TIMEOUT + 5
+    # Heartbeat constants. websocket-client requires PING_INTERVAL strictly
+    # greater than PING_TIMEOUT, so they are pinned here rather than read
+    # from the platform-wide WS_PING_* env vars (which the proxy server
+    # tolerates being equal under the `websockets` library).
+    HEARTBEAT_INTERVAL = 30
+    HEARTBEAT_TIMEOUT = 120
+    PING_INTERVAL = 30
+    PING_TIMEOUT = 10
     HEARTBEAT_JOIN_TIMEOUT = 3
 
     # Subscription batching — Shoonya supports '#'-separated scrip lists in
     # a single message; chunk large lists so each WS send stays small and
     # add a small delay between chunks to avoid server-side rate limits.
-    MAX_SCRIPS_PER_BATCH = int(os.getenv("WS_MAX_SCRIPS_PER_BATCH", "100"))
-    SUBSCRIPTION_DELAY = float(os.getenv("WS_SUBSCRIPTION_DELAY", "0.5"))
-    SUBSCRIPTION_RETRY_DELAY = float(os.getenv("WS_SUBSCRIPTION_RETRY_DELAY", "2.0"))
+    # Empirically Shoonya tolerates much faster pacing than the original
+    # 0.5s/2.0s pair; 100ms / 500ms keeps headroom for very large bursts
+    # and is invisible to single-symbol UI clicks (which skip the delay
+    # entirely via the `if has_more` guard around the wait).
+    MAX_SCRIPS_PER_BATCH = 100
+    SUBSCRIPTION_DELAY = 0.1
+    SUBSCRIPTION_RETRY_DELAY = 0.5
 
     # Message types (OAuth WebSocket API)
     MSG_TYPE_CONNECT = "a"
