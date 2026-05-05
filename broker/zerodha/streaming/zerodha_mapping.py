@@ -30,6 +30,7 @@ class ZerodhaExchangeMapper:
         "NCO": "NCO",
         "NSE_INDEX": "NSE_INDEX",
         "BSE_INDEX": "BSE_INDEX",
+        "MCX_INDEX": "MCX_INDEX",
         "GLOBAL_INDEX": "GLOBAL",
     }
 

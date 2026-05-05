@@ -1570,11 +1570,12 @@ class WebSocketProxy:
                 remaining = parts[:-1]  # everything except mode
 
                 # Detect two-segment exchange prefixes (NSE_INDEX, BSE_INDEX,
-                # GLOBAL_INDEX, NSEIX_INDEX). Add new index/multi-segment
+                # MCX_INDEX, GLOBAL_INDEX, NSEIX_INDEX). Add new index/multi-segment
                 # exchanges here when introducing them.
                 _MULTI_SEGMENT_EXCHANGE_PREFIXES = (
                     ("NSE", "INDEX"),
                     ("BSE", "INDEX"),
+                    ("MCX", "INDEX"),
                     ("GLOBAL", "INDEX"),
                 )
                 if len(remaining) >= 2 and (remaining[0], remaining[1]) in _MULTI_SEGMENT_EXCHANGE_PREFIXES:
