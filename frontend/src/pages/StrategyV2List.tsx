@@ -11,6 +11,16 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -38,6 +48,7 @@ const STATE_BADGE_CLASS: Record<string, string> = {
 export default function StrategyV2List() {
   const [rows, setRows] = useState<StrategyV2[]>([])
   const [loading, setLoading] = useState(true)
+  const [deleteTarget, setDeleteTarget] = useState<StrategyV2 | null>(null)
   const navigate = useNavigate()
 
   const refresh = async () => {
@@ -67,12 +78,18 @@ export default function StrategyV2List() {
     }
   }
 
-  const onDelete = async (s: StrategyV2) => {
+  const onDelete = (s: StrategyV2) => {
     if (s.is_active) {
       toast.error('Disable the strategy before deleting')
       return
     }
-    if (!confirm(`Delete strategy "${s.name}"? This cannot be undone.`)) return
+    setDeleteTarget(s)
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    const s = deleteTarget
+    setDeleteTarget(null)
     try {
       await strategyV2Api.remove(s.id)
       toast.success(`Deleted ${s.name}`)
@@ -186,6 +203,23 @@ export default function StrategyV2List() {
           </CardContent>
         </Card>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete strategy?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete{' '}
+              <span className="font-medium">{deleteTarget?.name ?? ''}</span>{' '}
+              and all of its legs, runs, orders, and audit history. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
