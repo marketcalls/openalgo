@@ -38,10 +38,10 @@ cp .sample.env .env
 # Generate new APP_KEY and API_KEY_PEPPER:
 uv run python -c "import secrets; print(secrets.token_hex(32))"
 
-# Build React frontend (required - not tracked in git)
-cd frontend && npm install && npm run build && cd ..
-
-# Run application (uv automatically handles virtual env and dependencies)
+# Run application (uv automatically handles virtual env and dependencies).
+# The React frontend dist is force-committed to `main` by CI, so a fresh
+# clone of main already has frontend/dist/ ready to serve. You only need
+# to install Node and build locally if you are actively editing React code.
 uv run app.py
 ```
 
@@ -238,8 +238,10 @@ Most testing is currently manual via:
 
 ### Building for Production
 
+You typically do **not** need to build the frontend yourself for production deploys — see the CI/CD section below. Build only when actively editing React code:
+
 ```bash
-# Build React frontend
+# Build React frontend (only needed if editing React code)
 cd frontend
 npm run build
 
@@ -249,19 +251,28 @@ npm run build
 
 ### Important: Frontend Build (CI/CD)
 
-**`frontend/dist/` is NOT tracked in git.** The CI/CD pipeline builds it automatically on each push.
+`frontend/dist/` is in `.gitignore` so local devs cannot accidentally commit half-built artifacts — but on `main` the directory **is tracked**. The CI workflow (`.github/workflows/ci.yml`, job `commit-dist`) runs after every successful push to `main` and force-commits the freshly-built dist back to the branch:
 
-For local development after cloning:
-```bash
-cd frontend
-npm install
-npm run build
+```yaml
+# Excerpt from .github/workflows/ci.yml
+- name: Commit and push dist
+  run: |
+    git add -f frontend/dist/
+    git diff --staged --quiet || git commit -m "chore: auto-build frontend dist [skip ci]"
+    git push
 ```
 
-This is required before running the application locally. The build artifacts are gitignored to:
-- Prevent merge conflicts on hash-named files
-- Keep the repository size smaller
-- Ensure fresh builds via CI/CD
+Practical implications:
+
+- **Production servers** (clients running OpenAlgo on Ubuntu/Docker/EC2) **do not need Node.js or npm.** A plain `git pull` from `main` already brings the latest UI artifacts. This is the canonical upgrade path documented at https://docs.openalgo.in/installation-guidelines/getting-started/upgrade.
+- **Backend-only local devs** (editing Python only, not React) also typically don't need to build — whatever CI committed last serves the UI fine.
+- **React developers** still need `cd frontend && npm install && npm run build` (or `npm run dev` for hot reload) to test their own changes locally, since the local `.gitignore` won't track their build output.
+- **Feature branches** that the CI hasn't built yet may have stale or missing `frontend/dist/`. Either build locally or rebase onto a recent `main`.
+
+Why gitignore + force-add rather than just tracking the dist normally:
+- Prevents merge conflicts on hash-named chunk files between contributors
+- Keeps PR diffs small and reviewable
+- Single canonical build per merged PR (CI's), no drift from contributor-local Node versions
 
 ## Key Architectural Concepts
 
@@ -511,7 +522,7 @@ All error logging uses `logger.exception()` (not `logger.error()` + manual trace
 ## Claude Code Instructions
 
 ### Frontend Build Process
-When building the React frontend locally:
-- Run `cd frontend && npm run build` (build only, no tests)
-- Tests are handled by CI/CD pipeline, not required for local builds
-- The `frontend/dist/` directory is gitignored and built by GitHub Actions
+- The React frontend dist is force-committed to `main` by CI (`commit-dist` job in `.github/workflows/ci.yml`). Production servers and backend-only contributors do NOT need Node.js or npm — a plain `git pull` from `main` already brings the latest UI.
+- When actively editing React code, run `cd frontend && npm install && npm run build` (build only, no tests). Tests run in CI; not required for local iteration.
+- The local `.gitignore` excludes `frontend/dist/` so contributors cannot accidentally commit their own build output — but CI uses `git add -f` to override the ignore on `main` only.
+- See the "Important: Frontend Build (CI/CD)" section above for the full picture.
