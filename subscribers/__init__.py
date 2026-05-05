@@ -4,11 +4,42 @@ Subscriber registration — wires all subscribers to the event bus at app startu
 Call register_all() once during app initialization.
 """
 
-from subscribers import log_subscriber, socketio_subscriber, telegram_subscriber
+from subscribers import (
+    log_subscriber,
+    socketio_subscriber,
+    strategy_audit_subscriber,
+    telegram_subscriber,
+)
 from utils.event_bus import bus
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# Strategy v2 + account topics — used by the audit subscriber to fan-in every
+# event into a single chained-hash log row.
+STRATEGY_TOPICS = (
+    "strategy.signal_received",
+    "strategy.signal_rejected",
+    "strategy.run_started",
+    "strategy.state_changed",
+    "strategy.leg_resolved",
+    "strategy.leg_filled",
+    "strategy.rms_triggered",
+    "strategy.trail_advanced",
+    "strategy.exit_triggered",
+    "strategy.enter_failed",
+    "strategy.exit_failed",
+    "strategy.run_closed",
+    "strategy.engine_error",
+    "strategy.webhook_secret_rotated",
+    "strategy.webhook_banned",
+)
+
+ACCOUNT_TOPICS = (
+    "account.locked",
+    "account.unlocked",
+)
 
 
 def register_all():
@@ -103,5 +134,74 @@ def register_all():
         socketio_subscriber.on_sandbox_t1_settlement,
         "socketio:sandbox_t1_settlement",
     )
+
+    # ------------------------------------------------------------------------
+    # Strategy v2 + Account events
+    # ------------------------------------------------------------------------
+
+    # Audit subscriber — single writer of strategy_events table. Every
+    # strategy.* and account.* topic fans in here for chained-hash persistence.
+    for topic in STRATEGY_TOPICS + ACCOUNT_TOPICS:
+        bus.subscribe(topic, strategy_audit_subscriber.on_event, f"audit:{topic}")
+
+    # Per-topic socketio + log wiring.
+    _STRATEGY_HANDLERS = {
+        "strategy.signal_received":         "on_strategy_signal_received",
+        "strategy.signal_rejected":         "on_strategy_signal_rejected",
+        "strategy.run_started":             "on_strategy_run_started",
+        "strategy.state_changed":           "on_strategy_state_changed",
+        "strategy.leg_resolved":            "on_strategy_leg_resolved",
+        "strategy.leg_filled":              "on_strategy_leg_filled",
+        "strategy.rms_triggered":           "on_strategy_rms_triggered",
+        "strategy.trail_advanced":          "on_strategy_trail_advanced",
+        "strategy.exit_triggered":          "on_strategy_exit_triggered",
+        "strategy.enter_failed":            "on_strategy_enter_failed",
+        "strategy.exit_failed":             "on_strategy_exit_failed",
+        "strategy.run_closed":              "on_strategy_run_closed",
+        "strategy.engine_error":            "on_strategy_engine_error",
+        "strategy.webhook_secret_rotated":  "on_strategy_webhook_secret_rotated",
+        "strategy.webhook_banned":          "on_strategy_webhook_banned",
+    }
+    for topic, handler_name in _STRATEGY_HANDLERS.items():
+        log_handler = getattr(log_subscriber, handler_name, None)
+        if log_handler is not None:
+            bus.subscribe(topic, log_handler, f"log:{topic}")
+        sock_handler = getattr(socketio_subscriber, handler_name, None)
+        if sock_handler is not None:
+            bus.subscribe(topic, sock_handler, f"socketio:{topic}")
+
+    # Telegram fires only on the loud topics — see plan §5.3.4.
+    bus.subscribe(
+        "strategy.run_closed",
+        telegram_subscriber.on_strategy_run_closed,
+        "telegram:strategy_run_closed",
+    )
+    bus.subscribe(
+        "strategy.exit_failed",
+        telegram_subscriber.on_strategy_exit_failed,
+        "telegram:strategy_exit_failed",
+    )
+    bus.subscribe(
+        "strategy.engine_error",
+        telegram_subscriber.on_strategy_engine_error,
+        "telegram:strategy_engine_error",
+    )
+    bus.subscribe(
+        "strategy.webhook_banned",
+        telegram_subscriber.on_strategy_webhook_banned,
+        "telegram:strategy_webhook_banned",
+    )
+
+    # Account.* — log + socketio + telegram (locked only).
+    bus.subscribe("account.locked",
+                  log_subscriber.on_account_locked, "log:account_locked")
+    bus.subscribe("account.locked",
+                  socketio_subscriber.on_account_locked, "socketio:account_locked")
+    bus.subscribe("account.locked",
+                  telegram_subscriber.on_account_locked, "telegram:account_locked")
+    bus.subscribe("account.unlocked",
+                  log_subscriber.on_account_unlocked, "log:account_unlocked")
+    bus.subscribe("account.unlocked",
+                  socketio_subscriber.on_account_unlocked, "socketio:account_unlocked")
 
     logger.debug("EventBus: all subscribers registered")

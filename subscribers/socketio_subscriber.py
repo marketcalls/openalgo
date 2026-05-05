@@ -245,3 +245,299 @@ def _emit_analyzer_update(event):
         "analyzer_update",
         {"request": event.request_data, "response": event.response_data},
     )
+
+
+# =============================================================================
+# Strategy v2 + Account events
+#
+# These emit room-scoped to per-strategy rooms so multiple browser tabs / pages
+# only receive updates for the strategies they're viewing. Every payload
+# carries both ts_utc (epoch ms) and ts_ist (display string) — clients render
+# ts_ist directly without timezone math.
+# =============================================================================
+
+from utils.ist_time import fmt_orderbook, now_utc, to_epoch_ms  # noqa: E402
+
+
+def _strategy_room(strategy_id):
+    return f"strategy_{int(strategy_id or 0)}"
+
+
+def _ts_pair():
+    """Return (ts_utc_epoch_ms, ts_ist_display_string) for 'now'."""
+    now = now_utc()
+    return to_epoch_ms(now), fmt_orderbook(now)
+
+
+def on_strategy_signal_received(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_signal_received",
+        {
+            "strategy_id": event.strategy_id,
+            "signing_method": event.signing_method,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_signal_rejected(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_signal_rejected",
+        {
+            "strategy_id": event.strategy_id,
+            "reason": event.reason,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_run_started(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_run_started",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "mode": event.mode,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_state_changed(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_state_change",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "old_state": event.old_state,
+            "new_state": event.new_state,
+            "reason": event.reason,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_leg_resolved(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_leg_resolved",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "leg_id": event.leg_id,
+            "resolved_symbol": event.resolved_symbol,
+            "resolved_exchange": event.resolved_exchange,
+            "tick_size": event.tick_size,
+            "lot_size": event.lot_size,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_leg_filled(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_order_event",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "leg_id": event.leg_id,
+            "orderid": event.orderid,
+            "status": "complete",
+            "filled_qty": event.qty,
+            "avg_price": event.avg_price,
+            "source": "entry_fill",
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_rms_triggered(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_rms_triggered",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "leg_id": event.leg_id,
+            "rule": event.rule,
+            "ltp": event.ltp,
+            "threshold": event.threshold,
+            "new_sl": event.new_sl,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_trail_advanced(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_trail_advanced",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "leg_id": event.leg_id,
+            "advances": event.advances,
+            "new_sl": event.new_sl,
+            "ltp": event.ltp,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_exit_triggered(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_exit_triggered",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "reason": event.reason,
+            "legs_exited": event.legs_exited,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_enter_failed(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_enter_failed",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "details": event.details,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_exit_failed(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_exit_failed",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "details": event.details,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_run_closed(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_run_closed",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "exit_reason": event.exit_reason,
+            "realized_pnl": event.realized_pnl,
+            "max_unrealized_pnl": event.max_unrealized_pnl,
+            "max_drawdown": event.max_drawdown,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_engine_error(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_engine_error",
+        {
+            "strategy_id": event.strategy_id,
+            "run_id": event.run_id,
+            "error_type": event.error_type,
+            "message": event.message,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_webhook_secret_rotated(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_webhook_rotated",
+        {
+            "strategy_id": event.strategy_id,
+            "method": event.method,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_strategy_webhook_banned(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "strategy_webhook_banned",
+        {
+            "strategy_id": event.strategy_id,
+            "webhook_id": event.webhook_id,
+            "failures": event.failures,
+            "ban_duration_seconds": event.ban_duration_seconds,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+        room=_strategy_room(event.strategy_id),
+    )
+
+
+def on_account_locked(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "account_locked",
+        {
+            "user_id": event.user_id,
+            "reason": event.reason,
+            "until_ts_utc": event.until_ts_utc,
+            "cumulative_loss": event.cumulative_loss,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+    )
+
+
+def on_account_unlocked(event):
+    ts_utc, ts_ist = _ts_pair()
+    socketio.emit(
+        "account_unlocked",
+        {
+            "user_id": event.user_id,
+            "cleared_by": event.cleared_by,
+            "ts_utc": ts_utc,
+            "ts_ist": ts_ist,
+        },
+    )

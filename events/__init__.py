@@ -1,5 +1,10 @@
 """Event types for the OpenAlgo event bus."""
 
+from events.account_events import (
+    AccountLockedEvent,
+    AccountUnlockedEvent,
+    BrokerOrderUpdateEvent,
+)
 from events.analyzer_events import AnalyzerErrorEvent
 from events.base import OrderEvent
 from events.batch_events import (
@@ -31,6 +36,23 @@ from events.sandbox_events import (
     SandboxOrderFilledEvent,
     SandboxT1SettlementEvent,
 )
+from events.strategy_events import (
+    StrategyEngineErrorEvent,
+    StrategyEnterFailedEvent,
+    StrategyExitFailedEvent,
+    StrategyExitTriggeredEvent,
+    StrategyLegFilledEvent,
+    StrategyLegResolvedEvent,
+    StrategyRmsTriggeredEvent,
+    StrategyRunClosedEvent,
+    StrategyRunStartedEvent,
+    StrategySignalReceivedEvent,
+    StrategySignalRejectedEvent,
+    StrategyStateChangedEvent,
+    StrategyTrailAdvancedEvent,
+    WebhookBannedEvent,
+    WebhookSecretRotatedEvent,
+)
 
 __all__ = [
     "OrderEvent",
@@ -59,4 +81,24 @@ __all__ = [
     "GTTCancelFailedEvent",
     "GTTTriggeredEvent",
     "GTTExpiredEvent",
+    # Strategy v2
+    "StrategySignalReceivedEvent",
+    "StrategySignalRejectedEvent",
+    "StrategyRunStartedEvent",
+    "StrategyStateChangedEvent",
+    "StrategyLegResolvedEvent",
+    "StrategyLegFilledEvent",
+    "StrategyRmsTriggeredEvent",
+    "StrategyTrailAdvancedEvent",
+    "StrategyExitTriggeredEvent",
+    "StrategyEnterFailedEvent",
+    "StrategyExitFailedEvent",
+    "StrategyRunClosedEvent",
+    "StrategyEngineErrorEvent",
+    "WebhookSecretRotatedEvent",
+    "WebhookBannedEvent",
+    # Account
+    "AccountLockedEvent",
+    "AccountUnlockedEvent",
+    "BrokerOrderUpdateEvent",
 ]
