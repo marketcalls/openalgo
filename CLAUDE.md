@@ -118,6 +118,54 @@ OpenAlgo uses **6 separate databases** for isolation:
 
 Each database has its own initialization function in `/database/`.
 
+#### Database Migrations (always required when DB schema changes)
+
+OpenAlgo has ~150K production users who upgrade by pulling `main` and running:
+
+```bash
+uv run upgrade/migrate_all.py
+```
+
+**Whenever you add, alter, or rename a table or column in any `db/*.db` file, you MUST add a migration script** under `upgrade/` and register it in `upgrade/migrate_all.py:MIGRATIONS`. App startup also runs `init_db()` for every model module (registered in `app.py`), but **do not rely on that alone** — users running migrations from a CI/CD path or a Docker entrypoint may invoke `migrate_all.py` separately, and an explicit migration script is the auditable record of every schema change.
+
+**Migration script requirements (mirrors `upgrade/migrate_flow.py`):**
+
+1. Place the file at `upgrade/migrate_<feature>.py` and make it directly executable (`#!/usr/bin/env python3`, ends with `if __name__ == "__main__": sys.exit(main())`).
+2. **Idempotent** — safe to run on a fresh install, an existing install, and back-to-back. Use `inspect(engine).get_table_names()` checks before `CREATE TABLE`, or rely on SQLAlchemy `Base.metadata.create_all(bind=engine)` which is no-op for already-existing tables.
+3. **Load `.env` first** before importing any DB module — engines are built at import time from `os.getenv("DATABASE_URL")` and will crash with `"Expected string or URL object, got None"` if the env isn't loaded:
+
+   ```python
+   import os, sys
+   sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+   from dotenv import load_dotenv
+   load_dotenv()
+   # Only NOW import database/* modules
+   from database.your_db import init_db
+   ```
+
+4. **No Unicode arrows or special chars in `print(...)` output** — Windows cp1252 console can't encode `→`, `←`, etc. Use `->` and `<-`. Existing migrations follow this convention.
+5. Exit code 0 on success, non-zero on failure. `migrate_all.py` checks return codes and aborts on first failure.
+6. **Register in `upgrade/migrate_all.py`** by appending a tuple `("migrate_<feature>.py", "Human-readable description")` to the `MIGRATIONS` list. Order matters — migrations run sequentially in list order; declare dependencies appropriately.
+
+**Verify before pushing:**
+
+```bash
+# 1. Dry-run on a fresh install (delete db/openalgo.db first if you want a true clean test)
+uv run upgrade/migrate_all.py
+# 2. Run a second time on the now-existing DB — must be idempotent
+uv run upgrade/migrate_all.py
+# 3. Inspect the resulting schema
+uv run python -c "import sqlite3; con=sqlite3.connect('db/openalgo.db'); print([r[0] for r in con.execute(\"SELECT name FROM sqlite_master WHERE type='table'\")])"
+```
+
+**Why this matters at 150K-user scale:**
+- A migration that crashes mid-way leaves users in an indeterminate state — recovery is painful (often manual SQL).
+- A non-idempotent migration breaks any user who runs `migrate_all.py` twice (common when upgrade scripts retry).
+- Schema additions are safer than alterations. **Avoid `ALTER COLUMN`** (SQLite rewrites the table); prefer adding new columns with sensible defaults and migrating data into them.
+- For destructive changes (column drops, type narrowing, table renames), document the rollback procedure in the migration file's docstring.
+
+**Production servers do NOT auto-migrate on `git pull`.** The user must explicitly run `uv run upgrade/migrate_all.py`. The release notes / upgrade documentation should call out any new migration required.
+
 #### SQLite Connection Pooling (NullPool)
 
 All SQLite databases use `NullPool` — each operation gets a fresh connection, closed immediately after use. **Do NOT use `StaticPool`** (single shared connection) — it causes `"bad parameter or other API misuse"` and `"cannot commit - SQL statements in progress"` errors because concurrent requests corrupt the shared connection's cursor state. This applies to all platforms (Windows, Mac, Linux).

@@ -20,7 +20,21 @@ from __future__ import annotations
 import os
 import sys
 
+# Repo root on sys.path so we can import database.strategy_v2_db.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Load .env BEFORE the strategy_v2_db import — that module builds the
+# SQLAlchemy engine at import time from os.getenv("DATABASE_URL"), so the
+# environment must be populated first. Mirrors the pattern other migrations
+# follow (e.g. upgrade/migrate_flow.py).
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    # python-dotenv ships in the project deps; if it's missing, fail loud
+    # below when DATABASE_URL turns up empty.
+    pass
 
 
 def _ensure_tables() -> None:
@@ -39,15 +53,15 @@ def _phase7_convert_v1_strategies() -> None:
 
     Conversion plan (for reference; implemented in Phase 7):
       For each row in v1 `strategies`:
-        if a v2 strategy with same webhook_id exists → skip
-        else → create strategies_v2 row carrying webhook_id, name, user_id,
-                  platform, times, mode='live', signing_method='NONE'
-              for each v1 strategy_symbol_mappings row → create strategy_legs
-                  row with segment inferred from exchange (NSE/BSE → CASH,
-                  NFO/BFO → FUT or OPT based on symbol pattern)
-              create empty strategy_risk_config row
+        if a v2 strategy with same webhook_id exists -> skip
+        else -> create strategies_v2 row carrying webhook_id, name, user_id,
+                   platform, times, mode='live', signing_method='NONE'
+                for each v1 strategy_symbol_mappings row -> create strategy_legs
+                   row with segment inferred from exchange (NSE/BSE -> CASH,
+                   NFO/BFO -> FUT or OPT based on symbol pattern)
+                create empty strategy_risk_config row
     """
-    print("  [SKIP] v1 → v2 conversion is disabled in Phase 0")
+    print("  [SKIP] v1 -> v2 conversion is disabled in Phase 0")
 
 
 def main() -> int:
