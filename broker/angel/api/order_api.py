@@ -218,8 +218,15 @@ def place_order_api(data, auth):
     # Parse the JSON response
     response_data = response.json()
 
-    if response_data["status"] == True:
-        orderid = response_data["data"]["orderid"]
+    # Use .get() so a malformed / non-conforming response (gateway error
+    # envelope, partial response, network blip) returns a clean
+    # ``orderid = None`` instead of raising KeyError. Angel's documented
+    # success shape carries ``status: true`` and ``data.orderid``; anything
+    # else is treated as a failure and surfaced through the caller's
+    # existing None-orderid error path. See issue #846 for the original
+    # KeyError trace this hardening eliminates.
+    if response_data.get("status") is True:
+        orderid = response_data.get("data", {}).get("orderid")
     else:
         orderid = None
     return response, response_data, orderid
