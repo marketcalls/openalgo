@@ -399,19 +399,23 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
             const updated = new Map(prev)
             const newData = { ...existing.data }
 
-            if (mode === 1 || mode === 2) {
-              Object.assign(newData, {
-                ltp: marketData.ltp ?? newData.ltp,
-                open: marketData.open ?? newData.open,
-                high: marketData.high ?? newData.high,
-                low: marketData.low ?? newData.low,
-                close: marketData.close ?? newData.close,
-                volume: marketData.volume ?? newData.volume,
-                change: marketData.change ?? newData.change,
-                change_percent: marketData.change_percent ?? newData.change_percent,
-                timestamp: marketData.timestamp ?? newData.timestamp,
-              })
-            }
+            // Scalar fields (LTP/OHLC/volume/change/timestamp) may arrive in
+            // any tick mode — Kite "full", Fyers SymbolUpdate, Upstox V3, and
+            // Dhan all include LTP+OHLC in their depth-mode payloads. Merge
+            // unconditionally with `??` fallback so a client subscribed to
+            // both LTP and Depth on the same symbol still sees LTP updates
+            // after the proxy upgrades the broker subscription to mode 3.
+            Object.assign(newData, {
+              ltp: marketData.ltp ?? newData.ltp,
+              open: marketData.open ?? newData.open,
+              high: marketData.high ?? newData.high,
+              low: marketData.low ?? newData.low,
+              close: marketData.close ?? newData.close,
+              volume: marketData.volume ?? newData.volume,
+              change: marketData.change ?? newData.change,
+              change_percent: marketData.change_percent ?? newData.change_percent,
+              timestamp: marketData.timestamp ?? newData.timestamp,
+            })
 
             if (mode === 3 && marketData.depth) {
               newData.depth = marketData.depth
