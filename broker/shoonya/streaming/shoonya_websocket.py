@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -21,12 +22,26 @@ class ShoonyaWebSocket:
     CONNECTION_TIMEOUT = 15
     THREAD_JOIN_TIMEOUT = 5
 
-    # Heartbeat constants
+    # Heartbeat constants. websocket-client requires PING_INTERVAL strictly
+    # greater than PING_TIMEOUT, so they are pinned here rather than read
+    # from the platform-wide WS_PING_* env vars (which the proxy server
+    # tolerates being equal under the `websockets` library).
     HEARTBEAT_INTERVAL = 30
     HEARTBEAT_TIMEOUT = 120
     PING_INTERVAL = 30
     PING_TIMEOUT = 10
     HEARTBEAT_JOIN_TIMEOUT = 3
+
+    # Subscription batching — Shoonya supports '#'-separated scrip lists in
+    # a single message; chunk large lists so each WS send stays small and
+    # add a small delay between chunks to avoid server-side rate limits.
+    # Empirically Shoonya tolerates much faster pacing than the original
+    # 0.5s/2.0s pair; 100ms / 500ms keeps headroom for very large bursts
+    # and is invisible to single-symbol UI clicks (which skip the delay
+    # entirely via the `if has_more` guard around the wait).
+    MAX_SCRIPS_PER_BATCH = 100
+    SUBSCRIPTION_DELAY = 0.1
+    SUBSCRIPTION_RETRY_DELAY = 0.5
 
     # Message types (OAuth WebSocket API)
     MSG_TYPE_CONNECT = "a"
@@ -73,6 +88,13 @@ class ShoonyaWebSocket:
         self.running = False
         self.connected = False
 
+        # Phase 4a: distinguishes auth-failure from transient network drops so
+        # the adapter can short-circuit the reconnect loop. Set True only when
+        # the broker explicitly rejects auth (status != "OK" in the auth-ack
+        # response). Persistent across the lifetime of this WS client.
+        self.auth_failed = False
+        self.auth_failure_reason: str | None = None
+
         # Callbacks
         self.on_message = on_message
         self.on_error = on_error
@@ -83,6 +105,18 @@ class ShoonyaWebSocket:
         self._heartbeat_thread = None
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
+
+        # Subscription batching — separate queues per (msg_type) since
+        # touchline/depth use different message types but share one worker.
+        self._pending_subscriptions: deque[tuple[str, str]] = deque()
+        self._subscription_thread: threading.Thread | None = None
+        self._subscription_lock = threading.Lock()
+
+        # Phase 8: shutdown event lets every wait/sleep loop bail immediately
+        # when stop() is called, instead of blocking up to N seconds. Critical
+        # under gunicorn+eventlet where systemd graceful_timeout (30s) would
+        # otherwise SIGKILL the worker mid-sleep.
+        self._shutdown_event = threading.Event()
 
         # Logging
         self.logger = logging.getLogger("shoonya_websocket")
@@ -115,6 +149,13 @@ class ShoonyaWebSocket:
     def _initialize_connection(self) -> None:
         """Initialize WebSocket connection and start thread"""
         self.running = True
+        # Phase 8: clear shutdown event so wait()s block normally on this
+        # session even if the same client object was previously stopped.
+        self._shutdown_event.clear()
+        # Phase 4a: reset stale auth-failure state if this client object is
+        # being reused for a fresh connection attempt.
+        self.auth_failed = False
+        self.auth_failure_reason = None
 
         self.ws = websocket.WebSocketApp(
             self.WS_URL,
@@ -134,13 +175,16 @@ class ShoonyaWebSocket:
         Returns:
             bool: True if connected within timeout, False otherwise
         """
+        # Phase 8: interruptible poll. Bail immediately if shutdown is signaled.
         start_time = time.time()
 
         while self.running and time.time() - start_time < self.CONNECTION_TIMEOUT:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True
-            time.sleep(0.1)
+            if self._shutdown_event.wait(0.1):
+                self.logger.debug("Connection wait interrupted by shutdown")
+                return False
 
         self.logger.error("Connection timeout")
         self.stop()
@@ -168,6 +212,15 @@ class ShoonyaWebSocket:
 
         self.running = False
         self.connected = False
+
+        # Phase 8: signal every wait/sleep loop (heartbeat, connection-poll,
+        # subscription worker) to bail immediately instead of blocking up to
+        # HEARTBEAT_INTERVAL seconds.
+        self._shutdown_event.set()
+
+        # Drop any queued subscription batches; the worker exits when it
+        # sees running=False on its next loop iteration.
+        self.clear_pending_subscriptions()
 
         self._close_websocket()
         self._wait_for_thread_completion()
@@ -294,6 +347,11 @@ class ShoonyaWebSocket:
             # set it before auth completes
             self.connected = False
             self.running = False
+            # Phase 4a: flag this as an auth failure so the adapter can
+            # short-circuit its reconnect loop instead of hammering a dead
+            # token (e.g., 3am IST daily token expiry, weekend gap).
+            self.auth_failed = True
+            self.auth_failure_reason = str(data)
             self._close_websocket()
 
         return True
@@ -373,7 +431,9 @@ class ShoonyaWebSocket:
         """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
         while self.running and self.connected:
             try:
-                time.sleep(self.HEARTBEAT_INTERVAL)
+                # Phase 8: interruptible — exit immediately on shutdown signal
+                if self._shutdown_event.wait(self.HEARTBEAT_INTERVAL):
+                    break
 
                 if self.running and self.connected:
                     if not self._send_heartbeat():
@@ -489,6 +549,145 @@ class ShoonyaWebSocket:
         return self._send_subscription_message(
             self.MSG_TYPE_DEPTH_UNSUB, scrip_list, "depth unsubscription"
         )
+
+    # Batched subscription API — accepts a list of scrips, queues them, and
+    # drains the queue from a single worker thread that chunks large lists
+    # into MAX_SCRIPS_PER_BATCH-sized '#'-separated messages with a small
+    # SUBSCRIPTION_DELAY between sends.
+    def subscribe_touchline_scrips(self, scrips: list[str]) -> None:
+        """Queue touchline subscriptions for batched sending"""
+        self._enqueue_subscriptions(self.MSG_TYPE_TOUCHLINE_SUB, scrips)
+
+    def unsubscribe_touchline_scrips(self, scrips: list[str]) -> None:
+        """Queue touchline unsubscriptions for batched sending"""
+        self._enqueue_subscriptions(self.MSG_TYPE_TOUCHLINE_UNSUB, scrips)
+
+    def subscribe_depth_scrips(self, scrips: list[str]) -> None:
+        """Queue depth subscriptions for batched sending"""
+        self._enqueue_subscriptions(self.MSG_TYPE_DEPTH_SUB, scrips)
+
+    def unsubscribe_depth_scrips(self, scrips: list[str]) -> None:
+        """Queue depth unsubscriptions for batched sending"""
+        self._enqueue_subscriptions(self.MSG_TYPE_DEPTH_UNSUB, scrips)
+
+    def _enqueue_subscriptions(self, msg_type: str, scrips: list[str]) -> None:
+        """Append (msg_type, scrip) entries to the pending queue and ensure
+        the worker thread is running."""
+        if not scrips:
+            return
+
+        with self._subscription_lock:
+            for scrip in scrips:
+                if scrip:
+                    self._pending_subscriptions.append((msg_type, scrip))
+
+            if self._subscription_thread and self._subscription_thread.is_alive():
+                return
+
+            self._subscription_thread = threading.Thread(
+                target=self._process_pending_subscriptions,
+                daemon=True,
+                name="ShoonyaWSSubWorker",
+            )
+            self._subscription_thread.start()
+
+    def _process_pending_subscriptions(self) -> None:
+        """Drain the pending queue, grouping consecutive same-type entries
+        into batches of up to MAX_SCRIPS_PER_BATCH scrips, '#'-joined into
+        a single WS message. Sleeps SUBSCRIPTION_DELAY between batches."""
+        consecutive_failures = 0
+
+        while self.running:
+            # Wait until we have an authenticated, connected WS session
+            if not self.connected:
+                consecutive_failures += 1
+                if consecutive_failures > 6:
+                    self.logger.error(
+                        "Subscription worker giving up — no connection after retries; "
+                        "dropping pending subscription batch"
+                    )
+                    with self._subscription_lock:
+                        self._pending_subscriptions.clear()
+                    return
+                # Phase 8: interruptible wait
+                if self._shutdown_event.wait(
+                    min(self.SUBSCRIPTION_RETRY_DELAY * consecutive_failures, 10)
+                ):
+                    return
+                continue
+
+            consecutive_failures = 0
+
+            batch_msg_type: str | None = None
+            batch_scrips: list[str] = []
+
+            with self._subscription_lock:
+                if not self._pending_subscriptions:
+                    self._subscription_thread = None
+                    return
+
+                while (
+                    self._pending_subscriptions
+                    and len(batch_scrips) < self.MAX_SCRIPS_PER_BATCH
+                ):
+                    msg_type, scrip = self._pending_subscriptions[0]
+                    if batch_msg_type is None:
+                        batch_msg_type = msg_type
+                    elif msg_type != batch_msg_type:
+                        break
+                    self._pending_subscriptions.popleft()
+                    batch_scrips.append(scrip)
+
+            if not batch_scrips or batch_msg_type is None:
+                continue
+
+            scrip_list = "#".join(batch_scrips)
+            operation_name = self._operation_name_for_msg_type(batch_msg_type)
+            success = self._send_subscription_message(
+                batch_msg_type, scrip_list, operation_name
+            )
+
+            if success:
+                self.logger.info(
+                    f"Sent batch {operation_name} for {len(batch_scrips)} scrips"
+                )
+                # Pace consecutive batches so we don't flood the server
+                with self._subscription_lock:
+                    has_more = bool(self._pending_subscriptions)
+                # Phase 8: interruptible pacing
+                if has_more and self._shutdown_event.wait(self.SUBSCRIPTION_DELAY):
+                    return
+            else:
+                # Re-queue at the front and back off; preserve ordering for the
+                # rest of the queue so different msg types stay grouped.
+                # Skip re-queue if shutting down — clear_pending_subscriptions()
+                # may have already drained, and re-adding here leaks stale
+                # entries into a later reconnect/reuse of this WS client.
+                with self._subscription_lock:
+                    if self.running and not self._shutdown_event.is_set():
+                        for scrip in reversed(batch_scrips):
+                            self._pending_subscriptions.appendleft((batch_msg_type, scrip))
+                self.logger.warning(
+                    f"{operation_name} batch failed; retrying after backoff"
+                )
+                if self._shutdown_event.wait(self.SUBSCRIPTION_RETRY_DELAY):
+                    return
+
+    def _operation_name_for_msg_type(self, msg_type: str) -> str:
+        """Human-readable label for log messages."""
+        return {
+            self.MSG_TYPE_TOUCHLINE_SUB: "touchline subscription",
+            self.MSG_TYPE_TOUCHLINE_UNSUB: "touchline unsubscription",
+            self.MSG_TYPE_DEPTH_SUB: "depth subscription",
+            self.MSG_TYPE_DEPTH_UNSUB: "depth unsubscription",
+        }.get(msg_type, f"message {msg_type}")
+
+    def clear_pending_subscriptions(self) -> int:
+        """Clear any queued subscription batches. Returns the number cleared."""
+        with self._subscription_lock:
+            count = len(self._pending_subscriptions)
+            self._pending_subscriptions.clear()
+        return count
 
     def _send_subscription_message(
         self, msg_type: str, scrip_list: str, operation_name: str

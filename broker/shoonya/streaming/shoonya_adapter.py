@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import Counter
 from typing import Any
 
 from database.auth_db import get_auth_token
@@ -296,6 +297,22 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._reconnect_timer = None
         self._resub_thread = None
 
+        # Subscription batch debounce — coalesce rapid subscribe()/unsubscribe()
+        # calls into a single batched WS message. Pending entries are
+        # (scrip, ws_call) tuples where ws_call is "touchline" or "depth".
+        # Leading-edge debounce: the FIRST call after a quiet period flushes
+        # immediately (no debounce wait), so a single-symbol UI click pays
+        # ~0ms adapter overhead. Subsequent calls within `_batch_delay` of
+        # the last flush wait it out so they coalesce — that's how the
+        # /optionchain 42-symbol burst still hits a single WS frame.
+        self._sub_queue: list[tuple[str, str]] = []
+        self._unsub_queue: list[tuple[str, str]] = []
+        self._sub_batch_timer: threading.Timer | None = None
+        self._unsub_batch_timer: threading.Timer | None = None
+        self._last_sub_flush_at: float = 0.0
+        self._last_unsub_flush_at: float = 0.0
+        self._batch_delay = 0.5
+
     def _setup_normalizers(self):
         """Initialize data normalizers"""
         self.normalizers = {
@@ -375,6 +392,14 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer.cancel()
                 timer_to_join = self._reconnect_timer
                 self._reconnect_timer = None
+            if self._sub_batch_timer:
+                self._sub_batch_timer.cancel()
+                self._sub_batch_timer = None
+            if self._unsub_batch_timer:
+                self._unsub_batch_timer.cancel()
+                self._unsub_batch_timer = None
+            self._sub_queue.clear()
+            self._unsub_queue.clear()
             resub_to_join = self._resub_thread
             ws_to_stop = self.ws_client
             self.ws_client = None
@@ -597,15 +622,21 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         }
 
     def _websocket_subscribe(self, subscription: dict) -> None:
-        """Handle WebSocket subscription with lock-protected ref counting"""
+        """Update ref counts and enqueue scrip into the subscription batch.
+        Leading-edge dispatch: if it's been at least `_batch_delay` since the
+        last flush, send the batch immediately so a single-symbol click pays
+        ~0ms of adapter overhead. Otherwise schedule a flush for the end of
+        the current debounce window so a burst of calls coalesces into one
+        WS frame."""
         scrip = subscription["scrip"]
         mode = subscription["mode"]
 
+        ws_call = None
+        flush_now = False
         with self.lock:
             if scrip not in self.ws_subscription_refs:
                 self.ws_subscription_refs[scrip] = {"touchline_count": 0, "depth_count": 0}
 
-            ws_call = None
             if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
                 if self.ws_subscription_refs[scrip]["touchline_count"] == 0:
                     ws_call = "touchline"
@@ -615,40 +646,144 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     ws_call = "depth"
                 self.ws_subscription_refs[scrip]["depth_count"] += 1
 
+            if ws_call:
+                self._sub_queue.append((scrip, ws_call))
+                flush_now = self._schedule_sub_flush_locked()
+
+        if flush_now:
+            # Outside the lock — _flush_subscription_batch reacquires it.
+            self._flush_subscription_batch()
+
+    def _schedule_sub_flush_locked(self) -> bool:
+        """Decide whether to flush the subscribe queue now (leading edge) or
+        schedule a timer for the end of the current debounce window.
+        Caller must hold self.lock. Returns True if the caller should call
+        _flush_subscription_batch synchronously after releasing the lock."""
+        elapsed = time.time() - self._last_sub_flush_at
+        if elapsed >= self._batch_delay:
+            # Quiet window — flush immediately. Mark the time now so any
+            # racing call within _batch_delay schedules a timer instead.
+            self._last_sub_flush_at = time.time()
+            if self._sub_batch_timer:
+                self._sub_batch_timer.cancel()
+                self._sub_batch_timer = None
+            return True
+        # In the debounce window — ensure a timer is scheduled to flush
+        # at the end of it. Don't restart an already-running timer (that
+        # would push the deadline back indefinitely under sustained load).
+        if self._sub_batch_timer is None:
+            delay = max(0.0, self._batch_delay - elapsed)
+            self._sub_batch_timer = threading.Timer(delay, self._flush_subscription_batch)
+            self._sub_batch_timer.daemon = True
+            self._sub_batch_timer.start()
+        return False
+
+    def _schedule_unsub_flush_locked(self) -> bool:
+        """Mirror of _schedule_sub_flush_locked for the unsubscribe queue."""
+        elapsed = time.time() - self._last_unsub_flush_at
+        if elapsed >= self._batch_delay:
+            self._last_unsub_flush_at = time.time()
+            if self._unsub_batch_timer:
+                self._unsub_batch_timer.cancel()
+                self._unsub_batch_timer = None
+            return True
+        if self._unsub_batch_timer is None:
+            delay = max(0.0, self._batch_delay - elapsed)
+            self._unsub_batch_timer = threading.Timer(
+                delay, self._flush_unsubscription_batch
+            )
+            self._unsub_batch_timer.daemon = True
+            self._unsub_batch_timer.start()
+        return False
+
+    def _reconcile_queues_locked(self) -> None:
+        """Cancel matching (scrip, ws_call) pairs that appear in both
+        _sub_queue and _unsub_queue. A subscribe followed by an unsubscribe
+        within the same debounce window has no net effect on the broker;
+        sending the pair wastes a round trip and — since the two queues
+        drain on independent timers — risks leaking a broker subscription
+        with no local tracking if the unsub flushes before the sub.
+        Caller must hold self.lock."""
+        if not (self._sub_queue and self._unsub_queue):
+            return
+        cancel = Counter(self._sub_queue) & Counter(self._unsub_queue)
+        if not cancel:
+            return
+
+        def filter_queue(
+            queue: list[tuple[str, str]], to_cancel: Counter
+        ) -> list[tuple[str, str]]:
+            remaining = Counter(to_cancel)
+            out: list[tuple[str, str]] = []
+            for entry in queue:
+                if remaining.get(entry, 0) > 0:
+                    remaining[entry] -= 1
+                    continue
+                out.append(entry)
+            return out
+
+        self._sub_queue = filter_queue(self._sub_queue, cancel)
+        self._unsub_queue = filter_queue(self._unsub_queue, cancel)
+
+    def _flush_subscription_batch(self) -> None:
+        """Drain _sub_queue, group by ws_call type, and hand off to the WS
+        layer's batched API which chunks and paces the actual sends."""
+        with self.lock:
+            self._sub_batch_timer = None
+            self._reconcile_queues_locked()
+            if not self._sub_queue:
+                return
+            queue_snapshot = self._sub_queue
+            self._sub_queue = []
+            self._last_sub_flush_at = time.time()
             ws = self.ws_client
 
-        # Network I/O outside lock
-        if ws_call and ws:
-            try:
-                if ws_call == "touchline":
-                    ws.subscribe_touchline(scrip)
-                    self.logger.info(f"First touchline subscription for {scrip}")
-                else:
-                    ws.subscribe_depth(scrip)
-                    self.logger.info(f"First depth subscription for {scrip}")
-            except Exception as e:
-                # SA-R7-7 fix: Log that subscription is kept in dict for retry on reconnect
-                self.logger.error(
-                    f"Error subscribing {ws_call} for {scrip}: {e}; "
-                    f"subscription retained for retry on reconnect"
+        if not ws:
+            self.logger.warning(
+                f"[BATCH_SUBSCRIBE] No WS client; dropping {len(queue_snapshot)} pending subs "
+                f"(will be re-sent on reconnect via resubscribe_all)"
+            )
+            return
+
+        touchline_scrips: list[str] = []
+        depth_scrips: list[str] = []
+        seen_touchline: set[str] = set()
+        seen_depth: set[str] = set()
+
+        # Dedupe within the batch — multiple correlation IDs for the same
+        # scrip/mode collapse to one WS subscription.
+        for scrip, ws_call in queue_snapshot:
+            if ws_call == "touchline" and scrip not in seen_touchline:
+                seen_touchline.add(scrip)
+                touchline_scrips.append(scrip)
+            elif ws_call == "depth" and scrip not in seen_depth:
+                seen_depth.add(scrip)
+                depth_scrips.append(scrip)
+
+        try:
+            if touchline_scrips:
+                self.logger.info(
+                    f"[BATCH_SUBSCRIBE] Sending {len(touchline_scrips)} touchline scrips"
                 )
-                # SA-4 fix: Roll back ref count on failure so retry is possible
-                with self.lock:
-                    if scrip in self.ws_subscription_refs:
-                        if ws_call == "touchline":
-                            self.ws_subscription_refs[scrip]["touchline_count"] = max(
-                                0, self.ws_subscription_refs[scrip]["touchline_count"] - 1
-                            )
-                        else:
-                            self.ws_subscription_refs[scrip]["depth_count"] = max(
-                                0, self.ws_subscription_refs[scrip]["depth_count"] - 1
-                            )
+                ws.subscribe_touchline_scrips(touchline_scrips)
+            if depth_scrips:
+                self.logger.info(
+                    f"[BATCH_SUBSCRIBE] Sending {len(depth_scrips)} depth scrips"
+                )
+                ws.subscribe_depth_scrips(depth_scrips)
+        except Exception as e:
+            self.logger.error(
+                f"Error queueing batch subscription: {e}; subscriptions retained "
+                f"in adapter and will be re-sent on reconnect"
+            )
 
     def _websocket_unsubscribe(self, subscription: dict) -> None:
-        """Handle WebSocket unsubscription with lock-protected ref counting"""
+        """Update ref counts and enqueue scrip into the unsubscribe batch.
+        Same leading-edge dispatch as _websocket_subscribe."""
         scrip = subscription["scrip"]
         mode = subscription["mode"]
 
+        flush_now = False
         with self.lock:
             if scrip not in self.ws_subscription_refs:
                 return
@@ -674,19 +809,54 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if refs and refs["touchline_count"] <= 0 and refs["depth_count"] <= 0:
                 del self.ws_subscription_refs[scrip]
 
+            if ws_call:
+                self._unsub_queue.append((scrip, ws_call))
+                flush_now = self._schedule_unsub_flush_locked()
+
+        if flush_now:
+            self._flush_unsubscription_batch()
+
+    def _flush_unsubscription_batch(self) -> None:
+        """Drain _unsub_queue and hand off to the WS-layer batched API."""
+        with self.lock:
+            self._unsub_batch_timer = None
+            self._reconcile_queues_locked()
+            if not self._unsub_queue:
+                return
+            queue_snapshot = self._unsub_queue
+            self._unsub_queue = []
+            self._last_unsub_flush_at = time.time()
             ws = self.ws_client
 
-        # Network I/O outside lock
-        if ws_call and ws:
-            try:
-                if ws_call == "touchline":
-                    ws.unsubscribe_touchline(scrip)
-                    self.logger.info(f"Last touchline subscription for {scrip}")
-                else:
-                    ws.unsubscribe_depth(scrip)
-                    self.logger.info(f"Last depth subscription for {scrip}")
-            except Exception as e:
-                self.logger.error(f"Error unsubscribing {ws_call} for {scrip}: {e}")
+        if not ws:
+            return
+
+        touchline_scrips: list[str] = []
+        depth_scrips: list[str] = []
+        seen_touchline: set[str] = set()
+        seen_depth: set[str] = set()
+
+        for scrip, ws_call in queue_snapshot:
+            if ws_call == "touchline" and scrip not in seen_touchline:
+                seen_touchline.add(scrip)
+                touchline_scrips.append(scrip)
+            elif ws_call == "depth" and scrip not in seen_depth:
+                seen_depth.add(scrip)
+                depth_scrips.append(scrip)
+
+        try:
+            if touchline_scrips:
+                self.logger.info(
+                    f"[BATCH_UNSUBSCRIBE] Sending {len(touchline_scrips)} touchline scrips"
+                )
+                ws.unsubscribe_touchline_scrips(touchline_scrips)
+            if depth_scrips:
+                self.logger.info(
+                    f"[BATCH_UNSUBSCRIBE] Sending {len(depth_scrips)} depth scrips"
+                )
+                ws.unsubscribe_depth_scrips(depth_scrips)
+        except Exception as e:
+            self.logger.error(f"Error queueing batch unsubscription: {e}")
 
     # SA-1 fix: Don't reset _reconnecting here — let _attempt_reconnection own that flag
     # SA-7 fix: Move _resubscribe_all to background thread to avoid blocking WS message thread
@@ -712,13 +882,63 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             resub.start()
 
     def _on_error(self, ws, error):
-        """Handle WebSocket connection error — just log, close callback handles reconnection"""
+        """Handle WebSocket connection error.
+        Phase 4a: detect auth-failure error messages (401/403/"unauthorized"/
+        "session expired"/"invalid token") and stop the reconnect loop. The
+        close callback owns the actual reconnect scheduling — we just set the
+        running flag here so it short-circuits."""
         self.logger.error(f"Shoonya WebSocket error: {error}")
+
+        # is_auth_error() inherited from BaseBrokerWebSocketAdapter
+        if self.is_auth_error(error):
+            self.logger.error(
+                "Auth-failure error detected on Shoonya WS; stopping reconnect "
+                "loop to avoid hammering broker IP with dead-token requests"
+            )
+            with self.lock:
+                self.running = False
+                self._reconnecting = False
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
 
     # M1 fix: connected=False inside lock block to prevent TOCTOU
     def _on_close(self, ws, close_status_code, close_msg):
-        """Handle WebSocket connection close with reconnection guard"""
+        """Handle WebSocket connection close with reconnection guard.
+        Phase 4a: short-circuit reconnect when the underlying close was caused
+        by an auth-failure ack (running=False already set by WS layer) or the
+        close-status text matches an auth-error pattern."""
         self.logger.info(f"Shoonya WebSocket connection closed: {close_status_code} - {close_msg}")
+
+        # Detect auth-failure paths before deciding to reconnect:
+        # 1. WS layer flagged auth_failed in _handle_auth_response (status != "OK")
+        # 2. Close message matches a generic auth-error pattern
+        ws_client = self.ws_client
+        ws_layer_auth_failed = bool(
+            ws_client is not None and getattr(ws_client, "auth_failed", False)
+        )
+        close_text_auth_failed = self.is_auth_error(close_msg) or self.is_auth_error(
+            str(close_status_code)
+        )
+
+        if ws_layer_auth_failed or close_text_auth_failed:
+            reason = (
+                getattr(ws_client, "auth_failure_reason", None)
+                if ws_layer_auth_failed
+                else f"{close_status_code} {close_msg}"
+            )
+            self.logger.error(
+                f"Auth failure on Shoonya WS ({reason}); stopping reconnect loop. "
+                f"User must re-login to refresh the auth token."
+            )
+            with self.lock:
+                self.connected = False
+                self.running = False
+                self._reconnecting = False
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
+            return
 
         with self.lock:
             self.connected = False
@@ -843,9 +1063,23 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     reconnect_succeeded = True
                     self.logger.info("Reconnected successfully")
             else:
-                self.logger.error("Reconnection failed")
-                self._schedule_reconnection()
-                scheduled_retry = True
+                # Phase 4a: distinguish "auth-rejected with fresh token" from
+                # transient TCP/timeout failures. If auth failed even with a
+                # freshly-fetched DB token, re-login is required — don't keep
+                # hammering the broker.
+                if getattr(new_client, "auth_failed", False):
+                    self.logger.error(
+                        f"Reconnection auth-rejected with fresh token "
+                        f"({new_client.auth_failure_reason}); stopping reconnect "
+                        f"loop. User must re-login."
+                    )
+                    with self.lock:
+                        self.running = False
+                        self._reconnecting = False
+                else:
+                    self.logger.error("Reconnection failed")
+                    self._schedule_reconnection()
+                    scheduled_retry = True
 
         except Exception as e:
             self.logger.error(f"Reconnection error: {e}")
@@ -898,17 +1132,18 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Snapshot ws_client reference under lock
             ws = self.ws_client
 
-        # Network I/O outside lock
+        # Network I/O outside lock — use batched API so large scrip sets get
+        # chunked into MAX_SCRIPS_PER_BATCH-sized messages by the WS layer.
         if ws and touchline_scrips:
             try:
-                ws.subscribe_touchline("#".join(touchline_scrips))
+                ws.subscribe_touchline_scrips(list(touchline_scrips))
                 self.logger.info(f"Resubscribed to {len(touchline_scrips)} touchline scrips")
             except Exception as e:
                 self.logger.error(f"Error resubscribing touchline: {e}")
 
         if ws and depth_scrips:
             try:
-                ws.subscribe_depth("#".join(depth_scrips))
+                ws.subscribe_depth_scrips(list(depth_scrips))
                 self.logger.info(f"Resubscribed to {len(depth_scrips)} depth scrips")
             except Exception as e:
                 self.logger.error(f"Error resubscribing depth: {e}")
@@ -1072,21 +1307,19 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # SA-16 fix: Track partial failures in unsubscribe calls
             unsub_errors = []
 
-            # Network I/O outside lock
+            # Network I/O outside lock — batched API chunks per MAX_SCRIPS_PER_BATCH
             if ws and touchline_scrips:
                 try:
-                    scrip_list = "#".join(touchline_scrips)
                     self.logger.info(f"Unsubscribing from {len(touchline_scrips)} touchline scrips")
-                    ws.unsubscribe_touchline(scrip_list)
+                    ws.unsubscribe_touchline_scrips(list(touchline_scrips))
                 except Exception as e:
                     self.logger.error(f"Error unsubscribing touchline: {e}")
                     unsub_errors.append(f"touchline: {e}")
 
             if ws and depth_scrips:
                 try:
-                    scrip_list = "#".join(depth_scrips)
                     self.logger.info(f"Unsubscribing from {len(depth_scrips)} depth scrips")
-                    ws.unsubscribe_depth(scrip_list)
+                    ws.unsubscribe_depth_scrips(list(depth_scrips))
                 except Exception as e:
                     self.logger.error(f"Error unsubscribing depth: {e}")
                     unsub_errors.append(f"depth: {e}")
@@ -1136,6 +1369,14 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self._reconnect_timer.cancel()
                     timer_to_join = self._reconnect_timer
                     self._reconnect_timer = None
+                if self._sub_batch_timer:
+                    self._sub_batch_timer.cancel()
+                    self._sub_batch_timer = None
+                if self._unsub_batch_timer:
+                    self._unsub_batch_timer.cancel()
+                    self._unsub_batch_timer = None
+                self._sub_queue.clear()
+                self._unsub_queue.clear()
                 resub_to_join = self._resub_thread
                 ws_to_stop = self.ws_client
                 self.ws_client = None
