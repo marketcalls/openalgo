@@ -42,6 +42,13 @@ class DhanWebSocket:
         "DISCONNECT": 12,
     }
 
+    # Health check (issue #1372 — silent-stall watchdog).
+    # Detects TCP-alive but data-flow-dead conditions that ping/pong alone
+    # cannot catch (VPS / NAT environments commonly keep the TCP connection
+    # alive while the broker stops sending application-level frames).
+    HEALTH_CHECK_INTERVAL = 30
+    DATA_TIMEOUT = 90
+
     def __init__(self, client_id: str, access_token: str, is_20_depth: bool = False):
         """
         Initialize Dhan WebSocket client
@@ -76,6 +83,13 @@ class DhanWebSocket:
         # Fatal error tracking (non-recoverable errors like expired subscription)
         self._fatal_error = False
         self._fatal_error_message = None
+
+        # Health monitoring (issue #1372). last_message_time is stamped on
+        # every inbound frame; the watchdog thread closes the socket if no
+        # frames arrive within DATA_TIMEOUT — _run_websocket then handles
+        # the close as a normal disconnect and reconnects with backoff.
+        self.last_message_time: float | None = None
+        self._health_check_thread: threading.Thread | None = None
 
         # Logging
         self.logger = logging.getLogger(f"dhan_websocket_{'20depth' if is_20_depth else '5depth'}")
@@ -293,10 +307,111 @@ class DhanWebSocket:
         """Handle WebSocket connection open"""
         self.connected = True
         self._was_connected = True
+        # Seed the watchdog so it doesn't false-trigger on a slow startup
+        # before the first tick lands.
+        self.last_message_time = time.time()
         self.logger.debug("WebSocket connection established")
+
+        # Start (or restart) the data-stall watchdog
+        self._start_health_check()
+
+        # Replay tracked subscriptions so a reconnect transparently restores
+        # the prior feed (issue #1372 — was caller responsibility).
+        self._resubscribe_all()
 
         if self.on_open:
             self.on_open(self)
+
+    def _resubscribe_all(self):
+        """Re-subscribe to all tracked instruments after a reconnect.
+
+        Snapshot under the lock, group by mode, batch per Dhan limits
+        (100 regular / 50 20-depth), and send the raw subscribe message
+        without re-mutating self.subscriptions (which is already populated).
+        Failure of any single batch is logged but does not abort the
+        rest — partial recovery is better than no recovery.
+        """
+        with self.lock:
+            if not self.subscriptions:
+                return
+            snapshot = list(self.subscriptions.values())
+
+        # Group instruments by subscription mode
+        by_mode: dict[str, list[dict]] = {}
+        for entry in snapshot:
+            mode = entry.get("mode")
+            instrument = entry.get("instrument")
+            if not mode or not instrument:
+                continue
+            by_mode.setdefault(mode, []).append(instrument)
+
+        max_batch_size = 50 if self.is_20_depth else 100
+
+        for mode, instruments in by_mode.items():
+            request_code = self.REQUEST_CODES.get(f"SUBSCRIBE_{mode}")
+            if request_code is None:
+                self.logger.warning(
+                    f"Skipping resubscribe for unknown mode {mode}"
+                )
+                continue
+
+            for i in range(0, len(instruments), max_batch_size):
+                batch = instruments[i : i + max_batch_size]
+                msg = {
+                    "RequestCode": request_code,
+                    "InstrumentCount": len(batch),
+                    "InstrumentList": batch,
+                }
+                try:
+                    if self.ws and hasattr(self.ws, "send") and callable(self.ws.send):
+                        self.ws.send(json.dumps(msg))
+                        self.logger.info(
+                            f"Resubscribed batch of {len(batch)} instruments in {mode} mode"
+                        )
+                except Exception as e:
+                    self.logger.error(
+                        f"Error resubscribing batch in {mode}: {e}", exc_info=True
+                    )
+
+    def _start_health_check(self):
+        """Start the data-stall watchdog thread (issue #1372).
+
+        Idempotent — a re-entry from a fresh _on_open while the previous
+        thread is still alive is a no-op; the previous loop will exit on
+        its next iteration when self.connected goes False.
+        """
+        if self._health_check_thread and self._health_check_thread.is_alive():
+            return
+        self._health_check_thread = threading.Thread(
+            target=self._health_check_loop, daemon=True
+        )
+        self._health_check_thread.start()
+
+    def _health_check_loop(self):
+        """Detect silent data stalls — close the socket if no frames arrive
+        within DATA_TIMEOUT. _run_websocket handles the close as a normal
+        disconnect and reconnects with the existing exponential backoff.
+        """
+        while self.running and self.connected:
+            time.sleep(self.HEALTH_CHECK_INTERVAL)
+            if not self.running or not self.connected:
+                break
+            if self.last_message_time is None:
+                continue
+            elapsed = time.time() - self.last_message_time
+            if elapsed > self.DATA_TIMEOUT:
+                self.logger.error(
+                    f"Data stall detected - no data for {elapsed:.1f}s "
+                    f"(threshold {self.DATA_TIMEOUT}s). Forcing reconnect..."
+                )
+                if self.ws:
+                    try:
+                        self.ws.close()
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Error closing WebSocket during stall reconnect: {e}"
+                        )
+                break
 
     def _on_error(self, ws, error):
         """Handle WebSocket errors with detection of fatal/non-recoverable errors"""
@@ -364,6 +479,12 @@ class DhanWebSocket:
     def _on_message(self, ws, message):
         """Handle incoming WebSocket messages"""
         try:
+            # Stamp every inbound frame for the data-stall watchdog. Even
+            # broker heartbeats (response code 0) keep the timestamp fresh,
+            # which is what we want — a healthy broker session is one that
+            # sends *something* within DATA_TIMEOUT.
+            self.last_message_time = time.time()
+
             # All Dhan responses are binary
             if isinstance(message, (bytes, bytearray)):
                 self.logger.debug(f"Received binary message of length: {len(message)} bytes")
