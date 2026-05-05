@@ -869,7 +869,40 @@ def api_toggle_strategy(strategy_id):
 @strategy_bp.route("/webhook/<webhook_id>", methods=["POST"])
 @limiter.limit(WEBHOOK_RATE_LIMIT)
 def webhook(webhook_id):
-    """Handle webhook from trading platform"""
+    """Handle webhook from trading platform.
+
+    Dispatch order: Strategy v2 first (if webhook_id matches a strategies_v2
+    row), else fall through to the legacy v1 handler. The URL contract is
+    preserved — external integrations don't break.
+    """
+    # ---- Strategy v2 dispatch ---------------------------------------------
+    # Capture raw bytes BEFORE any JSON parsing — required for HMAC over body.
+    raw_body = request.get_data()
+    try:
+        from database.strategy_v2_db import StrategyV2
+        from database.strategy_v2_db import db_session as v2_session
+
+        v2_row = (
+            v2_session.query(StrategyV2)
+            .filter(StrategyV2.webhook_id == webhook_id)
+            .first()
+        )
+    except Exception:
+        logger.exception("v2 webhook lookup failed; falling through to v1")
+        v2_row = None
+
+    if v2_row is not None:
+        from services.strategy.ingestion_service import handle_webhook as v2_ingest
+
+        status, body = v2_ingest(
+            webhook_id=webhook_id,
+            raw_body=raw_body,
+            headers=dict(request.headers),
+            request=request,
+        )
+        return jsonify(body), status
+
+    # ---- Legacy v1 path ---------------------------------------------------
     try:
         strategy = get_strategy_by_webhook_id(webhook_id)
         if not strategy:

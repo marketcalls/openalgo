@@ -1,16 +1,45 @@
-"""Strategy v2 blueprint — phase-0 scaffold.
+"""Strategy v2 REST API blueprint.
 
-Phase 0 ships only the audit-chain verifier endpoint. Subsequent phases add
-strategy/leg CRUD, run management, orderbook/tradebook/positionbook endpoints,
-webhook security endpoints, etc.
+URL prefix: /strategy/api/v2
+- Audit chain verifier
+- Strategy CRUD + toggle
+- Leg CRUD
+- Webhook secret rotation + dry-run test endpoint
 
-URL prefix: /strategy/api/v2  (REST/JSON only — UI routes still served by the
-React frontend under /strategy/v2 once the SPA pages land in Phase 1).
+Phase 1 ships these. Subsequent phases add the run / orderbook / tradebook /
+positionbook / events / risk-config endpoints.
+
+Auth: existing OpenAlgo session is required for all endpoints. Webhooks
+themselves (POST /strategy/webhook/<uuid>) are unauthenticated by URL secret
++ the signing layer in services/strategy/ingestion_service.py — those live
+in the legacy /strategy blueprint.
 """
 
-from flask import Blueprint, jsonify
+from __future__ import annotations
 
+import json
+import secrets as _secrets
+import uuid
+from datetime import datetime, timezone
+
+from flask import Blueprint, jsonify, request, session
+from marshmallow import ValidationError
+
+from database.strategy_v2_db import (
+    StrategyLeg,
+    StrategyRiskConfig,
+    StrategyV2,
+    db_session,
+)
+from events.strategy_events import WebhookSecretRotatedEvent
+from restx_api.strategy_v2_schemas import (
+    LegSchema,
+    StrategyCreateSchema,
+    StrategyUpdateSchema,
+    WebhookRotateSchema,
+)
 from subscribers.strategy_audit_subscriber import verify_chain
+from utils.event_bus import bus
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,27 +47,456 @@ logger = get_logger(__name__)
 strategy_v2_bp = Blueprint("strategy_v2", __name__, url_prefix="/strategy/api/v2")
 
 
+# ----------------------------------------------------------------------------
+# Auth helper
+# ----------------------------------------------------------------------------
+
+
+def _current_user_id():
+    """Return the logged-in user_id (mirrors the v1 pattern)."""
+    return session.get("user")
+
+
+def _require_login():
+    """Return (user_id, error_response_or_none). Caller bails if error."""
+    user = _current_user_id()
+    if not user:
+        return None, (jsonify({"status": "error", "code": "UNAUTHENTICATED"}), 401)
+    return user, None
+
+
+# ----------------------------------------------------------------------------
+# Serializers
+# ----------------------------------------------------------------------------
+
+
+def _strategy_to_dict(s: StrategyV2, *, include_secrets: bool = False) -> dict:
+    """Serialize a strategy row. Secrets only included on rotation responses
+    (one-time display)."""
+    d = {
+        "id": s.id,
+        "name": s.name,
+        "webhook_id": s.webhook_id,
+        "user_id": s.user_id,
+        "platform": s.platform,
+        "underlying": s.underlying,
+        "underlying_exchange": s.underlying_exchange,
+        "is_intraday": bool(s.is_intraday),
+        "start_time": s.start_time,
+        "end_time": s.end_time,
+        "squareoff_time": s.squareoff_time,
+        "state": s.state,
+        "is_active": bool(s.is_active),
+        "mode": s.mode,
+        "webhook_signing_method": s.webhook_signing_method,
+        "webhook_replay_window_seconds": s.webhook_replay_window_seconds or 0,
+        "webhook_ip_allowlist": json.loads(s.webhook_ip_allowlist) if s.webhook_ip_allowlist else [],
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+    }
+    if include_secrets:
+        d["webhook_secret"] = s.webhook_secret
+        d["webhook_hmac_key"] = s.webhook_hmac_key
+    return d
+
+
+def _leg_to_dict(l: StrategyLeg) -> dict:
+    return {
+        "id": l.id,
+        "leg_index": l.leg_index,
+        "segment": l.segment,
+        "position": l.position,
+        "product": l.product,
+        "symbol_cash": l.symbol_cash,
+        "qty": l.qty,
+        "expiry_type": l.expiry_type,
+        "lots": l.lots,
+        "option_type": l.option_type,
+        "strike_criteria": l.strike_criteria,
+        "strike_value": float(l.strike_value) if l.strike_value is not None else None,
+        "target_enabled": bool(l.target_enabled),
+        "target_value": float(l.target_value) if l.target_value is not None else None,
+        "target_unit": l.target_unit,
+        "sl_enabled": bool(l.sl_enabled),
+        "sl_value": float(l.sl_value) if l.sl_value is not None else None,
+        "sl_unit": l.sl_unit,
+        "trail_enabled": bool(l.trail_enabled),
+        "trail_x": float(l.trail_x) if l.trail_x is not None else None,
+        "trail_y": float(l.trail_y) if l.trail_y is not None else None,
+        "trail_unit": l.trail_unit,
+        "momentum_enabled": bool(l.momentum_enabled),
+        "momentum_value": float(l.momentum_value) if l.momentum_value is not None else None,
+        "momentum_unit": l.momentum_unit,
+        "resolved_symbol": l.resolved_symbol,
+        "resolved_exchange": l.resolved_exchange,
+        "lot_size_cache": l.lot_size_cache,
+        "tick_size_cache": float(l.tick_size_cache) if l.tick_size_cache is not None else None,
+    }
+
+
+# ----------------------------------------------------------------------------
+# Strategy CRUD
+# ----------------------------------------------------------------------------
+
+
+@strategy_v2_bp.route("/strategy", methods=["GET"])
+def list_strategies():
+    user, err = _require_login()
+    if err:
+        return err
+    rows = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.user_id == user)
+        .order_by(StrategyV2.created_at.desc())
+        .all()
+    )
+    return jsonify({"status": "success", "strategies": [_strategy_to_dict(s) for s in rows]}), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>", methods=["GET"])
+def get_strategy(strategy_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    legs = sorted(s.legs, key=lambda l: l.leg_index)
+    return jsonify({
+        "status": "success",
+        "strategy": _strategy_to_dict(s),
+        "legs": [_leg_to_dict(l) for l in legs],
+    }), 200
+
+
+def _make_webhook_secrets(method: str) -> tuple[str, str]:
+    """Generate body-secret + HMAC key sized appropriately."""
+    body_secret = _secrets.token_hex(16) if method in ("BODY_SECRET", "BOTH") else None
+    hmac_key = _secrets.token_hex(32) if method in ("HMAC_SHA256", "BOTH") else None
+    return body_secret, hmac_key
+
+
+@strategy_v2_bp.route("/strategy", methods=["POST"])
+def create_strategy():
+    user, err = _require_login()
+    if err:
+        return err
+    try:
+        data = StrategyCreateSchema().load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
+
+    method = data.get("webhook_signing_method", "NONE")
+    body_secret, hmac_key = _make_webhook_secrets(method)
+
+    s = StrategyV2(
+        name=data["name"],
+        webhook_id=str(uuid.uuid4()),
+        user_id=user,
+        platform=data.get("platform", "manual"),
+        underlying=data.get("underlying"),
+        underlying_exchange=data.get("underlying_exchange"),
+        is_intraday=data.get("is_intraday", True),
+        start_time=data["start_time"],
+        end_time=data["end_time"],
+        squareoff_time=data.get("squareoff_time"),
+        state="DRAFT",
+        is_active=False,
+        mode=data.get("mode", "live"),
+        webhook_signing_method=method,
+        webhook_replay_window_seconds=data.get("webhook_replay_window_seconds", 0),
+        webhook_ip_allowlist=(
+            json.dumps(data["webhook_ip_allowlist"])
+            if data.get("webhook_ip_allowlist")
+            else None
+        ),
+    )
+    s.webhook_secret = body_secret  # encrypted via descriptor
+    s.webhook_hmac_key = hmac_key
+
+    db_session.add(s)
+    # Initialize an empty risk_config row
+    db_session.flush()
+    db_session.add(StrategyRiskConfig(strategy_id=s.id))
+    db_session.commit()
+
+    return jsonify({
+        "status": "success",
+        "strategy": _strategy_to_dict(s, include_secrets=True),
+        "message": "Strategy created. Save the webhook_secret / webhook_hmac_key now — "
+                   "they will not be displayed again.",
+    }), 201
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>", methods=["PUT"])
+def update_strategy(strategy_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    try:
+        data = StrategyUpdateSchema().load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
+
+    # Refuse to modify webhook signing method while is_active=True (avoids
+    # mid-flight signature mismatches). Force a deactivate first.
+    if "webhook_signing_method" in data and s.is_active:
+        return jsonify({
+            "status": "error", "code": "STRATEGY_ACTIVE",
+            "message": "Disable the strategy before changing webhook_signing_method",
+        }), 409
+
+    for k, v in data.items():
+        if k == "webhook_ip_allowlist":
+            s.webhook_ip_allowlist = json.dumps(v) if v else None
+        else:
+            setattr(s, k, v)
+    db_session.commit()
+    return jsonify({"status": "success", "strategy": _strategy_to_dict(s)}), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>", methods=["DELETE"])
+def delete_strategy(strategy_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    if s.is_active:
+        return jsonify({"status": "error", "code": "STRATEGY_ACTIVE",
+                        "message": "Disable the strategy before deleting"}), 409
+    db_session.delete(s)
+    db_session.commit()
+    return jsonify({"status": "success"}), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/toggle", methods=["POST"])
+def toggle_strategy(strategy_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    s.is_active = not s.is_active
+    if s.is_active and s.state == "DRAFT":
+        s.state = "ARMED"
+    elif not s.is_active and s.state == "ARMED":
+        s.state = "DISABLED"
+    db_session.commit()
+    return jsonify({"status": "success", "is_active": s.is_active, "state": s.state}), 200
+
+
+# ----------------------------------------------------------------------------
+# Leg CRUD
+# ----------------------------------------------------------------------------
+
+
+def _validate_leg_payload(data: dict) -> tuple[bool, str]:
+    """Cross-field constraints not expressible in marshmallow alone."""
+    seg = data.get("segment")
+    if seg == "CASH":
+        if not data.get("symbol_cash") or not data.get("qty"):
+            return False, "CASH leg requires symbol_cash and qty"
+    elif seg == "FUT":
+        if not data.get("expiry_type") or not data.get("lots"):
+            return False, "FUT leg requires expiry_type and lots"
+    elif seg == "OPT":
+        if (not data.get("expiry_type") or not data.get("lots")
+                or not data.get("option_type") or not data.get("strike_criteria")):
+            return False, "OPT leg requires expiry_type, lots, option_type, strike_criteria"
+    return True, ""
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/legs", methods=["POST"])
+def add_leg(strategy_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    try:
+        data = LegSchema().load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
+    ok, msg = _validate_leg_payload(data)
+    if not ok:
+        return jsonify({"status": "error", "code": "INVALID_LEG", "message": msg}), 400
+
+    leg = StrategyLeg(strategy_id=s.id, **data)
+    db_session.add(leg)
+    db_session.commit()
+    return jsonify({"status": "success", "leg": _leg_to_dict(leg)}), 201
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/legs/<int:leg_id>", methods=["PUT"])
+def update_leg(strategy_id: int, leg_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    leg = (
+        db_session.query(StrategyLeg)
+        .join(StrategyV2)
+        .filter(
+            StrategyLeg.id == leg_id,
+            StrategyLeg.strategy_id == strategy_id,
+            StrategyV2.user_id == user,
+        )
+        .first()
+    )
+    if not leg:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    try:
+        data = LegSchema(partial=True).load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
+
+    for k, v in data.items():
+        setattr(leg, k, v)
+    db_session.commit()
+    return jsonify({"status": "success", "leg": _leg_to_dict(leg)}), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/legs/<int:leg_id>", methods=["DELETE"])
+def delete_leg(strategy_id: int, leg_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    leg = (
+        db_session.query(StrategyLeg)
+        .join(StrategyV2)
+        .filter(
+            StrategyLeg.id == leg_id,
+            StrategyLeg.strategy_id == strategy_id,
+            StrategyV2.user_id == user,
+        )
+        .first()
+    )
+    if not leg:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    db_session.delete(leg)
+    db_session.commit()
+    return jsonify({"status": "success"}), 200
+
+
+# ----------------------------------------------------------------------------
+# Webhook actions: rotate + test
+# ----------------------------------------------------------------------------
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/webhook/rotate", methods=["POST"])
+def rotate_webhook_secrets(strategy_id: int):
+    """Issue a new webhook_secret + webhook_hmac_key for the strategy.
+    Requires `confirm: <strategy.name>` in the body — destructive action.
+    """
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    try:
+        data = WebhookRotateSchema().load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
+
+    if data["confirm"] != s.name:
+        return jsonify({
+            "status": "error", "code": "CONFIRMATION_MISMATCH",
+            "message": "confirm must match the strategy name exactly",
+        }), 400
+
+    body_secret, hmac_key = _make_webhook_secrets(s.webhook_signing_method or "NONE")
+    s.webhook_secret = body_secret
+    s.webhook_hmac_key = hmac_key
+    db_session.commit()
+
+    bus.publish(WebhookSecretRotatedEvent(
+        strategy_id=s.id, method=s.webhook_signing_method or "NONE",
+    ))
+
+    return jsonify({
+        "status": "success",
+        "strategy": _strategy_to_dict(s, include_secrets=True),
+        "message": "Secrets rotated. Save the new values now — they will not be displayed again.",
+    }), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/webhook/test", methods=["POST"])
+def test_webhook(strategy_id: int):
+    """Dry-run validation: feeds the request through the same pipeline as a
+    real webhook (signature + replay + IP), but never creates a run or places
+    orders. Lets users verify their TradingView/Python alert config.
+    """
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+
+    from services.strategy.ingestion_service import handle_webhook
+
+    raw_body = request.get_data()
+    status, body = handle_webhook(
+        webhook_id=s.webhook_id,
+        raw_body=raw_body,
+        headers=dict(request.headers),
+        request=request,
+        dry_run=True,
+    )
+    return jsonify(body), status
+
+
+# ----------------------------------------------------------------------------
+# Audit chain verifier (Phase 0 carried forward)
+# ----------------------------------------------------------------------------
+
+
 @strategy_v2_bp.route("/audit/verify/<int:run_id>", methods=["GET"])
 def audit_verify(run_id: int):
-    """Walk the chained-hash audit log for a run and report integrity.
-
-    Returns:
-      200 {"status": "ok", "events_verified": N}                — chain intact
-      200 {"status": "tampered", "first_bad_event_id": ID, ...} — divergence
-      404 {"status": "error", "message": "no events for run"}   — empty
-    """
+    user, err = _require_login()
+    if err:
+        return err
     try:
         result = verify_chain(run_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("audit verify failed for run_id=%s", run_id)
-        return (
-            jsonify({"status": "error", "message": f"verifier crashed: {exc}"}),
-            500,
-        )
+        return jsonify({"status": "error", "message": f"verifier crashed: {exc}"}), 500
 
     if result.get("events_verified", 0) == 0 and result.get("status") == "ok":
-        return (
-            jsonify({"status": "error", "message": "no events for run"}),
-            404,
-        )
+        return jsonify({"status": "error", "message": "no events for run"}), 404
     return jsonify(result), 200
