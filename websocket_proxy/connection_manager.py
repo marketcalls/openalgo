@@ -104,14 +104,25 @@ class SharedZmqPublisher:
             if self._bound:
                 return self.zmq_port
 
+            # Internal message bus — bind only to the configured ZMQ_HOST
+            # (loopback by default). Publishing on `tcp://*` would expose raw
+            # tick data to anyone who can reach the port. Mirrors the bind
+            # behavior in websocket_proxy/base_adapter.py so both publisher
+            # paths are reachable from the proxy at the same address.
+            # Operators who genuinely need multi-host setups can set
+            # ZMQ_HOST=0.0.0.0 explicitly.
+            bind_host = os.getenv("ZMQ_HOST", "127.0.0.1")
+
             # Try specified port or find available one
             if port:
                 try:
-                    self.socket.bind(f"tcp://*:{port}")
+                    self.socket.bind(f"tcp://{bind_host}:{port}")
                     self.zmq_port = port
                     self._bound = True
                     os.environ["ZMQ_PORT"] = str(port)
-                    self.logger.info(f"Shared ZMQ publisher bound to port {port}")
+                    self.logger.info(
+                        f"Shared ZMQ publisher bound to {bind_host}:{port}"
+                    )
                     return port
                 except zmq.ZMQError as e:
                     self.logger.warning(f"Failed to bind to port {port}: {e}")
@@ -120,11 +131,13 @@ class SharedZmqPublisher:
             default_port = int(os.getenv("ZMQ_PORT", "5555"))
             for attempt_port in range(default_port, default_port + 100):
                 try:
-                    self.socket.bind(f"tcp://*:{attempt_port}")
+                    self.socket.bind(f"tcp://{bind_host}:{attempt_port}")
                     self.zmq_port = attempt_port
                     self._bound = True
                     os.environ["ZMQ_PORT"] = str(attempt_port)
-                    self.logger.info(f"Shared ZMQ publisher bound to port {attempt_port}")
+                    self.logger.info(
+                        f"Shared ZMQ publisher bound to {bind_host}:{attempt_port}"
+                    )
                     return attempt_port
                 except zmq.ZMQError:
                     continue
