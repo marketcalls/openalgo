@@ -29,6 +29,19 @@ class FyersTbtWebSocket:
     # Default TBT WebSocket URL
     DEFAULT_TBT_URL = "wss://rtsocket-api.fyers.in/versova"
 
+    # Health check settings - detect silent stalls (matches HSM/Upstox/Zerodha)
+    HEALTH_CHECK_INTERVAL = 30
+    DATA_TIMEOUT = 90
+
+    # Reconnection settings - exponential backoff (matches Dhan: 5s, 10s, 20s, 40s, 60s, 60s, ...)
+    RECONNECT_BASE_DELAY = 5
+    RECONNECT_MAX_DELAY = 60
+
+    # Subscribe coalescing window - mirrors HSM_BATCH_DELAY_SEC.
+    # Long enough for OptionChain-style burst subscribes to collapse into a
+    # single Fyers JSON message; short enough to feel snappy.
+    SUBSCRIBE_BATCH_DELAY_SEC = 0.15
+
     def __init__(self, access_token: str, log_path: str = ""):
         """
         Initialize TBT WebSocket client
@@ -45,8 +58,14 @@ class FyersTbtWebSocket:
         self.ws = None
         self.ws_thread = None
         self.ping_thread = None
+        self.health_check_thread: threading.Thread | None = None
         self.running = False
         self.connected = False
+
+        # Health monitoring - timestamp of the most recent inbound frame
+        # (binary tick, JSON ack, or pong). Used by the watchdog to detect
+        # silent stalls where the socket is open but the broker stopped sending.
+        self.last_message_time: float | None = None
 
         # Subscription tracking
         self.subscriptions: dict[str, set[str]] = {}  # channel -> symbols
@@ -65,7 +84,13 @@ class FyersTbtWebSocket:
         self.reconnect_enabled = True
         self.max_reconnect_attempts = 10
         self.reconnect_attempts = 0
-        self.reconnect_delay = 0
+
+        # Subscribe coalescing queue: channel -> set(symbols). Drained by a
+        # single threading.Timer 150ms after the first enqueue so a burst of
+        # per-symbol subscribe() calls collapses into one JSON per channel.
+        self._subscribe_batch_queue: dict[str, set[str]] = {}
+        self._subscribe_batch_timer: threading.Timer | None = None
+        self._subscribe_batch_lock = threading.Lock()
 
         # Get WebSocket URL
         self.ws_url = self._get_tbt_url()
@@ -137,6 +162,17 @@ class FyersTbtWebSocket:
         self.connected = False
         self.reconnect_enabled = False
 
+        # Cancel any pending subscribe-batch flush so the timer thread does
+        # not fire after the WebSocket has been closed.
+        with self._subscribe_batch_lock:
+            if self._subscribe_batch_timer is not None:
+                try:
+                    self._subscribe_batch_timer.cancel()
+                except Exception:
+                    pass
+                self._subscribe_batch_timer = None
+            self._subscribe_batch_queue.clear()
+
         # Close WebSocket
         if self.ws:
             try:
@@ -154,6 +190,14 @@ class FyersTbtWebSocket:
             self.ping_thread.join(timeout=3)
             if self.ping_thread.is_alive():
                 self.logger.warning("Ping thread did not terminate within 3 seconds")
+
+        if self.health_check_thread and self.health_check_thread.is_alive():
+            # Watchdog wakes every HEALTH_CHECK_INTERVAL (30s); give it a
+            # generous window before warning so we don't false-alarm during
+            # normal shutdown.
+            self.health_check_thread.join(timeout=self.HEALTH_CHECK_INTERVAL + 1)
+            if self.health_check_thread.is_alive():
+                self.logger.warning("Health check thread did not terminate")
 
         # Clear subscriptions
         self.subscriptions.clear()
@@ -190,26 +234,27 @@ class FyersTbtWebSocket:
                     break
 
     def _handle_reconnect(self):
-        """Handle reconnection with exponential backoff"""
+        """Handle reconnection with exponential backoff (5s, 10s, 20s, 40s, 60s cap)"""
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached")
             self.running = False
             return
 
         self.reconnect_attempts += 1
-        if self.reconnect_attempts % 5 == 0:
-            self.reconnect_delay = min(self.reconnect_delay + 5, 30)
+        delay = min(
+            self.RECONNECT_BASE_DELAY * (2 ** (self.reconnect_attempts - 1)),
+            self.RECONNECT_MAX_DELAY,
+        )
 
         self.logger.info(
-            f"Reconnecting in {self.reconnect_delay}s (attempt {self.reconnect_attempts}/{self.max_reconnect_attempts})"
+            f"Reconnecting in {delay}s (attempt {self.reconnect_attempts}/{self.max_reconnect_attempts})"
         )
-        time.sleep(self.reconnect_delay)
+        time.sleep(delay)
 
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
         self.ws = ws
         self.reconnect_attempts = 0
-        self.reconnect_delay = 0
 
         # Stop existing ping thread before creating new one (prevents thread accumulation)
         # Keep connected=False until the old thread has exited to prevent it from continuing
@@ -227,9 +272,16 @@ class FyersTbtWebSocket:
         # Now safe to set connected=True and start new ping thread
         self.connected = True
 
+        # Seed last_message_time so the watchdog has a starting point and
+        # does not trip immediately on a slow startup before the first tick.
+        self.last_message_time = time.time()
+
         # Start new ping thread
         self.ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
         self.ping_thread.start()
+
+        # Start data-stall watchdog (mirrors HSM, Upstox, Zerodha pattern)
+        self._start_health_check()
 
         self.logger.info("TBT WebSocket connected")
 
@@ -271,6 +323,10 @@ class FyersTbtWebSocket:
     def _on_message(self, ws, message):
         """Handle incoming WebSocket message"""
         try:
+            # Stamp every inbound frame (pong, JSON, protobuf) so the
+            # health-check watchdog treats any traffic as liveness.
+            self.last_message_time = time.time()
+
             # Check message type
             if isinstance(message, str):
                 # Text message - could be pong or JSON response
@@ -473,9 +529,48 @@ class FyersTbtWebSocket:
 
             time.sleep(10)
 
+    def _start_health_check(self):
+        """Start data-stall watchdog thread"""
+        if self.health_check_thread and self.health_check_thread.is_alive():
+            return
+        self.health_check_thread = threading.Thread(
+            target=self._health_check_loop, daemon=True
+        )
+        self.health_check_thread.start()
+
+    def _health_check_loop(self):
+        """Detect silent stalls — close socket if no frames for DATA_TIMEOUT.
+
+        Closing self.ws causes run_forever() to return, which triggers
+        _handle_reconnect() in _run_websocket and recovers the dead socket.
+        """
+        while self.connected and self.running:
+            time.sleep(self.HEALTH_CHECK_INTERVAL)
+            if not self.connected or not self.running:
+                break
+            if self.last_message_time is None:
+                continue
+            elapsed = time.time() - self.last_message_time
+            if elapsed > self.DATA_TIMEOUT:
+                self.logger.error(
+                    f"TBT data stall detected - no data for {elapsed:.1f}s. Forcing reconnect..."
+                )
+                self._force_reconnect()
+                break
+
+    def _force_reconnect(self):
+        """Force reconnection by closing the current WebSocket"""
+        if self.ws:
+            try:
+                self.ws.close()
+            except Exception as e:
+                self.logger.warning(f"Error closing WebSocket during force reconnect: {e}")
+
     def subscribe(self, symbols: list[str], channel: str = "1"):
         """
-        Subscribe to 50-level depth for symbols
+        Queue a subscribe to 50-level depth. The actual JSON is sent after a
+        SUBSCRIBE_BATCH_DELAY_SEC coalescing window so that bursty per-symbol
+        callers collapse into one consolidated message per channel.
 
         Args:
             symbols: List of symbol tickers (e.g., ['NSE:RELIANCE-EQ', 'NSE:TCS-EQ'])
@@ -484,31 +579,65 @@ class FyersTbtWebSocket:
         if not self.connected:
             self.logger.error("Not connected to TBT WebSocket")
             return False
-
-        try:
-            # Store subscription
-            if channel not in self.subscriptions:
-                self.subscriptions[channel] = set()
-            self.subscriptions[channel].update(symbols)
-
-            # Send subscribe message
-            subscribe_msg = {
-                "type": 1,
-                "data": {"subs": 1, "symbols": list(symbols), "mode": "depth", "channel": channel},
-            }
-
-            self.ws.send(json.dumps(subscribe_msg))
-            self.logger.debug(f"Subscribed to {len(symbols)} symbols on channel {channel}")
-
-            # Resume channel if not active
-            if channel not in self.active_channels:
-                self.switch_channel(resume_channels=[channel], pause_channels=[])
-
+        if not symbols:
             return True
 
+        # Track subscription state eagerly so unsubscribe()/_resubscribe_all()
+        # observe the truth even before the batch flush fires.
+        if channel not in self.subscriptions:
+            self.subscriptions[channel] = set()
+        self.subscriptions[channel].update(symbols)
+
+        with self._subscribe_batch_lock:
+            self._subscribe_batch_queue.setdefault(channel, set()).update(symbols)
+            if self._subscribe_batch_timer is None:
+                self._subscribe_batch_timer = threading.Timer(
+                    self.SUBSCRIBE_BATCH_DELAY_SEC, self._flush_subscribe_batch
+                )
+                self._subscribe_batch_timer.daemon = True
+                self._subscribe_batch_timer.start()
+        return True
+
+    def _flush_subscribe_batch(self):
+        """Drain the subscribe coalescing queue: one JSON per channel."""
+        try:
+            with self._subscribe_batch_lock:
+                pending = self._subscribe_batch_queue
+                self._subscribe_batch_queue = {}
+                self._subscribe_batch_timer = None
+
+            if not pending or not self.connected or not self.ws:
+                if pending:
+                    self.logger.warning(
+                        f"Dropping batch of {sum(len(s) for s in pending.values())} TBT subscribes — not connected"
+                    )
+                return
+
+            for channel, symbols in pending.items():
+                if not symbols:
+                    continue
+                try:
+                    subscribe_msg = {
+                        "type": 1,
+                        "data": {
+                            "subs": 1,
+                            "symbols": list(symbols),
+                            "mode": "depth",
+                            "channel": channel,
+                        },
+                    }
+                    self.ws.send(json.dumps(subscribe_msg))
+                    self.logger.debug(
+                        f"TBT batch-subscribed {len(symbols)} symbols on channel {channel}"
+                    )
+                    if channel not in self.active_channels:
+                        self.switch_channel(resume_channels=[channel], pause_channels=[])
+                except Exception as e:
+                    self.logger.error(
+                        f"Error flushing subscribe batch for channel {channel}: {e}"
+                    )
         except Exception as e:
-            self.logger.error(f"Subscribe error: {e}")
-            return False
+            self.logger.error(f"Subscribe batch flush error: {e}")
 
     def unsubscribe(self, symbols: list[str], channel: str = "1"):
         """
@@ -657,6 +786,14 @@ class FyersTbtWebSocket:
                 self.active_channels.clear()
             if hasattr(self, "depth_data"):
                 self.depth_data.clear()
+            if hasattr(self, "_subscribe_batch_timer") and self._subscribe_batch_timer:
+                try:
+                    self._subscribe_batch_timer.cancel()
+                except Exception:
+                    pass
+                self._subscribe_batch_timer = None
+            if hasattr(self, "_subscribe_batch_queue"):
+                self._subscribe_batch_queue.clear()
 
             # Force close WebSocket
             if hasattr(self, "ws") and self.ws:
@@ -671,6 +808,8 @@ class FyersTbtWebSocket:
                 self.ws_thread = None
             if hasattr(self, "ping_thread"):
                 self.ping_thread = None
+            if hasattr(self, "health_check_thread"):
+                self.health_check_thread = None
 
         except Exception:
             pass  # Suppress all errors in force cleanup
