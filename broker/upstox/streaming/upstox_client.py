@@ -50,6 +50,11 @@ class UpstoxWebSocketClient:
         self._health_check_thread: threading.Thread | None = None
         self._last_message_time: float | None = None
         self._connected = False
+
+        # Set by _force_reconnect() so _run_websocket can log the next
+        # reconnect attempt as STALL-TRIGGERED instead of looking identical
+        # to a network-induced reconnect (issue #1357).
+        self._stall_triggered_reconnect = False
         self.callbacks: dict[str, Callable | None] = {
             "on_connect": None,
             "on_message": None,
@@ -134,7 +139,20 @@ class UpstoxWebSocketClient:
                 break
 
             delay = self._calculate_backoff_delay(self._reconnect_attempts)
-            self.logger.info(f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})...")
+            # Distinguish stall-triggered from network-triggered reconnects
+            # in the logs so operators can diagnose root cause from a single
+            # log line rather than chasing across multiple files (issue #1357).
+            if self._stall_triggered_reconnect:
+                self.logger.warning(
+                    f"Reconnecting due to DATA STALL "
+                    f"(no ticks for >{self.DATA_TIMEOUT}s) — "
+                    f"in {delay}s (attempt {self._reconnect_attempts})..."
+                )
+                self._stall_triggered_reconnect = False  # reset for next cycle
+            else:
+                self.logger.info(
+                    f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})..."
+                )
             time.sleep(delay)
 
             # Re-fetch WebSocket URL for reconnection
@@ -269,7 +287,8 @@ class UpstoxWebSocketClient:
                 elapsed = time.time() - self._last_message_time
                 if elapsed > self.DATA_TIMEOUT:
                     self.logger.error(
-                        f"Data stall detected - no data for {elapsed:.1f}s. Forcing reconnect..."
+                        f"Data stall detected - no data for {elapsed:.1f}s "
+                        f"(threshold {self.DATA_TIMEOUT}s). Forcing reconnect..."
                     )
                     self._force_reconnect()
                     break
@@ -279,8 +298,14 @@ class UpstoxWebSocketClient:
         self.logger.debug("Health check loop exited")
 
     def _force_reconnect(self):
-        """Force reconnection by closing the current WebSocket"""
-        self.logger.info("Forcing WebSocket reconnection...")
+        """Force reconnection by closing the current WebSocket.
+
+        Sets _stall_triggered_reconnect so _run_websocket can log the
+        next reconnect attempt distinguishably from a network-induced one
+        (issue #1357).
+        """
+        self.logger.info("Forcing WebSocket reconnection (stall-triggered)...")
+        self._stall_triggered_reconnect = True
         if self.ws:
             try:
                 self.ws.close()
