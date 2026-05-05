@@ -20,6 +20,11 @@ from utils.logging import get_logger, highlight_url
 
 from .base_adapter import BaseBrokerWebSocketAdapter
 from .broker_factory import create_broker_adapter
+from .mode_utils import (
+    MODE_BY_UPPER_LABEL as _MODE_BY_UPPER_LABEL,
+    normalize_mode,
+    normalize_mode_or_none,
+)
 from .port_check import find_available_port, is_port_in_use
 
 # Initialize logger
@@ -76,8 +81,10 @@ class WebSocketProxy:
         self.last_message_time: dict[tuple[str, str, int], float] = {}
         self.message_throttle_interval = 0.05  # 50ms minimum between messages
 
-        # PERFORMANCE OPTIMIZATION 3: Pre-compute mode mappings
-        self.MODE_MAP = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
+        # MODE_MAP retained for any external consumers that imported it from
+        # this class. New code should call normalize_mode() / normalize_mode_or_none()
+        # at module level — those accept case-insensitive strings AND ints.
+        self.MODE_MAP = dict(_MODE_BY_UPPER_LABEL)
 
         # RESOURCE MONITORING: Track metrics for health checks
         self._stats_lock = aio.Lock() if hasattr(aio, 'Lock') else None
@@ -984,14 +991,19 @@ class WebSocketProxy:
 
         # Get subscription parameters
         symbols = data.get("symbols") or []  # Handle array of symbols
-        mode_str = data.get("mode", "Quote")  # Get mode as string (LTP, Quote, Depth)
+        raw_mode = data.get("mode", "Quote")  # Accepts 1/2/3 or LTP/Quote/Depth (any case)
         depth_level = data.get("depth", 5)  # Default to 5 levels
 
-        # Map string mode to numeric mode
-        mode_mapping = {"LTP": 1, "Quote": 2, "Depth": 3}
-
-        # Convert string mode to numeric if needed
-        mode = mode_mapping.get(mode_str, mode_str) if isinstance(mode_str, str) else mode_str
+        # Normalize mode through the single source of truth. Previously the
+        # in-handler mapping was Title-Case-only and silently passed through
+        # unknown strings (e.g. documented "QUOTE") — broker adapters then
+        # received the raw string instead of a numeric mode. See issue #1375.
+        try:
+            mode, mode_label = normalize_mode(raw_mode)
+        except (ValueError, TypeError) as e:
+            await self.send_error(client_id, "INVALID_MODE", str(e))
+            return
+        mode_str = mode_label  # Canonical label echoed back in subscribe response
 
         # Handle case where a single symbol is passed directly instead of as an array
         if not symbols and (data.get("symbol") and data.get("exchange")):
@@ -1104,11 +1116,16 @@ class WebSocketProxy:
 
         # Handle single symbol format
         if not symbols and not is_unsubscribe_all and (data.get("symbol") and data.get("exchange")):
+            try:
+                _mode_int, _ = normalize_mode(data.get("mode", 2))
+            except (ValueError, TypeError) as e:
+                await self.send_error(client_id, "INVALID_MODE", str(e))
+                return
             symbols = [
                 {
                     "symbol": data.get("symbol"),
                     "exchange": data.get("exchange"),
-                    "mode": data.get("mode", 2),  # Default to Quote mode
+                    "mode": _mode_int,
                 }
             ]
 
@@ -1197,7 +1214,21 @@ class WebSocketProxy:
             for symbol_info in symbols:
                 symbol = symbol_info.get("symbol")
                 exchange = symbol_info.get("exchange")
-                mode = symbol_info.get("mode", 2)  # Default to Quote mode
+                # Normalize mode (accepts 1/2/3 or LTP/Quote/Depth case-insensitive).
+                # Default to Quote mode (2) if absent.
+                try:
+                    mode, _ = normalize_mode(symbol_info.get("mode", 2))
+                except (ValueError, TypeError) as e:
+                    failed_unsubscriptions.append(
+                        {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "status": "error",
+                            "message": str(e),
+                            "broker": broker_name,
+                        }
+                    )
+                    continue
 
                 if not symbol or not exchange:
                     continue  # Skip invalid symbols
@@ -1549,12 +1580,13 @@ class WebSocketProxy:
                     logger.warning(f"Invalid topic format (no symbol): {topic_str}")
                     continue
 
-                # OPTIMIZATION: Use pre-computed mode map
-                mode = self.MODE_MAP.get(mode_str)
-
-                if not mode:
+                # Route through the single normalizer so topic parsing stays
+                # consistent with client-side mode handling.
+                normalized = normalize_mode_or_none(mode_str)
+                if normalized is None:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
                     continue
+                mode, _ = normalized
 
                 # No server-side LTP throttling: the previous time-based
                 # throttle dropped intra-window ticks instead of coalescing
