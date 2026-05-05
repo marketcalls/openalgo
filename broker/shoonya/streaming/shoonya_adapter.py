@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import Counter
 from typing import Any
 
 from database.auth_db import get_auth_token
@@ -695,11 +696,41 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self._unsub_batch_timer.start()
         return False
 
+    def _reconcile_queues_locked(self) -> None:
+        """Cancel matching (scrip, ws_call) pairs that appear in both
+        _sub_queue and _unsub_queue. A subscribe followed by an unsubscribe
+        within the same debounce window has no net effect on the broker;
+        sending the pair wastes a round trip and — since the two queues
+        drain on independent timers — risks leaking a broker subscription
+        with no local tracking if the unsub flushes before the sub.
+        Caller must hold self.lock."""
+        if not (self._sub_queue and self._unsub_queue):
+            return
+        cancel = Counter(self._sub_queue) & Counter(self._unsub_queue)
+        if not cancel:
+            return
+
+        def filter_queue(
+            queue: list[tuple[str, str]], to_cancel: Counter
+        ) -> list[tuple[str, str]]:
+            remaining = Counter(to_cancel)
+            out: list[tuple[str, str]] = []
+            for entry in queue:
+                if remaining.get(entry, 0) > 0:
+                    remaining[entry] -= 1
+                    continue
+                out.append(entry)
+            return out
+
+        self._sub_queue = filter_queue(self._sub_queue, cancel)
+        self._unsub_queue = filter_queue(self._unsub_queue, cancel)
+
     def _flush_subscription_batch(self) -> None:
         """Drain _sub_queue, group by ws_call type, and hand off to the WS
         layer's batched API which chunks and paces the actual sends."""
         with self.lock:
             self._sub_batch_timer = None
+            self._reconcile_queues_locked()
             if not self._sub_queue:
                 return
             queue_snapshot = self._sub_queue
@@ -789,6 +820,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Drain _unsub_queue and hand off to the WS-layer batched API."""
         with self.lock:
             self._unsub_batch_timer = None
+            self._reconcile_queues_locked()
             if not self._unsub_queue:
                 return
             queue_snapshot = self._unsub_queue

@@ -660,9 +660,13 @@ class ShoonyaWebSocket:
             else:
                 # Re-queue at the front and back off; preserve ordering for the
                 # rest of the queue so different msg types stay grouped.
+                # Skip re-queue if shutting down — clear_pending_subscriptions()
+                # may have already drained, and re-adding here leaks stale
+                # entries into a later reconnect/reuse of this WS client.
                 with self._subscription_lock:
-                    for scrip in reversed(batch_scrips):
-                        self._pending_subscriptions.appendleft((batch_msg_type, scrip))
+                    if self.running and not self._shutdown_event.is_set():
+                        for scrip in reversed(batch_scrips):
+                            self._pending_subscriptions.appendleft((batch_msg_type, scrip))
                 self.logger.warning(
                     f"{operation_name} batch failed; retrying after backoff"
                 )
