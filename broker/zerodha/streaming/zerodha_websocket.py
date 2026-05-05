@@ -49,7 +49,13 @@ class ZerodhaWebSocket:
 
     # Subscription batching (Zerodha supports up to 3000 instruments per connection)
     MAX_TOKENS_PER_SUBSCRIBE = 200
-    SUBSCRIPTION_DELAY = 2.0
+    # Delay between successive batches inside _process_pending_subscriptions.
+    # Was 2.0s — empirically Kite Connect tolerates much faster pacing, and
+    # the 2s floor was the dominant component of "first tick takes ~4s on
+    # subscribe" complaints. 0.5s keeps headroom for very large bursts but
+    # is invisible to single-symbol UI clicks (those skip the delay entirely
+    # via the `if self.pending_subscriptions` guard around the wait).
+    SUBSCRIPTION_DELAY = 0.5
     MAX_INSTRUMENTS_PER_CONNECTION = 3000
 
     # Reconnection settings
@@ -306,9 +312,16 @@ class ZerodhaWebSocket:
                     with self.lock:
                         for token in batch_tokens:
                             self.pending_subscriptions.append((token, batch_mode))
-                    time.sleep(5)
+                    # Interruptible: stop() unblocks immediately.
+                    if self._stop_event.wait(5):
+                        break
                 else:
-                    time.sleep(self.SUBSCRIPTION_DELAY)
+                    # Only throttle between batches when more work is queued,
+                    # so a single-symbol subscribe (the common UI case) is
+                    # not penalized with a wait it doesn't need.
+                    if self.pending_subscriptions:
+                        if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
+                            break
 
     def _subscribe_batch(self, tokens: list[int], mode: str) -> bool:
         """Subscribe to a batch of tokens"""
@@ -316,12 +329,14 @@ class ZerodhaWebSocket:
             if not self.connected or not self.ws:
                 return False
 
-            # Subscribe
+            # Subscribe.  Kite Connect tolerates `subscribe` and `mode`
+            # back-to-back over the same socket (TCP ordering preserved) —
+            # the 1s pacing that used to live between these messages was
+            # defensive over-engineering and was the dominant component of
+            # the ~4s "first tick" delay for fresh subscribes.
             sub_msg = json.dumps({"a": "subscribe", "v": tokens})
             self.ws.send(sub_msg)
             self.logger.debug(f"Subscribed to batch of {len(tokens)} tokens")
-
-            time.sleep(1.0)
 
             # Set mode
             mode_msg = json.dumps({"a": "mode", "v": [mode, tokens]})
@@ -333,7 +348,10 @@ class ZerodhaWebSocket:
                     self.subscribed_tokens.add(token)
 
             self.logger.debug(f"Set mode {mode} for {len(tokens)} tokens")
-            time.sleep(1.0)
+            # Tiny jitter so the broker has a moment to process before the
+            # outer loop pulls another batch. Empirically not strictly
+            # required, but cheap insurance.
+            time.sleep(0.05)
             return True
 
         except Exception as e:
