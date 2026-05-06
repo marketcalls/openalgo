@@ -268,6 +268,63 @@ def list_strategies():
     return jsonify({"status": "success", "strategies": out}), 200
 
 
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/webhook", methods=["GET"])
+def get_webhook_template(strategy_id: int):
+    """Return the strategy's full webhook envelope — URL, secret, ready-
+    to-paste JSON template — for one-click capture from the UI.
+
+    Per the single-user-per-deployment security model (CLAUDE.md): an
+    authenticated session has full control of the server; revealing the
+    body-secret on demand to that session is the same threat surface as
+    decrypting the DB on disk. The secret is still encrypted at rest via
+    utils.secret_box (Fernet keyed off APP_KEY) so it cannot be read
+    from a stolen DB backup without APP_KEY.
+    """
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+
+    # Lazily mint a secret for any legacy row that never had one. This
+    # mirrors the Phase 10 migration but covers the case where the user
+    # opens the dialog before running migrate_all.py.
+    minted = False
+    if not s.webhook_secret:
+        s.webhook_secret = _secrets.token_hex(16)
+        s.webhook_signing_method = "BODY_SECRET"
+        db_session.commit()
+        minted = True
+
+    # Build a ready-to-paste payload. ts is included only when the
+    # replay window is enabled, since clients with replay=0 don't need
+    # it and including it would mislead users into thinking it was
+    # required.
+    body: dict = {
+        "webhook_secret": s.webhook_secret,
+        "action": "BUY",
+    }
+    if s.webhook_replay_window_seconds and s.webhook_replay_window_seconds > 0:
+        from time import time as _now
+        body["ts"] = int(_now())
+    # signal_id intentionally absent from the rendered template — the
+    # backend doesn't currently validate it, and including a meaningless
+    # placeholder confuses users.
+
+    return jsonify({
+        "status": "success",
+        "webhook_url": f"/strategy/webhook/{s.webhook_id}",
+        "webhook_secret": s.webhook_secret,
+        "json_body": body,
+        "secret_minted": minted,
+    }), 200
+
+
 @strategy_v2_bp.route("/strategy/<int:strategy_id>", methods=["GET"])
 def get_strategy(strategy_id: int):
     user, err = _require_login()
