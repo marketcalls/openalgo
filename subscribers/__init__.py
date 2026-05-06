@@ -220,4 +220,13 @@ def register_all():
     bus.subscribe("broker.order_update", position_tracker.on_broker_order_update,
                   "tracker:broker_order_update")
 
+    # ------------------------------------------------------------------------
+    # RMS engine — singleton dispatcher. Listens for IN_TRADE state changes
+    # to register/unregister runs and (re)subscribe to market_data ticks.
+    # ------------------------------------------------------------------------
+    from services.strategy import rms_engine
+
+    bus.subscribe("strategy.state_changed", rms_engine.on_strategy_state_changed,
+                  "rms_engine:state_changed")
+
     logger.debug("EventBus: all subscribers registered")
