@@ -122,6 +122,29 @@ export const strategyV2Api = {
     return r.data
   },
 
+  /**
+   * Fetch the strategy's webhook envelope on demand — URL, decrypted
+   * body-secret, and a ready-to-paste JSON template. Single-user
+   * platform (CLAUDE.md security model) so revealing the secret to
+   * the authenticated session is the same threat model as decrypting
+   * the DB. Used by the Webhook & Security dialog so the template
+   * isn't stuck showing a placeholder after the one-time-display
+   * window closes.
+   */
+  getWebhookTemplate: async (
+    id: number
+  ): Promise<{
+    status: 'success' | 'error'
+    webhook_url: string
+    secret: string
+    trading_mode: 'LONG' | 'SHORT' | 'BOTH'
+    json_body: Record<string, unknown>
+    secret_minted: boolean
+  }> => {
+    const r = await webClient.get(`${ROOT}/strategy/${id}/webhook`)
+    return r.data
+  },
+
   /** Build the URL the user pastes into TradingView/Python/etc. */
   webhookUrl: (webhookId: string): string => {
     if (typeof window === 'undefined') return ''

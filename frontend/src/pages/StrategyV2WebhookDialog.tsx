@@ -44,14 +44,45 @@ export default function StrategyV2WebhookDialog({
   onRotated,
 }: Props) {
   const [replay, setReplay] = useState<number>(strategy.webhook_replay_window_seconds)
-  const [testPayload, setTestPayload] = useState<string>(buildTemplate(strategy, oneTimeSecret))
+  // Real secret fetched on demand via GET /strategy/{id}/webhook so the
+  // template shows the working value (not the <your-saved-secret>
+  // placeholder) every time the dialog opens. Single-user platform
+  // model — same threat surface as decrypting the DB. The fetched
+  // secret is what we splice into the template; oneTimeSecret only
+  // shows up on creation/rotation and takes priority since it's the
+  // freshly-minted value the user must save.
+  const [fetchedSecret, setFetchedSecret] = useState<string | null>(null)
+  const effectiveSecret = oneTimeSecret?.webhook_secret ?? fetchedSecret
+  const [testPayload, setTestPayload] = useState<string>(
+    buildTemplate(strategy, { webhook_secret: effectiveSecret ?? undefined })
+  )
   const [testResult, setTestResult] = useState<string>('')
   const [rotateConfirm, setRotateConfirm] = useState<string>('')
   const [busy, setBusy] = useState(false)
 
+  // Fetch on mount.
   useEffect(() => {
-    setTestPayload(buildTemplate(strategy, oneTimeSecret))
-  }, [strategy, oneTimeSecret])
+    let cancelled = false
+    strategyV2Api
+      .getWebhookTemplate(strategy.id)
+      .then((r) => {
+        if (!cancelled) setFetchedSecret(r.secret)
+      })
+      .catch((err) => {
+        // Failed fetch is non-fatal — the placeholder template still
+        // works for users who saved the secret out-of-band.
+        console.error('webhook template fetch failed', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [strategy.id])
+
+  useEffect(() => {
+    setTestPayload(
+      buildTemplate(strategy, { webhook_secret: effectiveSecret ?? undefined })
+    )
+  }, [strategy, effectiveSecret])
 
   const url = strategyV2Api.webhookUrl(strategy.webhook_id)
 
@@ -127,8 +158,7 @@ export default function StrategyV2WebhookDialog({
           <DialogTitle>Webhook & Security</DialogTitle>
           <DialogDescription>
             Every strategy carries a unique body-secret that must appear
-            in the webhook JSON. Configure the replay window and IP
-            allowlist below; test with a dry-run before going live.
+            in the webhook JSON. Test with a dry-run before going live.
           </DialogDescription>
         </DialogHeader>
 
@@ -155,23 +185,31 @@ export default function StrategyV2WebhookDialog({
             {oneTimeSecret?.webhook_secret && (
               <div className="border-2 border-amber-500/50 bg-amber-500/10 rounded-md p-3 space-y-2">
                 <p className="text-sm font-medium">
-                  Save this now — it will not be displayed again.
+                  Just-issued secret — save it now if you'll integrate
+                  externally without revisiting this dialog.
                 </p>
-                <div className="space-y-1">
-                  <Label className="text-xs">Body Secret (include in JSON)</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      readOnly
-                      value={oneTimeSecret.webhook_secret}
-                      className="font-mono text-xs"
-                    />
-                    <Button
-                      variant="outline"
-                      onClick={() => copy(oneTimeSecret.webhook_secret!)}
-                    >
-                      Copy
-                    </Button>
-                  </div>
+              </div>
+            )}
+
+            {/* Always-visible secret display. The dialog fetches the
+                actual decrypted value on mount via GET /webhook so
+                operators don't have to remember the one-time-display
+                window. */}
+            {effectiveSecret && (
+              <div className="space-y-1">
+                <Label className="text-xs">Body Secret (paste into the JSON `secret` field)</Label>
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    value={effectiveSecret}
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={() => copy(effectiveSecret)}
+                  >
+                    Copy
+                  </Button>
                 </div>
               </div>
             )}
