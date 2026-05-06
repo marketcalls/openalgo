@@ -1,14 +1,12 @@
 /**
  * Webhook & Security dialog for a Strategy v2.
  *
- * Sections:
- *   1. URL — copy-able webhook endpoint
- *   2. Signing method — NONE | BODY_SECRET | HMAC_SHA256 | BOTH
- *   3. One-time secret display (only on creation / rotation)
- *   4. Replay window + IP allowlist config
- *   5. TradingView template generator (depends on signing method)
- *   6. Test webhook button (dry-run)
- *   7. Rotate secrets (destructive — requires confirmation)
+ * Single signing scheme — every strategy carries a unique body-secret
+ * that must be present in the webhook JSON body. We dropped the prior
+ * menu of NONE / BODY_SECRET / HMAC_SHA256 / BOTH because users
+ * almost universally wanted the TradingView path and the choice was
+ * confusing. Legacy strategies on other methods are normalized to
+ * BODY_SECRET on next save.
  */
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
@@ -24,18 +22,11 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 
 import { strategyV2Api } from '@/api/strategy_v2'
-import type { SigningMethod, StrategyV2 } from '@/types/strategy_v2'
+import type { StrategyV2 } from '@/types/strategy_v2'
 
 interface Props {
   strategy: StrategyV2
@@ -52,33 +43,31 @@ export default function StrategyV2WebhookDialog({
   onUpdated,
   onRotated,
 }: Props) {
-  const [method, setMethod] = useState<SigningMethod>(strategy.webhook_signing_method)
   const [replay, setReplay] = useState<number>(strategy.webhook_replay_window_seconds)
-  const [allowlist, setAllowlist] = useState<string>(
-    strategy.webhook_ip_allowlist?.join('\n') ?? ''
-  )
-  const [testPayload, setTestPayload] = useState<string>(buildTemplate(strategy, method, oneTimeSecret))
+  const [testPayload, setTestPayload] = useState<string>(buildTemplate(strategy, oneTimeSecret))
   const [testResult, setTestResult] = useState<string>('')
   const [rotateConfirm, setRotateConfirm] = useState<string>('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    setTestPayload(buildTemplate(strategy, method, oneTimeSecret))
-  }, [strategy, method, oneTimeSecret])
+    setTestPayload(buildTemplate(strategy, oneTimeSecret))
+  }, [strategy, oneTimeSecret])
 
   const url = strategyV2Api.webhookUrl(strategy.webhook_id)
 
   const onSaveConfig = async () => {
     setBusy(true)
     try {
-      const cidrs = allowlist
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean)
       const r = await strategyV2Api.update(strategy.id, {
-        webhook_signing_method: method,
+        // Always send BODY_SECRET — keeps legacy strategies on this
+        // single scheme and forces the backend to materialize a secret
+        // for any row that never had one. IP allowlist is no longer
+        // user-configurable (security comes from the body-secret + the
+        // SEBI-mandated broker static-IP whitelisting at the broker side
+        // post-2026-04-01); we explicitly clear any legacy CIDR list.
+        webhook_signing_method: 'BODY_SECRET',
         webhook_replay_window_seconds: replay,
-        webhook_ip_allowlist: cidrs.length ? cidrs : null,
+        webhook_ip_allowlist: null,
       })
       onUpdated(r.strategy)
       toast.success('Webhook config saved')
@@ -137,8 +126,9 @@ export default function StrategyV2WebhookDialog({
         <DialogHeader>
           <DialogTitle>Webhook & Security</DialogTitle>
           <DialogDescription>
-            Configure the secret method, replay window, and IP allowlist.
-            Test the endpoint with a dry-run before going live.
+            Every strategy carries a unique body-secret that must appear
+            in the webhook JSON. Configure the replay window and IP
+            allowlist below; test with a dry-run before going live.
           </DialogDescription>
         </DialogHeader>
 
@@ -162,86 +152,43 @@ export default function StrategyV2WebhookDialog({
               </div>
             </div>
 
-            <div className="space-y-1">
-              <Label>Signing Method</Label>
-              <Select value={method} onValueChange={(v: SigningMethod) => setMethod(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="NONE">NONE — URL secret only</SelectItem>
-                  <SelectItem value="BODY_SECRET">BODY_SECRET — TradingView</SelectItem>
-                  <SelectItem value="HMAC_SHA256">HMAC_SHA256 — Python / Amibroker</SelectItem>
-                  <SelectItem value="BOTH">BOTH — accept either</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                TradingView cannot set custom HTTP headers — use BODY_SECRET there.
-                Python/Amibroker can use HMAC_SHA256 over the raw request body.
-              </p>
-            </div>
-
-            {oneTimeSecret && (oneTimeSecret.webhook_secret || oneTimeSecret.webhook_hmac_key) && (
+            {oneTimeSecret?.webhook_secret && (
               <div className="border-2 border-amber-500/50 bg-amber-500/10 rounded-md p-3 space-y-2">
                 <p className="text-sm font-medium">
-                  Save these now — they will not be displayed again.
+                  Save this now — it will not be displayed again.
                 </p>
-                {oneTimeSecret.webhook_secret && (
-                  <div className="space-y-1">
-                    <Label className="text-xs">Body Secret</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        readOnly
-                        value={oneTimeSecret.webhook_secret}
-                        className="font-mono text-xs"
-                      />
-                      <Button variant="outline" onClick={() => copy(oneTimeSecret.webhook_secret!)}>
-                        Copy
-                      </Button>
-                    </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Body Secret (include in JSON)</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      readOnly
+                      value={oneTimeSecret.webhook_secret}
+                      className="font-mono text-xs"
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={() => copy(oneTimeSecret.webhook_secret!)}
+                    >
+                      Copy
+                    </Button>
                   </div>
-                )}
-                {oneTimeSecret.webhook_hmac_key && (
-                  <div className="space-y-1">
-                    <Label className="text-xs">HMAC Key</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        readOnly
-                        value={oneTimeSecret.webhook_hmac_key}
-                        className="font-mono text-xs"
-                      />
-                      <Button variant="outline" onClick={() => copy(oneTimeSecret.webhook_hmac_key!)}>
-                        Copy
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                </div>
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label>Replay window (seconds, 0 = off)</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={3600}
-                  value={replay}
-                  onChange={(e) => setReplay(Number(e.target.value) || 0)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Body must include <code>ts</code> field within ±N seconds. 300 recommended for HMAC users.
-                </p>
-              </div>
-              <div className="space-y-1">
-                <Label>IP allowlist (one CIDR per line)</Label>
-                <Textarea
-                  rows={4}
-                  value={allowlist}
-                  onChange={(e) => setAllowlist(e.target.value)}
-                  placeholder="10.0.0.0/8&#10;52.89.214.238/32"
-                />
-              </div>
+            <div className="space-y-1">
+              <Label>Replay window (seconds, 0 = off)</Label>
+              <Input
+                type="number"
+                min={0}
+                max={3600}
+                value={replay}
+                onChange={(e) => setReplay(Number(e.target.value) || 0)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Body must include a <code>ts</code> field (epoch seconds)
+                within ±N seconds of server time. Set 0 to disable.
+              </p>
             </div>
 
             <div className="flex justify-end">
@@ -343,25 +290,21 @@ export default function StrategyV2WebhookDialog({
 
 function buildTemplate(
   strategy: StrategyV2,
-  method: SigningMethod,
   secret: { webhook_secret?: string; webhook_hmac_key?: string } | null
 ): string {
+  // Single signing scheme: every payload includes "webhook_secret".
+  // The placeholder shows up when the dialog is opened post-creation
+  // (the secret is one-time-display only); users must paste their saved
+  // copy in.
   const tplParts: string[] = []
-  if (method === 'BODY_SECRET' || method === 'BOTH') {
-    const value = secret?.webhook_secret ?? '<your-saved-body-secret>'
-    tplParts.push(`  "webhook_secret": "${value}"`)
-  }
+  const value = secret?.webhook_secret ?? '<your-saved-body-secret>'
+  tplParts.push(`  "webhook_secret": "${value}"`)
   tplParts.push('  "action": "BUY"')
   if (strategy.webhook_replay_window_seconds && strategy.webhook_replay_window_seconds > 0) {
     tplParts.push(`  "ts": ${Math.floor(Date.now() / 1000)}`)
   }
-  // signal_id is OPTIONAL today — the backend doesn't validate or dedupe by
-  // it; concurrent-run dedup is enforced by the DB unique partial index on
-  // (strategy_id, active states). The field is in the template as a forward-
-  // compatible hook; for TradingView users the placeholder is meant to be
-  // replaced with `{{strategy.order.id}}_{{time}}` so each firing carries a
-  // distinct id. For manual curl/Postman tests, any string works or you can
-  // omit the field entirely.
+  // signal_id is optional metadata. Include for TradingView users who
+  // can substitute `{{strategy.order.id}}_{{time}}`; harmless otherwise.
   tplParts.push('  "signal_id": "<optional — any string>"')
   return `{\n${tplParts.join(',\n')}\n}`
 }

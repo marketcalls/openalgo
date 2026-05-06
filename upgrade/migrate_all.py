@@ -72,6 +72,7 @@ MIGRATIONS = [
     ("migrate_strategy_v2.py", "Strategy v2 Engine — DB Tables + v1->v2 Conversion"),
     ("migrate_strategy_v1_drop.py", "Strategy v1 — Drop Legacy Tables (Phase 8)"),
     ("migrate_strategy_v2_phase9.py", "Strategy v2 — Phase 9 (segment, exit_date, run_forever, exchange_cash)"),
+    ("migrate_strategy_v2_phase10.py", "Strategy v2 — Phase 10 (collapse signing methods to BODY_SECRET)"),
 ]
 
 

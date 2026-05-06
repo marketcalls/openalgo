@@ -305,7 +305,12 @@ def create_strategy():
     except ValidationError as e:
         return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
 
-    method = data.get("webhook_signing_method", "NONE")
+    # Force a single, simple, TradingView-compatible signing scheme:
+    # every new strategy gets a unique body-secret. The previous menu
+    # of NONE/HMAC_SHA256/BOTH was confusing for users who almost
+    # universally just wanted the TradingView path. Existing strategies
+    # on other methods are honored on read but normalized on next save.
+    method = "BODY_SECRET"
     body_secret, hmac_key = _make_webhook_secrets(method)
 
     # Phase 9 cross-field validation: positional strategies must specify
@@ -402,6 +407,18 @@ def update_strategy(strategy_id: int):
             "status": "error", "code": "STRATEGY_ACTIVE",
             "message": "Disable the strategy before changing webhook_signing_method",
         }), 409
+
+    # We've collapsed signing to a single TradingView-compatible scheme.
+    # Any update that ALSO touches webhook_signing_method is silently
+    # normalized to BODY_SECRET so older clients can't drift the row
+    # back to NONE/HMAC/BOTH. Existing strategies on legacy methods get
+    # migrated to BODY_SECRET the next time the user touches them — but
+    # they need a fresh body_secret since legacy NONE rows have none.
+    if "webhook_signing_method" in data and data["webhook_signing_method"] != "BODY_SECRET":
+        data["webhook_signing_method"] = "BODY_SECRET"
+    if data.get("webhook_signing_method") == "BODY_SECRET" and not s.webhook_secret:
+        # Materialize a secret if the row never had one (legacy NONE).
+        s.webhook_secret = _secrets.token_hex(16)
 
     for k, v in data.items():
         if k == "webhook_ip_allowlist":
