@@ -436,10 +436,21 @@ def toggle_strategy(strategy_id: int):
     if not s:
         return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
     s.is_active = not s.is_active
-    if s.is_active and s.state == "DRAFT":
-        s.state = "ARMED"
-    elif not s.is_active and s.state == "ARMED":
-        s.state = "DISABLED"
+    # Keep state and is_active aligned. The state machine has 4 values:
+    #   DRAFT     — never enabled; toggling to active arms it
+    #   ARMED     — currently accepting webhooks
+    #   DISABLED  — was active, user explicitly disabled it
+    #   ARCHIVED  — terminal; toggle is blocked at the UI layer
+    # Earlier versions only handled DRAFT->ARMED and ARMED->DISABLED, which
+    # left re-enabling a previously-DISABLED strategy in a contradictory
+    # state (is_active=True, state=DISABLED). Now: any "becoming active"
+    # transition lands in ARMED; any "becoming inactive" lands in DISABLED.
+    if s.is_active:
+        if s.state in ("DRAFT", "DISABLED"):
+            s.state = "ARMED"
+    else:
+        if s.state == "ARMED":
+            s.state = "DISABLED"
     db_session.commit()
 
     # Squareoff scheduler — hook the strategy's intraday close-time job.

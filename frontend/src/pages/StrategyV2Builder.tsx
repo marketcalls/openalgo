@@ -443,32 +443,42 @@ export default function StrategyV2Builder() {
             >
               {strategy.mode === 'sandbox' ? 'SANDBOX' : 'LIVE'}
             </Badge>
-            <Badge
-              variant="outline"
-              className={
-                strategy.state === 'ARMED'
-                  ? 'bg-emerald-500/15 text-emerald-700 border-emerald-500/30'
-                  : strategy.state === 'DISABLED'
-                    ? 'bg-rose-500/15 text-rose-700 border-rose-500/30'
-                    : strategy.state === 'ARCHIVED'
-                      ? 'bg-neutral-500/15 text-neutral-500 border-neutral-500/30'
-                      : 'bg-sky-500/15 text-sky-700 border-sky-500/30'
-              }
-            >
-              {STATE_LABELS[strategy.state] ?? strategy.state}
-            </Badge>
+
+            {/* Single state-aware control replacing the previous
+                badge + button pair. The button label embeds the
+                current state so there's nowhere for the two indicators
+                to disagree, and the verb makes the action explicit. */}
             <Button
               variant={strategy.is_active ? 'outline' : 'default'}
               onClick={onToggleActive}
               disabled={toggling || strategy.state === 'ARCHIVED'}
               title={
                 strategy.is_active
-                  ? 'Disable — webhook signals will be rejected'
-                  : 'Enable — webhook signals will create runs'
+                  ? 'Webhook signals are being accepted — click to disable'
+                  : 'Webhook signals are rejected — click to enable'
               }
+              className="gap-2"
             >
-              {toggling ? 'Working…' : strategy.is_active ? 'Disable' : 'Enable'}
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  strategy.state === 'ARMED'
+                    ? 'bg-emerald-500'
+                    : strategy.state === 'DISABLED'
+                      ? 'bg-rose-500'
+                      : strategy.state === 'ARCHIVED'
+                        ? 'bg-neutral-400'
+                        : 'bg-sky-500'
+                }`}
+              />
+              {toggling
+                ? 'Working…'
+                : strategy.state === 'ARCHIVED'
+                  ? 'Archived'
+                  : strategy.is_active
+                    ? `${STATE_LABELS[strategy.state] ?? strategy.state} · Disable`
+                    : `${STATE_LABELS[strategy.state] ?? strategy.state} · Enable`}
             </Button>
+
             <Button
               variant="outline"
               onClick={() => navigate(`/strategy/v2/${strategy.id}/runs`)}
