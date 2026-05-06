@@ -331,6 +331,12 @@ export default function StrategyV2Builder() {
               {strategy.mode === 'sandbox' ? 'SANDBOX' : 'LIVE'}
             </Badge>
             <Badge variant="outline">{strategy.state}</Badge>
+            <Button
+              variant="outline"
+              onClick={() => navigate(`/strategy/v2/${strategy.id}/runs`)}
+            >
+              Runs
+            </Button>
             <Button variant="outline" onClick={() => setShowWebhook(true)}>
               Webhook & Security
             </Button>

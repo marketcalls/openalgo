@@ -20,6 +20,12 @@ import type {
   WebhookRotateResponse,
   WebhookTestResponse,
   AuditVerifyResponse,
+  StrategyRun,
+  RunOrderbookResponse,
+  RunListResponse,
+  RunTradeRow,
+  RunPositionRow,
+  RunEventRow,
 } from '@/types/strategy_v2'
 
 const ROOT = '/strategy/api/v2'
@@ -117,6 +123,43 @@ export const strategyV2Api = {
   // ---- Audit chain verifier (Phase 0) ----
   verifyAudit: async (runId: number): Promise<AuditVerifyResponse> => {
     const r = await webClient.get<AuditVerifyResponse>(`${ROOT}/audit/verify/${runId}`)
+    return r.data
+  },
+
+  // ---- Reporting (Phase 2) ----
+  listRuns: async (strategyId: number) => {
+    const r = await webClient.get<{ status: string; data: StrategyRun[] }>(
+      `${ROOT}/strategy/${strategyId}/runs`
+    )
+    return r.data.data || []
+  },
+
+  getRun: async (runId: number): Promise<StrategyRun> => {
+    const r = await webClient.get<{ status: string; data: StrategyRun }>(
+      `${ROOT}/run/${runId}`
+    )
+    return r.data.data
+  },
+
+  runOrderbook: async (runId: number): Promise<RunOrderbookResponse> => {
+    const r = await webClient.get<RunOrderbookResponse>(`${ROOT}/run/${runId}/orderbook`)
+    return r.data
+  },
+
+  runTradebook: async (runId: number): Promise<RunListResponse<RunTradeRow>> => {
+    const r = await webClient.get<RunListResponse<RunTradeRow>>(`${ROOT}/run/${runId}/tradebook`)
+    return r.data
+  },
+
+  runPositionbook: async (runId: number): Promise<RunListResponse<RunPositionRow>> => {
+    const r = await webClient.get<RunListResponse<RunPositionRow>>(
+      `${ROOT}/run/${runId}/positionbook`
+    )
+    return r.data
+  },
+
+  runEvents: async (runId: number): Promise<RunListResponse<RunEventRow>> => {
+    const r = await webClient.get<RunListResponse<RunEventRow>>(`${ROOT}/run/${runId}/events`)
     return r.data
   },
 }

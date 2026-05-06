@@ -21,13 +21,19 @@ import json
 import secrets as _secrets
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from flask import Blueprint, jsonify, request, session
 from marshmallow import ValidationError
 
 from database.strategy_v2_db import (
+    StrategyEvent,
     StrategyLeg,
+    StrategyOrder,
+    StrategyPosition,
     StrategyRiskConfig,
+    StrategyRun,
+    StrategyTrade,
     StrategyV2,
     db_session,
 )
@@ -38,6 +44,7 @@ from restx_api.strategy_v2_schemas import (
     StrategyUpdateSchema,
     WebhookRotateSchema,
 )
+from services.strategy import serializers
 from subscribers.strategy_audit_subscriber import verify_chain
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -479,6 +486,128 @@ def test_webhook(strategy_id: int):
         dry_run=True,
     )
     return jsonify(body), status
+
+
+# ----------------------------------------------------------------------------
+# Reporting endpoints — strategy-scoped orderbook / tradebook / positionbook /
+# events / runs. Same JSON envelopes as the global /api/v1 endpoints so the
+# frontend reuses table components.
+# ----------------------------------------------------------------------------
+
+
+def _user_owns_run(user: str, run_id: int) -> Optional[StrategyRun]:
+    """Auth helper — only return the run if it belongs to the logged-in user."""
+    return (
+        db_session.query(StrategyRun)
+        .join(StrategyV2, StrategyRun.strategy_id == StrategyV2.id)
+        .filter(StrategyRun.id == run_id, StrategyV2.user_id == user)
+        .first()
+    )
+
+
+def _user_owns_strategy(user: str, strategy_id: int) -> Optional[StrategyV2]:
+    return (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/runs", methods=["GET"])
+def list_runs(strategy_id: int):
+    """List all runs for a strategy, most-recent first."""
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_strategy(user, strategy_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyRun)
+        .filter(StrategyRun.strategy_id == strategy_id)
+        .order_by(StrategyRun.id.desc())
+        .all()
+    )
+    return jsonify(serializers.to_runs_format(rows)), 200
+
+
+@strategy_v2_bp.route("/run/<int:run_id>", methods=["GET"])
+def get_run(run_id: int):
+    """Single-run details (state, P&L peaks, exit reason, timestamps)."""
+    user, err = _require_login()
+    if err:
+        return err
+    run = _user_owns_run(user, run_id)
+    if not run:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    return jsonify(serializers.run_detail(run)), 200
+
+
+@strategy_v2_bp.route("/run/<int:run_id>/orderbook", methods=["GET"])
+def run_orderbook(run_id: int):
+    """Same JSON envelope as /api/v1/orderbook."""
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_run(user, run_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyOrder)
+        .filter(StrategyOrder.run_id == run_id)
+        .order_by(StrategyOrder.id.asc())
+        .all()
+    )
+    return jsonify(serializers.to_orderbook_format(rows)), 200
+
+
+@strategy_v2_bp.route("/run/<int:run_id>/tradebook", methods=["GET"])
+def run_tradebook(run_id: int):
+    """Same JSON envelope as /api/v1/tradebook."""
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_run(user, run_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyTrade)
+        .filter(StrategyTrade.run_id == run_id)
+        .order_by(StrategyTrade.id.asc())
+        .all()
+    )
+    return jsonify(serializers.to_tradebook_format(rows)), 200
+
+
+@strategy_v2_bp.route("/run/<int:run_id>/positionbook", methods=["GET"])
+def run_positionbook(run_id: int):
+    """Same JSON envelope as /api/v1/positionbook."""
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_run(user, run_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyPosition)
+        .filter(StrategyPosition.run_id == run_id)
+        .order_by(StrategyPosition.leg_id.asc())
+        .all()
+    )
+    return jsonify(serializers.to_positionbook_format(rows)), 200
+
+
+@strategy_v2_bp.route("/run/<int:run_id>/events", methods=["GET"])
+def run_events(run_id: int):
+    """Audit timeline for a run — every state change, RMS trigger, fill, etc."""
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_run(user, run_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyEvent)
+        .filter(StrategyEvent.run_id == run_id)
+        .order_by(StrategyEvent.id.asc())
+        .all()
+    )
+    return jsonify(serializers.to_events_format(rows)), 200
 
 
 # ----------------------------------------------------------------------------

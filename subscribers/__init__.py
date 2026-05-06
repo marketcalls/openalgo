@@ -204,4 +204,20 @@ def register_all():
     bus.subscribe("account.unlocked",
                   socketio_subscriber.on_account_unlocked, "socketio:account_unlocked")
 
+    # ------------------------------------------------------------------------
+    # Position tracker — keeps strategy_orders / trades / positions in sync
+    # with broker reality. Subscribes to the existing OrderEvent stream
+    # (placed/failed/cancelled) and the new BrokerOrderUpdateEvent.
+    # ------------------------------------------------------------------------
+    from services.strategy import position_tracker
+
+    bus.subscribe("order.placed", position_tracker.on_order_placed,
+                  "tracker:order_placed")
+    bus.subscribe("order.failed", position_tracker.on_order_failed,
+                  "tracker:order_failed")
+    bus.subscribe("order.cancelled", position_tracker.on_order_cancelled,
+                  "tracker:order_cancelled")
+    bus.subscribe("broker.order_update", position_tracker.on_broker_order_update,
+                  "tracker:broker_order_update")
+
     logger.debug("EventBus: all subscribers registered")

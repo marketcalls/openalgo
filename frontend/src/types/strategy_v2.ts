@@ -177,3 +177,111 @@ export interface AuditVerifyResponse {
   stored_row_hash?: string
   message?: string
 }
+
+// ----------------------------------------------------------------------------
+// Phase 2 — runs / orderbook / tradebook / positionbook / events
+// ----------------------------------------------------------------------------
+
+export interface StrategyRun {
+  id: number
+  strategy_id: number
+  state: RunState
+  mode: StrategyMode
+  exit_reason: string | null
+  triggered_at: string | null
+  entered_at: string | null
+  exited_at: string | null
+  peak_mtm: number
+  trough_mtm: number
+  profit_locked: boolean
+  realized_pnl: number
+  max_unrealized_pnl: number
+  max_drawdown: number
+  signal_source: string | null
+}
+
+export interface RunOrderRow {
+  // Same shape as /orderbook row:
+  action: string
+  symbol: string
+  exchange: string
+  orderid: string
+  product: string
+  quantity: string
+  price: number
+  pricetype: string
+  order_status: string
+  trigger_price: number
+  timestamp: string
+  // Strategy-only:
+  source: string
+  mode: StrategyMode
+  leg_id: number | null
+  run_id: number
+  rms_event_id: number | null
+}
+
+export interface RunOrderbookResponse {
+  status: string
+  data: {
+    orders: RunOrderRow[]
+    statistics: {
+      total_buy_orders: number
+      total_sell_orders: number
+      total_completed_orders: number
+      total_open_orders: number
+      total_rejected_orders: number
+    }
+  }
+}
+
+export interface RunTradeRow {
+  action: string
+  symbol: string
+  exchange: string
+  orderid: string
+  product: string
+  quantity: number
+  average_price: number
+  trade_value: number
+  timestamp: string
+  leg_id: number | null
+  run_id: number
+  broker_tradeid: string
+}
+
+export interface RunPositionRow {
+  symbol: string
+  exchange: string
+  product: string
+  quantity: string
+  average_price: string
+  ltp: string
+  pnl: string
+  leg_id: number
+  run_id: number
+  net_qty: number
+  avg_entry: number | null
+  ltp_decimal: number | null
+  unrealized_pnl: number
+  realized_pnl: number
+  current_sl_price: number | null
+  current_target_price: number | null
+  trail_advances_count: number
+  leg_state: string
+}
+
+export interface RunEventRow {
+  id: number
+  type: string
+  ts_utc: number
+  ts_ist: string
+  leg_id: number | null
+  payload: unknown
+  row_hash: string | null
+}
+
+export interface RunListResponse<T> {
+  status: string
+  data: T[]
+}
