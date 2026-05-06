@@ -149,6 +149,23 @@ def _resolve_cash(leg: StrategyLeg, api_key: str) -> ResolverResult:
     # rows (created before exchange_cash was added) so existing strategies
     # keep resolving without re-saving.
     exchange = leg.exchange_cash or "NSE"
+
+    # Hot-path fast-return: CASH symbol metadata (symbol/exchange/
+    # lot_size/tick_size) is static — RELIANCE on NSE has the same
+    # tick_size forever. If the leg already has its cache fields
+    # populated AND the symbol/exchange match what we want now,
+    # skip the DB round-trip entirely. Saves ~50-100ms per webhook
+    # on warm CASH legs which is the bulk of latency for
+    # per-symbol-routed strategies.
+    if (
+        leg.resolved_at is not None
+        and leg.resolved_symbol == leg.symbol_cash
+        and (leg.resolved_exchange or "").upper() == exchange.upper()
+        and leg.lot_size_cache is not None
+        and leg.tick_size_cache is not None
+    ):
+        return True, leg, ""
+
     from services.symbol_service import get_symbol_info
     ok, info, _ = get_symbol_info(symbol=leg.symbol_cash, exchange=exchange, api_key=api_key)
     if not ok:
