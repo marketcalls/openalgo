@@ -13,28 +13,13 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from utils.constants import CRYPTO_EXCHANGES
+from utils.constants import CRYPTO_EXCHANGES, NSE_INDEX_SYMBOLS, BSE_INDEX_SYMBOLS
 from utils.logging import get_logger
 
 # opengreeks is lazy-loaded inside calculate_greeks() and check_opengreeks_availability().
 
 logger = get_logger(__name__)
 
-INDIA_TZ = ZoneInfo("Asia/Kolkata")
-
-# Exchange-specific symbol mappings
-NSE_INDEX_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    "NIFTYNXT50",
-    "NIFTYIT",
-    "NIFTYPHARMA",
-    "NIFTYBANK",
-}
-
-BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
 
 CURRENCY_SYMBOLS = {"USDINR", "EURINR", "GBPINR", "JPYINR"}
 

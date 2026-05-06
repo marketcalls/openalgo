@@ -26,8 +26,6 @@ from services.option_symbol_service import (
 )
 from services.quotes_service import get_quotes
 from services.straddle_chart_service import (
-    NSE_INDEX_SYMBOLS,
-    BSE_INDEX_SYMBOLS,
     _get_quote_exchange,
     _convert_timestamp_to_ist,
     _calculate_days_to_expiry,
@@ -37,7 +35,7 @@ from services.strategy_chart_service import (
     _resolve_trading_window,
 )
 from database.token_db_enhanced import fno_search_symbols
-from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT, NSE_INDEX_SYMBOLS, BSE_INDEX_SYMBOLS
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
