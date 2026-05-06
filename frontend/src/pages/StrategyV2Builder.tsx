@@ -436,11 +436,17 @@ export default function StrategyV2Builder() {
       return
     }
     try {
-      const payload = legFormToPayload(draftLeg, legs.length + 1)
+      // Pick the next leg_index using max(existing)+1 instead of
+      // legs.length+1 so removing a middle leg and adding another
+      // doesn't collide with an existing leg_index. The DB has no
+      // unique constraint on (strategy_id, leg_index) but collisions
+      // confuse the user (table shows two rows with the same #).
+      const nextIndex = (legs.reduce((m, l) => Math.max(m, l.leg_index), 0)) + 1
+      const payload = legFormToPayload(draftLeg, nextIndex)
       const newLeg = await strategyV2Api.addLeg(numericId, payload)
       setLegs((prev) => [...prev, newLeg])
       setDraftLeg(blankLeg(draftLeg.segment))
-      toast.success(`Leg ${legs.length + 1} added`)
+      toast.success(`Leg added (#${nextIndex})`)
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } }
       toast.error(e?.response?.data?.message ?? 'Failed to add leg')
@@ -1192,21 +1198,34 @@ export default function StrategyV2Builder() {
                 <tr>
                   <th className="px-4 py-2">#</th>
                   <th className="px-4 py-2">Segment</th>
-                  <th className="px-4 py-2">B/S</th>
+                  {/* B/S column only meaningful for F&O packs (defines
+                      the spread structure). Hidden for CASH lists. */}
+                  {legs.some((l) => l.segment !== 'CASH') && (
+                    <th className="px-4 py-2">B/S</th>
+                  )}
                   <th className="px-4 py-2">Symbol / Underlying</th>
                   <th className="px-4 py-2">Qty / Lots</th>
+                  <th className="px-4 py-2">Product</th>
                   <th className="px-4 py-2">Risk</th>
                   <th className="px-4 py-2 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {legs.map((l) => (
+                {/* Render rows with a 1-based positional index so the
+                    user always sees a clean #1, #2, #3... regardless
+                    of leg.leg_index gaps left by deletes. The DB
+                    leg_index is still authoritative for ordering. */}
+                {legs.map((l, idx) => (
                   <tr key={l.id} className="border-b last:border-b-0">
-                    <td className="px-4 py-2">{l.leg_index}</td>
+                    <td className="px-4 py-2">{idx + 1}</td>
                     <td className="px-4 py-2">
                       <Badge variant="outline">{l.segment}</Badge>
                     </td>
-                    <td className="px-4 py-2">{l.position}</td>
+                    {legs.some((x) => x.segment !== 'CASH') && (
+                      <td className="px-4 py-2">
+                        {l.segment === 'CASH' ? '—' : l.position}
+                      </td>
+                    )}
                     <td className="px-4 py-2 font-mono text-xs">
                       {l.segment === 'CASH'
                         ? `${l.symbol_cash}${l.exchange_cash ? ` · ${l.exchange_cash}` : ''}`
@@ -1214,6 +1233,11 @@ export default function StrategyV2Builder() {
                     </td>
                     <td className="px-4 py-2">
                       {l.segment === 'CASH' ? `${l.qty} qty` : `${l.lots} lots`}
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge variant="outline" className="text-xs">
+                        {l.product}
+                      </Badge>
                     </td>
                     <td className="px-4 py-2 text-xs text-muted-foreground">
                       {[
