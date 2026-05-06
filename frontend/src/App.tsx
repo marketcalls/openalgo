@@ -79,6 +79,7 @@ const StrategyV2List = lazy(() => import('@/pages/StrategyV2List'))
 const StrategyV2Builder = lazy(() => import('@/pages/StrategyV2Builder'))
 const StrategyV2Runs = lazy(() => import('@/pages/StrategyV2Runs'))
 const StrategyV2RunDetail = lazy(() => import('@/pages/StrategyV2RunDetail'))
+const StrategyV2AccountRisk = lazy(() => import('@/pages/StrategyV2AccountRisk'))
 
 // Python Strategy pages
 const PythonStrategyIndex = lazy(() => import('@/pages/python-strategy/PythonStrategyIndex'))
@@ -226,6 +227,7 @@ function App() {
                 <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
                 {/* Strategy v2 — multi-leg engine + RMS + webhook security */}
                 <Route path="/strategy/v2" element={<StrategyV2List />} />
+                <Route path="/strategy/v2/account" element={<StrategyV2AccountRisk />} />
                 <Route path="/strategy/v2/:id" element={<StrategyV2Builder />} />
                 <Route path="/strategy/v2/:strategyId/runs" element={<StrategyV2Runs />} />
                 <Route

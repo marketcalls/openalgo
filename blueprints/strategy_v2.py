@@ -27,6 +27,8 @@ from flask import Blueprint, jsonify, request, session
 from marshmallow import ValidationError
 
 from database.strategy_v2_db import (
+    AccountRiskConfig,
+    AccountState,
     StrategyEvent,
     StrategyLeg,
     StrategyOrder,
@@ -39,6 +41,7 @@ from database.strategy_v2_db import (
 )
 from events.strategy_events import WebhookSecretRotatedEvent
 from restx_api.strategy_v2_schemas import (
+    AccountRiskConfigSchema,
     LegSchema,
     RiskConfigSchema,
     StrategyCreateSchema,
@@ -707,6 +710,113 @@ def run_events(run_id: int):
         .all()
     )
     return jsonify(serializers.to_events_format(rows)), 200
+
+
+# ----------------------------------------------------------------------------
+# Account-level risk config + state + unlock (Phase 4.5)
+# ----------------------------------------------------------------------------
+
+
+def _account_config_to_dict(cfg: AccountRiskConfig) -> dict:
+    return {
+        "user_id": cfg.user_id,
+        "max_concurrent_runs": cfg.max_concurrent_runs,
+        "max_daily_loss_abs": (
+            float(cfg.max_daily_loss_abs) if cfg.max_daily_loss_abs is not None else None
+        ),
+        "cooldown_after_loss_minutes": cfg.cooldown_after_loss_minutes,
+        "max_runs_per_strategy_per_day": cfg.max_runs_per_strategy_per_day,
+        "min_seconds_between_runs": cfg.min_seconds_between_runs,
+        "auto_clear_at": cfg.auto_clear_at,
+        "is_locked_out": bool(cfg.is_locked_out),
+        "lockout_reason": cfg.lockout_reason,
+        "lockout_until": cfg.lockout_until.isoformat() if cfg.lockout_until else None,
+    }
+
+
+def _account_state_to_dict(state: AccountState) -> dict:
+    return {
+        "user_id": state.user_id,
+        "active_run_count": state.active_run_count or 0,
+        "realized_pnl_today_live": (
+            float(state.realized_pnl_today_live) if state.realized_pnl_today_live is not None else 0.0
+        ),
+        "realized_pnl_today_sandbox": (
+            float(state.realized_pnl_today_sandbox)
+            if state.realized_pnl_today_sandbox is not None
+            else 0.0
+        ),
+        "unrealized_pnl_aggregate": (
+            float(state.unrealized_pnl_aggregate)
+            if state.unrealized_pnl_aggregate is not None
+            else 0.0
+        ),
+    }
+
+
+@strategy_v2_bp.route("/account/risk_config", methods=["GET"])
+def get_account_risk_config():
+    """Return the user's AccountRiskConfig + cached AccountState. Lazy-creates
+    both rows if missing (so the first call from a new install always
+    returns sensible defaults)."""
+    user, err = _require_login()
+    if err:
+        return err
+    from services.strategy.account_rms import (
+        get_or_create_config,
+        get_or_create_state,
+        is_locked_now,
+    )
+
+    cfg = get_or_create_config(user)
+    # Side-effect: is_locked_now auto-clears expired lockouts.
+    is_locked_now(cfg)
+    state = get_or_create_state(user)
+    return jsonify({
+        "status": "success",
+        "config": _account_config_to_dict(cfg),
+        "state": _account_state_to_dict(state),
+    }), 200
+
+
+@strategy_v2_bp.route("/account/risk_config", methods=["PUT"])
+def update_account_risk_config():
+    user, err = _require_login()
+    if err:
+        return err
+    try:
+        data = AccountRiskConfigSchema().load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
+
+    from services.strategy.account_rms import get_or_create_config
+
+    cfg = get_or_create_config(user)
+    for key, value in data.items():
+        setattr(cfg, key, value)
+    db_session.commit()
+    return jsonify({
+        "status": "success",
+        "config": _account_config_to_dict(cfg),
+    }), 200
+
+
+@strategy_v2_bp.route("/account/unlock", methods=["POST"])
+def unlock_account_endpoint():
+    """Manual unlock — clears the is_locked_out flag, lockout_until, and
+    lockout_reason. Idempotent: calling on an already-unlocked account is a
+    no-op."""
+    user, err = _require_login()
+    if err:
+        return err
+    from services.strategy.account_rms import get_or_create_config, unlock_account
+
+    unlock_account(user, cleared_by="manual")
+    cfg = get_or_create_config(user)
+    return jsonify({
+        "status": "success",
+        "config": _account_config_to_dict(cfg),
+    }), 200
 
 
 # ----------------------------------------------------------------------------

@@ -31,7 +31,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { strategyV2Api } from '@/api/strategy_v2'
-import type { StrategyV2 } from '@/types/strategy_v2'
+import type { AccountRiskConfig, StrategyV2 } from '@/types/strategy_v2'
 
 const MODE_BADGE_CLASS: Record<string, string> = {
   live: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/30',
@@ -47,6 +47,7 @@ const STATE_BADGE_CLASS: Record<string, string> = {
 
 export default function StrategyV2List() {
   const [rows, setRows] = useState<StrategyV2[]>([])
+  const [accountConfig, setAccountConfig] = useState<AccountRiskConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleteTarget, setDeleteTarget] = useState<StrategyV2 | null>(null)
   const navigate = useNavigate()
@@ -54,13 +55,28 @@ export default function StrategyV2List() {
   const refresh = async () => {
     setLoading(true)
     try {
-      const data = await strategyV2Api.list()
-      setRows(data)
+      const [strategies, accountInfo] = await Promise.all([
+        strategyV2Api.list(),
+        strategyV2Api.getAccountRiskConfig().catch(() => null),
+      ])
+      setRows(strategies)
+      if (accountInfo) setAccountConfig(accountInfo.config)
     } catch (err) {
       toast.error('Failed to load strategies')
       console.error(err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const onUnlockAccount = async () => {
+    try {
+      const updated = await strategyV2Api.unlockAccount()
+      setAccountConfig(updated)
+      toast.success('Account unlocked')
+    } catch (err) {
+      toast.error('Unlock failed')
+      console.error(err)
     }
   }
 
@@ -110,8 +126,35 @@ export default function StrategyV2List() {
             webhook security, and live/sandbox modes.
           </p>
         </div>
-        <Button onClick={() => navigate('/strategy/v2/new')}>+ New Strategy</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate('/strategy/v2/account')}>
+            Account Risk
+          </Button>
+          <Button onClick={() => navigate('/strategy/v2/new')}>+ New Strategy</Button>
+        </div>
       </div>
+
+      {/* Account-level lockout banner */}
+      {accountConfig?.is_locked_out && (
+        <Card className="mb-6 border-rose-500/50 bg-rose-500/10">
+          <CardContent className="py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Badge variant="outline" className="bg-rose-500/15 text-rose-700">
+                ACCOUNT LOCKED
+              </Badge>
+              <span className="text-sm">
+                {accountConfig.lockout_reason ?? 'Reason unknown'}.{' '}
+                <span className="text-muted-foreground">
+                  New webhooks rejected with 429 until cleared.
+                </span>
+              </span>
+            </div>
+            <Button variant="destructive" size="sm" onClick={onUnlockAccount}>
+              Unlock
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {loading ? (
         <Card>

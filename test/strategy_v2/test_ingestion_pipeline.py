@@ -92,12 +92,18 @@ def _wait_for_events(captured, count, timeout_sec=1.0):
 
 
 def _call_ingestion(strategy, raw_body=b"{}", headers=None, dry_run=False, source_ip="127.0.0.1"):
-    """Invoke handle_webhook with a mocked DB lookup and broker session."""
-    from services.strategy import ingestion_service
+    """Invoke handle_webhook with a mocked DB lookup and broker session.
+
+    Phase 4.5 added account_rms.preflight_check which queries
+    account_risk_config; we mock it to (True, "") since these tests focus on
+    the security gates upstream of preflight.
+    """
+    from services.strategy import account_rms, ingestion_service
 
     with patch.object(ingestion_service, "db_session") as mock_session, \
          patch.object(ingestion_service, "get_api_key_for_tradingview", return_value=None), \
-         patch.object(ingestion_service, "has_active_run", return_value=False):
+         patch.object(ingestion_service, "has_active_run", return_value=False), \
+         patch.object(account_rms, "preflight_check", return_value=(True, "")):
         mock_session.query.return_value.filter.return_value.first.return_value = strategy
 
         return ingestion_service.handle_webhook(
@@ -397,9 +403,12 @@ def test_signing_secret_stripped_before_signal_received(captured_events):
     # Use real has_active_run + db_session but mock api_key resolver
     # to force NO_BROKER_SESSION before run creation. The signal_received
     # event still fires because we got past validation.
+    from services.strategy import account_rms
+
     with patch.object(ingestion_service, "db_session") as ms, \
          patch.object(ingestion_service, "get_api_key_for_tradingview", return_value=None), \
-         patch.object(ingestion_service, "has_active_run", return_value=False):
+         patch.object(ingestion_service, "has_active_run", return_value=False), \
+         patch.object(account_rms, "preflight_check", return_value=(True, "")):
         ms.query.return_value.filter.return_value.first.return_value = s
 
         body = json.dumps({"webhook_secret": "hunter2", "action": "BUY", "ts": 0}).encode()

@@ -179,3 +179,38 @@ class RiskConfigSchema(Schema):
                                             validate=validate.Range(min=0))
     trail_to_entry_unit = fields.String(load_default="pct",
                                         validate=validate.OneOf(["pts", "pct"]))
+
+
+# ----------------------------------------------------------------------------
+# Account-level risk config (Phase 4.5)
+# ----------------------------------------------------------------------------
+
+
+class AccountRiskConfigSchema(Schema):
+    """Account-wide RMS — concurrent-run cap, daily loss cap, cooldown,
+    debounce, per-strategy daily cap, optional auto-clear time.
+
+    All fields optional / partial — the endpoint supports PATCH-style
+    updates by setting only the fields you want to change.
+    """
+    class Meta:
+        unknown = RAISE
+
+    max_concurrent_runs = fields.Integer(
+        validate=validate.Range(min=0, max=100), allow_none=True,
+    )
+    max_daily_loss_abs = fields.Float(allow_none=True)
+    cooldown_after_loss_minutes = fields.Integer(
+        validate=validate.Range(min=0, max=1440), allow_none=True,
+    )
+    max_runs_per_strategy_per_day = fields.Integer(
+        validate=validate.Range(min=0, max=10000), allow_none=True,
+    )
+    min_seconds_between_runs = fields.Integer(
+        validate=validate.Range(min=0, max=86400), allow_none=True,
+    )
+    auto_clear_at = fields.String(
+        allow_none=True,
+        validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"),
+        metadata={"description": "HH:MM IST; lockout self-clears at this time"},
+    )

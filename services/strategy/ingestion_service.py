@@ -237,13 +237,26 @@ def handle_webhook(
             "strategy_id": strategy.id,
         }
 
-    # 8. Account/strategy preflight
+    # 8. Per-strategy duplicate-active-run guard (cheap; before account RMS)
     if has_active_run(strategy.id):
         return _reject(
             strategy=strategy, webhook_id=webhook_id,
             reason="Strategy already has an active run",
             code="ALREADY_RUNNING",
             status=409, source_ip=source_ip,
+        )
+
+    # 8b. Account-level RMS preflight (lockout, concurrent cap, daily loss
+    #     cap, cooldown, debounce, per-strategy daily cap). See plan §9.1.
+    from services.strategy.account_rms import preflight_check as _preflight
+
+    allowed, reason = _preflight(strategy.user_id, strategy.id)
+    if not allowed:
+        return _reject(
+            strategy=strategy, webhook_id=webhook_id,
+            reason=reason,
+            code="ACCOUNT_PREFLIGHT_FAILED",
+            status=429, source_ip=source_ip,
         )
 
     # 9. Publish signal received & create run

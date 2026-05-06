@@ -308,3 +308,46 @@ export interface StrategyRiskConfig {
 }
 
 export type RiskConfigPayload = Partial<Omit<StrategyRiskConfig, 'strategy_id'>>
+
+// ----------------------------------------------------------------------------
+// Phase 4.5 — account-level RMS
+// ----------------------------------------------------------------------------
+
+export interface AccountRiskConfig {
+  user_id: string
+  max_concurrent_runs: number | null
+  max_daily_loss_abs: number | null
+  cooldown_after_loss_minutes: number | null
+  max_runs_per_strategy_per_day: number | null
+  min_seconds_between_runs: number | null
+  auto_clear_at: string | null
+  is_locked_out: boolean
+  lockout_reason: string | null
+  lockout_until: string | null
+}
+
+export interface AccountState {
+  user_id: string
+  active_run_count: number
+  realized_pnl_today_live: number
+  realized_pnl_today_sandbox: number
+  unrealized_pnl_aggregate: number
+}
+
+export interface AccountRiskConfigResponse {
+  status: string
+  config: AccountRiskConfig
+  state: AccountState
+}
+
+export type AccountRiskConfigPayload = Partial<
+  Pick<
+    AccountRiskConfig,
+    | 'max_concurrent_runs'
+    | 'max_daily_loss_abs'
+    | 'cooldown_after_loss_minutes'
+    | 'max_runs_per_strategy_per_day'
+    | 'min_seconds_between_runs'
+    | 'auto_clear_at'
+  >
+>

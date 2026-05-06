@@ -28,6 +28,9 @@ import type {
   RunEventRow,
   StrategyRiskConfig,
   RiskConfigPayload,
+  AccountRiskConfig,
+  AccountRiskConfigPayload,
+  AccountRiskConfigResponse,
 } from '@/types/strategy_v2'
 
 const ROOT = '/strategy/api/v2'
@@ -182,5 +185,28 @@ export const strategyV2Api = {
       payload
     )
     return r.data.data
+  },
+
+  // ---- Phase 4.5: account-level risk config + state + unlock ----
+  getAccountRiskConfig: async (): Promise<AccountRiskConfigResponse> => {
+    const r = await webClient.get<AccountRiskConfigResponse>(`${ROOT}/account/risk_config`)
+    return r.data
+  },
+
+  updateAccountRiskConfig: async (
+    payload: AccountRiskConfigPayload
+  ): Promise<AccountRiskConfig> => {
+    const r = await webClient.put<{ status: string; config: AccountRiskConfig }>(
+      `${ROOT}/account/risk_config`,
+      payload
+    )
+    return r.data.config
+  },
+
+  unlockAccount: async (): Promise<AccountRiskConfig> => {
+    const r = await webClient.post<{ status: string; config: AccountRiskConfig }>(
+      `${ROOT}/account/unlock`
+    )
+    return r.data.config
   },
 }

@@ -229,4 +229,14 @@ def register_all():
     bus.subscribe("strategy.state_changed", rms_engine.on_strategy_state_changed,
                   "rms_engine:state_changed")
 
+    # ------------------------------------------------------------------------
+    # Account-level RMS — Phase 4.5
+    # Maintains active_run_count + realized_pnl_today_live/sandbox on
+    # state transitions. Locks the account when the daily-loss cap is breached.
+    # ------------------------------------------------------------------------
+    from services.strategy import account_rms
+
+    bus.subscribe("strategy.state_changed", account_rms.on_state_changed,
+                  "account_rms:state_changed")
+
     logger.debug("EventBus: all subscribers registered")
