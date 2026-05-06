@@ -512,7 +512,7 @@ export default function StrategyV2Builder() {
             <Input
               value={form.name}
               onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
-              placeholder="My iron condor"
+              placeholder="My Strategy"
               maxLength={80}
             />
           </div>
