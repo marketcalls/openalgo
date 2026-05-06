@@ -346,15 +346,86 @@ class RmsEngine:
 
             self._runs[run_id] = runtime
             self._refresh_subscription()
+
+            # Phase 9.3 — also tell the broker's WebSocket to start
+            # streaming these symbols. subscribe_critical above only
+            # registered a local callback; without an active broker
+            # subscription the callback never fires. Pull the user_id
+            # from the strategy row (use runtime.strategy_id which is a
+            # primitive — `run` may already be detached after _persist_trail
+            # ran with its own commit + remove). Capture symbols inside
+            # the lock; the actual subscribe call is fire-and-forget so
+            # we drop the lock before calling out.
+            user_id = (
+                db_session.query(StrategyV2.user_id)
+                .filter(StrategyV2.id == runtime.strategy_id)
+                .scalar()
+            )
+            symbols_to_sub = [
+                (leg.symbol, leg.exchange) for leg in runtime.legs.values()
+            ]
             # Use the cached primitive on `runtime`, not the ORM `run`.
-            # _persist_trail above commits + removes the session, which
-            # detaches the `run` instance — accessing `run.strategy_id`
-            # here would trigger a refresh on a detached row.
             logger.info(
                 "rms_engine: registered run_id=%s strategy_id=%s legs=%s",
                 run_id, runtime.strategy_id, len(runtime.legs),
             )
-            return True
+
+        # Outside the lock — the WS subscription call goes over ZMQ to the
+        # websocket_proxy server and may block briefly; don't hold _lock.
+        if user_id and symbols_to_sub:
+            self._ensure_broker_subscription(user_id, symbols_to_sub)
+        return True
+
+    @staticmethod
+    def _ensure_broker_subscription(
+        user_id: str, symbols: list[tuple[str, str]]
+    ) -> None:
+        """Ask the broker WebSocket (via services.websocket_service) to
+        stream LTP for the given (symbol, exchange) pairs.
+
+        Mirrors sandbox.websocket_execution_engine._subscribe_ws_symbols.
+        Subscriptions are idempotent at the broker layer; calling this
+        multiple times for the same symbols is harmless. We don't track
+        which we've already subscribed because the broker pool already
+        does. unregister_run does NOT call unsubscribe — symbols may be
+        shared across runs and across sandbox/live consumers, so leaving
+        them subscribed is the safer default.
+        """
+        try:
+            from database.auth_db import (
+                get_api_key_for_tradingview,
+                get_broker_name,
+            )
+            from services.websocket_service import subscribe_to_symbols
+
+            api_key = get_api_key_for_tradingview(user_id)
+            if not api_key:
+                logger.warning(
+                    "rms_engine: WS subscribe skipped — no API key for user=%s",
+                    user_id,
+                )
+                return
+            broker = get_broker_name(api_key) or "unknown"
+
+            payload = [{"symbol": s, "exchange": e} for s, e in symbols]
+            ok, resp, status = subscribe_to_symbols(
+                username=user_id, broker=broker, symbols=payload, mode="LTP"
+            )
+            if not ok:
+                logger.warning(
+                    "rms_engine: WS subscribe failed user=%s symbols=%s status=%s msg=%s",
+                    user_id, symbols, status, resp.get("message"),
+                )
+            else:
+                logger.info(
+                    "rms_engine: WS subscribed user=%s symbols=%s",
+                    user_id, symbols,
+                )
+        except Exception:
+            logger.exception(
+                "rms_engine: WS subscribe crashed user=%s symbols=%s",
+                user_id, symbols,
+            )
 
     def unregister_run(self, run_id: int) -> None:
         """Stop monitoring a run. Called when state transitions to a terminal
