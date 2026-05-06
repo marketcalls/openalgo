@@ -69,17 +69,10 @@ const PRODUCTS_BY_EXCHANGE: Record<CashExchange, ProductType[]> = {
   NCO: ['MIS', 'NRML'],
 }
 
-const CASH_EXCHANGES: CashExchange[] = [
-  'NSE',
-  'BSE',
-  'NFO',
-  'BFO',
-  'CDS',
-  'BCD',
-  'MCX',
-  'NCDEX',
-  'NCO',
-]
+// Cash legs trade equity on NSE/BSE only. Derivatives/commodities live
+// on their own segments (Index F&O, Stock F&O); they have separate
+// builders that route to NFO/BFO/MCX etc. via the strategy underlying.
+const CASH_EXCHANGES: CashExchange[] = ['NSE', 'BSE']
 
 // ---------------------------------------------------------------------------
 // Local form-state types — aligned with LegPayload but with all fields
