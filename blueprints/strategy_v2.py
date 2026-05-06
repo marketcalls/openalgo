@@ -596,10 +596,72 @@ def add_leg(strategy_id: int):
     if not ok:
         return jsonify({"status": "error", "code": "INVALID_LEG", "message": msg}), 400
 
+    # Phase 13.1 — reject duplicate legs in the same strategy. The
+    # uniqueness key depends on the segment because what counts as
+    # "the same leg" differs:
+    #   CASH : same (exchange, symbol)            — one row per stock
+    #   FUT  : same expiry_type                   — one futures row per expiry
+    #   OPT  : same (expiry_type, option_type, strike_criteria, strike_value)
+    #          — one option row per contract definition
+    # Two legs with the same key would either fight each other on
+    # entry (same order placed twice) or just be a UI mistake. Block
+    # at the API level so the frontend cannot create them even by
+    # racing two POSTs.
+    dup = _find_duplicate_leg(s.id, data)
+    if dup is not None:
+        return jsonify({
+            "status": "error", "code": "DUPLICATE_LEG",
+            "message": f"This contract is already configured (leg #{dup})",
+        }), 409
+
     leg = StrategyLeg(strategy_id=s.id, **data)
     db_session.add(leg)
     db_session.commit()
     return jsonify({"status": "success", "leg": _leg_to_dict(leg)}), 201
+
+
+def _find_duplicate_leg(strategy_id: int, data: dict) -> int | None:
+    """Return the leg_index of an existing leg in this strategy with the
+    same uniqueness key as `data`, or None if no duplicate exists."""
+    segment = data.get("segment")
+    q = db_session.query(StrategyLeg).filter(
+        StrategyLeg.strategy_id == strategy_id
+    )
+    if segment == "CASH":
+        sym = (data.get("symbol_cash") or "").strip().upper()
+        exch = (data.get("exchange_cash") or "NSE").strip().upper()
+        q = q.filter(
+            StrategyLeg.segment == "CASH",
+            StrategyLeg.symbol_cash.is_not(None),
+        )
+        for row in q.all():
+            row_sym = (row.symbol_cash or "").strip().upper()
+            row_exch = (row.exchange_cash or "NSE").strip().upper()
+            if row_sym == sym and row_exch == exch:
+                return row.leg_index
+        return None
+    if segment == "FUT":
+        expiry = data.get("expiry_type")
+        for row in q.filter(
+            StrategyLeg.segment == "FUT",
+            StrategyLeg.expiry_type == expiry,
+        ).all():
+            return row.leg_index
+        return None
+    if segment == "OPT":
+        for row in q.filter(
+            StrategyLeg.segment == "OPT",
+            StrategyLeg.expiry_type == data.get("expiry_type"),
+            StrategyLeg.option_type == data.get("option_type"),
+            StrategyLeg.strike_criteria == data.get("strike_criteria"),
+        ).all():
+            # strike_value can be None for ATM; compare numerically.
+            row_strike = float(row.strike_value) if row.strike_value is not None else None
+            new_strike = float(data["strike_value"]) if data.get("strike_value") is not None else None
+            if row_strike == new_strike:
+                return row.leg_index
+        return None
+    return None
 
 
 @strategy_v2_bp.route("/strategy/<int:strategy_id>/legs/<int:leg_id>", methods=["PUT"])

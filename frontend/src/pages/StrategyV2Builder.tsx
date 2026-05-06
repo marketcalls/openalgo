@@ -383,6 +383,44 @@ export default function StrategyV2Builder() {
     }
   }
 
+  // True when the current draft would create a duplicate of an existing
+  // leg. Mirrors the server-side _find_duplicate_leg() check in
+  // blueprints/strategy_v2.py so the user gets immediate feedback
+  // instead of having to round-trip and parse a 409 error. Same
+  // segment-specific uniqueness key:
+  //   CASH : (exchange, symbol)
+  //   FUT  : (expiry_type)
+  //   OPT  : (expiry_type, option_type, strike_criteria, strike_value)
+  const draftIsDuplicate = (() => {
+    if (draftLeg.segment === 'CASH') {
+      const sym = draftLeg.symbol_cash.trim().toUpperCase()
+      const exch = (draftLeg.exchange_cash || 'NSE').toUpperCase()
+      if (!sym) return false
+      return legs.some(
+        (l) =>
+          l.segment === 'CASH' &&
+          (l.symbol_cash || '').trim().toUpperCase() === sym &&
+          (l.exchange_cash || 'NSE').toUpperCase() === exch,
+      )
+    }
+    if (draftLeg.segment === 'FUT') {
+      return legs.some(
+        (l) => l.segment === 'FUT' && l.expiry_type === draftLeg.expiry_type,
+      )
+    }
+    if (draftLeg.segment === 'OPT') {
+      return legs.some(
+        (l) =>
+          l.segment === 'OPT' &&
+          l.expiry_type === draftLeg.expiry_type &&
+          l.option_type === draftLeg.option_type &&
+          l.strike_criteria === draftLeg.strike_criteria &&
+          (l.strike_value ?? null) === (draftLeg.strike_value ?? null),
+      )
+    }
+    return false
+  })()
+
   // -------- Add a leg -----------------------------------------------------
   const onAddLeg = async () => {
     if (!numericId) {
@@ -391,6 +429,10 @@ export default function StrategyV2Builder() {
     }
     if (draftLeg.segment === 'CASH' && !draftLeg.symbol_cash.trim()) {
       toast.error('Cash leg needs a symbol')
+      return
+    }
+    if (draftIsDuplicate) {
+      toast.error('This contract is already configured on this strategy')
       return
     }
     try {
@@ -1116,8 +1158,23 @@ export default function StrategyV2Builder() {
               />
             </div>
 
-            <div className="flex justify-end">
-              <Button onClick={onAddLeg}>+ Add Leg</Button>
+            <div className="flex justify-end items-center gap-3">
+              {draftIsDuplicate && (
+                <span className="text-xs text-rose-600">
+                  This contract is already on the strategy.
+                </span>
+              )}
+              <Button
+                onClick={onAddLeg}
+                disabled={draftIsDuplicate}
+                title={
+                  draftIsDuplicate
+                    ? 'Same contract already configured — pick a different symbol'
+                    : undefined
+                }
+              >
+                + Add Leg
+              </Button>
             </div>
           </CardContent>
         </Card>
