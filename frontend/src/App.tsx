@@ -220,8 +220,16 @@ function App() {
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
-                {/* Phase 6: Webhook Strategies */}
-                <Route path="/strategy" element={<StrategyIndex />} />
+                {/* Phase 7: Strategy v2 is the default. The /strategy entry point
+                    now renders the v2 list; the legacy v1 list stays accessible at
+                    /strategy/v1/list during the canary period (Phase 8 removes v1).
+                    /strategy/v2 is preserved as an alias so existing bookmarks /
+                    deep links continue to work. */}
+                <Route path="/strategy" element={<StrategyV2List />} />
+                <Route path="/strategy/v1/list" element={<StrategyIndex />} />
+                {/* Legacy v1 deep-link routes — kept verbatim so internal links
+                    on the v1 list page (new/edit/configure) keep working until v1
+                    is removed. */}
                 <Route path="/strategy/new" element={<NewStrategy />} />
                 <Route path="/strategy/:strategyId" element={<ViewStrategy />} />
                 <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />

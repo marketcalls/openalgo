@@ -69,7 +69,7 @@ MIGRATIONS = [
     ("migrate_samco_auth.py", "Samco 2FA Authentication"),
     ("migrate_zerodha_new_exchanges.py", "Zerodha NCO/GLOBAL_INDEX & GIFTNIFTY Cleanup"),
     ("add_totp_purpose_flags.py", "Per-Purpose 2FA Flags (login/MCP/reset)"),
-    ("migrate_strategy_v2.py", "Strategy v2 Engine — DB Tables (Phase 0)"),
+    ("migrate_strategy_v2.py", "Strategy v2 Engine — DB Tables + v1->v2 Conversion"),
 ]
 
 
