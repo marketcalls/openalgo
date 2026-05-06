@@ -34,3 +34,17 @@
 
 * BUY: Buy
 * SELL: Sell
+
+### Order Status
+
+Canonical `order_status` values returned by `/orderbook` and `/orderstatus`:
+
+* open: Order accepted by the broker, awaiting fill (includes partial fills before the close)
+* complete: Order fully filled
+* rejected: Order refused by the broker (margin, risk, schema, etc.)
+* cancelled: Order cancelled by the user, the system, or the exchange
+
+Strategy v2's `/strategy/api/v2/run/<run_id>/orderbook` and
+`/strategy/api/v2/strategy/<strategy_id>/orderbook` return the same set.
+The `statistics` block on the orderbook envelope counts complete/open/rejected
+separately; cancelled orders are NOT counted toward `total_open_orders`.

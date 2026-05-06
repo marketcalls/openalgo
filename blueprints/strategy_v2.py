@@ -1000,6 +1000,90 @@ def run_events(run_id: int):
 
 
 # ----------------------------------------------------------------------------
+# Strategy-level books — aggregate across every run of a single strategy.
+# Same envelope as the global /orderbook /tradebook /positionbook services
+# documented in docs/prompt/services_documentation.md, so frontends and SDK
+# clients can reuse their existing parsing.
+#
+# Differs from the per-run books (`/run/<run_id>/...`) in that these answer
+# "what has THIS STRATEGY done lifetime" rather than "what's in this single
+# webhook-to-flat lifecycle".
+# ----------------------------------------------------------------------------
+
+
+def _user_owns_strategy(user: str, strategy_id: int) -> bool:
+    return (
+        db_session.query(StrategyV2.id)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+        is not None
+    )
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/orderbook", methods=["GET"])
+def strategy_orderbook(strategy_id: int):
+    """All orders across every run of this strategy, in /orderbook format.
+
+    Statistics counts include lifetime totals — buy/sell/complete/open/rejected.
+    Cancelled orders are not counted as open (per docs/prompt/order-constants.md).
+    """
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_strategy(user, strategy_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyOrder)
+        .filter(StrategyOrder.strategy_id == strategy_id)
+        .order_by(StrategyOrder.id.desc())
+        .all()
+    )
+    return jsonify(serializers.to_orderbook_format(rows)), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/tradebook", methods=["GET"])
+def strategy_tradebook(strategy_id: int):
+    """All fills across every run of this strategy, in /tradebook format."""
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_strategy(user, strategy_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyTrade)
+        .filter(StrategyTrade.strategy_id == strategy_id)
+        .order_by(StrategyTrade.id.desc())
+        .all()
+    )
+    return jsonify(serializers.to_tradebook_format(rows)), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/positionbook", methods=["GET"])
+def strategy_positionbook(strategy_id: int):
+    """Currently OPEN positions across every active run of this strategy.
+
+    Closed legs (net_qty=0) are filtered out — the canonical /positionbook
+    only shows live positions, not historical-flat ones. The strategy's
+    historical tradebook covers post-mortem audit.
+    """
+    user, err = _require_login()
+    if err:
+        return err
+    if not _user_owns_strategy(user, strategy_id):
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rows = (
+        db_session.query(StrategyPosition)
+        .filter(
+            StrategyPosition.strategy_id == strategy_id,
+            StrategyPosition.leg_state.in_(("OPEN", "EXITING_LEG", "PENDING_ENTRY")),
+        )
+        .order_by(StrategyPosition.id.desc())
+        .all()
+    )
+    return jsonify(serializers.to_positionbook_format(rows)), 200
+
+
+# ----------------------------------------------------------------------------
 # Account-level risk config + state + unlock (Phase 4.5)
 # ----------------------------------------------------------------------------
 

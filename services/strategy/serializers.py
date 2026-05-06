@@ -183,6 +183,14 @@ def _compute_statistics(orders: list[dict]) -> dict[str, float]:
     total_buy_orders, total_sell_orders, total_completed_orders,
     total_open_orders, total_rejected_orders. All floats (matches existing
     contract).
+
+    Canonical order_status values per docs/prompt/order-constants.md:
+        open / complete / rejected / cancelled
+
+    cancelled orders are deliberately NOT counted toward total_open_orders
+    — they're terminal and shouldn't inflate the "live order" view.
+    trigger_pending and pending are mapped to open (intermediate states
+    a few brokers expose before the final canonical 4-state set).
     """
     stats = {
         "total_buy_orders": 0.0,
@@ -204,6 +212,7 @@ def _compute_statistics(orders: list[dict]) -> dict[str, float]:
             stats["total_open_orders"] += 1
         elif status == "rejected":
             stats["total_rejected_orders"] += 1
+        # status == "cancelled" intentionally not counted in any bucket
     return stats
 
 

@@ -145,6 +145,31 @@ export const strategyV2Api = {
     return r.data
   },
 
+  // ---- Strategy-level books — same envelope as global /orderbook ----
+  // /tradebook /positionbook services. Aggregate across every run of
+  // the strategy.
+
+  strategyOrderbook: async (id: number): Promise<RunOrderbookResponse> => {
+    const r = await webClient.get<RunOrderbookResponse>(
+      `${ROOT}/strategy/${id}/orderbook`
+    )
+    return r.data
+  },
+
+  strategyTradebook: async (id: number): Promise<{ status: string; data: RunTradeRow[] }> => {
+    const r = await webClient.get<{ status: string; data: RunTradeRow[] }>(
+      `${ROOT}/strategy/${id}/tradebook`
+    )
+    return r.data
+  },
+
+  strategyPositionbook: async (id: number): Promise<{ status: string; data: RunPositionRow[] }> => {
+    const r = await webClient.get<{ status: string; data: RunPositionRow[] }>(
+      `${ROOT}/strategy/${id}/positionbook`
+    )
+    return r.data
+  },
+
   /** Build the URL the user pastes into TradingView/Python/etc. */
   webhookUrl: (webhookId: string): string => {
     if (typeof window === 'undefined') return ''
