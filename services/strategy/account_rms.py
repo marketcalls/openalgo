@@ -57,6 +57,12 @@ _TERMINAL_STATES = (
     "CLOSED", "EXIT_FAILED", "ERRORED", "STOPPED", "ENTRY_FAILED",
 )
 
+# Active states — what the concurrent-run cap counts as a "live" run.
+# Mirrors state_machine.ACTIVE_RUN_STATES; duplicated here to avoid an
+# import cycle (state_machine pulls in subscribers which pull in
+# account_rms).
+_ACTIVE_RUN_STATES = ("ARMED", "ENTERING", "IN_TRADE", "EXITING")
+
 
 # ---------------------------------------------------------------------------
 # State accessors
@@ -219,11 +225,40 @@ def preflight_check(user_id: str, strategy_id: int) -> Tuple[bool, str]:
     if is_locked_now(cfg):
         return False, f"Account locked: {cfg.lockout_reason or 'unknown'}"
 
-    # 2. Concurrent run cap
-    if cfg.max_concurrent_runs and state.active_run_count >= cfg.max_concurrent_runs:
+    # 2. Concurrent run cap.
+    #
+    # Compute the count directly from strategy_runs each time instead of
+    # trusting state.active_run_count. The counter is maintained
+    # incrementally via on_state_changed, but any path that mutates a
+    # run's state outside the state machine (manual DB cleanup, partial
+    # restore from backup, a future audit-recovery tool, etc.) leaves
+    # the counter stale. A direct SELECT COUNT on the indexed
+    # state column costs microseconds and removes the drift class
+    # of bugs entirely. Self-healing: also write back the corrected
+    # value so subsequent reads from /account/state see the right
+    # number on the dashboard.
+    actual_active = (
+        db_session.query(func.count(StrategyRun.id))
+        .filter(
+            StrategyRun.strategy_id.in_(
+                db_session.query(StrategyV2.id).filter(StrategyV2.user_id == user_id)
+            )
+        )
+        .filter(StrategyRun.state.in_(_ACTIVE_RUN_STATES))
+        .scalar() or 0
+    )
+    if state.active_run_count != actual_active:
+        logger.info(
+            "account_rms: active_run_count drift corrected user=%s cached=%s actual=%s",
+            user_id, state.active_run_count, actual_active,
+        )
+        state.active_run_count = actual_active
+        db_session.commit()
+
+    if cfg.max_concurrent_runs and actual_active >= cfg.max_concurrent_runs:
         return False, (
             f"max_concurrent_runs ({cfg.max_concurrent_runs}) reached — "
-            f"current active runs: {state.active_run_count}"
+            f"current active runs: {actual_active}"
         )
 
     # 3. Daily loss cap (live mode only — sandbox is virtual and shouldn't gate)

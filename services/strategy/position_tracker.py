@@ -209,10 +209,26 @@ def on_broker_order_update(event) -> None:
         order.order_status = status
         order.last_status_update_at = now_utc()
 
+        run_id_to_check = None
         if status == "complete" and filled_qty > 0:
             _record_fill(order, filled_qty, avg_price)
+            # Capture the run_id before commit so we can run the close
+            # check post-commit when it sees the freshly-written
+            # position state alongside the EXITING transition that
+            # exit_strategy committed on its own tx.
+            run_id_to_check = order.run_id
 
         db_session.commit()
+
+        if run_id_to_check is not None:
+            # Discard the worker's session/transaction so the close
+            # check starts a fresh read snapshot. Without this, the
+            # subsequent state query would be served from the same
+            # tx that committed above, which doesn't see updates
+            # committed concurrently by exit_strategy on another
+            # thread (SQLite snapshot isolation).
+            db_session.remove()
+            _maybe_close_run(run_id_to_check)
 
     except Exception:
         db_session.rollback()
@@ -323,11 +339,18 @@ def _record_fill(order: StrategyOrder, filled_qty: int, avg_price: Decimal) -> N
         )
     )
 
-    # If this fill flattens every position for the run and the run is
-    # in EXITING, transition it to CLOSED. Without this the run sits
-    # forever in EXITING — entry placed, exit placed, position flat,
-    # but nothing flips the run's lifecycle to terminal.
-    _maybe_close_run(order.run_id)
+    # NOTE: _maybe_close_run is intentionally NOT called here. It must
+    # run AFTER on_broker_order_update's outer db_session.commit() so
+    # that:
+    #   (1) the position-state writes from _recompute_position are
+    #       visible to the close-check's open-position query, and
+    #   (2) the run's state is read from a fresh transaction snapshot,
+    #       not the one we started above. exit_strategy commits the
+    #       IN_TRADE -> EXITING transition on a different thread/tx;
+    #       SQLite snapshot isolation means a query inside our open
+    #       tx still sees the pre-EXITING value.
+    # See on_broker_order_update where _maybe_close_run is invoked
+    # post-commit.
 
 
 def _maybe_close_run(run_id: int) -> None:

@@ -178,16 +178,40 @@ def test_unlock_account_clears_state(in_memory_db, captured_events):
 
 
 def test_preflight_blocks_at_concurrent_cap(in_memory_db):
+    """Seed actual active runs across two strategies (the active-run
+    unique partial index allows only one active run per (strategy_id,
+    leg_id_or_zero), so we can't put two on the same strategy without
+    leg_ids). The Phase 13.2 self-heal change made the cached counter
+    advisory only — concurrent-cap enforcement now reads strategy_runs
+    directly."""
+    from datetime import datetime, timezone
+
+    from database.strategy_v2_db import StrategyRun, StrategyV2
     from services.strategy import account_rms
 
-    s = _seed_strategy(in_memory_db)
-    cfg = account_rms.get_or_create_config(s.user_id)
+    s1 = _seed_strategy(in_memory_db)
+    s2 = StrategyV2(
+        name="other", webhook_id="other-uuid", user_id=s1.user_id,
+        is_intraday=True, start_time="09:15", end_time="15:30",
+        state="ARMED", is_active=True, mode="live",
+        webhook_signing_method="NONE",
+    )
+    in_memory_db.add(s2)
+    in_memory_db.flush()
+
+    cfg = account_rms.get_or_create_config(s1.user_id)
     cfg.max_concurrent_runs = 2
-    state = account_rms.get_or_create_state(s.user_id)
-    state.active_run_count = 2
     in_memory_db.commit()
 
-    allowed, reason = account_rms.preflight_check(s.user_id, s.id)
+    for sid in (s1.id, s2.id):
+        in_memory_db.add(StrategyRun(
+            strategy_id=sid, state="IN_TRADE", mode="live",
+            triggered_at=datetime.now(timezone.utc),
+            entered_at=datetime.now(timezone.utc),
+        ))
+    in_memory_db.commit()
+
+    allowed, reason = account_rms.preflight_check(s1.user_id, s1.id)
     assert allowed is False
     assert "max_concurrent_runs" in reason
 
