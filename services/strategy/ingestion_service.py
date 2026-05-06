@@ -564,7 +564,14 @@ def _start_run(
         strategy=strategy, run_id=run.id, legs=legs, adapter=adapter,
     )
 
-    return (200 if success else 500), {
+    # Always return 200 — the webhook itself was accepted, signed, and
+    # processed. Downstream order-placement failures (broker timeout,
+    # sandbox MIS-after-cutoff, etc.) are surfaced via `code` and
+    # `summary.errors`. Returning 5xx here would make TradingView retry,
+    # which is wasteful for business-rule rejections (the MIS cutoff
+    # won't change on a retry) and dangerous for partial-fill cases
+    # (a retry could double-place the legs that DID succeed).
+    return 200, {
         "status": "success" if success else "error",
         "code": "RUN_STARTED" if success else "ENTRY_FAILED",
         "run_id": run.id,
