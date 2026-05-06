@@ -77,7 +77,32 @@ def init_db():
 
 
 def get_analyze_mode():
-    """Get current analyze mode setting (cached for 1 hour)"""
+    """Get current analyze-mode setting (cached for 1 hour).
+
+    Strategy v2 (Phase 6) overrides this per-call via
+    utils.strategy_mode_context — when an order is placed under a
+    `with force_strategy_mode("sandbox")` block, this returns True
+    regardless of the global flag. Same for "live" → False. This lets a
+    sandbox-mode v2 strategy run alongside a live one without each having
+    to flip the global toggle.
+
+    The override is checked BEFORE the cache so it's always authoritative
+    when set; falls through to the global flag when not set (None).
+    """
+    # Per-call override (Phase 6 sandbox parity)
+    try:
+        from utils.strategy_mode_context import get_force_mode
+
+        forced = get_force_mode()
+    except Exception:
+        # Defensive — never let an import error in the override path break
+        # the order pipeline. Falls through to the global flag.
+        forced = None
+    if forced == "sandbox":
+        return True
+    if forced == "live":
+        return False
+
     cache_key = "analyze_mode"
 
     # Check cache first

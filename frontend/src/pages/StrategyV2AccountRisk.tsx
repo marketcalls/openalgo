@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { strategyV2Api } from '@/api/strategy_v2'
 import type {
   AccountRiskConfig,
@@ -38,6 +39,14 @@ export default function StrategyV2AccountRisk() {
   const [state, setState] = useState<AccountState | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // Phase 6: cross-mode view toggle. The backend tracks live and sandbox
+  // P&L independently — this picks which slice is highlighted on the
+  // dashboard. Daily-loss lockout always operates on live only (see
+  // services/strategy/account_rms.py:on_state_changed); the sandbox
+  // numbers exist for visibility, not RMS gating.
+  const [viewMode, setViewMode] = useState<'combined' | 'live' | 'sandbox'>(
+    'combined',
+  )
 
   const refresh = async () => {
     setLoading(true)
@@ -146,27 +155,48 @@ export default function StrategyV2AccountRisk() {
 
       {/* Live state card ---------------------------------------------------- */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-base">Live State</CardTitle>
+          <Tabs
+            value={viewMode}
+            onValueChange={(v) => setViewMode(v as typeof viewMode)}
+          >
+            <TabsList>
+              <TabsTrigger value="combined">Combined</TabsTrigger>
+              <TabsTrigger value="live">Live</TabsTrigger>
+              <TabsTrigger value="sandbox">Sandbox</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </CardHeader>
         <CardContent className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
           <Stat label="Active Runs" value={String(state.active_run_count)} />
-          <Stat
-            label="Today's Live P&L"
-            value={fmtMoney(state.realized_pnl_today_live)}
-            tone={tone(state.realized_pnl_today_live)}
-          />
-          <Stat
-            label="Today's Sandbox P&L"
-            value={fmtMoney(state.realized_pnl_today_sandbox)}
-            tone={tone(state.realized_pnl_today_sandbox)}
-          />
+          {(viewMode === 'combined' || viewMode === 'live') && (
+            <Stat
+              label="Today's Live P&L"
+              value={fmtMoney(state.realized_pnl_today_live)}
+              tone={tone(state.realized_pnl_today_live)}
+            />
+          )}
+          {(viewMode === 'combined' || viewMode === 'sandbox') && (
+            <Stat
+              label="Today's Sandbox P&L"
+              value={fmtMoney(state.realized_pnl_today_sandbox)}
+              tone={tone(state.realized_pnl_today_sandbox)}
+            />
+          )}
           <Stat
             label="Unrealized Aggregate"
             value={fmtMoney(state.unrealized_pnl_aggregate)}
             tone={tone(state.unrealized_pnl_aggregate)}
           />
         </CardContent>
+        {viewMode === 'sandbox' && (
+          <CardContent className="pt-0 text-xs text-muted-foreground">
+            Sandbox P&L is informational only. The daily-loss lockout cap
+            below operates on live realized P&L only — sandbox losses never
+            trigger an account lockout.
+          </CardContent>
+        )}
       </Card>
 
       {/* Caps card ---------------------------------------------------------- */}

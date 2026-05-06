@@ -365,6 +365,23 @@ export default function StrategyV2Builder() {
         )}
       </div>
 
+      {/* ---------- Sandbox banner (Phase 6) ----------
+          Surfaces the routing guarantee when this strategy is set to
+          sandbox: regardless of the global analyzer toggle, every order
+          this strategy places is rerouted to the sandbox engine via the
+          per-call mode contextvar. */}
+      {form.mode === 'sandbox' && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+          <div className="font-medium">Sandbox mode</div>
+          <p className="text-xs mt-1 text-amber-800 dark:text-amber-200">
+            Orders from this strategy always route to the sandbox engine
+            (paper fills at live LTP, zero slippage), independent of the
+            global Analyzer toggle. Live strategies on the same account
+            keep routing to the broker normally.
+          </p>
+        </div>
+      )}
+
       {/* ---------- Index & Timings ---------- */}
       <Card>
         <CardHeader>
