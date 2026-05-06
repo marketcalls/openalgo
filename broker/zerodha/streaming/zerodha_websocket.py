@@ -113,6 +113,15 @@ class ZerodhaWebSocket:
         self._connection_ready = threading.Event()
         self._stop_event = threading.Event()
 
+        # Auth failure tracking. Kite Connect access tokens expire daily
+        # at ~08:00 IST; when expired the WS handshake returns
+        # "Handshake status 403 Forbidden ... Authentication failed".
+        # Reconnecting with the same baked-in access_token will fail
+        # forever — there's no path for the WS thread to refresh the
+        # token. Flag the failure so the adapter (which CAN re-fetch
+        # from the auth db) tears this client down and rebuilds it.
+        self.auth_failed = False
+
         self.logger.info("Enhanced Zerodha WebSocket client initialized (sync)")
 
     def set_token_exchange_mapping(self, token_exchange_map: dict[int, str]):
@@ -167,6 +176,15 @@ class ZerodhaWebSocket:
                 self.logger.error(f"WebSocket run_forever error: {e}")
 
             self.connected = False
+
+            # Auth failure short-circuits the retry loop. The token is
+            # baked into self.ws_url so retrying achieves nothing — the
+            # adapter must rebuild this client with a fresh token.
+            if self.auth_failed:
+                self.logger.warning(
+                    "WebSocket thread exiting — auth failed, awaiting adapter re-init with fresh token"
+                )
+                break
 
             if not self.running or self._stop_event.is_set():
                 break
@@ -407,6 +425,23 @@ class ZerodhaWebSocket:
         self.logger.error(f"WebSocket error: {error}")
         self.connected = False
         self.error_count += 1
+
+        # Detect Kite Connect daily token expiry (08:00 IST). Errors look
+        # like: "Handshake status 403 Forbidden ... 'Authentication failed.'"
+        # When seen, flag and stop the reconnect loop — the adapter will
+        # rebuild this client with a freshly re-fetched access_token.
+        err_str = str(error)
+        if "403" in err_str or "Authentication failed" in err_str:
+            if not self.auth_failed:
+                self.logger.warning(
+                    "Kite WS auth failed — stopping reconnects so adapter can refresh access_token"
+                )
+            self.auth_failed = True
+            # Trip the run-loop's exit conditions so it doesn't waste
+            # 50 retries × exponential backoff on a guaranteed-fail token.
+            self.running = False
+            self._stop_event.set()
+
         if self.on_error:
             try:
                 self.on_error(error)

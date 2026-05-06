@@ -709,6 +709,120 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Handle WebSocket errors"""
         self.logger.error(f"WebSocket error: {error}")
 
+        # Daily token-expiry recovery. When Kite returns 403/Authentication
+        # failed the underlying ZerodhaWebSocket flips its `auth_failed`
+        # flag and stops retrying. We here detect the same condition and
+        # rebuild the client end-to-end so the next subscribe attempt
+        # succeeds with a fresh access_token from the auth db.
+        #
+        # Without this, the broker WS adapter stays dead until the user
+        # restarts the OpenAlgo container, even if they re-log into Kite.
+        err_str = str(error)
+        if "403" in err_str or "Authentication failed" in err_str:
+            if getattr(self, "_token_refresh_in_progress", False):
+                # Re-init already running in another thread — don't pile up.
+                return
+            self._token_refresh_in_progress = True
+            try:
+                threading.Thread(
+                    target=self._refresh_token_and_reconnect,
+                    daemon=True,
+                    name="ZerodhaTokenRefresh",
+                ).start()
+            except Exception as e:
+                self.logger.error(f"Failed to spawn token refresh thread: {e}")
+                self._token_refresh_in_progress = False
+
+    def _refresh_token_and_reconnect(self):
+        """
+        Tear down the auth-failed WS client, re-fetch the access_token from
+        the auth db (which holds whatever token the user has after their
+        latest Kite login), and bring up a fresh WebSocket client. Resubs
+        are replayed from self.subscribed_symbols so the user doesn't
+        notice a daily disconnect.
+        """
+        try:
+            self.logger.warning("🔄 Refreshing Zerodha token + rebuilding WebSocket client")
+
+            # Snapshot subscriptions to replay after reconnect.
+            with self.lock:
+                subs_snapshot = list(self.subscribed_symbols.values())
+
+            # Stop and discard the dead WS client.
+            try:
+                if self.ws_client:
+                    self.ws_client.stop()
+            except Exception as e:
+                self.logger.debug(f"Error stopping old WS client: {e}")
+            self.ws_client = None
+            self.connected = False
+            self.running = False
+
+            # Re-read the access_token from the auth db. The user's most
+            # recent Kite login is recorded there; if they haven't re-
+            # logged this is the same expired token and we'll loop, but
+            # the loop is throttled by Kite's own rate-limiting and the
+            # user will see the failures in logs and act.
+            #
+            # bypass_cache=True is REQUIRED here: get_auth_token's default
+            # path returns a cached token that was populated with the now-
+            # expired credentials. Without bypassing, this refresh re-reads
+            # the same dead token forever even after the user re-logs and
+            # the DB has fresh credentials. See OpenAlgo issue #765.
+            if not self.user_id:
+                self.logger.error("Cannot refresh token: user_id is None")
+                return
+            auth_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not auth_token:
+                self.logger.error("Cannot refresh token: auth db returned no token")
+                return
+            if ":" in auth_token:
+                parts = auth_token.split(":")
+                self.access_token = parts[1] if len(parts) >= 2 else auth_token
+            else:
+                self.access_token = auth_token
+            if not self.access_token:
+                self.logger.error("Cannot refresh token: empty access_token after parse")
+                return
+
+            # Rebuild the WS client with the fresh token.
+            self.ws_client = ZerodhaWebSocket(
+                api_key=self.api_key,
+                access_token=self.access_token,
+                on_ticks=self._handle_ticks,
+            )
+            self.ws_client.on_connect = self._on_connect
+            self.ws_client.on_disconnect = self._on_disconnect
+            self.ws_client.on_error = self._on_error
+
+            # Connect — same flow as the original adapter.connect().
+            if not self.ws_client.start():
+                self.logger.error("Token refresh: ws_client.start() returned False")
+                return
+            self.running = True
+            if self.ws_client.wait_for_connection(timeout=15.0):
+                self.connected = True
+                self.logger.info("✅ Token refresh: WebSocket reconnected with fresh token")
+            else:
+                self.logger.warning("Token refresh: connection still pending after 15s")
+
+            # Replay subscriptions so the upstream stream keeps flowing.
+            if subs_snapshot:
+                self.logger.info(f"Replaying {len(subs_snapshot)} subscriptions after token refresh")
+                for sub in subs_snapshot:
+                    try:
+                        self.subscribe(
+                            symbol=sub.get("symbol"),
+                            exchange=sub.get("exchange"),
+                            mode=sub.get("mode", 2),
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Failed to replay subscription {sub}: {e}")
+        except Exception as e:
+            self.logger.error(f"Token refresh failed: {e}")
+        finally:
+            self._token_refresh_in_progress = False
+
     def cleanup(self):
         """Clean up all resources including WebSocket connection and ZMQ resources"""
         try:
