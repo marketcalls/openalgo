@@ -292,19 +292,20 @@ function buildTemplate(
   strategy: StrategyV2,
   secret: { webhook_secret?: string; webhook_hmac_key?: string } | null
 ): string {
-  // Single signing scheme: every payload includes "webhook_secret".
-  // The placeholder shows up when the dialog is opened post-creation
-  // (the secret is one-time-display only); users must paste their saved
-  // copy in.
+  // Phase 11 contract — short field names, mode-aware payload:
+  //   LONG  / SHORT : { secret, symbol, action }
+  //   BOTH          : { secret, symbol, action, position_size }
+  // Replay-window strategies also get a "ts" line.
   const tplParts: string[] = []
-  const value = secret?.webhook_secret ?? '<your-saved-body-secret>'
-  tplParts.push(`  "webhook_secret": "${value}"`)
+  const secretValue = secret?.webhook_secret ?? '<your-saved-secret>'
+  tplParts.push(`  "secret": "${secretValue}"`)
+  tplParts.push('  "symbol": "<your-symbol>"')
   tplParts.push('  "action": "BUY"')
+  if (strategy.trading_mode === 'BOTH') {
+    tplParts.push('  "position_size": "1"')
+  }
   if (strategy.webhook_replay_window_seconds && strategy.webhook_replay_window_seconds > 0) {
     tplParts.push(`  "ts": ${Math.floor(Date.now() / 1000)}`)
   }
-  // signal_id is optional metadata. Include for TradingView users who
-  // can substitute `{{strategy.order.id}}_{{time}}`; harmless otherwise.
-  tplParts.push('  "signal_id": "<optional — any string>"')
   return `{\n${tplParts.join(',\n')}\n}`
 }

@@ -235,7 +235,11 @@ def handle_webhook(
             status=403, source_ip=source_ip,
         )
 
-    # 7. Strip signing fields before passing to engine
+    # 7. Strip signing fields before passing to engine.
+    #    Both the new short name (`secret`) and the legacy long name
+    #    (`webhook_secret`) are accepted by verify_body_secret; pop both
+    #    so neither ends up in the audit log payload.
+    body.pop("secret", None)
     body.pop("webhook_secret", None)
     body.pop("ts", None)
 

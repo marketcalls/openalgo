@@ -49,6 +49,7 @@ import type {
   StrategySegment,
   StrategyV2,
   StrategyV2CreatePayload,
+  TradingMode,
 } from '@/types/strategy_v2'
 
 import StrategyV2WebhookDialog from './StrategyV2WebhookDialog'
@@ -182,6 +183,7 @@ const legFormToPayload = (lf: LegFormState, leg_index: number): LegPayload => ({
 interface StrategyForm {
   name: string
   segment: StrategySegment
+  trading_mode: TradingMode
   underlying: string
   underlying_exchange: string
   is_intraday: boolean
@@ -196,6 +198,7 @@ interface StrategyForm {
 const blankStrategy = (): StrategyForm => ({
   name: '',
   segment: 'CASH',
+  trading_mode: 'LONG',
   underlying: 'NIFTY',
   underlying_exchange: 'NSE_INDEX',
   is_intraday: true,
@@ -245,6 +248,7 @@ export default function StrategyV2Builder() {
         setForm({
           name: data.strategy.name,
           segment: data.strategy.segment ?? 'CASH',
+          trading_mode: data.strategy.trading_mode ?? 'LONG',
           underlying: data.strategy.underlying ?? 'NIFTY',
           underlying_exchange: data.strategy.underlying_exchange ?? 'NSE_INDEX',
           is_intraday: data.strategy.is_intraday,
@@ -326,6 +330,7 @@ export default function StrategyV2Builder() {
       const payload: StrategyV2CreatePayload = {
         name: form.name.trim(),
         segment: form.segment,
+        trading_mode: form.trading_mode,
         // Underlying meaningful for INDEX_FO + STOCK_FO. Backend nulls
         // when segment=CASH but we mirror the rule so the body is honest.
         underlying: isFnO ? form.underlying || null : null,
@@ -685,8 +690,31 @@ export default function StrategyV2Builder() {
             </div>
           </div>
 
+          {/* "Mode" = trading direction (LONG/SHORT/BOTH). Drives how
+              the webhook ingestion interprets `action`. The previous
+              "Mode" label (live/sandbox) was renamed to "Engine" so
+              both can coexist without ambiguity. */}
           <div className="space-y-1">
             <Label>Mode</Label>
+            <Select
+              value={form.trading_mode}
+              onValueChange={(v: TradingMode) =>
+                setForm((s) => ({ ...s, trading_mode: v }))
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="LONG">Long Only</SelectItem>
+                <SelectItem value="SHORT">Short Only</SelectItem>
+                <SelectItem value="BOTH">Both (Long &amp; Short)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1">
+            <Label>Engine</Label>
             <Select
               value={form.mode}
               onValueChange={(v: 'live' | 'sandbox') => setForm((s) => ({ ...s, mode: v }))}

@@ -103,6 +103,7 @@ def _strategy_to_dict(s: StrategyV2, *, include_secrets: bool = False) -> dict:
         "state": s.state,
         "is_active": bool(s.is_active),
         "mode": s.mode,
+        "trading_mode": s.trading_mode or "LONG",
         "webhook_signing_method": s.webhook_signing_method,
         "webhook_replay_window_seconds": s.webhook_replay_window_seconds or 0,
         "webhook_ip_allowlist": json.loads(s.webhook_ip_allowlist) if s.webhook_ip_allowlist else [],
@@ -301,25 +302,28 @@ def get_webhook_template(strategy_id: int):
         db_session.commit()
         minted = True
 
-    # Build a ready-to-paste payload. ts is included only when the
-    # replay window is enabled, since clients with replay=0 don't need
-    # it and including it would mislead users into thinking it was
-    # required.
+    # Build a ready-to-paste payload using the simplified `secret` field
+    # name. The previous `webhook_secret` is still accepted by the
+    # ingestion layer for back-compat with payloads created before this
+    # rename. The body shape depends on the strategy's trading_mode:
+    #   LONG / SHORT: { secret, symbol, action }
+    #   BOTH:                   { secret, symbol, action, position_size }
     body: dict = {
-        "webhook_secret": s.webhook_secret,
+        "secret": s.webhook_secret,
+        "symbol": "<your-symbol>",
         "action": "BUY",
     }
+    if (s.trading_mode or "LONG") == "BOTH":
+        body["position_size"] = "1"
     if s.webhook_replay_window_seconds and s.webhook_replay_window_seconds > 0:
         from time import time as _now
         body["ts"] = int(_now())
-    # signal_id intentionally absent from the rendered template — the
-    # backend doesn't currently validate it, and including a meaningless
-    # placeholder confuses users.
 
     return jsonify({
         "status": "success",
         "webhook_url": f"/strategy/webhook/{s.webhook_id}",
-        "webhook_secret": s.webhook_secret,
+        "secret": s.webhook_secret,
+        "trading_mode": s.trading_mode or "LONG",
         "json_body": body,
         "secret_minted": minted,
     }), 200
@@ -415,6 +419,7 @@ def create_strategy():
         state="DRAFT",
         is_active=False,
         mode=data.get("mode", "live"),
+        trading_mode=data.get("trading_mode", "LONG"),
         webhook_signing_method=method,
         webhook_replay_window_seconds=data.get("webhook_replay_window_seconds", 0),
         webhook_ip_allowlist=(

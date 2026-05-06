@@ -4,6 +4,9 @@
  */
 
 export type StrategyMode = 'live' | 'sandbox'
+// Phase 11 — webhook dispatch direction. The DB column is `trading_mode`
+// (since `mode` is already taken by live/sandbox); UI labels it "Mode".
+export type TradingMode = 'LONG' | 'SHORT' | 'BOTH'
 export type StrategyState =
   | 'DRAFT'
   | 'ARMED'
@@ -79,6 +82,7 @@ export interface StrategyV2 {
   state: StrategyState
   is_active: boolean
   mode: StrategyMode
+  trading_mode: TradingMode
   // Optional — present on list responses, absent on single-strategy GETs.
   live?: StrategyLiveSnapshot
   webhook_signing_method: SigningMethod
@@ -150,6 +154,7 @@ export interface StrategyV2CreatePayload {
   exit_date?: string | null
   run_forever?: boolean
   mode?: StrategyMode
+  trading_mode?: TradingMode
   webhook_signing_method?: SigningMethod
   webhook_replay_window_seconds?: number
   webhook_ip_allowlist?: string[] | null

@@ -99,6 +99,13 @@ class StrategyV2(Base):
     state = Column(String(15), nullable=False, default="DRAFT")
     is_active = Column(Boolean, default=False, index=True)
     mode = Column(String(10), nullable=False, default="live")
+    # Phase 11 — webhook dispatch direction. The ingestion service
+    # interprets the payload's "action" field against this mode:
+    #   LONG  : BUY=enter long, SELL=close long
+    #   SHORT : SELL=enter short, BUY=close short
+    #   BOTH  : BUY/SELL with position_size>0 opens that direction;
+    #           position_size=0 closes the opposite-direction position
+    trading_mode = Column(String(10), nullable=False, default="LONG")
 
     # Webhook security — see plan §8.4. Sensitive columns encrypted at rest.
     webhook_signing_method = Column(String(20), nullable=False, default="NONE")
@@ -128,6 +135,10 @@ class StrategyV2(Base):
         CheckConstraint(
             "segment IN ('CASH','INDEX_FO','STOCK_FO')",
             name="ck_strat_segment",
+        ),
+        CheckConstraint(
+            "trading_mode IN ('LONG','SHORT','BOTH')",
+            name="ck_strat_trading_mode",
         ),
     )
 

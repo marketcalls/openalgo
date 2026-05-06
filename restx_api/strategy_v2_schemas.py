@@ -30,6 +30,11 @@ class StrategyCreateSchema(Schema):
         load_default="CASH",
         validate=validate.OneOf(["CASH", "INDEX_FO", "STOCK_FO"]),
     )
+    # Phase 11 — webhook dispatch direction.
+    trading_mode = fields.String(
+        load_default="LONG",
+        validate=validate.OneOf(["LONG", "SHORT", "BOTH"]),
+    )
     underlying = fields.String(load_default=None, allow_none=True)
     underlying_exchange = fields.String(
         load_default=None,
@@ -79,6 +84,9 @@ class StrategyUpdateSchema(Schema):
         ["tradingview", "amibroker", "python", "manual", "chartink"]))
     segment = fields.String(
         validate=validate.OneOf(["CASH", "INDEX_FO", "STOCK_FO"])
+    )
+    trading_mode = fields.String(
+        validate=validate.OneOf(["LONG", "SHORT", "BOTH"])
     )
     underlying = fields.String(allow_none=True)
     underlying_exchange = fields.String(allow_none=True)

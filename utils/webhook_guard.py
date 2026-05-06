@@ -43,17 +43,19 @@ logger = get_logger(__name__)
 
 
 def verify_body_secret(body_json: dict, expected_secret: Optional[str]) -> bool:
-    """True if body['webhook_secret'] matches expected_secret (constant-time).
+    """True if body['secret'] matches expected_secret (constant-time).
 
-    Used for the TradingView-compatible BODY_SECRET signing method. The
-    secret travels inside the JSON body — TV alerts can paste a static
-    value into the alert template.
+    Accepts both the canonical `secret` field name and the legacy
+    `webhook_secret` for back-compat with alerts created before the
+    rename. New payloads should use `secret` — shorter, cleaner.
+    Used for the TradingView-compatible BODY_SECRET signing method.
     """
     if not expected_secret:
         return False
     received = ""
     if isinstance(body_json, dict):
-        v = body_json.get("webhook_secret", "")
+        # Prefer the new short field name; fall back to the legacy one.
+        v = body_json.get("secret") or body_json.get("webhook_secret", "")
         if isinstance(v, str):
             received = v
     return hmac.compare_digest(received, expected_secret)
