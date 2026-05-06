@@ -297,18 +297,23 @@ def handle_webhook(
             status=409, source_ip=source_ip,
         )
 
-    # 8b. Account-level RMS preflight (lockout, concurrent cap, daily loss
-    #     cap, cooldown, debounce, per-strategy daily cap). See plan §9.1.
-    from services.strategy.account_rms import preflight_check as _preflight
+    # 8c. Account-level RMS preflight — gates ENTRIES only. Exits must
+    #     ALWAYS be allowed: even if the account is locked / daily-loss
+    #     cap is breached / cooldown is active, the operator (or risk
+    #     system) needs an unblocked path to close existing positions.
+    #     Blocking exits here would trap a user with an open position
+    #     and no way to flatten it via webhook.
+    if intent == "entry":
+        from services.strategy.account_rms import preflight_check as _preflight
 
-    allowed, reason = _preflight(strategy.user_id, strategy.id)
-    if not allowed:
-        return _reject(
-            strategy=strategy, webhook_id=webhook_id,
-            reason=reason,
-            code="ACCOUNT_PREFLIGHT_FAILED",
-            status=429, source_ip=source_ip,
-        )
+        allowed, reason = _preflight(strategy.user_id, strategy.id)
+        if not allowed:
+            return _reject(
+                strategy=strategy, webhook_id=webhook_id,
+                reason=reason,
+                code="ACCOUNT_PREFLIGHT_FAILED",
+                status=429, source_ip=source_ip,
+            )
 
     # 9. Resolve API key for the strategy's user — broker adapters need this.
     api_key = get_api_key_for_tradingview(strategy.user_id)
