@@ -225,16 +225,16 @@ export default function StrategyV2List() {
                         {s.name}
                       </button>
                     </td>
-                    {/* Segment column shows Cash for plain equity baskets,
-                        otherwise the underlying + index exchange (NIFTY ·
-                        NSE_INDEX). Lets the operator scan a long list and
-                        immediately see what each strategy trades. */}
+                    {/* Segment column lets the operator scan a long list
+                        and immediately see what each strategy trades. */}
                     <td className="px-4 py-3 text-muted-foreground">
                       {s.segment === 'CASH'
                         ? 'Cash'
                         : s.underlying
                           ? `${s.underlying} · ${s.underlying_exchange ?? ''}`
-                          : 'Index F&O'}
+                          : s.segment === 'STOCK_FO'
+                            ? 'Stock F&O'
+                            : 'Index F&O'}
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant="outline" className={MODE_BADGE_CLASS[s.mode] || ''}>

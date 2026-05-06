@@ -23,9 +23,12 @@ class StrategyCreateSchema(Schema):
                                   ["tradingview", "amibroker", "python", "manual", "chartink"]
                               ))
     # Phase 9 — segment drives whether underlying is meaningful.
+    # CASH      → per-leg stock symbol on NSE/BSE
+    # INDEX_FO  → futures/options on an index (NIFTY/BANKNIFTY/SENSEX)
+    # STOCK_FO  → futures/options on a single stock (RELIANCE/INFY etc.)
     segment = fields.String(
         load_default="CASH",
-        validate=validate.OneOf(["CASH", "INDEX_FO"]),
+        validate=validate.OneOf(["CASH", "INDEX_FO", "STOCK_FO"]),
     )
     underlying = fields.String(load_default=None, allow_none=True)
     underlying_exchange = fields.String(
@@ -74,7 +77,9 @@ class StrategyUpdateSchema(Schema):
     name = fields.String(validate=validate.Length(min=3, max=80))
     platform = fields.String(validate=validate.OneOf(
         ["tradingview", "amibroker", "python", "manual", "chartink"]))
-    segment = fields.String(validate=validate.OneOf(["CASH", "INDEX_FO"]))
+    segment = fields.String(
+        validate=validate.OneOf(["CASH", "INDEX_FO", "STOCK_FO"])
+    )
     underlying = fields.String(allow_none=True)
     underlying_exchange = fields.String(allow_none=True)
     is_intraday = fields.Boolean()

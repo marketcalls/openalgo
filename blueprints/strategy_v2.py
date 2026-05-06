@@ -329,11 +329,20 @@ def create_strategy():
         user_id=user,
         platform=data.get("platform", "manual"),
         segment=data.get("segment", "CASH"),
-        # Underlying is only meaningful for INDEX_FO strategies; CASH
-        # strategies leave both null regardless of what was sent.
-        underlying=data.get("underlying") if data.get("segment") == "INDEX_FO" else None,
+        # Underlying is meaningful for INDEX_FO (NIFTY etc.) and STOCK_FO
+        # (RELIANCE/INFY etc.); CASH strategies don't carry one. Both
+        # F&O segments share the same arm-time leg-resolver path —
+        # the only thing that differs is what the user picked from
+        # the underlying picker.
+        underlying=(
+            data.get("underlying")
+            if data.get("segment") in ("INDEX_FO", "STOCK_FO")
+            else None
+        ),
         underlying_exchange=(
-            data.get("underlying_exchange") if data.get("segment") == "INDEX_FO" else None
+            data.get("underlying_exchange")
+            if data.get("segment") in ("INDEX_FO", "STOCK_FO")
+            else None
         ),
         is_intraday=is_intraday,
         start_time=data["start_time"],

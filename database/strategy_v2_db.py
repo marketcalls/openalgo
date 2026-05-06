@@ -125,7 +125,10 @@ class StrategyV2(Base):
             "webhook_signing_method IN ('NONE','BODY_SECRET','HMAC_SHA256','BOTH')",
             name="ck_strat_signing",
         ),
-        CheckConstraint("segment IN ('CASH','INDEX_FO')", name="ck_strat_segment"),
+        CheckConstraint(
+            "segment IN ('CASH','INDEX_FO','STOCK_FO')",
+            name="ck_strat_segment",
+        ),
     )
 
     # --- Encrypted accessors -------------------------------------------------

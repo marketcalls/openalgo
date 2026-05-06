@@ -23,9 +23,12 @@ export type RunState =
 export type SigningMethod = 'NONE' | 'BODY_SECRET' | 'HMAC_SHA256' | 'BOTH'
 
 export type Segment = 'CASH' | 'FUT' | 'OPT'
-// Phase 9 — strategy-level segment selector. CASH strategies don't need
-// an underlying; INDEX_FO strategies do. Drives the builder UI.
-export type StrategySegment = 'CASH' | 'INDEX_FO'
+// Phase 9 — strategy-level segment selector. Drives which fields the
+// builder shows and how the leg resolver looks up contracts.
+//   CASH      — per-leg stock symbol on NSE/BSE (no underlying)
+//   INDEX_FO  — futures/options on an index (NIFTY/BANKNIFTY/SENSEX)
+//   STOCK_FO  — futures/options on a single stock (RELIANCE/INFY etc.)
+export type StrategySegment = 'CASH' | 'INDEX_FO' | 'STOCK_FO'
 // Phase 9 — per-leg exchange for CASH legs. Other segments derive their
 // exchange from the strategy underlying_exchange at resolve time.
 export type CashExchange =

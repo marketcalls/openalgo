@@ -53,16 +53,6 @@ import type {
 
 import StrategyV2WebhookDialog from './StrategyV2WebhookDialog'
 
-// Friendly labels for the state badge — DRAFT/ARMED/DISABLED stays in the
-// schema (driven by webhook ingestion + toggle), but we surface "Draft /
-// Enabled / Disabled" in the UI per user feedback.
-const STATE_LABELS: Record<string, string> = {
-  DRAFT: 'Draft',
-  ARMED: 'Enabled',
-  DISABLED: 'Disabled',
-  ARCHIVED: 'Archived',
-}
-
 // Phase 9 — product types per exchange. NSE/BSE equity = MIS / CNC;
 // every derivative segment uses MIS / NRML. Drives the leg-builder
 // Product dropdown filter.
@@ -331,15 +321,15 @@ export default function StrategyV2Builder() {
   const onSaveHeader = async () => {
     setSavingHeader(true)
     try {
-      const isIndexFo = form.segment === 'INDEX_FO'
+      const isFnO =
+        form.segment === 'INDEX_FO' || form.segment === 'STOCK_FO'
       const payload: StrategyV2CreatePayload = {
         name: form.name.trim(),
         segment: form.segment,
-        // Underlying only meaningful for INDEX_FO. Backend also nulls
-        // these when segment=CASH but we mirror the rule so the request
-        // body is honest.
-        underlying: isIndexFo ? form.underlying || null : null,
-        underlying_exchange: isIndexFo ? form.underlying_exchange || null : null,
+        // Underlying meaningful for INDEX_FO + STOCK_FO. Backend nulls
+        // when segment=CASH but we mirror the rule so the body is honest.
+        underlying: isFnO ? form.underlying || null : null,
+        underlying_exchange: isFnO ? form.underlying_exchange || null : null,
         is_intraday: form.is_intraday,
         start_time: form.start_time,
         end_time: form.is_intraday ? form.end_time : null,
@@ -444,39 +434,33 @@ export default function StrategyV2Builder() {
               {strategy.mode === 'sandbox' ? 'SANDBOX' : 'LIVE'}
             </Badge>
 
-            {/* Single state-aware control replacing the previous
-                badge + button pair. The button label embeds the
-                current state so there's nowhere for the two indicators
-                to disagree, and the verb makes the action explicit. */}
+            {/* Start / Stop button — single decisive verb. When the
+                strategy is running, button shows red Stop; when stopped,
+                shows green Start. Archived is a terminal state and the
+                button is disabled. */}
             <Button
-              variant={strategy.is_active ? 'outline' : 'default'}
               onClick={onToggleActive}
               disabled={toggling || strategy.state === 'ARCHIVED'}
               title={
                 strategy.is_active
-                  ? 'Webhook signals are being accepted — click to disable'
-                  : 'Webhook signals are rejected — click to enable'
+                  ? 'Webhook signals are accepted — click to stop'
+                  : 'Webhook signals are rejected — click to start'
               }
-              className="gap-2"
+              className={
+                strategy.state === 'ARCHIVED'
+                  ? ''
+                  : strategy.is_active
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+              }
             >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  strategy.state === 'ARMED'
-                    ? 'bg-emerald-500'
-                    : strategy.state === 'DISABLED'
-                      ? 'bg-rose-500'
-                      : strategy.state === 'ARCHIVED'
-                        ? 'bg-neutral-400'
-                        : 'bg-sky-500'
-                }`}
-              />
               {toggling
                 ? 'Working…'
                 : strategy.state === 'ARCHIVED'
                   ? 'Archived'
                   : strategy.is_active
-                    ? `${STATE_LABELS[strategy.state] ?? strategy.state} · Disable`
-                    : `${STATE_LABELS[strategy.state] ?? strategy.state} · Enable`}
+                    ? 'Stop'
+                    : 'Start'}
             </Button>
 
             <Button
@@ -525,42 +509,72 @@ export default function StrategyV2Builder() {
             />
           </div>
 
-          {/* Segment toggle drives whether Underlying is shown. */}
-          <div className="space-y-1">
+          {/* Segment toggle drives the leg builder + underlying picker.
+              CASH=stocks on NSE/BSE; INDEX_FO=index F&O (NIFTY etc.);
+              STOCK_FO=single-stock F&O (RELIANCE etc.). Switching
+              auto-snaps the underlying_exchange to the right value:
+              NSE_INDEX/BSE_INDEX for indices, NFO for stock F&O. */}
+          <div className="space-y-1 lg:col-span-2">
             <Label>Segment</Label>
             <div className="flex border rounded-md overflow-hidden">
               <button
                 type="button"
                 className={`flex-1 py-2 text-sm ${form.segment === 'CASH' ? 'bg-primary text-primary-foreground' : ''}`}
-                onClick={() => setForm((s) => ({ ...s, segment: 'CASH' }))}
+                onClick={() =>
+                  setForm((s) => ({
+                    ...s,
+                    segment: 'CASH',
+                  }))
+                }
               >
                 Cash
               </button>
               <button
                 type="button"
                 className={`flex-1 py-2 text-sm ${form.segment === 'INDEX_FO' ? 'bg-primary text-primary-foreground' : ''}`}
-                onClick={() => setForm((s) => ({ ...s, segment: 'INDEX_FO' }))}
+                onClick={() =>
+                  setForm((s) => ({
+                    ...s,
+                    segment: 'INDEX_FO',
+                    underlying: s.underlying || 'NIFTY',
+                    underlying_exchange:
+                      s.underlying === 'SENSEX' || s.underlying === 'BANKEX'
+                        ? 'BSE_INDEX'
+                        : 'NSE_INDEX',
+                  }))
+                }
               >
                 Index F&amp;O
+              </button>
+              <button
+                type="button"
+                className={`flex-1 py-2 text-sm ${form.segment === 'STOCK_FO' ? 'bg-primary text-primary-foreground' : ''}`}
+                onClick={() =>
+                  setForm((s) => ({
+                    ...s,
+                    segment: 'STOCK_FO',
+                    // Reset underlying — the user picks a stock via
+                    // search; pre-filling NIFTY would be wrong here.
+                    underlying: '',
+                    underlying_exchange: 'NFO',
+                  }))
+                }
+              >
+                Stock F&amp;O
               </button>
             </div>
           </div>
 
-          {/* Underlying + Underlying Exchange — only relevant for INDEX_FO
-              strategies. Both fields are sent on save; the leg resolver
-              uses underlying_exchange to look up the contract chain at
-              arm-time. NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY live on
-              NSE_INDEX; SENSEX/BANKEX on BSE_INDEX; CRUDEOIL etc on
-              MCX_INDEX. */}
+          {/* INDEX_FO — pick from the standard list of indices. Each
+              index auto-snaps its underlying_exchange because the
+              mapping is fixed. */}
           {form.segment === 'INDEX_FO' && (
             <>
               <div className="space-y-1">
-                <Label>Underlying</Label>
+                <Label>Underlying Index</Label>
                 <Select
                   value={form.underlying}
                   onValueChange={(v) => {
-                    // Auto-snap exchange when the underlying changes so
-                    // the user doesn't have to remember the mapping.
                     const idxExchange =
                       v === 'SENSEX' || v === 'BANKEX'
                         ? 'BSE_INDEX'
@@ -586,7 +600,7 @@ export default function StrategyV2Builder() {
                 </Select>
               </div>
               <div className="space-y-1">
-                <Label>Underlying Exchange</Label>
+                <Label>Index Exchange</Label>
                 <Select
                   value={form.underlying_exchange}
                   onValueChange={(v) =>
@@ -600,6 +614,51 @@ export default function StrategyV2Builder() {
                     <SelectItem value="NSE_INDEX">NSE_INDEX</SelectItem>
                     <SelectItem value="BSE_INDEX">BSE_INDEX</SelectItem>
                     <SelectItem value="MCX_INDEX">MCX_INDEX</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
+          {/* STOCK_FO — underlying is a stock symbol picked via search.
+              Same /search/api/search endpoint as /search/token + /tradingview;
+              we filter by NSE so the suggestions are NSE-listed stocks
+              (the only ones with F&O contracts). The chosen symbol is
+              the F&O underlying (RELIANCE/INFY/...); leg resolver uses
+              underlying_exchange (NFO/BFO) at arm-time. */}
+          {form.segment === 'STOCK_FO' && (
+            <>
+              <div className="space-y-1">
+                <Label>Underlying Stock</Label>
+                <SymbolSearchInput
+                  value={form.underlying}
+                  exchange="NSE"
+                  onChange={(v) =>
+                    setForm((s) => ({ ...s, underlying: v.toUpperCase() }))
+                  }
+                  onSelect={(row) =>
+                    setForm((s) => ({
+                      ...s,
+                      underlying: row.symbol,
+                    }))
+                  }
+                  placeholder="Search stock (e.g. RELIANCE)"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>F&amp;O Exchange</Label>
+                <Select
+                  value={form.underlying_exchange}
+                  onValueChange={(v) =>
+                    setForm((s) => ({ ...s, underlying_exchange: v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NFO">NFO</SelectItem>
+                    <SelectItem value="BFO">BFO</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -734,14 +793,12 @@ export default function StrategyV2Builder() {
           </CardHeader>
           <CardContent className="space-y-4">
             {(() => {
-              // Effect-equivalent inline snap. Avoids a separate useEffect
-              // for one tiny invariant; keeps the rule colocated with the
-              // tab list it constrains.
+              // Both INDEX_FO and STOCK_FO use Futures/Options legs;
+              // CASH uses Cash legs. Snap the draft leg's segment to
+              // a valid choice when the strategy segment flips.
               const allowed: Segment[] =
                 form.segment === 'CASH' ? ['CASH'] : ['FUT', 'OPT']
               if (!allowed.includes(draftLeg.segment)) {
-                // Defer to next tick so React doesn't complain about state
-                // updates during render.
                 setTimeout(() => setDraftLeg(blankLeg(allowed[0])), 0)
               }
               return null
@@ -754,7 +811,7 @@ export default function StrategyV2Builder() {
                 {form.segment === 'CASH' && (
                   <TabsTrigger value="CASH">Cash</TabsTrigger>
                 )}
-                {form.segment === 'INDEX_FO' && (
+                {(form.segment === 'INDEX_FO' || form.segment === 'STOCK_FO') && (
                   <>
                     <TabsTrigger value="FUT">Futures</TabsTrigger>
                     <TabsTrigger value="OPT">Options</TabsTrigger>
