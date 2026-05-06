@@ -69,11 +69,30 @@ export interface StrategyStateChangePayload {
   ts_ist: string
 }
 
+export interface StrategyOrderEventPayload {
+  strategy_id: number
+  run_id: number
+  leg_id: number
+  orderid: string
+  status: string
+  filled_qty: number
+  avg_price: number
+  source: string
+  ts_utc: number
+  ts_ist: string
+}
+
 export interface StrategyV2LiveState {
   pnl: PnlTickPayload | null
   legs: Record<number, LegUpdatePayload>
   health: StrategyHealthPayload | null
   lastStateChange: StrategyStateChangePayload | null
+  // Fill events fire via strategy_order_event whenever a leg fills.
+  // Useful for triggering refetch on BUY entry — the state_change for
+  // ENTERING -> IN_TRADE arrives BEFORE the position row is written
+  // (the broker fill is what creates the position, and it lands later
+  // on a separate worker thread). Listen for fills to catch the row.
+  lastOrderEvent: StrategyOrderEventPayload | null
   connected: boolean
 }
 
@@ -82,6 +101,7 @@ const initialState: StrategyV2LiveState = {
   legs: {},
   health: null,
   lastStateChange: null,
+  lastOrderEvent: null,
   connected: false,
 }
 
@@ -149,6 +169,11 @@ export function useStrategyV2Socket(
     socket.on('strategy_state_change', (data: StrategyStateChangePayload) => {
       if (data.strategy_id !== strategyId) return
       setState((s) => ({ ...s, lastStateChange: data }))
+    })
+
+    socket.on('strategy_order_event', (data: StrategyOrderEventPayload) => {
+      if (data.strategy_id !== strategyId) return
+      setState((s) => ({ ...s, lastOrderEvent: data }))
     })
 
     return () => {

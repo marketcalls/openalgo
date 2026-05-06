@@ -113,10 +113,33 @@ export default function StrategyV2Runs() {
       .finally(() => setLoading(false))
   }, [sid])
 
-  // Lazy-fetch each tab's data on first switch + when the user comes
-  // back to it (so e.g. closing a position reflects in Positions tab).
+  // Event-driven refresh of the active tab's data. Triggers:
+  //   1. Mount + tab switch — fetch initial state
+  //   2. Any strategy_state_change event from the Socket.IO room —
+  //      ARMED -> ENTERING -> IN_TRADE -> EXITING -> CLOSED. Each
+  //      transition implies orderbook/tradebook/positionbook may have
+  //      changed (orders placed, fills recorded, positions opened
+  //      or closed). Keying the effect on `live.lastStateChange`
+  //      forces a re-fetch on every transition. Also re-fetch the
+  //      runs list so the lifecycle column updates without a manual
+  //      page refresh.
+  //
+  // Cheaper than polling: zero requests when no state change fires,
+  // and a ~5ms round-trip per state change vs an interval poll
+  // running constantly. The existing Socket.IO connection (used for
+  // live MTM ticks) does the push.
+  // Refetch triggers — combine state-change + fill events.
+  // state_change covers SELL/exit cleanly (position is updated to CLOSED
+  // BEFORE the EXITING -> CLOSED transition fires).
+  // strategy_order_event covers BUY entry: ENTERING -> IN_TRADE fires
+  // BEFORE the broker fill lands and creates the position row, so
+  // state-change alone misses the appearance. The fill event arrives
+  // a few hundred ms later when the position is committed.
+  const stateChangeKey = live.lastStateChange?.ts_utc ?? 0
+  const orderEventKey = live.lastOrderEvent?.ts_utc ?? 0
   useEffect(() => {
     if (!sid) return
+
     if (tab === 'orders') {
       strategyV2Api
         .strategyOrderbook(sid)
@@ -144,8 +167,17 @@ export default function StrategyV2Runs() {
           toast.error('Failed to load positionbook')
           console.error(err)
         })
+    } else if (tab === 'runs' && (stateChangeKey > 0 || orderEventKey > 0)) {
+      // Only refetch runs on state-change/fill events; the initial
+      // mount already loaded them via the parent useEffect.
+      strategyV2Api
+        .listRuns(sid)
+        .then((r) => setRuns(r))
+        .catch((err) => {
+          console.error('runs refresh failed', err)
+        })
     }
-  }, [sid, tab])
+  }, [sid, tab, stateChangeKey, orderEventKey])
 
   if (loading) {
     return <div className="container mx-auto p-8">Loading…</div>
@@ -233,27 +265,38 @@ export default function StrategyV2Runs() {
                     </tr>
                   </thead>
                   <tbody>
-                    {positions.map((p) => (
-                      <tr key={`${p.run_id}-${p.leg_id}`} className="border-b last:border-b-0">
-                        <td className="px-4 py-2 font-mono">{p.symbol}</td>
-                        <td className="px-4 py-2 text-xs">{p.exchange}</td>
-                        <td className="px-4 py-2 text-xs">{p.product}</td>
-                        <td className="px-4 py-2 text-right font-mono">{p.quantity}</td>
-                        <td className="px-4 py-2 text-right font-mono">{p.average_price}</td>
-                        <td className="px-4 py-2 text-right font-mono">{p.ltp}</td>
-                        <td
-                          className={`px-4 py-2 text-right font-mono ${
-                            Number(p.pnl) > 0
-                              ? 'text-emerald-700'
-                              : Number(p.pnl) < 0
-                                ? 'text-rose-700'
-                                : ''
-                          }`}
-                        >
-                          {p.pnl}
-                        </td>
-                      </tr>
-                    ))}
+                    {positions.map((p) => {
+                      // Merge live tick data — ltp + mtm arrive at ~5Hz via
+                      // strategy_leg_update events, debounced server-side.
+                      // Falls back to the row's stored values when the engine
+                      // hasn't ticked the leg yet (e.g., between fills).
+                      const tick = p.leg_id ? live.legs[p.leg_id] : undefined
+                      const ltp = tick?.ltp ?? Number(p.ltp_decimal ?? p.ltp ?? 0)
+                      const pnl = tick?.mtm ?? Number(p.unrealized_pnl ?? p.pnl ?? 0)
+                      return (
+                        <tr key={`${p.run_id}-${p.leg_id}`} className="border-b last:border-b-0">
+                          <td className="px-4 py-2 font-mono">{p.symbol}</td>
+                          <td className="px-4 py-2 text-xs">{p.exchange}</td>
+                          <td className="px-4 py-2 text-xs">{p.product}</td>
+                          <td className="px-4 py-2 text-right font-mono">{p.quantity}</td>
+                          <td className="px-4 py-2 text-right font-mono">{p.average_price}</td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            {ltp ? Number(ltp).toFixed(2) : '—'}
+                          </td>
+                          <td
+                            className={`px-4 py-2 text-right font-mono ${
+                              pnl > 0
+                                ? 'text-emerald-700'
+                                : pnl < 0
+                                  ? 'text-rose-700'
+                                  : ''
+                            }`}
+                          >
+                            {pnl ? pnl.toFixed(2) : '0.00'}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               )}
