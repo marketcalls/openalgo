@@ -68,12 +68,6 @@ const OIProfile = lazy(() => import('@/pages/OIProfile'))
 const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
 const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
 
-// Strategy pages
-const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
-const NewStrategy = lazy(() => import('@/pages/strategy/NewStrategy'))
-const ViewStrategy = lazy(() => import('@/pages/strategy/ViewStrategy'))
-const ConfigureSymbols = lazy(() => import('@/pages/strategy/ConfigureSymbols'))
-
 // Strategy v2 — multi-leg engine + RMS + webhook security
 const StrategyV2List = lazy(() => import('@/pages/StrategyV2List'))
 const StrategyV2Builder = lazy(() => import('@/pages/StrategyV2Builder'))
@@ -220,20 +214,11 @@ function App() {
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
-                {/* Phase 7: Strategy v2 is the default. The /strategy entry point
-                    now renders the v2 list; the legacy v1 list stays accessible at
-                    /strategy/v1/list during the canary period (Phase 8 removes v1).
-                    /strategy/v2 is preserved as an alias so existing bookmarks /
-                    deep links continue to work. */}
+                {/* Strategy v2 — multi-leg engine + RMS + webhook security.
+                    /strategy and /strategy/v2 both render the list; the alias
+                    keeps bookmarks created during the v1->v2 canary period
+                    working without redirects. */}
                 <Route path="/strategy" element={<StrategyV2List />} />
-                <Route path="/strategy/v1/list" element={<StrategyIndex />} />
-                {/* Legacy v1 deep-link routes — kept verbatim so internal links
-                    on the v1 list page (new/edit/configure) keep working until v1
-                    is removed. */}
-                <Route path="/strategy/new" element={<NewStrategy />} />
-                <Route path="/strategy/:strategyId" element={<ViewStrategy />} />
-                <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
-                {/* Strategy v2 — multi-leg engine + RMS + webhook security */}
                 <Route path="/strategy/v2" element={<StrategyV2List />} />
                 <Route path="/strategy/v2/account" element={<StrategyV2AccountRisk />} />
                 <Route path="/strategy/v2/:id" element={<StrategyV2Builder />} />

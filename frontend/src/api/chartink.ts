@@ -4,7 +4,7 @@ import type {
   ChartinkSymbolMapping,
   CreateChartinkStrategyRequest,
 } from '@/types/chartink'
-import type { SymbolSearchResult } from '@/types/strategy'
+import type { SymbolSearchResult } from '@/types/symbol'
 import type { ApiResponse } from '@/types/trading'
 import { webClient } from './client'
 

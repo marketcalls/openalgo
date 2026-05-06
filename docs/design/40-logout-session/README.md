@@ -189,11 +189,7 @@ def revoke_user_tokens():
         from database.settings_db import clear_settings_cache
         clear_settings_cache()
 
-        # 4. Clear strategy cache
-        from database.strategy_db import clear_strategy_cache
-        clear_strategy_cache()
-
-        # 5. Clear telegram cache
+        # 4. Clear telegram cache
         from database.telegram_db import clear_telegram_cache
         clear_telegram_cache()
 

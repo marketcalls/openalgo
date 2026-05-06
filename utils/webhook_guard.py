@@ -117,13 +117,29 @@ def verify_replay(
 
 
 def _client_ip_from_request(request) -> str:
-    """Resolve the client IP, honoring X-Forwarded-For when present
-    (production behind nginx). Falls back to remote_addr."""
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        # XFF can be a comma-separated list — leftmost is the originating client.
-        return xff.split(",")[0].strip()
-    return request.remote_addr or ""
+    """Resolve the client IP gated on ``TRUST_PROXY_HEADERS`` so the
+    webhook IP allowlist cannot be bypassed by an attacker that reaches
+    gunicorn directly and sends a forged ``X-Forwarded-For`` header.
+
+    Delegates to ``utils.ip_helper.get_real_ip`` which is the project's
+    canonical client-IP resolver — same source of truth used by the
+    login rate-limiter, the IP ban list, and the audit log. Without this
+    gate, a self-hosted operator running OpenAlgo on an unprotected
+    public port (no proxy in front) would lose the entire allowlist.
+    """
+    from utils.ip_helper import get_real_ip
+
+    # get_real_ip needs Flask's request context; webhook_guard always
+    # runs inside the webhook view, so this is satisfied. We pass via
+    # the function-call import (not module-level) only to keep the unit
+    # tests in test_webhook_guard.py independent of Flask app setup.
+    try:
+        return get_real_ip() or ""
+    except Exception:
+        # Defensive: never let a header-parsing edge case crash the
+        # signing pipeline. Falling through to remote_addr is the same
+        # safe-default the rest of the project uses.
+        return request.remote_addr or ""
 
 
 def parse_allowlist(stored: Optional[str]) -> list:

@@ -101,55 +101,88 @@ def _snapshot_db_once(reason: str) -> None:
 
 
 def _phase7_convert_v1_strategies() -> None:
-    """Convert v1 -> v2. See module docstring for the rule set."""
-    # Late imports so the module is importable even when only Phase 0 has run
-    # (the v1 tables may not exist on a fresh install).
-    try:
-        from database.strategy_db import (
-            Strategy as StrategyV1,
-            db_session as v1_session,
-        )
-    except Exception:
-        # v1 module not present (already removed in a future Phase 8 install).
-        print("  [SKIP] v1 strategy module unavailable; nothing to convert")
-        return
+    """Convert v1 -> v2. See module docstring for the rule set.
+
+    The v1 ORM module (database/strategy_db.py) is removed in Phase 8, so
+    we read the legacy `strategies` and `strategy_symbol_mappings` tables
+    directly via the SQLAlchemy engine. This keeps the converter working
+    for users who:
+      - have existing v1 data, AND
+      - pull a release that no longer ships the v1 ORM
+
+    Reading via raw SQL also avoids triggering v1 SQLAlchemy mapper
+    registration on engines that no longer have those models bound.
+    """
+    from sqlalchemy import inspect, text
 
     from database.strategy_v2_db import (
         StrategyLeg,
         StrategyRiskConfig,
         StrategyV2,
         db_session as v2_session,
+        engine as v2_engine,
     )
 
-    # Count v1 rows up front so we can skip the snapshot when there's
-    # genuinely nothing to do (subsequent runs after the first migration).
+    # Bail out cleanly if the v1 tables don't exist (fresh install, or v1
+    # has already been dropped by migrate_strategy_v1_drop.py).
     try:
-        v1_strategies = v1_session.query(StrategyV1).all()
-    except Exception as exc:
-        # Table missing (fresh install, never had v1) -> nothing to convert.
-        print(f"  [SKIP] v1 strategies table unreadable ({exc.__class__.__name__})")
+        existing = set(inspect(v2_engine).get_table_names())
+    except Exception as exc:  # pragma: no cover — defensive
+        print(f"  [SKIP] DB inspection failed ({exc.__class__.__name__}: {exc})")
         return
 
-    if not v1_strategies:
+    if "strategies" not in existing:
+        print("  [SKIP] v1 'strategies' table not present; nothing to convert")
+        return
+
+    # Read v1 rows via raw SQL — no ORM dependency on the deleted v1 module.
+    with v2_engine.connect() as conn:
+        v1_rows = conn.execute(
+            text(
+                "SELECT id, name, webhook_id, user_id, platform, is_intraday, "
+                "       start_time, end_time, squareoff_time "
+                "FROM strategies"
+            )
+        ).mappings().all()
+
+    if not v1_rows:
         print("  [OK] No v1 strategies present; nothing to convert")
         return
 
-    # Determine work to do *before* snapshotting so a no-op rerun doesn't
-    # generate redundant backups.
     existing_v2_webhooks = {
         wh for (wh,) in v2_session.query(StrategyV2.webhook_id).all()
     }
-    pending = [s for s in v1_strategies if s.webhook_id not in existing_v2_webhooks]
-    skipped = len(v1_strategies) - len(pending)
+    pending = [r for r in v1_rows if r["webhook_id"] not in existing_v2_webhooks]
+    skipped = len(v1_rows) - len(pending)
 
     print(
-        f"  [INFO] v1 strategies: {len(v1_strategies)}, "
+        f"  [INFO] v1 strategies: {len(v1_rows)}, "
         f"already-converted: {skipped}, pending: {len(pending)}"
     )
 
     if not pending:
         print("  [OK] All v1 strategies already have v2 counterparts; nothing to do")
         return
+
+    # Pre-fetch every mapping for the pending v1 strategies in a single
+    # query — avoids N round-trips inside the conversion loop.
+    pending_ids = [r["id"] for r in pending]
+    placeholders = ",".join(f":id_{i}" for i in range(len(pending_ids)))
+    params = {f"id_{i}": v for i, v in enumerate(pending_ids)}
+    with v2_engine.connect() as conn:
+        mapping_rows = conn.execute(
+            text(
+                "SELECT id, strategy_id, symbol, exchange, quantity, product_type "
+                "FROM strategy_symbol_mappings "
+                f"WHERE strategy_id IN ({placeholders}) "
+                "ORDER BY strategy_id, id"
+            ),
+            params,
+        ).mappings().all()
+
+    mappings_by_strategy: dict[int, list] = {}
+    for m in mapping_rows:
+        mappings_by_strategy.setdefault(m["strategy_id"], []).append(m)
 
     # We're about to mutate -> snapshot first.
     _snapshot_db_once(reason=f"converting {len(pending)} v1 strategies")
@@ -165,21 +198,21 @@ def _phase7_convert_v1_strategies() -> None:
             # from migrate_all.py orchestration.
             already = (
                 v2_session.query(StrategyV2.id)
-                .filter(StrategyV2.webhook_id == v1.webhook_id)
+                .filter(StrategyV2.webhook_id == v1["webhook_id"])
                 .first()
             )
             if already:
                 continue
 
             v2 = StrategyV2(
-                name=(v1.name or "")[:80] or f"Migrated {v1.id}",
-                webhook_id=v1.webhook_id,
-                user_id=v1.user_id,
-                platform=v1.platform or "tradingview",
-                is_intraday=bool(v1.is_intraday),
-                start_time=v1.start_time or "09:15",
-                end_time=v1.end_time or "15:30",
-                squareoff_time=v1.squareoff_time,
+                name=(v1["name"] or "")[:80] or f"Migrated {v1['id']}",
+                webhook_id=v1["webhook_id"],
+                user_id=v1["user_id"],
+                platform=v1["platform"] or "tradingview",
+                is_intraday=bool(v1["is_intraday"]),
+                start_time=v1["start_time"] or "09:15",
+                end_time=v1["end_time"] or "15:30",
+                squareoff_time=v1["squareoff_time"],
                 state="DRAFT",
                 is_active=False,
                 mode="live",
@@ -188,16 +221,16 @@ def _phase7_convert_v1_strategies() -> None:
             v2_session.add(v2)
             v2_session.flush()  # populate v2.id for FK use below
 
-            mappings = list(v1.symbol_mappings or [])
+            mappings = mappings_by_strategy.get(v1["id"], [])
             for idx, m in enumerate(mappings, start=1):
                 leg = StrategyLeg(
                     strategy_id=v2.id,
                     leg_index=idx,
                     segment="CASH",
                     position="B",
-                    product=(m.product_type or "MIS")[:10],
-                    symbol_cash=(m.symbol or "")[:50],
-                    qty=int(m.quantity or 0),
+                    product=(m["product_type"] or "MIS")[:10],
+                    symbol_cash=(m["symbol"] or "")[:50],
+                    qty=int(m["quantity"] or 0),
                 )
                 v2_session.add(leg)
                 legs_created += 1
@@ -210,14 +243,14 @@ def _phase7_convert_v1_strategies() -> None:
             v2_session.commit()
             converted += 1
             print(
-                f"  [OK] Converted v1#{v1.id} '{v1.name}' "
+                f"  [OK] Converted v1#{v1['id']} '{v1['name']}' "
                 f"-> v2#{v2.id} ({len(mappings)} leg(s))"
             )
         except Exception as exc:
             v2_session.rollback()
             failed += 1
             print(
-                f"  [FAIL] v1#{v1.id} '{v1.name}': "
+                f"  [FAIL] v1#{v1['id']} '{v1['name']}': "
                 f"{exc.__class__.__name__}: {exc}"
             )
 

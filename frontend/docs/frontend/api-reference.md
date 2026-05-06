@@ -85,35 +85,43 @@ await ordersApi.cancelOrder(orderId)
 await ordersApi.modifyOrder(orderId, modifications)
 ```
 
-### Strategy API
+### Strategy v2 API
 
 ```tsx
-// src/api/strategy.ts
-import { strategyApi } from '@/api/strategy'
+// src/api/strategy_v2.ts
+import { strategyV2Api } from '@/api/strategy_v2'
 
 // Get all strategies
-const strategies = await strategyApi.getStrategies()
+const strategies = await strategyV2Api.list()
 
-// Get single strategy
-const strategy = await strategyApi.getStrategy(strategyId)
+// Get single strategy + legs
+const detail = await strategyV2Api.get(strategyId)
 
 // Create strategy
-const newStrategy = await strategyApi.createStrategy({
+const created = await strategyV2Api.create({
   name: 'My Strategy',
-  description: 'Strategy description',
+  underlying: 'NIFTY',
+  underlying_exchange: 'NSE_INDEX',
+  is_intraday: true,
+  start_time: '09:30',
+  end_time: '15:15',
+  squareoff_time: '15:20',
+  mode: 'live',
+  webhook_signing_method: 'NONE',
 })
 
-// Update strategy
-await strategyApi.updateStrategy(strategyId, updates)
+// Add a leg (Cash, Futures, or Options)
+await strategyV2Api.addLeg(strategyId, legPayload)
 
-// Delete strategy
-await strategyApi.deleteStrategy(strategyId)
+// Toggle armed/disabled
+await strategyV2Api.toggle(strategyId)
 
-// Get webhook URL
-const webhookUrl = strategyApi.getWebhookUrl(webhookId)
+// Webhook URL (preserved verbatim across the v1->v2 conversion)
+const webhookUrl = strategyV2Api.webhookUrl(webhookId)
 
-// Configure symbols
-await strategyApi.configureSymbols(strategyId, symbols)
+// Strategy-scoped reporting
+const orders = await strategyV2Api.runOrderbook(runId)
+const trades = await strategyV2Api.runTradebook(runId)
 ```
 
 ### Chartink API

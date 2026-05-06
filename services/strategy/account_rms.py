@@ -165,6 +165,19 @@ def is_locked_now(cfg: AccountRiskConfig) -> bool:
         cfg.lockout_until = None
         try:
             db_session.commit()
+            # Publish the unlock event so the audit chain reflects the
+            # state change. Without this, an operator inspecting the
+            # audit log sees a lock event with no matching unlock and
+            # has to infer that the auto-clear fired. The event is also
+            # what wakes the React UI's lockout banner so it disappears
+            # without a page reload.
+            try:
+                from utils.event_bus import bus  # local import — avoid cycle
+                bus.publish(
+                    AccountUnlockedEvent(user_id=cfg.user_id, cleared_by="auto_expiry")
+                )
+            except Exception:
+                logger.exception("account_rms: failed to publish auto-unlock event")
         except Exception:
             db_session.rollback()
         return False

@@ -45,7 +45,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink'
 import { CHARTINK_EXCHANGES, CHARTINK_PRODUCTS } from '@/types/chartink'
-import type { SymbolSearchResult } from '@/types/strategy'
+import type { SymbolSearchResult } from '@/types/symbol'
 
 export default function ConfigureChartinkSymbols() {
   const { strategyId } = useParams<{ strategyId: string }>()

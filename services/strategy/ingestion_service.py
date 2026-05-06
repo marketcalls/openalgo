@@ -131,7 +131,18 @@ def handle_webhook(
 
     Returns: (http_status, response_body_dict).
     """
-    source_ip = request.remote_addr or "" if request is not None else ""
+    # Use the project's canonical client-IP resolver so audit-log
+    # source_ip matches what the IP allowlist sees. Both gate on
+    # TRUST_PROXY_HEADERS — same source of truth as login rate-limit
+    # and ban-list. See utils/ip_helper.py.
+    if request is not None:
+        try:
+            from utils.ip_helper import get_real_ip
+            source_ip = get_real_ip() or ""
+        except Exception:
+            source_ip = request.remote_addr or ""
+    else:
+        source_ip = ""
 
     # 1. Lookup
     strategy = (

@@ -165,7 +165,27 @@ class RmsEngine:
         Idempotent: if already registered, a no-op return True. Returns
         False if the run can't be hydrated (no legs / no positions / not
         IN_TRADE).
+
+        Also places the initial SL on each leg before the first tick
+        arrives — required because register_run is called on the
+        IN_TRADE state transition (positions exist but the engine has
+        no LTP yet). Without this, a position opened just before a feed
+        outage or pre-market window would sit unprotected until the
+        first tick. The initial SL is computed from avg_entry + the
+        leg's sl_value/unit (no LTP dependency) and written via
+        _persist_trail in the same db_session.
         """
+        try:
+            return self._register_run_locked(run_id)
+        finally:
+            # register_run runs from the bus subscriber dispatcher which
+            # has no Flask app context; teardown_appcontext won't fire,
+            # so the scoped_session would otherwise stay bound to the
+            # green thread until next request. Match the pattern used in
+            # _persist_trail / _persist_run_state / account_rms.
+            db_session.remove()
+
+    def _register_run_locked(self, run_id: int) -> bool:
         with self._lock:
             if run_id in self._runs:
                 return True
@@ -298,11 +318,41 @@ class RmsEngine:
             if not runtime.legs:
                 return False
 
+            # Place initial SL on every leg that has SL enabled but no
+            # SL price yet (newly-armed leg, fresh fill). Computed from
+            # avg_entry + sl_value/unit — independent of LTP — so the
+            # position is protected immediately, not only after the
+            # first tick. Persisted now so a restart between fill and
+            # first tick doesn't leak the protection.
+            for leg in runtime.legs.values():
+                if (
+                    leg.sl_enabled
+                    and leg.current_sl_price is None
+                    and leg.sl_value is not None
+                ):
+                    sd = evaluate_sl(
+                        enabled=True,
+                        sl_value=leg.sl_value,
+                        sl_unit=leg.sl_unit,
+                        avg_entry=leg.avg_entry,
+                        ltp=leg.avg_entry,  # no LTP yet; SL is anchored on entry
+                        direction=leg.direction,
+                        tick_size=leg.tick_size,
+                        current_sl_price=None,
+                    )
+                    if sd.sl_price is not None:
+                        leg.current_sl_price = sd.sl_price
+                        self._persist_trail(leg)
+
             self._runs[run_id] = runtime
             self._refresh_subscription()
+            # Use the cached primitive on `runtime`, not the ORM `run`.
+            # _persist_trail above commits + removes the session, which
+            # detaches the `run` instance — accessing `run.strategy_id`
+            # here would trigger a refresh on a detached row.
             logger.info(
                 "rms_engine: registered run_id=%s strategy_id=%s legs=%s",
-                run_id, run.strategy_id, len(runtime.legs),
+                run_id, runtime.strategy_id, len(runtime.legs),
             )
             return True
 

@@ -183,14 +183,13 @@ def fresh_db(tmp_path: Path) -> Path:
 
 def test_migration_no_v1_data(fresh_db: Path):
     """Clean DB (no v1 schema) -> migration succeeds, creates v2 tables,
-    no backup. Handles either skip path: v1 table missing OR v1 table
-    present but empty."""
+    no backup. Accepts any 'nothing to convert' skip path."""
     r = _run_migration(fresh_db)
     assert r.returncode == 0, r.stdout + r.stderr
-    # Either skip phrase is acceptable — both signal "nothing to convert".
+    # Any of the converter's 'nothing to do' messages is fine.
     assert (
         "No v1 strategies present" in r.stdout
-        or "v1 strategies table unreadable" in r.stdout
+        or "'strategies' table not present" in r.stdout
     ), r.stdout
 
     strats, legs = _query_v2(fresh_db)

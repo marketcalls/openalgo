@@ -1,8 +1,15 @@
 # Strategy Risk Management & Position Tracking — PRD
 
 **Date**: 2026-02-06
-**Status**: Draft
+**Status**: Superseded by [2026-05-06-strategy-v2-implementation-plan.md](./2026-05-06-strategy-v2-implementation-plan.md) (2026-05-06)
 **Scope**: Webhook + Chartink Strategies (V1)
+
+> **Historical record only.** The v1 strategy engine and surrounding RMS
+> proposal in this document have been replaced by the v2 design (multi-leg
+> leg builder, account/strategy/leg-level RMS, webhook security, sandbox
+> parity). Phase 8 of the v2 implementation plan removed the v1 code
+> paths, frontend pages, and DB tables. Read this only for historical
+> context — implementation guidance lives in the linked v2 plan.
 
 ---
 

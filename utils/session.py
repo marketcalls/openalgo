@@ -145,14 +145,6 @@ def revoke_user_tokens(revoke_db_tokens=True):
             except Exception as cache_error:
                 logger.exception(f"Error clearing settings cache: {cache_error}")
 
-            # Clear strategy cache on logout/session expiry
-            try:
-                from database.strategy_db import clear_strategy_cache
-
-                clear_strategy_cache()
-            except Exception as cache_error:
-                logger.exception(f"Error clearing strategy cache: {cache_error}")
-
             # Clear telegram cache on logout/session expiry
             try:
                 from database.telegram_db import clear_telegram_cache

@@ -127,14 +127,6 @@ export default function StrategyV2List() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate('/strategy/v1/list')}
-            title="Open the legacy v1 strategy list (read-only access during the canary period)"
-          >
-            Legacy v1 list
-          </Button>
           <Button variant="outline" onClick={() => navigate('/strategy/v2/account')}>
             Account Risk
           </Button>

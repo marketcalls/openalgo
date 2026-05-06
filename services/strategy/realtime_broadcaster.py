@@ -104,6 +104,16 @@ class _RealtimeBroadcaster:
             _DEBOUNCE_SEC,
         )
 
+        # Subscribe to state-changes so we can evict per-run debounce
+        # state when a run hits a terminal state. Without this, every
+        # closed run leaves a row in _last_emit_ts forever — small but
+        # unbounded for long-uptime servers.
+        try:
+            from utils.event_bus import bus
+            bus.subscribe("strategy.state_changed", self._on_state_changed)
+        except Exception:
+            logger.exception("realtime_broadcaster: state_changed subscribe failed")
+
         # Health watcher — separate thread polls is_trade_management_safe.
         self._health_running = True
         self._health_thread = threading.Thread(
@@ -112,6 +122,26 @@ class _RealtimeBroadcaster:
             daemon=True,
         )
         self._health_thread.start()
+
+    # ----- State change subscription ---------------------------------------
+
+    _TERMINAL_STATES = frozenset(
+        {"CLOSED", "ENTRY_FAILED", "EXIT_FAILED", "ERRORED", "STOPPED"}
+    )
+
+    def _on_state_changed(self, event) -> None:
+        """When a run reaches a terminal state, drop its debounce-cache
+        entry. The run_id won't tick again so the entry is dead memory."""
+        try:
+            new_state = getattr(event, "new_state", None)
+            run_id = getattr(event, "run_id", None)
+            if new_state in self._TERMINAL_STATES and run_id is not None:
+                with self._lock:
+                    self._last_emit_ts.pop(int(run_id), None)
+        except Exception:
+            logger.exception(
+                "realtime_broadcaster: error handling state_changed event"
+            )
 
     def stop(self) -> None:
         """Tear down (test cleanup)."""
