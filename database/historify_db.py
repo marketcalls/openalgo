@@ -1516,7 +1516,14 @@ def vacuum_database():
 
 
 # Supported exchanges (these are static across brokers)
-SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX", "CRYPTO"]
+# Keep aligned with utils/constants.VALID_EXCHANGES — Historify must accept any
+# exchange the platform validates as legal, otherwise /history download/upload
+# rejects symbols that the live /quote and /history-API paths happily serve.
+SUPPORTED_EXCHANGES = [
+    "NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NCO",
+    "NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX",
+    "CRYPTO",
+]
 
 
 def get_supported_intervals(api_key: str) -> list[str]:

@@ -402,7 +402,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Mapped exchange for data field
         """
         # Map index exchanges to their base exchanges for data consistency
-        if subscription_exchange in ("NSE_INDEX", "BSE_INDEX", "GLOBAL_INDEX"):
+        if subscription_exchange in ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX"):
             return subscription_exchange  # Keep index exchange in data for client filtering
         else:
             return subscription_exchange  # Keep as-is for regular exchanges
@@ -513,7 +513,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             mode = tick.get("mode", "ltp")
 
             # Check if this is an index based on exchange
-            is_index = exchange in ["NSE_INDEX", "BSE_INDEX", "GLOBAL_INDEX"]
+            is_index = exchange in ["NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX"]
 
             # Transform based on whether it's an index or regular instrument
             if is_index:
@@ -536,7 +536,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Index LTP mode - match Angel adapter structure exactly
             transformed = {
                 "symbol": symbol,
-                "exchange": exchange,  # Preserve index exchange (NSE_INDEX/BSE_INDEX/GLOBAL_INDEX)
+                "exchange": exchange,  # Preserve index exchange (NSE_INDEX/BSE_INDEX/MCX_INDEX/GLOBAL_INDEX)
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
                 "ltt": tick.get(

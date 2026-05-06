@@ -123,6 +123,16 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Cache OHLCV open values keyed by uppercased symbol name
         self.ohlcv_cache: Dict[str, dict] = {}  # "NAME" -> {"open": ..., "close": ...}
 
+        # Subscribe coalescing queue (issue #1366) — collects per-symbol
+        # subscribe() calls into a 500ms window and dispatches batched SDK
+        # calls grouped by (channel, exchange). Mirrors the Zerodha pattern
+        # from broker/zerodha/streaming/zerodha_adapter.py:60-62, 151-194,
+        # adapted for Nubra's three call sites: subscribe_index,
+        # subscribe_ohlcv, subscribe_orderbook.
+        self.subscription_queue: list[dict] = []
+        self.batch_timer: threading.Timer | None = None
+        self.batch_delay = 0.5  # seconds — fleet norm
+
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
     ) -> dict[str, Any]:
@@ -180,12 +190,108 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Error connecting: {e}")
             return self._create_error_response("CONNECT_ERROR", str(e))
 
+    def _enqueue_subscribe(self, item: dict) -> None:
+        """Append a subscription request to the coalescing queue and arm the
+        flush timer if this is the first item in an empty queue.
+
+        Caller MUST hold self.lock — invoked from within the lock-protected
+        sections of _subscribe_via_index_channel and _subscribe_via_orderbook_channel.
+        """
+        self.subscription_queue.append(item)
+        if len(self.subscription_queue) == 1:
+            self._start_batch_timer()
+
+    def _start_batch_timer(self) -> None:
+        """Arm a fresh threading.Timer that will fire _process_batch_subscriptions
+        after batch_delay seconds. Cancels any prior timer first.
+        """
+        if self.batch_timer is not None:
+            self.batch_timer.cancel()
+        self.batch_timer = threading.Timer(
+            self.batch_delay, self._process_batch_subscriptions
+        )
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Drain the queue and emit batched SDK calls grouped by
+        (channel, exchange). Single 100-symbol burst becomes:
+            - 1 subscribe_index per nubra_exchange
+            - 1 subscribe_ohlcv per nubra_exchange
+            - 1 subscribe_orderbook for all ref_ids
+        instead of 100 of each.
+
+        State invariants: dedup sets (index_channel_subscribed,
+        ohlcv_channel_subscribed, orderbook_subscribed) are already
+        populated by the per-call subscribe path, so we just send the
+        SDK calls. If a call fails, the dedup state is unchanged so
+        the next subscribe() retry will re-enqueue.
+        """
+        with self.lock:
+            if not self.subscription_queue:
+                self.batch_timer = None
+                return
+            pending = list(self.subscription_queue)
+            self.subscription_queue.clear()
+            self.batch_timer = None
+            ws_client = self.ws_client
+
+        if not ws_client:
+            self.logger.warning(
+                f"Dropping batch of {len(pending)} subscriptions — ws_client gone"
+            )
+            return
+
+        # Group: index/OHLCV by nubra_exchange, orderbook ref_ids in one bucket
+        index_by_exchange: dict[str, list[str]] = {}
+        orderbook_ref_ids: list[int] = []
+        for item in pending:
+            if item["channel"] == "index":
+                index_by_exchange.setdefault(item["nubra_exchange"], []).append(
+                    item["sub_name"]
+                )
+            elif item["channel"] == "orderbook":
+                orderbook_ref_ids.append(item["ref_id"])
+
+        # Index + OHLCV bulk calls per nubra_exchange
+        for nubra_exchange, sub_names in index_by_exchange.items():
+            try:
+                ws_client.subscribe_index(sub_names, exchange=nubra_exchange)
+                ws_client.subscribe_ohlcv(
+                    sub_names, interval="1d", exchange=nubra_exchange
+                )
+                self.logger.info(
+                    f"Batch subscribed {len(sub_names)} symbols on index+OHLCV "
+                    f"channel ({nubra_exchange})"
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Batch index/OHLCV subscribe failed for {nubra_exchange}: {e}"
+                )
+
+        # Orderbook bulk call (single channel, no per-exchange split)
+        if orderbook_ref_ids:
+            try:
+                ws_client.subscribe_orderbook(orderbook_ref_ids)
+                self.logger.info(
+                    f"Batch subscribed {len(orderbook_ref_ids)} ref_ids on orderbook channel"
+                )
+            except Exception as e:
+                self.logger.error(f"Batch orderbook subscribe failed: {e}")
+
     def disconnect(self) -> dict[str, Any]:
         """Disconnect and clean up."""
         try:
             with self.lock:
                 self.running = False
                 self.connected = False
+
+                # Cancel pending batch flush so the timer thread does not
+                # fire after ws_client is gone (issue #1366).
+                if self.batch_timer is not None:
+                    self.batch_timer.cancel()
+                    self.batch_timer = None
+                self.subscription_queue.clear()
 
                 if self.ws_client:
                     self.ws_client.close()
@@ -312,16 +418,21 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "NOT_CONNECTED", "WebSocket client disconnected"
                 )
 
-            # Only send WebSocket subscription if not already on index channel
+            # Queue for batched index + OHLCV subscribe (issue #1366). Mark
+            # tracking sets eagerly so a duplicate subscribe() call for the
+            # same key does not enqueue twice. The actual SDK calls
+            # (subscribe_index + subscribe_ohlcv) are dispatched together
+            # by _process_batch_subscriptions() after the coalescing window.
             if key not in self.index_channel_subscribed:
-                self.ws_client.subscribe_index([sub_name], exchange=nubra_exchange)
-                self.index_channel_subscribed.add(key)
-
-            # Also subscribe to index_bucket (OHLCV) to get open/close values
-            if key not in self.ohlcv_channel_subscribed:
-                self.ws_client.subscribe_ohlcv(
-                    [sub_name], interval="1d", exchange=nubra_exchange
+                self._enqueue_subscribe(
+                    {
+                        "channel": "index",
+                        "key": key,
+                        "sub_name": sub_name,
+                        "nubra_exchange": nubra_exchange,
+                    }
                 )
+                self.index_channel_subscribed.add(key)
                 self.ohlcv_channel_subscribed.add(key)
 
             # Register the subscription name for data routing
@@ -407,9 +518,19 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "NOT_CONNECTED", "WebSocket client disconnected"
                 )
 
-            # Subscribe to orderbook channel if not already
+            # Queue for batched orderbook subscribe (issue #1366). Eager add
+            # to the dedup set prevents duplicate enqueue when subscribe()
+            # is called twice for the same ref_id within the coalescing
+            # window. The actual SDK call is dispatched together with any
+            # other queued ref_ids by _process_batch_subscriptions().
             if ref_id not in self.orderbook_subscribed:
-                self.ws_client.subscribe_orderbook([ref_id])
+                self._enqueue_subscribe(
+                    {
+                        "channel": "orderbook",
+                        "key": key,
+                        "ref_id": ref_id,
+                    }
+                )
                 self.orderbook_subscribed.add(ref_id)
 
             self.ref_id_to_symbol[ref_id] = (symbol, exchange)
