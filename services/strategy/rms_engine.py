@@ -328,6 +328,104 @@ class RmsEngine:
         with self._lock:
             return list(self._runs.keys())
 
+    def runs_for_symbol(self, exchange: str, symbol: str) -> list[int]:
+        """Return run_ids that have at least one active leg on this symbol.
+        Used by realtime_broadcaster to fan out a tick to affected runs."""
+        with self._lock:
+            return list(self._symbol_to_runs.get(_symbol_key(exchange, symbol), ()))
+
+    def snapshot_run(self, run_id: int) -> Optional[dict]:
+        """Public read-only snapshot of a run's RMS state — used by the
+        realtime broadcaster to build Socket.IO payloads.
+
+        Returns None if the run isn't currently being monitored. Caller
+        treats that as "no live update available" and skips emission.
+
+        The aggregate MTM is recomputed from per-leg last_ltp at call time
+        so the snapshot reflects the latest tick, not the last evaluation.
+        """
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                return None
+
+            agg_mtm = 0.0
+            legs_payload = []
+            for leg in run.legs.values():
+                ltp = leg.last_ltp
+                mtm = 0.0
+                sign = 1 if leg.direction == "long" else -1
+                if ltp is not None:
+                    mtm = (ltp - leg.avg_entry) * abs(leg.net_qty) * sign
+                    agg_mtm += mtm
+
+                # Distances surface "how close to SL/target are we"
+                sl_distance = None
+                if ltp is not None and leg.current_sl_price is not None:
+                    # Adverse direction: long → ltp - sl; short → sl - ltp
+                    sl_distance = (ltp - leg.current_sl_price) * sign
+
+                target_distance = None
+                if (
+                    ltp is not None
+                    and leg.target_enabled
+                    and leg.target_value is not None
+                    and leg.target_unit is not None
+                ):
+                    # Recompute target price (it's stable — function of avg_entry)
+                    from services.strategy.rms_evaluators import to_price_delta
+                    delta = to_price_delta(
+                        leg.target_value, leg.target_unit, leg.avg_entry,
+                    )
+                    target_price = leg.avg_entry + (delta * sign)
+                    target_distance = (target_price - ltp) * sign
+
+                # "Next trail at" — how far until the next ratchet advance fires
+                next_trail_at = None
+                if (
+                    leg.trail_enabled
+                    and leg.trail_x is not None
+                    and leg.trail_unit is not None
+                    and leg.last_trail_anchor is not None
+                    and ltp is not None
+                ):
+                    from services.strategy.rms_evaluators import to_price_delta
+                    x_delta = to_price_delta(
+                        leg.trail_x, leg.trail_unit, leg.avg_entry,
+                    )
+                    if x_delta > 0:
+                        favorable_done = (ltp - leg.last_trail_anchor) * sign
+                        # Distance to NEXT advance from where we are now.
+                        next_trail_at = x_delta - (favorable_done % x_delta)
+
+                legs_payload.append({
+                    "leg_id": leg.leg_id,
+                    "symbol": leg.symbol,
+                    "exchange": leg.exchange,
+                    "direction": leg.direction,
+                    "avg_entry": leg.avg_entry,
+                    "net_qty": leg.net_qty,
+                    "ltp": ltp,
+                    "mtm": mtm,
+                    "current_sl_price": leg.current_sl_price,
+                    "sl_distance_pts": sl_distance,
+                    "target_distance_pts": target_distance,
+                    "trail_advances_count": leg.trail_advances_count,
+                    "trail_to_entry_armed": leg.trail_to_entry_armed,
+                    "next_trail_at_pts": next_trail_at,
+                    "tick_size": leg.tick_size,
+                })
+
+            return {
+                "run_id": run.run_id,
+                "strategy_id": run.strategy_id,
+                "agg_mtm": agg_mtm,
+                "peak_mtm": run.peak_mtm,
+                "drawdown": run.peak_mtm - agg_mtm,
+                "profit_locked": run.profit_locked,
+                "legs": legs_payload,
+            }
+
     # ----------------- Subscription management -----------------
 
     def _refresh_subscription(self) -> None:

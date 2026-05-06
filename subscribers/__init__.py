@@ -239,4 +239,28 @@ def register_all():
     bus.subscribe("strategy.state_changed", account_rms.on_state_changed,
                   "account_rms:state_changed")
 
+    # ------------------------------------------------------------------------
+    # Strategy v2 room join/leave handlers (Phase 5)
+    # Frontend emits 'strategy_join' with {strategy_id} on RunDetail mount;
+    # the server places the socket in room=f'strategy_{id}' so the realtime
+    # broadcaster's room-scoped emits reach this client.
+    # ------------------------------------------------------------------------
+    try:
+        from extensions import socketio
+        from flask_socketio import join_room, leave_room
+
+        @socketio.on("strategy_v2_join")
+        def _strategy_v2_join(data):
+            sid = int((data or {}).get("strategy_id") or 0)
+            if sid:
+                join_room(f"strategy_{sid}")
+
+        @socketio.on("strategy_v2_leave")
+        def _strategy_v2_leave(data):
+            sid = int((data or {}).get("strategy_id") or 0)
+            if sid:
+                leave_room(f"strategy_{sid}")
+    except Exception:
+        logger.exception("Failed to register strategy v2 socket join/leave handlers")
+
     logger.debug("EventBus: all subscribers registered")

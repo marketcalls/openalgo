@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { strategyV2Api } from '@/api/strategy_v2'
+import { useStrategyV2Socket } from '@/hooks/useStrategyV2Socket'
 import type {
   AuditVerifyResponse,
   RunEventRow,
@@ -62,6 +63,11 @@ export default function StrategyV2RunDetail() {
   const [events, setEvents] = useState<RunEventRow[]>([])
   const [loading, setLoading] = useState(true)
   const [verifyResult, setVerifyResult] = useState<AuditVerifyResponse | null>(null)
+
+  // Live updates via Socket.IO — joins room=f"strategy_{strategyId}" on
+  // mount, leaves on unmount. Backend debounces at 200ms per run so even
+  // 1000 ticks/sec only produces ~5 React renders/sec.
+  const live = useStrategyV2Socket(sid, !!sid)
 
   useEffect(() => {
     if (!rid) return
@@ -141,6 +147,55 @@ export default function StrategyV2RunDetail() {
 
         {/* Overview ---------------------------------------------------- */}
         <TabsContent value="overview">
+          {/* Live MTM card — only shown when the engine is actively
+               broadcasting (run is IN_TRADE and ticks are flowing). */}
+          {live.pnl && (
+            <Card className="mb-4 border-emerald-500/30 bg-emerald-500/5">
+              <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Live</CardTitle>
+                <span className="text-xs text-muted-foreground">
+                  updated {live.pnl.ts_ist}
+                </span>
+              </CardHeader>
+              <CardContent className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                <Stat
+                  label="Aggregate MTM"
+                  value={fmtMoney(live.pnl.agg_mtm)}
+                  tone={tone(live.pnl.agg_mtm)}
+                />
+                <Stat
+                  label="Peak MTM"
+                  value={fmtMoney(live.pnl.peak_mtm)}
+                  tone="positive"
+                />
+                <Stat
+                  label="Drawdown from peak"
+                  value={fmtMoney(live.pnl.drawdown)}
+                  tone="negative"
+                />
+                <Stat
+                  label="Profit Lock"
+                  value={live.pnl.profit_locked ? 'Armed' : 'Off'}
+                  tone={live.pnl.profit_locked ? 'positive' : 'neutral'}
+                />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Health banner — surfaces market_data_service.is_trade_management_safe.
+               Stale/disconnected feed pauses RMS evaluations on the backend. */}
+          {live.health && !live.health.feed_safe && (
+            <Card className="mb-4 border-rose-500/40 bg-rose-500/10">
+              <CardContent className="py-3 text-sm">
+                <span className="font-medium text-rose-700">RMS paused</span>
+                <span className="text-muted-foreground">
+                  {' '}
+                  — {live.health.reason || 'feed unsafe'}
+                </span>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>Run summary</CardTitle>
@@ -293,47 +348,72 @@ export default function StrategyV2RunDetail() {
                       <th className="px-4 py-2 text-right">Avg Entry</th>
                       <th className="px-4 py-2 text-right">LTP</th>
                       <th className="px-4 py-2 text-right">Unrealized</th>
-                      <th className="px-4 py-2 text-right">Realized</th>
-                      <th className="px-4 py-2 text-right">SL</th>
-                      <th className="px-4 py-2 text-right">Target</th>
+                      <th className="px-4 py-2 text-right">SL · dist</th>
+                      <th className="px-4 py-2 text-right">Target · dist</th>
                       <th className="px-4 py-2 text-right">Trail #</th>
+                      <th className="px-4 py-2 text-right">Next trail</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {positions.map((p) => (
-                      <tr key={p.leg_id} className="border-b last:border-b-0">
-                        <td className="px-4 py-2 font-mono text-xs">
-                          {p.exchange}:{p.symbol}
-                        </td>
-                        <td className="px-4 py-2 text-xs">{p.leg_state}</td>
-                        <td className="px-4 py-2 text-right">{p.net_qty}</td>
-                        <td className="px-4 py-2 text-right">
-                          {p.avg_entry?.toFixed(2) ?? '—'}
-                        </td>
-                        <td className="px-4 py-2 text-right">{p.ltp}</td>
-                        <td
-                          className={`px-4 py-2 text-right font-mono ${
-                            p.unrealized_pnl >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                          }`}
+                    {positions.map((p) => {
+                      const liveLeg = live.legs[p.leg_id]
+                      const ltp = liveLeg?.ltp ?? p.ltp_decimal ?? null
+                      const unreal = liveLeg?.mtm ?? p.unrealized_pnl
+                      const slPrice = liveLeg?.current_sl_price ?? p.current_sl_price
+                      const slDist = liveLeg?.sl_distance_pts ?? null
+                      const tgtDist = liveLeg?.target_distance_pts ?? null
+                      const nextTrail = liveLeg?.next_trail_at_pts ?? null
+                      const trailCount =
+                        liveLeg?.trail_advances_count ?? p.trail_advances_count
+                      const isLive = !!liveLeg
+                      return (
+                        <tr
+                          key={p.leg_id}
+                          className={`border-b last:border-b-0 ${isLive ? 'bg-emerald-500/5' : ''}`}
                         >
-                          {fmtMoney(p.unrealized_pnl)}
-                        </td>
-                        <td
-                          className={`px-4 py-2 text-right font-mono ${
-                            p.realized_pnl >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                          }`}
-                        >
-                          {fmtMoney(p.realized_pnl)}
-                        </td>
-                        <td className="px-4 py-2 text-right font-mono text-xs">
-                          {p.current_sl_price?.toFixed(2) ?? '—'}
-                        </td>
-                        <td className="px-4 py-2 text-right font-mono text-xs">
-                          {p.current_target_price?.toFixed(2) ?? '—'}
-                        </td>
-                        <td className="px-4 py-2 text-right">{p.trail_advances_count}</td>
-                      </tr>
-                    ))}
+                          <td className="px-4 py-2 font-mono text-xs">
+                            {p.exchange}:{p.symbol}
+                          </td>
+                          <td className="px-4 py-2 text-xs">{p.leg_state}</td>
+                          <td className="px-4 py-2 text-right">{p.net_qty}</td>
+                          <td className="px-4 py-2 text-right">
+                            {p.avg_entry?.toFixed(2) ?? '—'}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            {ltp != null ? Number(ltp).toFixed(2) : '—'}
+                          </td>
+                          <td
+                            className={`px-4 py-2 text-right font-mono ${
+                              unreal >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                            }`}
+                          >
+                            {fmtMoney(unreal)}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono text-xs">
+                            {slPrice?.toFixed(2) ?? '—'}
+                            {slDist != null && (
+                              <span className="text-muted-foreground">
+                                {' · '}
+                                {slDist.toFixed(2)}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono text-xs">
+                            {p.current_target_price?.toFixed(2) ?? '—'}
+                            {tgtDist != null && (
+                              <span className="text-muted-foreground">
+                                {' · '}
+                                {tgtDist.toFixed(2)}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 text-right">{trailCount}</td>
+                          <td className="px-4 py-2 text-right text-xs text-muted-foreground">
+                            {nextTrail != null ? nextTrail.toFixed(2) : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               ) : (

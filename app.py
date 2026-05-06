@@ -665,6 +665,16 @@ def setup_environment(app):
             except Exception as e:
                 logger.error(f"Failed to rehydrate Strategy v2 squareoff: {e}")
 
+            # Strategy v2 realtime broadcaster — pumps engine snapshots
+            # to Socket.IO at debounced 5Hz per active run.
+            try:
+                from services.strategy.realtime_broadcaster import start_broadcaster
+
+                start_broadcaster()
+                logger.debug("Strategy v2 realtime broadcaster started")
+            except Exception as e:
+                logger.error(f"Failed to start Strategy v2 broadcaster: {e}")
+
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
                 from database.settings_db import get_analyze_mode
