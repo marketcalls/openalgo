@@ -459,12 +459,18 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 self.running = False
 
-            # Cancel any pending batch subscription timer and drop queued items
-            if self.batch_timer:
-                self.batch_timer.cancel()
-                self.batch_timer = None
+            # Cancel any pending batch subscription timer and drop queued
+            # items. Capture the timer reference under the lock — otherwise
+            # _process_batch_subscriptions() (which also clears it under the
+            # lock) can race us between the truthiness check and .cancel(),
+            # raising AttributeError and aborting the rest of cleanup
+            # (heartbeat stop, reconnect cancel, ws close).
             with self.lock:
+                pending_timer = self.batch_timer
+                self.batch_timer = None
                 self.subscription_queue.clear()
+            if pending_timer:
+                pending_timer.cancel()
 
             # Signal heartbeat thread to stop immediately
             if self._heartbeat_stop:
