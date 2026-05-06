@@ -16,12 +16,13 @@ logger = get_logger(__name__)
 
 # OpenAlgo→Kite exchange-prefix translation for /quote, /quote/ltp, /quote/ohlc.
 # Kite uses NSE/BSE/NFO/BFO/MCX/NCO/CDS/BCD/GLOBAL/NSEIX as the prefix in
-# `i=EXCHANGE:tradingsymbol`. NSE_INDEX/BSE_INDEX use NSE/BSE on the broker
-# side. GLOBAL_INDEX folds two Kite feeds (GLOBAL + NSEIX) — the per-row
-# brexchange column carries the original Kite exchange code.
+# `i=EXCHANGE:tradingsymbol`. NSE_INDEX/BSE_INDEX/MCX_INDEX use NSE/BSE/MCX on
+# the broker side. GLOBAL_INDEX folds two Kite feeds (GLOBAL + NSEIX) — the
+# per-row brexchange column carries the original Kite exchange code.
 _OA_INDEX_TO_KITE = {
     "NSE_INDEX": "NSE",
     "BSE_INDEX": "BSE",
+    "MCX_INDEX": "MCX",
 }
 
 

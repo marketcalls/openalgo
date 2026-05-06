@@ -82,7 +82,7 @@ Place a new order with the broker.
 | symbol | str | Yes | Trading symbol |
 | action | str | Yes | BUY or SELL |
 | exchange | str | Yes | Exchange (NSE, NFO, etc.) |
-| price_type | str | Yes | MARKET, LIMIT, SL, SL-M |
+| pricetype | str | Yes | MARKET, LIMIT, SL, SL-M |
 | product | str | Yes | MIS, CNC, NRML |
 | quantity | int/str | Yes | Order quantity |
 | price | float/str | No | Order price (for LIMIT orders) |
@@ -99,7 +99,7 @@ order_data = {
     "symbol": "NHPC",
     "action": "BUY",
     "exchange": "NSE",
-    "price_type": "MARKET",
+    "pricetype": "MARKET",
     "product": "MIS",
     "quantity": 1
 }
@@ -131,7 +131,7 @@ order_data = {
     "symbol": "YESBANK",
     "action": "BUY",
     "exchange": "NSE",
-    "price_type": "LIMIT",
+    "pricetype": "LIMIT",
     "product": "MIS",
     "quantity": "1",
     "price": "16",
@@ -191,7 +191,7 @@ Place a smart order that considers current position size.
 | symbol | str | Yes | Trading symbol |
 | action | str | Yes | BUY or SELL |
 | exchange | str | Yes | Exchange (NSE, NFO, etc.) |
-| price_type | str | Yes | MARKET, LIMIT, SL, SL-M |
+| pricetype | str | Yes | MARKET, LIMIT, SL, SL-M |
 | product | str | Yes | MIS, CNC, NRML |
 | quantity | int/str | Yes | Order quantity |
 | position_size | int | Yes | Target position size |
@@ -207,7 +207,7 @@ order_data = {
     "symbol": "TATAMOTORS",
     "action": "SELL",
     "exchange": "NSE",
-    "price_type": "MARKET",
+    "pricetype": "MARKET",
     "product": "MIS",
     "quantity": 1,
     "position_size": 5
@@ -676,7 +676,7 @@ Split a large order into multiple smaller orders.
 | action | str | Yes | BUY or SELL |
 | quantity | int | Yes | Total quantity to split |
 | splitsize | int | Yes | Size of each split order |
-| price_type | str | Yes | MARKET, LIMIT, SL, SL-M |
+| pricetype | str | Yes | MARKET, LIMIT, SL, SL-M |
 | product | str | Yes | MIS, CNC, NRML |
 | price | float/str | No | Order price (for LIMIT orders) |
 
@@ -691,7 +691,7 @@ split_data = {
     "action": "SELL",
     "quantity": 105,
     "splitsize": 20,
-    "price_type": "MARKET",
+    "pricetype": "MARKET",
     "product": "MIS"
 }
 
@@ -788,7 +788,7 @@ Modify an existing order.
 | symbol | str | Yes | Trading symbol |
 | action | str | Yes | BUY or SELL |
 | exchange | str | Yes | Exchange (NSE, NFO, etc.) |
-| price_type | str | Yes | MARKET, LIMIT, SL, SL-M |
+| pricetype | str | Yes | MARKET, LIMIT, SL, SL-M |
 | product | str | Yes | MIS, CNC, NRML |
 | quantity | int/str | Yes | New order quantity |
 | price | float/str | Yes | New order price |
@@ -804,7 +804,7 @@ order_data = {
     "symbol": "YESBANK",
     "action": "BUY",
     "exchange": "NSE",
-    "price_type": "LIMIT",
+    "pricetype": "LIMIT",
     "product": "CNC",
     "quantity": 1,
     "price": 16.5
@@ -3133,8 +3133,8 @@ socketio.emit('order_event', {
     'action': 'BUY',
     'orderid': '250408000989443',
     'exchange': 'NSE',
-    'price_type': 'MARKET',
-    'product_type': 'MIS',
+    'pricetype': 'MARKET',
+    'product': 'MIS',
     'mode': 'live'
 })
 ```
