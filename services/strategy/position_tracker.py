@@ -323,6 +323,68 @@ def _record_fill(order: StrategyOrder, filled_qty: int, avg_price: Decimal) -> N
         )
     )
 
+    # If this fill flattens every position for the run and the run is
+    # in EXITING, transition it to CLOSED. Without this the run sits
+    # forever in EXITING — entry placed, exit placed, position flat,
+    # but nothing flips the run's lifecycle to terminal.
+    _maybe_close_run(order.run_id)
+
+
+def _maybe_close_run(run_id: int) -> None:
+    """Transition EXITING -> CLOSED when all positions for the run are
+    flat. Idempotent — if already CLOSED or any leg is still OPEN this
+    is a no-op. Called from _record_fill after every fill so closing
+    multi-leg packs (iron condor etc.) wait for all legs to finish.
+    """
+    from database.strategy_v2_db import StrategyPosition, StrategyRun
+    from services.strategy.state_machine import transition_run
+
+    run = (
+        db_session.query(StrategyRun)
+        .filter(StrategyRun.id == run_id)
+        .first()
+    )
+    if run is None or run.state != "EXITING":
+        return
+
+    open_positions = (
+        db_session.query(StrategyPosition.id)
+        .filter(
+            StrategyPosition.run_id == run_id,
+            StrategyPosition.leg_state.in_(("OPEN", "EXITING_LEG", "PENDING_ENTRY")),
+        )
+        .first()
+    )
+    if open_positions is not None:
+        return  # at least one leg still has a position
+
+    # Sum realized P&L across all positions belonging to this run so
+    # the closed run carries the right number on the Runs list page.
+    from decimal import Decimal as _D
+
+    total_realized = _D(0)
+    rows = (
+        db_session.query(StrategyPosition.realized_pnl)
+        .filter(StrategyPosition.run_id == run_id)
+        .all()
+    )
+    for (rp,) in rows:
+        if rp is not None:
+            total_realized += _D(str(rp))
+
+    run.realized_pnl = total_realized
+    run.exited_at = now_utc()
+    if not run.exit_reason:
+        run.exit_reason = "all_legs_flat"
+    db_session.commit()
+
+    # State transition publishes its own audit event; do this last so
+    # the realized_pnl is on the row by the time subscribers query it.
+    transition_run(
+        run_id, expected_old="EXITING", new_state="CLOSED",
+        reason="all legs flat", strategy_id=run.strategy_id,
+    )
+
 
 def _recompute_position(
     *,
