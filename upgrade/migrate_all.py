@@ -74,6 +74,7 @@ MIGRATIONS = [
     ("migrate_strategy_v2_phase9.py", "Strategy v2 — Phase 9 (segment, exit_date, run_forever, exchange_cash)"),
     ("migrate_strategy_v2_phase10.py", "Strategy v2 — Phase 10 (collapse signing methods to BODY_SECRET)"),
     ("migrate_strategy_v2_phase11.py", "Strategy v2 — Phase 11 (trading_mode: LONG / SHORT / BOTH)"),
+    ("migrate_strategy_v2_phase12.py", "Strategy v2 — Phase 12 (relax strategies_v2.end_time to NULLABLE)"),
 ]
 
 
