@@ -39,6 +39,7 @@ from sqlalchemy.orm import joinedload
 from database.strategy_v2_db import (
     StrategyLeg,
     StrategyPosition,
+    StrategyRiskConfig,
     StrategyRun,
     StrategyV2,
     db_session,
@@ -49,9 +50,14 @@ from events.strategy_events import (
 )
 from services.strategy.rms_evaluators import (
     direction_of,
+    evaluate_overall_sl,
+    evaluate_overall_target,
+    evaluate_profit_lock_arm,
+    evaluate_profit_lock_floor,
     evaluate_sl,
     evaluate_target,
     evaluate_trail,
+    evaluate_trail_to_entry,
 )
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -83,7 +89,7 @@ class _LegRuntime:
     tick_size: float
     direction: str                    # "long" | "short"
     avg_entry: float
-    net_qty: int
+    net_qty: int                      # signed (positive=long, negative=short)
 
     # Per-leg risk config
     target_enabled: bool = False
@@ -103,6 +109,8 @@ class _LegRuntime:
     current_sl_price: Optional[float] = None
     last_trail_anchor: Optional[float] = None
     trail_advances_count: int = 0
+    trail_to_entry_armed: bool = False
+    last_ltp: Optional[float] = None  # cached for aggregate MTM across legs
 
 
 @dataclass
@@ -110,6 +118,22 @@ class _RunRuntime:
     run_id: int
     strategy_id: int
     legs: dict[int, _LegRuntime] = field(default_factory=dict)
+
+    # Strategy-level RMS config (cached at register-time)
+    overall_sl_enabled: bool = False
+    overall_sl_abs: Optional[float] = None
+    overall_target_enabled: bool = False
+    overall_target_abs: Optional[float] = None
+    lock_profit_enabled: bool = False
+    lock_at_abs: Optional[float] = None
+    lock_min_abs: Optional[float] = None
+    trail_to_entry_enabled: bool = False
+    trail_to_entry_threshold: float = 0.0
+    trail_to_entry_unit: str = "pct"
+
+    # Live strategy-level state
+    peak_mtm: float = 0.0
+    profit_locked: bool = False
 
 
 def _symbol_key(exchange: str, symbol: str) -> str:
@@ -175,7 +199,39 @@ class RmsEngine:
             )
             legs_by_id = {l.id: l for l in strategy_legs}
 
-            runtime = _RunRuntime(run_id=run_id, strategy_id=run.strategy_id)
+            # Load strategy_risk_config (Phase 4) — cache at register-time so
+            # the tick loop never hits the DB for config.
+            cfg = (
+                db_session.query(StrategyRiskConfig)
+                .filter(StrategyRiskConfig.strategy_id == run.strategy_id)
+                .first()
+            )
+
+            runtime = _RunRuntime(
+                run_id=run_id,
+                strategy_id=run.strategy_id,
+                peak_mtm=float(run.peak_mtm or 0),
+                profit_locked=bool(run.profit_locked),
+            )
+            if cfg is not None:
+                runtime.overall_sl_enabled = bool(cfg.overall_sl_enabled)
+                runtime.overall_sl_abs = (
+                    float(cfg.overall_sl_abs) if cfg.overall_sl_abs is not None else None
+                )
+                runtime.overall_target_enabled = bool(cfg.overall_target_enabled)
+                runtime.overall_target_abs = (
+                    float(cfg.overall_target_abs) if cfg.overall_target_abs is not None else None
+                )
+                runtime.lock_profit_enabled = bool(cfg.lock_profit_enabled)
+                runtime.lock_at_abs = (
+                    float(cfg.lock_at_abs) if cfg.lock_at_abs is not None else None
+                )
+                runtime.lock_min_abs = (
+                    float(cfg.lock_min_abs) if cfg.lock_min_abs is not None else None
+                )
+                runtime.trail_to_entry_enabled = bool(cfg.trail_to_entry_enabled)
+                runtime.trail_to_entry_threshold = float(cfg.trail_to_entry_threshold or 0)
+                runtime.trail_to_entry_unit = cfg.trail_to_entry_unit or "pct"
 
             for pos in positions:
                 leg_def = legs_by_id.get(pos.leg_id)
@@ -231,6 +287,10 @@ class RmsEngine:
                         else avg_entry
                     ),
                     trail_advances_count=int(pos.trail_advances_count or 0),
+                    trail_to_entry_armed=bool(pos.trail_to_entry_armed),
+                    last_ltp=(
+                        float(pos.ltp_decimal) if pos.ltp_decimal is not None else None
+                    ),
                 )
                 runtime.legs[pos.leg_id] = leg
                 self._symbol_to_runs[_symbol_key(pos.exchange, pos.symbol)].add(run_id)
@@ -347,10 +407,18 @@ class RmsEngine:
             if runtime is None:
                 return
 
-        # Each leg of the run that matches this symbol gets evaluated.
+        # Stamp the new ltp on the matching leg(s) before per-leg eval so
+        # aggregate MTM later sees the latest tick.
+        ticked_legs: list[_LegRuntime] = []
         for leg in list(runtime.legs.values()):
-            if _symbol_key(leg.exchange, leg.symbol) != symbol_key:
-                continue
+            if _symbol_key(leg.exchange, leg.symbol) == symbol_key:
+                leg.last_ltp = ltp
+                ticked_legs.append(leg)
+
+        # Per-leg rule evaluation for the legs whose symbol just ticked.
+        # If a leg fires an exit, _fire_exit drops it from runtime.legs;
+        # subsequent strategy-level evaluation will sum what's left.
+        for leg in ticked_legs:
             try:
                 self._evaluate_leg(runtime, leg, ltp)
             except Exception:
@@ -358,6 +426,17 @@ class RmsEngine:
                     "rms_engine: leg evaluation failed run=%s leg=%s",
                     run_id, leg.leg_id,
                 )
+
+        # Strategy-level rules — only meaningful if the run has multiple legs
+        # active OR a single leg with overall caps. The aggregate uses
+        # last_ltp from each leg (NOT the just-ticked LTP for un-ticked legs;
+        # they keep their last seen value).
+        try:
+            self._evaluate_strategy_level(runtime)
+        except Exception:
+            logger.exception(
+                "rms_engine: strategy-level evaluation failed run=%s", run_id,
+            )
 
     def _evaluate_leg(self, run: _RunRuntime, leg: _LegRuntime, ltp: float) -> None:
         """The four rules in priority order.
@@ -447,6 +526,189 @@ class RmsEngine:
                 )
                 return
 
+    # ----------------- Strategy-level evaluation (Phase 4) -----------------
+
+    def _evaluate_strategy_level(self, run: _RunRuntime) -> None:
+        """After per-leg rules, evaluate run-wide rules.
+
+        Order matches plan §6.1:
+          4. Overall SL / Overall Target — short-circuit; full strategy exit
+          5. Profit lock arm + floor
+          6. Trail-to-entry per leg
+
+        We compute aggregate MTM from in-memory leg.last_ltp values. Legs
+        without a tick yet (leg.last_ltp is None) contribute 0 to mtm —
+        this is conservative (treats as flat) and self-correcting once
+        every leg has been touched.
+        """
+        if not run.legs:
+            return
+
+        # ---- Aggregate MTM ----
+        agg_mtm = 0.0
+        for leg in run.legs.values():
+            if leg.last_ltp is None:
+                continue
+            sign = 1 if leg.direction == "long" else -1
+            mtm = (leg.last_ltp - leg.avg_entry) * abs(leg.net_qty) * sign
+            agg_mtm += mtm
+
+        prev_peak = run.peak_mtm
+        if agg_mtm > run.peak_mtm:
+            run.peak_mtm = agg_mtm
+
+        peak_changed = run.peak_mtm != prev_peak
+
+        # ---- 4a. Overall SL ----
+        sl_decision = evaluate_overall_sl(
+            enabled=run.overall_sl_enabled,
+            overall_sl_abs=run.overall_sl_abs,
+            aggregate_mtm=agg_mtm,
+        )
+        if sl_decision.triggered:
+            self._persist_run_state(run, agg_mtm)
+            self._fire_strategy_exit(run, "OVERALL_SL", sl_decision.threshold, agg_mtm)
+            return
+
+        # ---- 4b. Overall Target ----
+        tgt_decision = evaluate_overall_target(
+            enabled=run.overall_target_enabled,
+            overall_target_abs=run.overall_target_abs,
+            aggregate_mtm=agg_mtm,
+        )
+        if tgt_decision.triggered:
+            self._persist_run_state(run, agg_mtm)
+            self._fire_strategy_exit(run, "OVERALL_TARGET", tgt_decision.threshold, agg_mtm)
+            return
+
+        # ---- 5a. Profit lock arm (latch) ----
+        arm_now = evaluate_profit_lock_arm(
+            enabled=run.lock_profit_enabled,
+            lock_at_abs=run.lock_at_abs,
+            peak_mtm=run.peak_mtm,
+            already_armed=run.profit_locked,
+        )
+        if arm_now:
+            run.profit_locked = True
+            bus.publish(
+                StrategyRmsTriggeredEvent(
+                    strategy_id=run.strategy_id, run_id=run.run_id, leg_id=0,
+                    rule="PROFIT_LOCK_ARMED",
+                    ltp=agg_mtm, threshold=run.lock_at_abs or 0.0,
+                )
+            )
+
+        # ---- 5b. Profit lock floor exit ----
+        if run.profit_locked:
+            floor_decision = evaluate_profit_lock_floor(
+                armed=True,
+                lock_min_abs=run.lock_min_abs,
+                aggregate_mtm=agg_mtm,
+            )
+            if floor_decision.triggered:
+                self._persist_run_state(run, agg_mtm)
+                self._fire_strategy_exit(
+                    run, "PROFIT_LOCK", floor_decision.threshold, agg_mtm,
+                )
+                return
+
+        # ---- 6. Trail-to-entry per leg ----
+        if run.trail_to_entry_enabled:
+            for leg in list(run.legs.values()):
+                if leg.trail_to_entry_armed or leg.last_ltp is None:
+                    continue
+                d = evaluate_trail_to_entry(
+                    enabled=True,
+                    threshold=run.trail_to_entry_threshold,
+                    threshold_unit=run.trail_to_entry_unit,  # type: ignore[arg-type]
+                    avg_entry=leg.avg_entry,
+                    ltp=leg.last_ltp,
+                    direction=leg.direction,  # type: ignore[arg-type]
+                    tick_size=leg.tick_size,
+                    current_sl_price=leg.current_sl_price,
+                    already_armed=False,
+                )
+                if d.arm_now:
+                    leg.trail_to_entry_armed = True
+                    if d.new_sl_price is not None:
+                        leg.current_sl_price = d.new_sl_price
+                    self._persist_trail(leg)
+                    bus.publish(
+                        StrategyRmsTriggeredEvent(
+                            strategy_id=run.strategy_id, run_id=run.run_id,
+                            leg_id=leg.leg_id, rule="TRAIL_TO_ENTRY",
+                            ltp=leg.last_ltp,
+                            threshold=run.trail_to_entry_threshold,
+                            new_sl=d.new_sl_price or 0.0,
+                        )
+                    )
+
+        # Persist run-level state on peak change (debounced — we only write
+        # when the peak actually moved, not on every tick).
+        if peak_changed:
+            self._persist_run_state(run, agg_mtm)
+
+    def _persist_run_state(self, run: _RunRuntime, agg_mtm: float) -> None:
+        """Write peak_mtm + profit_locked back to strategy_runs."""
+        try:
+            db_session.execute(
+                StrategyRun.__table__.update()
+                .where(StrategyRun.id == run.run_id)
+                .values(
+                    peak_mtm=Decimal(str(run.peak_mtm)),
+                    profit_locked=run.profit_locked,
+                    max_unrealized_pnl=Decimal(str(max(run.peak_mtm, agg_mtm))),
+                )
+            )
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            logger.exception("rms_engine._persist_run_state failed run=%s", run.run_id)
+        finally:
+            db_session.remove()
+
+    def _fire_strategy_exit(
+        self,
+        run: _RunRuntime,
+        rule: str,
+        threshold: float,
+        agg_mtm: float,
+    ) -> None:
+        """Drop the entire run from the registry, publish the trigger event,
+        call exit_service.exit_strategy. Engine sees the EXITING transition
+        downstream via on_state_changed and unregisters cleanly."""
+        run_id = run.run_id
+        strategy_id = run.strategy_id
+
+        # Remove ALL legs of this run from monitoring before placing exits.
+        with self._lock:
+            r = self._runs.pop(run_id, None)
+            if r is not None:
+                for leg in r.legs.values():
+                    key = _symbol_key(leg.exchange, leg.symbol)
+                    refs = self._symbol_to_runs.get(key, set())
+                    refs.discard(run_id)
+                    if not refs:
+                        self._symbol_to_runs.pop(key, None)
+            self._refresh_subscription()
+
+        bus.publish(
+            StrategyRmsTriggeredEvent(
+                strategy_id=strategy_id, run_id=run_id, leg_id=0,
+                rule=rule, ltp=agg_mtm, threshold=threshold,
+            )
+        )
+
+        # Lazy import — exit_service has the same restx_api circular dance.
+        from services.strategy.exit_service import exit_strategy
+
+        try:
+            exit_strategy(run_id=run_id, reason=f"exit_{rule.lower()}")
+        except Exception:
+            logger.exception(
+                "rms_engine._fire_strategy_exit: exit_strategy failed run=%s", run_id,
+            )
+
     # ----------------- Side-effect helpers -----------------
 
     def _persist_trail(self, leg: _LegRuntime) -> None:
@@ -465,6 +727,7 @@ class RmsEngine:
                     if leg.last_trail_anchor is not None
                     else None,
                     trail_advances_count=leg.trail_advances_count,
+                    trail_to_entry_armed=leg.trail_to_entry_armed,
                     updated_at=datetime.now(timezone.utc),
                 )
             )

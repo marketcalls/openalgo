@@ -40,6 +40,7 @@ from database.strategy_v2_db import (
 from events.strategy_events import WebhookSecretRotatedEvent
 from restx_api.strategy_v2_schemas import (
     LegSchema,
+    RiskConfigSchema,
     StrategyCreateSchema,
     StrategyUpdateSchema,
     WebhookRotateSchema,
@@ -311,6 +312,18 @@ def toggle_strategy(strategy_id: int):
     elif not s.is_active and s.state == "ARMED":
         s.state = "DISABLED"
     db_session.commit()
+
+    # Squareoff scheduler — hook the strategy's intraday close-time job.
+    try:
+        from services.strategy import squareoff_scheduler
+
+        if s.is_active:
+            squareoff_scheduler.schedule_strategy(s.id)
+        else:
+            squareoff_scheduler.unschedule_strategy(s.id)
+    except Exception:
+        logger.exception("toggle_strategy: scheduler hook failed for id=%s", s.id)
+
     return jsonify({"status": "success", "is_active": s.is_active, "state": s.state}), 200
 
 
@@ -486,6 +499,92 @@ def test_webhook(strategy_id: int):
         dry_run=True,
     )
     return jsonify(body), status
+
+
+# ----------------------------------------------------------------------------
+# Strategy-level risk config (Phase 4)
+# ----------------------------------------------------------------------------
+
+
+def _risk_config_to_dict(rc: StrategyRiskConfig) -> dict:
+    return {
+        "strategy_id": rc.strategy_id,
+        "overall_sl_enabled": bool(rc.overall_sl_enabled),
+        "overall_sl_abs": float(rc.overall_sl_abs) if rc.overall_sl_abs is not None else None,
+        "overall_target_enabled": bool(rc.overall_target_enabled),
+        "overall_target_abs": (
+            float(rc.overall_target_abs) if rc.overall_target_abs is not None else None
+        ),
+        "lock_profit_enabled": bool(rc.lock_profit_enabled),
+        "lock_at_abs": float(rc.lock_at_abs) if rc.lock_at_abs is not None else None,
+        "lock_min_abs": float(rc.lock_min_abs) if rc.lock_min_abs is not None else None,
+        "trail_to_entry_enabled": bool(rc.trail_to_entry_enabled),
+        "trail_to_entry_threshold": (
+            float(rc.trail_to_entry_threshold)
+            if rc.trail_to_entry_threshold is not None
+            else 0.0
+        ),
+        "trail_to_entry_unit": rc.trail_to_entry_unit or "pct",
+    }
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/risk_config", methods=["GET"])
+def get_risk_config(strategy_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+    rc = (
+        db_session.query(StrategyRiskConfig)
+        .filter(StrategyRiskConfig.strategy_id == strategy_id)
+        .first()
+    )
+    if rc is None:
+        # Lazy-create if missing (e.g. older strategies created before
+        # Phase 4).
+        rc = StrategyRiskConfig(strategy_id=strategy_id)
+        db_session.add(rc)
+        db_session.commit()
+    return jsonify({"status": "success", "data": _risk_config_to_dict(rc)}), 200
+
+
+@strategy_v2_bp.route("/strategy/<int:strategy_id>/risk_config", methods=["PUT"])
+def update_risk_config(strategy_id: int):
+    user, err = _require_login()
+    if err:
+        return err
+    s = (
+        db_session.query(StrategyV2)
+        .filter(StrategyV2.id == strategy_id, StrategyV2.user_id == user)
+        .first()
+    )
+    if not s:
+        return jsonify({"status": "error", "code": "NOT_FOUND"}), 404
+
+    try:
+        data = RiskConfigSchema().load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return jsonify({"status": "error", "code": "VALIDATION", "errors": e.messages}), 400
+
+    rc = (
+        db_session.query(StrategyRiskConfig)
+        .filter(StrategyRiskConfig.strategy_id == strategy_id)
+        .first()
+    )
+    if rc is None:
+        rc = StrategyRiskConfig(strategy_id=strategy_id)
+        db_session.add(rc)
+
+    for key, value in data.items():
+        setattr(rc, key, value)
+    db_session.commit()
+    return jsonify({"status": "success", "data": _risk_config_to_dict(rc)}), 200
 
 
 # ----------------------------------------------------------------------------

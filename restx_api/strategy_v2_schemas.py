@@ -150,3 +150,32 @@ class WebhookTestSchema(Schema):
     TradingView/Python alert."""
     class Meta:
         unknown = EXCLUDE
+
+
+# ----------------------------------------------------------------------------
+# Strategy-level risk config (Phase 4)
+# ----------------------------------------------------------------------------
+
+
+class RiskConfigSchema(Schema):
+    """Overall (strategy-level) RMS configuration. Abs ₹ only — strategies
+    don't carry capital allocation, so % at this scope has no reference.
+    See plan §1.1 #4 + §14.2 #2."""
+    class Meta:
+        unknown = RAISE
+
+    overall_sl_enabled = fields.Boolean(load_default=False)
+    overall_sl_abs = fields.Float(allow_none=True, load_default=None)
+
+    overall_target_enabled = fields.Boolean(load_default=False)
+    overall_target_abs = fields.Float(allow_none=True, load_default=None)
+
+    lock_profit_enabled = fields.Boolean(load_default=False)
+    lock_at_abs = fields.Float(allow_none=True, load_default=None)
+    lock_min_abs = fields.Float(allow_none=True, load_default=None)
+
+    trail_to_entry_enabled = fields.Boolean(load_default=False)
+    trail_to_entry_threshold = fields.Float(load_default=0.0,
+                                            validate=validate.Range(min=0))
+    trail_to_entry_unit = fields.String(load_default="pct",
+                                        validate=validate.OneOf(["pts", "pct"]))

@@ -652,6 +652,19 @@ def setup_environment(app):
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
 
+            # Strategy v2 squareoff scheduler — rehydrate jobs for any
+            # strategies that were is_active=True at last shutdown so the
+            # configured close-time fires even after a restart.
+            try:
+                from services.strategy.squareoff_scheduler import rehydrate_all
+
+                count = rehydrate_all()
+                logger.debug(
+                    "Strategy v2 squareoff scheduler rehydrated %s job(s)", count,
+                )
+            except Exception as e:
+                logger.error(f"Failed to rehydrate Strategy v2 squareoff: {e}")
+
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
                 from database.settings_db import get_analyze_mode

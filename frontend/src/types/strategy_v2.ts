@@ -285,3 +285,26 @@ export interface RunListResponse<T> {
   status: string
   data: T[]
 }
+
+// ----------------------------------------------------------------------------
+// Phase 4 — strategy-level risk config (overall SL / target / lock / trail-to-entry)
+// ----------------------------------------------------------------------------
+
+export interface StrategyRiskConfig {
+  strategy_id: number
+  overall_sl_enabled: boolean
+  overall_sl_abs: number | null
+
+  overall_target_enabled: boolean
+  overall_target_abs: number | null
+
+  lock_profit_enabled: boolean
+  lock_at_abs: number | null
+  lock_min_abs: number | null
+
+  trail_to_entry_enabled: boolean
+  trail_to_entry_threshold: number
+  trail_to_entry_unit: RiskUnit
+}
+
+export type RiskConfigPayload = Partial<Omit<StrategyRiskConfig, 'strategy_id'>>

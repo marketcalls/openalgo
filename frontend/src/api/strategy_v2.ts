@@ -26,6 +26,8 @@ import type {
   RunTradeRow,
   RunPositionRow,
   RunEventRow,
+  StrategyRiskConfig,
+  RiskConfigPayload,
 } from '@/types/strategy_v2'
 
 const ROOT = '/strategy/api/v2'
@@ -161,5 +163,24 @@ export const strategyV2Api = {
   runEvents: async (runId: number): Promise<RunListResponse<RunEventRow>> => {
     const r = await webClient.get<RunListResponse<RunEventRow>>(`${ROOT}/run/${runId}/events`)
     return r.data
+  },
+
+  // ---- Phase 4: strategy-level risk config ----
+  getRiskConfig: async (strategyId: number): Promise<StrategyRiskConfig> => {
+    const r = await webClient.get<{ status: string; data: StrategyRiskConfig }>(
+      `${ROOT}/strategy/${strategyId}/risk_config`
+    )
+    return r.data.data
+  },
+
+  updateRiskConfig: async (
+    strategyId: number,
+    payload: RiskConfigPayload
+  ): Promise<StrategyRiskConfig> => {
+    const r = await webClient.put<{ status: string; data: StrategyRiskConfig }>(
+      `${ROOT}/strategy/${strategyId}/risk_config`,
+      payload
+    )
+    return r.data.data
   },
 }

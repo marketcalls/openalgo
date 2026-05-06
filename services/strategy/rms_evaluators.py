@@ -88,6 +88,25 @@ class TrailDecision:
     new_anchor: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class OverallDecision:
+    """Strategy-level rule outcome — only one rule fires per tick."""
+    triggered: bool
+    rule: str = ""                    # "OVERALL_SL"|"OVERALL_TARGET"|"PROFIT_LOCK"
+    threshold: float = 0.0            # MTM at which the rule fires
+
+
+@dataclass(frozen=True)
+class TrailToEntryDecision:
+    """Per-leg trail-to-entry — once armed, SL is pinned to avg_entry.
+
+    `armed_now` is True only on the tick that arms it (so callers can emit
+    a one-shot event). `new_sl_price` is the entry-pinned SL after tick-snap.
+    """
+    arm_now: bool
+    new_sl_price: Optional[float] = None
+
+
 # ---------------------------------------------------------------------------
 # Target evaluator — fires when LTP crosses target in the favorable direction.
 # ---------------------------------------------------------------------------
@@ -265,3 +284,153 @@ def evaluate_trail(
         new_sl_price=new_sl,
         new_anchor=new_anchor,
     )
+
+
+# ===========================================================================
+# Strategy-level evaluators (overall SL / target / profit lock / trail-to-entry)
+# ===========================================================================
+#
+# Per plan §1.1 #4 + §14.2: overall settings are abs ₹ ONLY — strategies
+# don't carry capital allocation, so % at this scope has no reference. The
+# per-leg evaluators above keep pts/% support because % there is relative
+# to the leg's own avg_entry.
+#
+# Evaluation order (callers must respect — see plan §6.1):
+#   1. evaluate_overall_sl — short-circuits everything; full strategy exit
+#   2. evaluate_overall_target — same; full strategy exit
+#   3. evaluate_profit_lock_arm — latch the lock when peak crosses lock_at
+#   4. evaluate_profit_lock_floor — exit when locked AND mtm <= lock_min
+#   5. evaluate_trail_to_entry (per leg) — pin SL to entry after favorable
+#      move past threshold
+
+
+def evaluate_overall_sl(
+    *,
+    enabled: bool,
+    overall_sl_abs: Optional[float],
+    aggregate_mtm: float,
+) -> OverallDecision:
+    """Trigger when aggregate MTM falls to -|overall_sl_abs|.
+
+    User stores overall_sl_abs as a positive number (e.g. 5000 means
+    "lose at most ₹5,000"). Engine inverts the sign at trigger time.
+    """
+    if not enabled or overall_sl_abs is None:
+        return OverallDecision(triggered=False)
+    threshold = -abs(float(overall_sl_abs))
+    if aggregate_mtm <= threshold:
+        return OverallDecision(
+            triggered=True, rule="OVERALL_SL", threshold=threshold,
+        )
+    return OverallDecision(triggered=False)
+
+
+def evaluate_overall_target(
+    *,
+    enabled: bool,
+    overall_target_abs: Optional[float],
+    aggregate_mtm: float,
+) -> OverallDecision:
+    """Trigger when aggregate MTM rises to +overall_target_abs."""
+    if not enabled or overall_target_abs is None:
+        return OverallDecision(triggered=False)
+    threshold = abs(float(overall_target_abs))
+    if aggregate_mtm >= threshold:
+        return OverallDecision(
+            triggered=True, rule="OVERALL_TARGET", threshold=threshold,
+        )
+    return OverallDecision(triggered=False)
+
+
+def evaluate_profit_lock_arm(
+    *,
+    enabled: bool,
+    lock_at_abs: Optional[float],
+    peak_mtm: float,
+    already_armed: bool,
+) -> bool:
+    """Decide whether to arm the profit lock.
+
+    Latched: once True, the engine never re-evaluates this branch (the
+    caller persists `already_armed=True` and skips this evaluator on
+    subsequent ticks).
+    """
+    if not enabled or lock_at_abs is None or already_armed:
+        return False
+    return peak_mtm >= abs(float(lock_at_abs))
+
+
+def evaluate_profit_lock_floor(
+    *,
+    armed: bool,
+    lock_min_abs: Optional[float],
+    aggregate_mtm: float,
+) -> OverallDecision:
+    """Once armed, trigger if mtm falls to lock_min_abs.
+
+    lock_min_abs is the FLOOR — typically less than lock_at_abs. e.g.
+    lock_at=5000, lock_min=3000 means "after seeing +5000, exit if MTM
+    drops to +3000".
+    """
+    if not armed or lock_min_abs is None:
+        return OverallDecision(triggered=False)
+    threshold = float(lock_min_abs)
+    if aggregate_mtm <= threshold:
+        return OverallDecision(
+            triggered=True, rule="PROFIT_LOCK", threshold=threshold,
+        )
+    return OverallDecision(triggered=False)
+
+
+def evaluate_trail_to_entry(
+    *,
+    enabled: bool,
+    threshold: Optional[float],
+    threshold_unit: Optional[Unit],
+    avg_entry: float,
+    ltp: float,
+    direction: Direction,
+    tick_size: float,
+    current_sl_price: Optional[float],
+    already_armed: bool,
+) -> TrailToEntryDecision:
+    """Per-leg one-way ratchet — once the leg has moved favorably by `threshold`,
+    pin the SL at break-even (avg_entry, snapped to tick).
+
+    `already_armed` is the latch — once armed, this evaluator must be
+    skipped by the caller on subsequent ticks (the SL is already at entry,
+    nothing to do).
+
+    The current_sl_price is consulted so the new entry-pinned SL only
+    applies if it actually IMPROVES on the existing SL — otherwise the
+    advance is suppressed (one-way ratchet).
+    """
+    if not enabled or threshold is None or threshold_unit is None or already_armed:
+        return TrailToEntryDecision(arm_now=False)
+
+    if threshold <= 0:
+        return TrailToEntryDecision(arm_now=False)
+
+    delta = to_price_delta(threshold, threshold_unit, avg_entry)
+    sign = dir_sign(direction)
+    favorable = (ltp - avg_entry) * sign
+    if favorable < delta:
+        return TrailToEntryDecision(arm_now=False)
+
+    # Compute the entry-pinned SL with favorable rounding.
+    new_sl = round_to_tick(
+        avg_entry,
+        tick_size,
+        mode="favorable",
+        side="BUY" if direction == "long" else "SELL",
+    )
+
+    # One-way ratchet — must improve on current SL.
+    if current_sl_price is not None:
+        improvement = (new_sl - current_sl_price) * sign
+        if improvement <= 0:
+            # Existing SL is already at or beyond entry — just arm the latch
+            # without changing anything visible.
+            return TrailToEntryDecision(arm_now=True, new_sl_price=current_sl_price)
+
+    return TrailToEntryDecision(arm_now=True, new_sl_price=new_sl)

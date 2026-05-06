@@ -43,6 +43,7 @@ import type {
   RiskUnit,
   Segment,
   StrategyLeg,
+  StrategyRiskConfig,
   StrategyV2,
   StrategyV2CreatePayload,
 } from '@/types/strategy_v2'
@@ -195,14 +196,18 @@ export default function StrategyV2Builder() {
     webhook_secret?: string
     webhook_hmac_key?: string
   } | null>(null)
+  const [riskConfig, setRiskConfig] = useState<StrategyRiskConfig | null>(null)
+  const [savingRisk, setSavingRisk] = useState(false)
 
   // -------- Load existing strategy ----------------------------------------
   useEffect(() => {
     if (isNew || !numericId) return
     setLoading(true)
-    strategyV2Api
-      .get(numericId)
-      .then((data) => {
+    Promise.all([
+      strategyV2Api.get(numericId),
+      strategyV2Api.getRiskConfig(numericId).catch(() => null),
+    ])
+      .then(([data, rc]) => {
         setStrategy(data.strategy)
         setLegs(data.legs)
         setForm({
@@ -215,6 +220,7 @@ export default function StrategyV2Builder() {
           squareoff_time: data.strategy.squareoff_time ?? '',
           mode: data.strategy.mode,
         })
+        if (rc) setRiskConfig(rc)
       })
       .catch((err) => {
         toast.error('Failed to load strategy')
@@ -222,6 +228,21 @@ export default function StrategyV2Builder() {
       })
       .finally(() => setLoading(false))
   }, [isNew, numericId])
+
+  const onSaveRiskConfig = async () => {
+    if (!numericId || !riskConfig) return
+    setSavingRisk(true)
+    try {
+      const updated = await strategyV2Api.updateRiskConfig(numericId, riskConfig)
+      setRiskConfig(updated)
+      toast.success('Risk config saved')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      toast.error(e?.response?.data?.message ?? 'Failed to save risk config')
+    } finally {
+      setSavingRisk(false)
+    }
+  }
 
   // -------- Header save ---------------------------------------------------
   const onSaveHeader = async () => {
@@ -700,6 +721,175 @@ export default function StrategyV2Builder() {
                 ))}
               </tbody>
             </table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ---------- Strategy Risk Config (Phase 4) ---------- */}
+      {!isNew && numericId && riskConfig && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Overall Strategy Risk</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Strategy-level rules in absolute ₹. Aggregate MTM across all legs
+              decides when these fire — not single-symbol points.
+            </p>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Overall SL */}
+            <div className="border rounded-md p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Overall SL (₹)</Label>
+                <Switch
+                  checked={riskConfig.overall_sl_enabled}
+                  onCheckedChange={(b) =>
+                    setRiskConfig({ ...riskConfig, overall_sl_enabled: b })
+                  }
+                />
+              </div>
+              {riskConfig.overall_sl_enabled && (
+                <Input
+                  type="number"
+                  min={0}
+                  value={riskConfig.overall_sl_abs ?? 0}
+                  onChange={(e) =>
+                    setRiskConfig({
+                      ...riskConfig,
+                      overall_sl_abs: Number(e.target.value) || 0,
+                    })
+                  }
+                  placeholder="e.g. 5000"
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                Strategy exits all legs when aggregate MTM ≤ -₹{riskConfig.overall_sl_abs ?? 0}.
+              </p>
+            </div>
+
+            {/* Overall Target */}
+            <div className="border rounded-md p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Overall Target (₹)</Label>
+                <Switch
+                  checked={riskConfig.overall_target_enabled}
+                  onCheckedChange={(b) =>
+                    setRiskConfig({ ...riskConfig, overall_target_enabled: b })
+                  }
+                />
+              </div>
+              {riskConfig.overall_target_enabled && (
+                <Input
+                  type="number"
+                  min={0}
+                  value={riskConfig.overall_target_abs ?? 0}
+                  onChange={(e) =>
+                    setRiskConfig({
+                      ...riskConfig,
+                      overall_target_abs: Number(e.target.value) || 0,
+                    })
+                  }
+                  placeholder="e.g. 10000"
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                Strategy exits all legs when aggregate MTM ≥ +₹{riskConfig.overall_target_abs ?? 0}.
+              </p>
+            </div>
+
+            {/* Profit Lock */}
+            <div className="border rounded-md p-3 space-y-2 lg:col-span-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Profit Lock (₹)</Label>
+                <Switch
+                  checked={riskConfig.lock_profit_enabled}
+                  onCheckedChange={(b) =>
+                    setRiskConfig({ ...riskConfig, lock_profit_enabled: b })
+                  }
+                />
+              </div>
+              {riskConfig.lock_profit_enabled && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Lock at (peak ₹)</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={riskConfig.lock_at_abs ?? 0}
+                      onChange={(e) =>
+                        setRiskConfig({
+                          ...riskConfig,
+                          lock_at_abs: Number(e.target.value) || 0,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Floor (min ₹)</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={riskConfig.lock_min_abs ?? 0}
+                      onChange={(e) =>
+                        setRiskConfig({
+                          ...riskConfig,
+                          lock_min_abs: Number(e.target.value) || 0,
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Once peak MTM hits ₹{riskConfig.lock_at_abs ?? 0}, strategy exits if MTM
+                drops back to ₹{riskConfig.lock_min_abs ?? 0}. One-way latch.
+              </p>
+            </div>
+
+            {/* Trail-to-entry */}
+            <div className="border rounded-md p-3 space-y-2 lg:col-span-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Trail SL to Entry</Label>
+                <Switch
+                  checked={riskConfig.trail_to_entry_enabled}
+                  onCheckedChange={(b) =>
+                    setRiskConfig({ ...riskConfig, trail_to_entry_enabled: b })
+                  }
+                />
+              </div>
+              {riskConfig.trail_to_entry_enabled && (
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    value={riskConfig.trail_to_entry_threshold}
+                    onChange={(e) =>
+                      setRiskConfig({
+                        ...riskConfig,
+                        trail_to_entry_threshold: Number(e.target.value) || 0,
+                      })
+                    }
+                    className="flex-1"
+                  />
+                  <UnitToggle
+                    unit={riskConfig.trail_to_entry_unit}
+                    onChange={(u) =>
+                      setRiskConfig({ ...riskConfig, trail_to_entry_unit: u })
+                    }
+                  />
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Once each leg moves favorably by{' '}
+                {riskConfig.trail_to_entry_threshold}
+                {riskConfig.trail_to_entry_unit}, its SL is pinned to entry price
+                (no-loss trade). One-way ratchet per leg.
+              </p>
+            </div>
+          </CardContent>
+          <CardContent className="flex justify-end pt-0">
+            <Button onClick={onSaveRiskConfig} disabled={savingRisk}>
+              {savingRisk ? 'Saving…' : 'Save Risk Config'}
+            </Button>
           </CardContent>
         </Card>
       )}
