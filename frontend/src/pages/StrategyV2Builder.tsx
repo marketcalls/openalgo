@@ -336,7 +336,10 @@ export default function StrategyV2Builder() {
         underlying: isFnO ? form.underlying || null : null,
         underlying_exchange: isFnO ? form.underlying_exchange || null : null,
         is_intraday: form.is_intraday,
-        start_time: form.start_time,
+        // Positional strategies don't show an Entry Time field — submit
+        // a market-open default so the DB NOT-NULL constraint is
+        // satisfied without gating signals to a specific minute.
+        start_time: form.is_intraday ? form.start_time : '09:15',
         end_time: form.is_intraday ? form.end_time : null,
         squareoff_time: form.is_intraday ? form.squareoff_time || null : null,
         exit_date: !form.is_intraday && !form.run_forever
@@ -729,14 +732,22 @@ export default function StrategyV2Builder() {
             </Select>
           </div>
 
-          <div className="space-y-1">
-            <Label>Entry Time (IST)</Label>
-            <Input
-              type="time"
-              value={form.start_time}
-              onChange={(e) => setForm((s) => ({ ...s, start_time: e.target.value }))}
-            />
-          </div>
+          {/* Entry Time is only meaningful for intraday — it gates when
+              the webhook will accept entry signals during the trading
+              session. For positional strategies the lifecycle is
+              determined by Run Forever or Exit Date, so a per-minute
+              entry gate adds no value; we silently submit '09:15'
+              (market open) so the existing time-window check is a no-op. */}
+          {form.is_intraday && (
+            <div className="space-y-1">
+              <Label>Entry Time (IST)</Label>
+              <Input
+                type="time"
+                value={form.start_time}
+                onChange={(e) => setForm((s) => ({ ...s, start_time: e.target.value }))}
+              />
+            </div>
+          )}
 
           {/* Intraday-only: Exit Time + Squareoff Time. */}
           {form.is_intraday && (
