@@ -168,7 +168,16 @@ def on_broker_order_update(event) -> None:
 
     Looks up the strategy_orders row by broker orderid; if not found this is
     not one of our orders → no-op.
+
+    Retry note: the event bus is async (ThreadPoolExecutor), so a sandbox
+    fill event can race execution_service's db commit — the handler arrives
+    here before the strategy_orders row is visible. We retry the lookup a
+    handful of times with a short backoff before deciding "not our order."
+    Live broker fills don't hit this race in practice (network round-trip
+    >> commit time) but the retry is harmless on those too.
     """
+    import time as _time
+
     orderid = getattr(event, "orderid", None) or ""
     if not orderid:
         return
@@ -178,13 +187,22 @@ def on_broker_order_update(event) -> None:
     avg_price = Decimal(str(getattr(event, "average_price", 0) or 0))
 
     try:
-        order = (
-            db_session.query(StrategyOrder)
-            .filter(StrategyOrder.orderid == str(orderid))
-            .first()
-        )
+        order = None
+        for _attempt in range(5):
+            order = (
+                db_session.query(StrategyOrder)
+                .filter(StrategyOrder.orderid == str(orderid))
+                .first()
+            )
+            if order:
+                break
+            # Release the scoped session so the next iteration sees fresh
+            # commits from execution_service's worker.
+            db_session.remove()
+            _time.sleep(0.05)
+
         if not order:
-            # Not a strategy-attributed order — silently ignore.
+            # Genuinely not a strategy-attributed order — give up.
             return
 
         # Update strategy_orders row.
@@ -201,6 +219,45 @@ def on_broker_order_update(event) -> None:
         logger.exception("position_tracker.on_broker_order_update failed for %s", orderid)
     finally:
         db_session.remove()
+
+
+def on_sandbox_order_filled(event) -> None:
+    """Bridge from `sandbox.order_filled` -> the position tracker.
+
+    Sandbox fills publish `SandboxOrderFilledEvent` directly from the
+    sandbox engine (sandbox/execution_engine.py:_publish_fill_event).
+    Live fills go through the broker's order-update channel which
+    eventually publishes `BrokerOrderUpdateEvent`. Both paths must
+    converge on the same `_record_fill` codepath so strategy_orders /
+    strategy_trades / strategy_positions get written, the leg state
+    advances PENDING_ENTRY -> OPEN, and the engine starts monitoring.
+
+    Without this bridge, sandbox-mode strategies see their orders go
+    to status='complete' but never accumulate positions or MTM — the
+    UI stays at zero because the engine has no leg in its registry.
+
+    The translation is straightforward — sandbox always fires on full
+    fills, so we synthesize a status='complete' BrokerOrderUpdateEvent
+    and dispatch through the same handler used for live fills.
+    """
+    # Use a duck-typed shim instead of importing BrokerOrderUpdateEvent
+    # to avoid coupling this module to the events package twice. The
+    # downstream handler reads attributes via getattr so any object with
+    # the right shape works.
+    class _Shim:
+        def __init__(self, src):
+            self.orderid = getattr(src, "orderid", "") or ""
+            self.status = "complete"
+            self.filled_qty = int(getattr(src, "quantity", 0) or 0)
+            self.average_price = float(getattr(src, "price", 0) or 0)
+            self.raw = {
+                "source": "sandbox.order_filled",
+                "tradeid": getattr(src, "tradeid", None),
+                "symbol": getattr(src, "symbol", None),
+                "exchange": getattr(src, "exchange", None),
+            }
+
+    on_broker_order_update(_Shim(event))
 
 
 # ----------------------------------------------------------------------------

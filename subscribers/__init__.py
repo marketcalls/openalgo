@@ -219,6 +219,11 @@ def register_all():
                   "tracker:order_cancelled")
     bus.subscribe("broker.order_update", position_tracker.on_broker_order_update,
                   "tracker:broker_order_update")
+    # Phase 9.2 — bridge sandbox fills into the same handler. Without this,
+    # sandbox-mode strategies see orders go to status='complete' but never
+    # accumulate positions or MTM. See position_tracker.on_sandbox_order_filled.
+    bus.subscribe("sandbox.order_filled", position_tracker.on_sandbox_order_filled,
+                  "tracker:sandbox_order_filled")
 
     # ------------------------------------------------------------------------
     # RMS engine — singleton dispatcher. Listens for IN_TRADE state changes
@@ -226,6 +231,12 @@ def register_all():
     # ------------------------------------------------------------------------
     from services.strategy import rms_engine
 
+    # When the position tracker creates a strategy_positions row after a
+    # fill, re-attempt engine registration in case the IN_TRADE state
+    # transition raced ahead of the fill commit (sandbox path; see
+    # rms_engine.on_strategy_leg_filled).
+    bus.subscribe("strategy.leg_filled", rms_engine.on_strategy_leg_filled,
+                  "engine:leg_filled_register")
     bus.subscribe("strategy.state_changed", rms_engine.on_strategy_state_changed,
                   "rms_engine:state_changed")
 

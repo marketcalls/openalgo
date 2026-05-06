@@ -31,6 +31,7 @@ import type {
   AccountRiskConfig,
   AccountRiskConfigPayload,
   AccountRiskConfigResponse,
+  StrategyState,
 } from '@/types/strategy_v2'
 
 const ROOT = '/strategy/api/v2'
@@ -72,9 +73,11 @@ export const strategyV2Api = {
   },
 
   toggle: async (id: number) => {
-    const r = await webClient.post<{ status: string; is_active: boolean; state: string }>(
-      `${ROOT}/strategy/${id}/toggle`
-    )
+    const r = await webClient.post<{
+      status: string
+      is_active: boolean
+      state: StrategyState
+    }>(`${ROOT}/strategy/${id}/toggle`)
     return r.data
   },
 

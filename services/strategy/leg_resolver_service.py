@@ -145,12 +145,16 @@ def _resolve_cash(leg: StrategyLeg, api_key: str) -> ResolverResult:
     if not leg.symbol_cash:
         return False, None, "CASH leg missing symbol_cash"
 
-    # Cash legs default to NSE; future enhancement: per-leg exchange selector.
-    exchange = "NSE"
+    # Phase 9 — per-leg exchange selector. Falls back to NSE for legacy
+    # rows (created before exchange_cash was added) so existing strategies
+    # keep resolving without re-saving.
+    exchange = leg.exchange_cash or "NSE"
     from services.symbol_service import get_symbol_info
     ok, info, _ = get_symbol_info(symbol=leg.symbol_cash, exchange=exchange, api_key=api_key)
     if not ok:
-        return False, None, info.get("message", f"symbol {leg.symbol_cash} not found on NSE")
+        return False, None, info.get(
+            "message", f"symbol {leg.symbol_cash} not found on {exchange}"
+        )
 
     data = info.get("data", {})
     leg.resolved_symbol = data.get("symbol", leg.symbol_cash)

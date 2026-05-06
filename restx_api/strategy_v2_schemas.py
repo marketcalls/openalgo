@@ -22,6 +22,11 @@ class StrategyCreateSchema(Schema):
                               validate=validate.OneOf(
                                   ["tradingview", "amibroker", "python", "manual", "chartink"]
                               ))
+    # Phase 9 — segment drives whether underlying is meaningful.
+    segment = fields.String(
+        load_default="CASH",
+        validate=validate.OneOf(["CASH", "INDEX_FO"]),
+    )
     underlying = fields.String(load_default=None, allow_none=True)
     underlying_exchange = fields.String(
         load_default=None,
@@ -33,10 +38,21 @@ class StrategyCreateSchema(Schema):
     is_intraday = fields.Boolean(load_default=True)
     start_time = fields.String(required=True,
                                validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"))
-    end_time = fields.String(required=True,
+    # end_time is required for INTRADAY only — positional strategies use
+    # exit_date or run_forever instead. Cross-field validation in the
+    # endpoint handler enforces "intraday must have end_time".
+    end_time = fields.String(load_default=None, allow_none=True,
                              validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"))
     squareoff_time = fields.String(load_default=None, allow_none=True,
                                    validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"))
+    # Phase 9 — positional-only fields. Endpoint handler enforces
+    # "positional must have exit_date OR run_forever=True".
+    exit_date = fields.String(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Regexp(r"^\d{4}-\d{2}-\d{2}$"),
+    )
+    run_forever = fields.Boolean(load_default=False)
     mode = fields.String(load_default="live",
                          validate=validate.OneOf(["live", "sandbox"]))
     webhook_signing_method = fields.String(
@@ -58,13 +74,18 @@ class StrategyUpdateSchema(Schema):
     name = fields.String(validate=validate.Length(min=3, max=80))
     platform = fields.String(validate=validate.OneOf(
         ["tradingview", "amibroker", "python", "manual", "chartink"]))
+    segment = fields.String(validate=validate.OneOf(["CASH", "INDEX_FO"]))
     underlying = fields.String(allow_none=True)
     underlying_exchange = fields.String(allow_none=True)
     is_intraday = fields.Boolean()
     start_time = fields.String(validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"))
-    end_time = fields.String(validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"))
+    end_time = fields.String(allow_none=True,
+                             validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"))
     squareoff_time = fields.String(allow_none=True,
                                    validate=validate.Regexp(r"^[0-2]\d:[0-5]\d$"))
+    exit_date = fields.String(allow_none=True,
+                              validate=validate.Regexp(r"^\d{4}-\d{2}-\d{2}$"))
+    run_forever = fields.Boolean()
     mode = fields.String(validate=validate.OneOf(["live", "sandbox"]))
     webhook_signing_method = fields.String(
         validate=validate.OneOf(["NONE", "BODY_SECRET", "HMAC_SHA256", "BOTH"]),
@@ -90,6 +111,14 @@ class LegSchema(Schema):
 
     # CASH-only
     symbol_cash = fields.String(allow_none=True)
+    # Phase 9 — per-leg exchange. Defaults to NSE in the resolver if
+    # absent (back-compat with rows that pre-date the column).
+    exchange_cash = fields.String(
+        allow_none=True,
+        validate=validate.OneOf(
+            ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "NCO"]
+        ),
+    )
     qty = fields.Integer(allow_none=True, validate=validate.Range(min=1))
 
     # FUT + OPT

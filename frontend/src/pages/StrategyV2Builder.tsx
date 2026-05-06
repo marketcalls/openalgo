@@ -34,7 +34,9 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { strategyV2Api } from '@/api/strategy_v2'
+import { SymbolSearchInput } from '@/components/SymbolSearchInput'
 import type {
+  CashExchange,
   ExpiryType,
   LegPayload,
   OptionType,
@@ -44,11 +46,49 @@ import type {
   Segment,
   StrategyLeg,
   StrategyRiskConfig,
+  StrategySegment,
   StrategyV2,
   StrategyV2CreatePayload,
 } from '@/types/strategy_v2'
 
 import StrategyV2WebhookDialog from './StrategyV2WebhookDialog'
+
+// Friendly labels for the state badge — DRAFT/ARMED/DISABLED stays in the
+// schema (driven by webhook ingestion + toggle), but we surface "Draft /
+// Enabled / Disabled" in the UI per user feedback.
+const STATE_LABELS: Record<string, string> = {
+  DRAFT: 'Draft',
+  ARMED: 'Enabled',
+  DISABLED: 'Disabled',
+  ARCHIVED: 'Archived',
+}
+
+// Phase 9 — product types per exchange. NSE/BSE equity = MIS / CNC;
+// every derivative segment uses MIS / NRML. Drives the leg-builder
+// Product dropdown filter.
+const PRODUCTS_BY_EXCHANGE: Record<CashExchange, ProductType[]> = {
+  NSE: ['MIS', 'CNC'],
+  BSE: ['MIS', 'CNC'],
+  NFO: ['MIS', 'NRML'],
+  BFO: ['MIS', 'NRML'],
+  CDS: ['MIS', 'NRML'],
+  BCD: ['MIS', 'NRML'],
+  MCX: ['MIS', 'NRML'],
+  NCDEX: ['MIS', 'NRML'],
+  NCO: ['MIS', 'NRML'],
+}
+
+const CASH_EXCHANGES: CashExchange[] = [
+  'NSE',
+  'BSE',
+  'NFO',
+  'BFO',
+  'CDS',
+  'BCD',
+  'MCX',
+  'NCDEX',
+  'NCO',
+]
 
 // ---------------------------------------------------------------------------
 // Local form-state types — aligned with LegPayload but with all fields
@@ -61,6 +101,7 @@ interface LegFormState {
   product: ProductType
 
   symbol_cash: string
+  exchange_cash: CashExchange
   qty: number
 
   expiry_type: ExpiryType
@@ -82,10 +123,6 @@ interface LegFormState {
   trail_x: number
   trail_y: number
   trail_unit: RiskUnit
-
-  momentum_enabled: boolean
-  momentum_value: number
-  momentum_unit: RiskUnit
 }
 
 const blankLeg = (segment: Segment): LegFormState => ({
@@ -93,6 +130,7 @@ const blankLeg = (segment: Segment): LegFormState => ({
   position: 'B',
   product: segment === 'CASH' ? 'MIS' : 'NRML',
   symbol_cash: '',
+  exchange_cash: 'NSE',
   qty: 1,
   expiry_type: 'CURRENT_WEEK',
   lots: 1,
@@ -109,9 +147,6 @@ const blankLeg = (segment: Segment): LegFormState => ({
   trail_x: 1,
   trail_y: 1,
   trail_unit: 'pts',
-  momentum_enabled: false,
-  momentum_value: 0,
-  momentum_unit: 'pts',
 })
 
 const legFormToPayload = (lf: LegFormState, leg_index: number): LegPayload => ({
@@ -121,7 +156,11 @@ const legFormToPayload = (lf: LegFormState, leg_index: number): LegPayload => ({
   product: lf.product,
   // Conditional fields
   ...(lf.segment === 'CASH'
-    ? { symbol_cash: lf.symbol_cash.trim(), qty: lf.qty }
+    ? {
+        symbol_cash: lf.symbol_cash.trim(),
+        exchange_cash: lf.exchange_cash,
+        qty: lf.qty,
+      }
     : {}),
   ...(lf.segment !== 'CASH'
     ? { expiry_type: lf.expiry_type, lots: lf.lots }
@@ -144,9 +183,6 @@ const legFormToPayload = (lf: LegFormState, leg_index: number): LegPayload => ({
   trail_x: lf.trail_enabled ? lf.trail_x : null,
   trail_y: lf.trail_enabled ? lf.trail_y : null,
   trail_unit: lf.trail_enabled ? lf.trail_unit : null,
-  momentum_enabled: lf.momentum_enabled,
-  momentum_value: lf.momentum_enabled ? lf.momentum_value : null,
-  momentum_unit: lf.momentum_enabled ? lf.momentum_unit : null,
 })
 
 // ---------------------------------------------------------------------------
@@ -155,23 +191,29 @@ const legFormToPayload = (lf: LegFormState, leg_index: number): LegPayload => ({
 
 interface StrategyForm {
   name: string
+  segment: StrategySegment
   underlying: string
   underlying_exchange: string
   is_intraday: boolean
   start_time: string
   end_time: string
   squareoff_time: string
+  exit_date: string         // YYYY-MM-DD (positional)
+  run_forever: boolean      // positional
   mode: 'live' | 'sandbox'
 }
 
 const blankStrategy = (): StrategyForm => ({
   name: '',
+  segment: 'CASH',
   underlying: 'NIFTY',
   underlying_exchange: 'NSE_INDEX',
   is_intraday: true,
   start_time: '09:35',
   end_time: '15:15',
   squareoff_time: '15:20',
+  exit_date: '',
+  run_forever: false,
   mode: 'live',
 })
 
@@ -212,12 +254,15 @@ export default function StrategyV2Builder() {
         setLegs(data.legs)
         setForm({
           name: data.strategy.name,
+          segment: data.strategy.segment ?? 'CASH',
           underlying: data.strategy.underlying ?? 'NIFTY',
           underlying_exchange: data.strategy.underlying_exchange ?? 'NSE_INDEX',
           is_intraday: data.strategy.is_intraday,
           start_time: data.strategy.start_time,
-          end_time: data.strategy.end_time,
+          end_time: data.strategy.end_time ?? '15:15',
           squareoff_time: data.strategy.squareoff_time ?? '',
+          exit_date: data.strategy.exit_date ?? '',
+          run_forever: data.strategy.run_forever ?? false,
           mode: data.strategy.mode,
         })
         if (rc) setRiskConfig(rc)
@@ -229,16 +274,54 @@ export default function StrategyV2Builder() {
       .finally(() => setLoading(false))
   }, [isNew, numericId])
 
+  // Arm / Disable the strategy. Calls the same /toggle endpoint the list
+  // page uses; the backend flips is_active and transitions state between
+  // DRAFT/DISABLED and ARMED, validating that the strategy is shaped
+  // correctly (e.g. has at least one leg).
+  const [toggling, setToggling] = useState(false)
+  const onToggleActive = async () => {
+    if (!numericId) return
+    setToggling(true)
+    try {
+      // Toggle returns only {status, is_active, state} — patch those onto
+      // the existing strategy object so the badges + button label update
+      // without requiring a full re-fetch.
+      const r = await strategyV2Api.toggle(numericId)
+      setStrategy((prev) =>
+        prev ? { ...prev, is_active: r.is_active, state: r.state } : prev
+      )
+      toast.success(r.is_active ? 'Strategy enabled' : 'Strategy disabled')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } }
+      toast.error(e?.response?.data?.message ?? 'Toggle failed')
+    } finally {
+      setToggling(false)
+    }
+  }
+
   const onSaveRiskConfig = async () => {
     if (!numericId || !riskConfig) return
     setSavingRisk(true)
     try {
-      const updated = await strategyV2Api.updateRiskConfig(numericId, riskConfig)
+      // The GET response includes strategy_id (the FK / primary key on
+      // strategy_risk_config); the PUT schema is unknown=RAISE so we
+      // must strip it before send. Same for any updated_at-style
+      // server-side fields the schema doesn't accept.
+      const { strategy_id: _sid, ...payload } = riskConfig
+      void _sid
+      const updated = await strategyV2Api.updateRiskConfig(numericId, payload)
       setRiskConfig(updated)
       toast.success('Risk config saved')
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { message?: string } } }
-      toast.error(e?.response?.data?.message ?? 'Failed to save risk config')
+      const e = err as {
+        response?: { data?: { message?: string; errors?: unknown } }
+      }
+      const detail = e?.response?.data?.errors
+        ? ` (${JSON.stringify(e.response.data.errors)})`
+        : ''
+      toast.error(
+        (e?.response?.data?.message ?? 'Failed to save risk config') + detail
+      )
     } finally {
       setSavingRisk(false)
     }
@@ -248,14 +331,23 @@ export default function StrategyV2Builder() {
   const onSaveHeader = async () => {
     setSavingHeader(true)
     try {
+      const isIndexFo = form.segment === 'INDEX_FO'
       const payload: StrategyV2CreatePayload = {
         name: form.name.trim(),
-        underlying: form.underlying || null,
-        underlying_exchange: form.underlying_exchange || null,
+        segment: form.segment,
+        // Underlying only meaningful for INDEX_FO. Backend also nulls
+        // these when segment=CASH but we mirror the rule so the request
+        // body is honest.
+        underlying: isIndexFo ? form.underlying || null : null,
+        underlying_exchange: isIndexFo ? form.underlying_exchange || null : null,
         is_intraday: form.is_intraday,
         start_time: form.start_time,
-        end_time: form.end_time,
+        end_time: form.is_intraday ? form.end_time : null,
         squareoff_time: form.is_intraday ? form.squareoff_time || null : null,
+        exit_date: !form.is_intraday && !form.run_forever
+          ? form.exit_date || null
+          : null,
+        run_forever: !form.is_intraday && form.run_forever,
         mode: form.mode,
         webhook_signing_method: 'NONE',
       }
@@ -351,7 +443,32 @@ export default function StrategyV2Builder() {
             >
               {strategy.mode === 'sandbox' ? 'SANDBOX' : 'LIVE'}
             </Badge>
-            <Badge variant="outline">{strategy.state}</Badge>
+            <Badge
+              variant="outline"
+              className={
+                strategy.state === 'ARMED'
+                  ? 'bg-emerald-500/15 text-emerald-700 border-emerald-500/30'
+                  : strategy.state === 'DISABLED'
+                    ? 'bg-rose-500/15 text-rose-700 border-rose-500/30'
+                    : strategy.state === 'ARCHIVED'
+                      ? 'bg-neutral-500/15 text-neutral-500 border-neutral-500/30'
+                      : 'bg-sky-500/15 text-sky-700 border-sky-500/30'
+              }
+            >
+              {STATE_LABELS[strategy.state] ?? strategy.state}
+            </Badge>
+            <Button
+              variant={strategy.is_active ? 'outline' : 'default'}
+              onClick={onToggleActive}
+              disabled={toggling || strategy.state === 'ARCHIVED'}
+              title={
+                strategy.is_active
+                  ? 'Disable — webhook signals will be rejected'
+                  : 'Enable — webhook signals will create runs'
+              }
+            >
+              {toggling ? 'Working…' : strategy.is_active ? 'Disable' : 'Enable'}
+            </Button>
             <Button
               variant="outline"
               onClick={() => navigate(`/strategy/v2/${strategy.id}/runs`)}
@@ -382,10 +499,10 @@ export default function StrategyV2Builder() {
         </div>
       )}
 
-      {/* ---------- Index & Timings ---------- */}
+      {/* ---------- Strategy header ---------- */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Index and Timings</CardTitle>
+          <CardTitle className="text-base">Strategy</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="space-y-1">
@@ -397,25 +514,88 @@ export default function StrategyV2Builder() {
               maxLength={80}
             />
           </div>
+
+          {/* Segment toggle drives whether Underlying is shown. */}
           <div className="space-y-1">
-            <Label>Underlying</Label>
-            <Select
-              value={form.underlying}
-              onValueChange={(v) => setForm((s) => ({ ...s, underlying: v }))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="NIFTY">NIFTY</SelectItem>
-                <SelectItem value="BANKNIFTY">BANKNIFTY</SelectItem>
-                <SelectItem value="FINNIFTY">FINNIFTY</SelectItem>
-                <SelectItem value="MIDCPNIFTY">MIDCPNIFTY</SelectItem>
-                <SelectItem value="SENSEX">SENSEX</SelectItem>
-                <SelectItem value="BANKEX">BANKEX</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label>Segment</Label>
+            <div className="flex border rounded-md overflow-hidden">
+              <button
+                type="button"
+                className={`flex-1 py-2 text-sm ${form.segment === 'CASH' ? 'bg-primary text-primary-foreground' : ''}`}
+                onClick={() => setForm((s) => ({ ...s, segment: 'CASH' }))}
+              >
+                Cash
+              </button>
+              <button
+                type="button"
+                className={`flex-1 py-2 text-sm ${form.segment === 'INDEX_FO' ? 'bg-primary text-primary-foreground' : ''}`}
+                onClick={() => setForm((s) => ({ ...s, segment: 'INDEX_FO' }))}
+              >
+                Index F&amp;O
+              </button>
+            </div>
           </div>
+
+          {/* Underlying + Underlying Exchange — only relevant for INDEX_FO
+              strategies. Both fields are sent on save; the leg resolver
+              uses underlying_exchange to look up the contract chain at
+              arm-time. NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY live on
+              NSE_INDEX; SENSEX/BANKEX on BSE_INDEX; CRUDEOIL etc on
+              MCX_INDEX. */}
+          {form.segment === 'INDEX_FO' && (
+            <>
+              <div className="space-y-1">
+                <Label>Underlying</Label>
+                <Select
+                  value={form.underlying}
+                  onValueChange={(v) => {
+                    // Auto-snap exchange when the underlying changes so
+                    // the user doesn't have to remember the mapping.
+                    const idxExchange =
+                      v === 'SENSEX' || v === 'BANKEX'
+                        ? 'BSE_INDEX'
+                        : 'NSE_INDEX'
+                    setForm((s) => ({
+                      ...s,
+                      underlying: v,
+                      underlying_exchange: idxExchange,
+                    }))
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NIFTY">NIFTY</SelectItem>
+                    <SelectItem value="BANKNIFTY">BANKNIFTY</SelectItem>
+                    <SelectItem value="FINNIFTY">FINNIFTY</SelectItem>
+                    <SelectItem value="MIDCPNIFTY">MIDCPNIFTY</SelectItem>
+                    <SelectItem value="SENSEX">SENSEX</SelectItem>
+                    <SelectItem value="BANKEX">BANKEX</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Underlying Exchange</Label>
+                <Select
+                  value={form.underlying_exchange}
+                  onValueChange={(v) =>
+                    setForm((s) => ({ ...s, underlying_exchange: v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NSE_INDEX">NSE_INDEX</SelectItem>
+                    <SelectItem value="BSE_INDEX">BSE_INDEX</SelectItem>
+                    <SelectItem value="MCX_INDEX">MCX_INDEX</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
           <div className="space-y-1">
             <Label>Strategy Type</Label>
             <div className="flex border rounded-md overflow-hidden">
@@ -435,6 +615,7 @@ export default function StrategyV2Builder() {
               </button>
             </div>
           </div>
+
           <div className="space-y-1">
             <Label>Mode</Label>
             <Select
@@ -450,6 +631,7 @@ export default function StrategyV2Builder() {
               </SelectContent>
             </Select>
           </div>
+
           <div className="space-y-1">
             <Label>Entry Time (IST)</Label>
             <Input
@@ -458,44 +640,116 @@ export default function StrategyV2Builder() {
               onChange={(e) => setForm((s) => ({ ...s, start_time: e.target.value }))}
             />
           </div>
-          <div className="space-y-1">
-            <Label>Exit Time (IST)</Label>
-            <Input
-              type="time"
-              value={form.end_time}
-              onChange={(e) => setForm((s) => ({ ...s, end_time: e.target.value }))}
-            />
-          </div>
+
+          {/* Intraday-only: Exit Time + Squareoff Time. */}
           {form.is_intraday && (
-            <div className="space-y-1">
-              <Label>Squareoff Time</Label>
-              <Input
-                type="time"
-                value={form.squareoff_time}
-                onChange={(e) => setForm((s) => ({ ...s, squareoff_time: e.target.value }))}
-              />
-            </div>
+            <>
+              <div className="space-y-1">
+                <Label>Exit Time (IST)</Label>
+                <Input
+                  type="time"
+                  value={form.end_time}
+                  onChange={(e) => setForm((s) => ({ ...s, end_time: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Squareoff Time</Label>
+                <Input
+                  type="time"
+                  value={form.squareoff_time}
+                  onChange={(e) => setForm((s) => ({ ...s, squareoff_time: e.target.value }))}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Positional-only: Run Forever toggle + Exit Date picker. */}
+          {!form.is_intraday && (
+            <>
+              <div className="space-y-1">
+                <Label>Run Forever</Label>
+                <div className="flex items-center gap-2 h-10 rounded-md border px-3">
+                  <Switch
+                    checked={form.run_forever}
+                    onCheckedChange={(b) =>
+                      setForm((s) => ({ ...s, run_forever: b, exit_date: b ? '' : s.exit_date }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {form.run_forever ? 'No auto-exit' : 'Auto-exit on date below'}
+                  </span>
+                </div>
+              </div>
+              {!form.run_forever && (
+                <div className="space-y-1">
+                  <Label>Exit Date</Label>
+                  <Input
+                    type="date"
+                    value={form.exit_date}
+                    onChange={(e) =>
+                      setForm((s) => ({ ...s, exit_date: e.target.value }))
+                    }
+                  />
+                </div>
+              )}
+            </>
           )}
         </CardContent>
         <CardContent className="flex justify-end gap-2 pt-0">
-          <Button onClick={onSaveHeader} disabled={savingHeader || !form.name.trim()}>
+          <Button
+            onClick={onSaveHeader}
+            disabled={
+              savingHeader ||
+              !form.name.trim() ||
+              // Intraday must have an end_time; positional must pick exit_date or run_forever.
+              (form.is_intraday && !form.end_time) ||
+              (!form.is_intraday && !form.run_forever && !form.exit_date)
+            }
+          >
             {savingHeader ? 'Saving…' : isNew ? 'Create Strategy' : 'Save'}
           </Button>
         </CardContent>
       </Card>
 
-      {/* ---------- Leg Builder ---------- */}
+      {/* ---------- Leg Builder ----------
+          Tabs are constrained by the strategy's Segment:
+            CASH      -> only Cash legs allowed
+            INDEX_FO  -> only Futures / Options legs allowed
+          We also auto-snap the draft leg's segment whenever the strategy
+          segment flips, so a Cash strategy can't carry a stale FUT draft. */}
       {!isNew && numericId && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Leg Builder</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Tabs value={draftLeg.segment} onValueChange={(v) => setDraftLeg(blankLeg(v as Segment))}>
+            {(() => {
+              // Effect-equivalent inline snap. Avoids a separate useEffect
+              // for one tiny invariant; keeps the rule colocated with the
+              // tab list it constrains.
+              const allowed: Segment[] =
+                form.segment === 'CASH' ? ['CASH'] : ['FUT', 'OPT']
+              if (!allowed.includes(draftLeg.segment)) {
+                // Defer to next tick so React doesn't complain about state
+                // updates during render.
+                setTimeout(() => setDraftLeg(blankLeg(allowed[0])), 0)
+              }
+              return null
+            })()}
+            <Tabs
+              value={draftLeg.segment}
+              onValueChange={(v) => setDraftLeg(blankLeg(v as Segment))}
+            >
               <TabsList>
-                <TabsTrigger value="CASH">Cash</TabsTrigger>
-                <TabsTrigger value="FUT">Futures</TabsTrigger>
-                <TabsTrigger value="OPT">Options</TabsTrigger>
+                {form.segment === 'CASH' && (
+                  <TabsTrigger value="CASH">Cash</TabsTrigger>
+                )}
+                {form.segment === 'INDEX_FO' && (
+                  <>
+                    <TabsTrigger value="FUT">Futures</TabsTrigger>
+                    <TabsTrigger value="OPT">Options</TabsTrigger>
+                  </>
+                )}
               </TabsList>
             </Tabs>
 
@@ -503,13 +757,51 @@ export default function StrategyV2Builder() {
               {draftLeg.segment === 'CASH' && (
                 <>
                   <div className="space-y-1">
+                    <Label>Exchange</Label>
+                    <Select
+                      value={draftLeg.exchange_cash}
+                      onValueChange={(v: CashExchange) => {
+                        const allowed = PRODUCTS_BY_EXCHANGE[v]
+                        setDraftLeg((s) => ({
+                          ...s,
+                          exchange_cash: v,
+                          // If current product isn't valid for the new exchange,
+                          // snap to the first allowed value (MIS for both lists).
+                          product: allowed.includes(s.product) ? s.product : allowed[0],
+                        }))
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CASH_EXCHANGES.map((x) => (
+                          <SelectItem key={x} value={x}>{x}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
                     <Label>Symbol</Label>
-                    <Input
+                    <SymbolSearchInput
                       value={draftLeg.symbol_cash}
-                      onChange={(e) =>
-                        setDraftLeg((s) => ({ ...s, symbol_cash: e.target.value.toUpperCase() }))
+                      exchange={draftLeg.exchange_cash}
+                      onChange={(v) =>
+                        setDraftLeg((s) => ({ ...s, symbol_cash: v.toUpperCase() }))
                       }
-                      placeholder="INFY"
+                      onSelect={(row) =>
+                        setDraftLeg((s) => ({
+                          ...s,
+                          symbol_cash: row.symbol,
+                          // Auto-snap exchange if the picked symbol is from a
+                          // different one (mostly happens when user filters
+                          // empty and picks across exchanges).
+                          exchange_cash: (CASH_EXCHANGES as string[]).includes(row.exchange)
+                            ? (row.exchange as CashExchange)
+                            : s.exchange_cash,
+                        }))
+                      }
+                      placeholder="Search symbol (e.g. INFY)"
                     />
                   </div>
                   <NumberField
@@ -581,9 +873,16 @@ export default function StrategyV2Builder() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="MIS">MIS</SelectItem>
-                    <SelectItem value="CNC">CNC</SelectItem>
-                    <SelectItem value="NRML">NRML</SelectItem>
+                    {/* For CASH legs the product list filters by the chosen
+                        exchange (NSE/BSE -> MIS+CNC; everything else -> MIS+NRML).
+                        For FUT/OPT legs we always show MIS + NRML — F&O equity
+                        derivatives never use CNC. */}
+                    {(draftLeg.segment === 'CASH'
+                      ? PRODUCTS_BY_EXCHANGE[draftLeg.exchange_cash]
+                      : (['MIS', 'NRML'] as ProductType[])
+                    ).map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -667,15 +966,6 @@ export default function StrategyV2Builder() {
                 onY={(v) => setDraftLeg((s) => ({ ...s, trail_y: v }))}
                 onUnit={(u) => setDraftLeg((s) => ({ ...s, trail_unit: u }))}
               />
-              <RiskBlock
-                label="Simple Momentum"
-                enabled={draftLeg.momentum_enabled}
-                onToggle={(b) => setDraftLeg((s) => ({ ...s, momentum_enabled: b }))}
-                value={draftLeg.momentum_value}
-                unit={draftLeg.momentum_unit}
-                onValue={(v) => setDraftLeg((s) => ({ ...s, momentum_value: v }))}
-                onUnit={(u) => setDraftLeg((s) => ({ ...s, momentum_unit: u }))}
-              />
             </div>
 
             <div className="flex justify-end">
@@ -714,7 +1004,7 @@ export default function StrategyV2Builder() {
                     <td className="px-4 py-2">{l.position}</td>
                     <td className="px-4 py-2 font-mono text-xs">
                       {l.segment === 'CASH'
-                        ? l.symbol_cash
+                        ? `${l.symbol_cash}${l.exchange_cash ? ` · ${l.exchange_cash}` : ''}`
                         : `${strategy?.underlying ?? ''} ${l.expiry_type ?? ''} ${l.option_type ?? ''} ${l.strike_criteria ?? ''}${l.strike_value ? ` ${l.strike_value > 0 ? `OTM${l.strike_value}` : `ITM${Math.abs(l.strike_value)}`}` : ''}`}
                     </td>
                     <td className="px-4 py-2">

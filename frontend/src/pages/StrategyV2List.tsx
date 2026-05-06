@@ -7,7 +7,7 @@
  *
  * Phase 1 deliverable per docs/plans/2026-05-06-strategy-v2-implementation-plan.md.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -31,6 +31,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { strategyV2Api } from '@/api/strategy_v2'
+import { useStrategyV2ListSocket } from '@/hooks/useStrategyV2Socket'
 import type { AccountRiskConfig, StrategyV2 } from '@/types/strategy_v2'
 
 const MODE_BADGE_CLASS: Record<string, string> = {
@@ -39,10 +40,19 @@ const MODE_BADGE_CLASS: Record<string, string> = {
 }
 
 const STATE_BADGE_CLASS: Record<string, string> = {
-  DRAFT: 'bg-neutral-500/15 text-neutral-700',
-  ARMED: 'bg-emerald-500/15 text-emerald-700',
-  DISABLED: 'bg-neutral-500/15 text-neutral-700',
-  ARCHIVED: 'bg-neutral-500/10 text-neutral-500',
+  DRAFT: 'bg-sky-500/15 text-sky-700 border-sky-500/30',
+  ARMED: 'bg-emerald-500/15 text-emerald-700 border-emerald-500/30',
+  DISABLED: 'bg-rose-500/15 text-rose-700 border-rose-500/30',
+  ARCHIVED: 'bg-neutral-500/10 text-neutral-500 border-neutral-500/30',
+}
+
+// Friendly state labels — schema stays DRAFT/ARMED/DISABLED/ARCHIVED but
+// the UI displays Draft/Enabled/Disabled/Archived per user feedback.
+const STATE_LABELS: Record<string, string> = {
+  DRAFT: 'Draft',
+  ARMED: 'Enabled',
+  DISABLED: 'Disabled',
+  ARCHIVED: 'Archived',
 }
 
 export default function StrategyV2List() {
@@ -51,6 +61,19 @@ export default function StrategyV2List() {
   const [loading, setLoading] = useState(true)
   const [deleteTarget, setDeleteTarget] = useState<StrategyV2 | null>(null)
   const navigate = useNavigate()
+
+  // Phase 9.2 — subscribe via Socket.IO to every strategy that has an
+  // active run, so the Today's P&L column updates in real time. Only
+  // active runs receive ticks from the engine, so subscribing for
+  // strategies without one is wasted RAM but harmless.
+  const subscribableIds = useMemo(
+    () =>
+      rows
+        .filter((r) => r.live?.active_run_id != null)
+        .map((r) => r.id),
+    [rows],
+  )
+  const livePnl = useStrategyV2ListSocket(subscribableIds)
 
   const refresh = async () => {
     setLoading(true)
@@ -180,10 +203,12 @@ export default function StrategyV2List() {
               <thead className="border-b text-left">
                 <tr className="text-xs uppercase text-muted-foreground">
                   <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">Underlying</th>
+                  <th className="px-4 py-3">Segment</th>
                   <th className="px-4 py-3">Mode</th>
                   <th className="px-4 py-3">State</th>
+                  <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3">Schedule</th>
+                  <th className="px-4 py-3 text-right">Today's P&amp;L</th>
                   <th className="px-4 py-3">Active</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
@@ -200,8 +225,16 @@ export default function StrategyV2List() {
                         {s.name}
                       </button>
                     </td>
+                    {/* Segment column shows Cash for plain equity baskets,
+                        otherwise the underlying + index exchange (NIFTY ·
+                        NSE_INDEX). Lets the operator scan a long list and
+                        immediately see what each strategy trades. */}
                     <td className="px-4 py-3 text-muted-foreground">
-                      {s.underlying ? `${s.underlying} · ${s.underlying_exchange ?? ''}` : '—'}
+                      {s.segment === 'CASH'
+                        ? 'Cash'
+                        : s.underlying
+                          ? `${s.underlying} · ${s.underlying_exchange ?? ''}`
+                          : 'Index F&O'}
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant="outline" className={MODE_BADGE_CLASS[s.mode] || ''}>
@@ -210,13 +243,53 @@ export default function StrategyV2List() {
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant="outline" className={STATE_BADGE_CLASS[s.state] || ''}>
-                        {s.state}
+                        {STATE_LABELS[s.state] ?? s.state}
                       </Badge>
+                    </td>
+                    {/* Type column — Intraday vs Positional. Schedule
+                        column to the right shows the actual timing /
+                        date / run-forever info. */}
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {s.is_intraday ? 'Intraday' : 'Positional'}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {s.is_intraday
-                        ? `${s.start_time}–${s.end_time}${s.squareoff_time ? ` · sq ${s.squareoff_time}` : ''}`
-                        : 'Positional'}
+                        ? `${s.start_time}–${s.end_time ?? ''}${s.squareoff_time ? ` · sq ${s.squareoff_time}` : ''}`
+                        : s.run_forever
+                          ? 'Run forever'
+                          : s.exit_date
+                            ? `until ${s.exit_date}`
+                            : '—'}
+                    </td>
+                    {/* Today's P&L = realized (closed runs today) + unrealized
+                        (active run's live agg_mtm). Live updates arrive via
+                        Socket.IO and override the snapshot from the initial
+                        list payload. */}
+                    <td className="px-4 py-3 text-right font-mono">
+                      {(() => {
+                        const liveAgg =
+                          livePnl[s.id]?.agg_mtm ?? s.live?.agg_mtm ?? 0
+                        const realized = s.live?.realized_today ?? 0
+                        const total = liveAgg + realized
+                        if (!s.live || (s.live.active_run_id == null && realized === 0)) {
+                          return <span className="text-muted-foreground">—</span>
+                        }
+                        const cls =
+                          total > 0
+                            ? 'text-emerald-700'
+                            : total < 0
+                              ? 'text-rose-700'
+                              : ''
+                        const sign = total > 0 ? '+' : ''
+                        return (
+                          <span className={cls}>
+                            {sign}₹{total.toFixed(2)}
+                            {s.live.active_run_id != null && (
+                              <span className="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse align-middle" />
+                            )}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3">
                       <Button

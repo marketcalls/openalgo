@@ -23,6 +23,21 @@ export type RunState =
 export type SigningMethod = 'NONE' | 'BODY_SECRET' | 'HMAC_SHA256' | 'BOTH'
 
 export type Segment = 'CASH' | 'FUT' | 'OPT'
+// Phase 9 — strategy-level segment selector. CASH strategies don't need
+// an underlying; INDEX_FO strategies do. Drives the builder UI.
+export type StrategySegment = 'CASH' | 'INDEX_FO'
+// Phase 9 — per-leg exchange for CASH legs. Other segments derive their
+// exchange from the strategy underlying_exchange at resolve time.
+export type CashExchange =
+  | 'NSE'
+  | 'BSE'
+  | 'NFO'
+  | 'BFO'
+  | 'CDS'
+  | 'BCD'
+  | 'MCX'
+  | 'NCDEX'
+  | 'NCO'
 export type Position = 'B' | 'S'
 export type ProductType = 'MIS' | 'CNC' | 'NRML'
 export type OptionType = 'CE' | 'PE'
@@ -30,21 +45,39 @@ export type ExpiryType = 'CURRENT_WEEK' | 'NEXT_WEEK' | 'CURRENT_MONTH' | 'NEXT_
 export type StrikeCriteria = 'ATM' | 'STRIKE_OFFSET' | 'PREMIUM' | 'DELTA'
 export type RiskUnit = 'pts' | 'pct'
 
+// Phase 9.2 — per-row live snapshot embedded by GET /strategy
+// (computed server-side from each strategy's active run + today's
+// realized roll-up). Subsequent updates arrive over Socket.IO via
+// strategy_pnl_tick (room-scoped per strategy_id).
+export interface StrategyLiveSnapshot {
+  active_run_id: number | null
+  active_state: RunState | null
+  agg_mtm: number
+  peak_mtm: number
+  drawdown: number
+  realized_today: number
+}
+
 export interface StrategyV2 {
   id: number
   name: string
   webhook_id: string
   user_id: string
   platform: string | null
+  segment: StrategySegment
   underlying: string | null
   underlying_exchange: string | null
   is_intraday: boolean
   start_time: string
-  end_time: string
+  end_time: string | null
   squareoff_time: string | null
+  exit_date: string | null         // YYYY-MM-DD (positional)
+  run_forever: boolean             // positional, mutually exclusive with exit_date
   state: StrategyState
   is_active: boolean
   mode: StrategyMode
+  // Optional — present on list responses, absent on single-strategy GETs.
+  live?: StrategyLiveSnapshot
   webhook_signing_method: SigningMethod
   webhook_replay_window_seconds: number
   webhook_ip_allowlist: string[]
@@ -61,6 +94,7 @@ export interface StrategyLeg {
 
   // CASH-only
   symbol_cash: string | null
+  exchange_cash: CashExchange | null
   qty: number | null
 
   // FUT + OPT
@@ -103,12 +137,15 @@ export interface StrategyV2WithLegs {
 export interface StrategyV2CreatePayload {
   name: string
   platform?: string
+  segment?: StrategySegment
   underlying?: string | null
   underlying_exchange?: string | null
   is_intraday?: boolean
   start_time: string
-  end_time: string
+  end_time?: string | null
   squareoff_time?: string | null
+  exit_date?: string | null
+  run_forever?: boolean
   mode?: StrategyMode
   webhook_signing_method?: SigningMethod
   webhook_replay_window_seconds?: number
@@ -126,6 +163,7 @@ export interface LegPayload {
   product: ProductType
 
   symbol_cash?: string | null
+  exchange_cash?: CashExchange | null
   qty?: number | null
 
   expiry_type?: ExpiryType | null

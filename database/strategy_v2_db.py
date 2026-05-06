@@ -74,12 +74,28 @@ class StrategyV2(Base):
     webhook_id = Column(String(36), nullable=False, unique=True)
     user_id = Column(String(255), nullable=False, index=True)
     platform = Column(String(50))
+    # Phase 9 — segment drives whether 'underlying' is meaningful. CASH
+    # strategies operate on individual stocks (per-leg exchange + symbol)
+    # and don't need an Index/F&O underlying. INDEX_FO strategies (futures
+    # / options on NIFTY, BANKNIFTY, etc.) use the underlying field for
+    # leg resolution at arm-time.
+    segment = Column(String(10), nullable=False, default="CASH")
     underlying = Column(String(50))
     underlying_exchange = Column(String(15))
     is_intraday = Column(Boolean, default=True)
     start_time = Column(String(5), nullable=False)
-    end_time = Column(String(5), nullable=False)
+    # end_time is required for INTRADAY (HH:MM exit window) but irrelevant
+    # for POSITIONAL strategies that use exit_date or run_forever instead.
+    # Kept nullable so positional rows can omit it. Existing intraday rows
+    # always have a value because the form enforces it.
+    end_time = Column(String(5))
     squareoff_time = Column(String(5))
+    # Phase 9 — positional-only fields. Mutually exclusive: either
+    # exit_date is set (auto-flat at end of that calendar day in IST),
+    # or run_forever=True (no auto-flat — manual close only). Validation
+    # at the marshmallow layer.
+    exit_date = Column(String(10))   # ISO date YYYY-MM-DD (string for SQLite portability)
+    run_forever = Column(Boolean, default=False)
     state = Column(String(15), nullable=False, default="DRAFT")
     is_active = Column(Boolean, default=False, index=True)
     mode = Column(String(10), nullable=False, default="live")
@@ -109,6 +125,7 @@ class StrategyV2(Base):
             "webhook_signing_method IN ('NONE','BODY_SECRET','HMAC_SHA256','BOTH')",
             name="ck_strat_signing",
         ),
+        CheckConstraint("segment IN ('CASH','INDEX_FO')", name="ck_strat_segment"),
     )
 
     # --- Encrypted accessors -------------------------------------------------
@@ -147,6 +164,10 @@ class StrategyLeg(Base):
 
     # CASH-only
     symbol_cash = Column(String(50))
+    # Phase 9 — per-leg exchange for CASH legs. Lets a single strategy
+    # mix NSE and BSE stocks, or include an MCX commodity equivalent in
+    # the same basket. Defaults to NSE on rows that pre-date the column.
+    exchange_cash = Column(String(15))
     qty = Column(Integer)
 
     # FUT + OPT

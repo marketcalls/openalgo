@@ -978,3 +978,23 @@ def get_engine() -> RmsEngine:
 def on_strategy_state_changed(event) -> None:
     """Bus subscriber — wired in subscribers/__init__.py:register_all."""
     engine.on_state_changed(event)
+
+
+def on_strategy_leg_filled(event) -> None:
+    """Re-attempt register_run when a fill event arrives. Covers the
+    race where state_changed -> IN_TRADE fires before strategy_positions
+    rows have been committed by the position tracker (the bus dispatches
+    state-change and order-fill events on different worker threads). The
+    engine's register_run is idempotent — repeating after the position
+    is committed is safe and just wires up the leg if the first attempt
+    bailed early with 'no open legs'.
+    """
+    run_id = getattr(event, "run_id", None)
+    if not run_id:
+        return
+    try:
+        engine.register_run(int(run_id))
+    except Exception:
+        logger.exception(
+            "rms_engine.on_strategy_leg_filled: register_run failed run=%s", run_id
+        )

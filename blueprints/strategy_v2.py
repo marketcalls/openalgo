@@ -90,12 +90,16 @@ def _strategy_to_dict(s: StrategyV2, *, include_secrets: bool = False) -> dict:
         "webhook_id": s.webhook_id,
         "user_id": s.user_id,
         "platform": s.platform,
+        # Phase 9 — segment + positional exit fields.
+        "segment": s.segment or "CASH",
         "underlying": s.underlying,
         "underlying_exchange": s.underlying_exchange,
         "is_intraday": bool(s.is_intraday),
         "start_time": s.start_time,
         "end_time": s.end_time,
         "squareoff_time": s.squareoff_time,
+        "exit_date": s.exit_date,
+        "run_forever": bool(s.run_forever),
         "state": s.state,
         "is_active": bool(s.is_active),
         "mode": s.mode,
@@ -119,6 +123,7 @@ def _leg_to_dict(l: StrategyLeg) -> dict:
         "position": l.position,
         "product": l.product,
         "symbol_cash": l.symbol_cash,
+        "exchange_cash": l.exchange_cash,
         "qty": l.qty,
         "expiry_type": l.expiry_type,
         "lots": l.lots,
@@ -150,6 +155,97 @@ def _leg_to_dict(l: StrategyLeg) -> dict:
 # ----------------------------------------------------------------------------
 
 
+_ACTIVE_RUN_STATES = ("ARMED", "ENTERING", "IN_TRADE", "EXITING")
+
+
+def _strategy_live_snapshot(strategy_id: int) -> dict:
+    """Compose a per-strategy live snapshot for the list page.
+
+    Combines two sources:
+      * The most recent ACTIVE run row (if any). The engine's in-memory
+        registry holds fresh MTM via snapshot_run(); we prefer that over
+        the persisted StrategyRun.peak_mtm because tick-rate updates only
+        flush to DB at terminal states.
+      * Today's realized P&L = sum(StrategyRun.realized_pnl) over runs
+        that closed today in IST. Lets the operator see profit even when
+        no run is currently active.
+
+    Returned shape (matches the frontend's PnlTickPayload partials so the
+    Socket.IO update path can patch the row):
+
+        {
+          "active_run_id": int | None,
+          "active_state": str | None,
+          "agg_mtm": float,        # 0.0 if no active run
+          "peak_mtm": float,
+          "drawdown": float,
+          "realized_today": float, # sum of CLOSED runs today
+        }
+    """
+    from datetime import datetime, time, timezone
+    from zoneinfo import ZoneInfo
+
+    snapshot = {
+        "active_run_id": None,
+        "active_state": None,
+        "agg_mtm": 0.0,
+        "peak_mtm": 0.0,
+        "drawdown": 0.0,
+        "realized_today": 0.0,
+    }
+
+    # Active run — there can only be one because of idx_strategy_runs_active.
+    active = (
+        db_session.query(StrategyRun)
+        .filter(
+            StrategyRun.strategy_id == strategy_id,
+            StrategyRun.state.in_(_ACTIVE_RUN_STATES),
+        )
+        .order_by(StrategyRun.id.desc())
+        .first()
+    )
+    if active is not None:
+        snapshot["active_run_id"] = active.id
+        snapshot["active_state"] = active.state
+        # Try the engine first — fresher than the DB columns.
+        try:
+            from services.strategy.rms_engine import get_engine
+            snap = get_engine().snapshot_run(active.id)
+            if snap is not None:
+                snapshot["agg_mtm"] = float(snap.get("agg_mtm") or 0)
+                snapshot["peak_mtm"] = float(snap.get("peak_mtm") or 0)
+                snapshot["drawdown"] = float(snap.get("drawdown") or 0)
+            else:
+                # Engine doesn't know about this run yet (eg ENTERING) —
+                # fall back to the persisted columns (last flush).
+                snapshot["peak_mtm"] = float(active.peak_mtm or 0)
+                snapshot["drawdown"] = float(active.max_drawdown or 0)
+        except Exception:
+            logger.exception(
+                "list_strategies: engine.snapshot_run failed for run=%s",
+                active.id,
+            )
+
+    # Today's realized = sum of runs that exited within today (IST window).
+    ist = ZoneInfo("Asia/Kolkata")
+    now_ist = datetime.now(ist)
+    midnight_ist = datetime.combine(now_ist.date(), time.min, tzinfo=ist)
+    today_start_utc = midnight_ist.astimezone(timezone.utc)
+    closed_today = (
+        db_session.query(StrategyRun.realized_pnl)
+        .filter(
+            StrategyRun.strategy_id == strategy_id,
+            StrategyRun.state == "CLOSED",
+            StrategyRun.exited_at >= today_start_utc,
+        )
+        .all()
+    )
+    snapshot["realized_today"] = float(
+        sum((r[0] or 0) for r in closed_today)
+    )
+    return snapshot
+
+
 @strategy_v2_bp.route("/strategy", methods=["GET"])
 def list_strategies():
     user, err = _require_login()
@@ -161,7 +257,15 @@ def list_strategies():
         .order_by(StrategyV2.created_at.desc())
         .all()
     )
-    return jsonify({"status": "success", "strategies": [_strategy_to_dict(s) for s in rows]}), 200
+    out = []
+    for s in rows:
+        d = _strategy_to_dict(s)
+        # Phase 9.2 — embed the live snapshot so the list page can render
+        # P&L without a follow-up round-trip per row. Subsequent updates
+        # come over Socket.IO via strategy_pnl_tick (room-scoped per id).
+        d["live"] = _strategy_live_snapshot(s.id)
+        out.append(d)
+    return jsonify({"status": "success", "strategies": out}), 200
 
 
 @strategy_v2_bp.route("/strategy/<int:strategy_id>", methods=["GET"])
@@ -204,17 +308,39 @@ def create_strategy():
     method = data.get("webhook_signing_method", "NONE")
     body_secret, hmac_key = _make_webhook_secrets(method)
 
+    # Phase 9 cross-field validation: positional strategies must specify
+    # how they exit (a date or run-forever); intraday strategies must
+    # specify end_time. We enforce here rather than in marshmallow so the
+    # error message can name both fields together.
+    is_intraday = data.get("is_intraday", True)
+    if is_intraday:
+        if not data.get("end_time"):
+            return jsonify({"status": "error", "code": "VALIDATION",
+                            "errors": {"end_time": "required for intraday"}}), 400
+    else:
+        if not data.get("exit_date") and not data.get("run_forever"):
+            return jsonify({"status": "error", "code": "VALIDATION",
+                            "errors": {"exit_date": "positional must set exit_date "
+                                       "or run_forever=true"}}), 400
+
     s = StrategyV2(
         name=data["name"],
         webhook_id=str(uuid.uuid4()),
         user_id=user,
         platform=data.get("platform", "manual"),
-        underlying=data.get("underlying"),
-        underlying_exchange=data.get("underlying_exchange"),
-        is_intraday=data.get("is_intraday", True),
+        segment=data.get("segment", "CASH"),
+        # Underlying is only meaningful for INDEX_FO strategies; CASH
+        # strategies leave both null regardless of what was sent.
+        underlying=data.get("underlying") if data.get("segment") == "INDEX_FO" else None,
+        underlying_exchange=(
+            data.get("underlying_exchange") if data.get("segment") == "INDEX_FO" else None
+        ),
+        is_intraday=is_intraday,
         start_time=data["start_time"],
-        end_time=data["end_time"],
-        squareoff_time=data.get("squareoff_time"),
+        end_time=data.get("end_time"),
+        squareoff_time=data.get("squareoff_time") if is_intraday else None,
+        exit_date=data.get("exit_date") if not is_intraday else None,
+        run_forever=bool(data.get("run_forever") and not is_intraday),
         state="DRAFT",
         is_active=False,
         mode=data.get("mode", "live"),

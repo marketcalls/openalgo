@@ -355,6 +355,13 @@ function buildTemplate(
   if (strategy.webhook_replay_window_seconds && strategy.webhook_replay_window_seconds > 0) {
     tplParts.push(`  "ts": ${Math.floor(Date.now() / 1000)}`)
   }
-  tplParts.push('  "signal_id": "your-unique-id-here"')
+  // signal_id is OPTIONAL today — the backend doesn't validate or dedupe by
+  // it; concurrent-run dedup is enforced by the DB unique partial index on
+  // (strategy_id, active states). The field is in the template as a forward-
+  // compatible hook; for TradingView users the placeholder is meant to be
+  // replaced with `{{strategy.order.id}}_{{time}}` so each firing carries a
+  // distinct id. For manual curl/Postman tests, any string works or you can
+  // omit the field entirely.
+  tplParts.push('  "signal_id": "<optional — any string>"')
   return `{\n${tplParts.join(',\n')}\n}`
 }
