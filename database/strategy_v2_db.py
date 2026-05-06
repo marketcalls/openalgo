@@ -282,6 +282,11 @@ class StrategyRun(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     strategy_id = Column(Integer, ForeignKey("strategies_v2.id"), nullable=False, index=True)
+    # Phase 13 — when set, this run is scoped to a single leg (CASH per-
+    # symbol routing). When NULL, the run is strategy-level (F&O pack —
+    # all legs fire together). The unique partial index below enforces
+    # at most one active run per (strategy_id, leg_id_or_zero).
+    leg_id = Column(Integer)
     state = Column(String(20), nullable=False, index=True)
     mode = Column(String(10), nullable=False)
     signal_payload = Column(Text)
@@ -306,10 +311,13 @@ class StrategyRun(Base):
             name="ck_run_state",
         ),
         CheckConstraint("mode IN ('live','sandbox')", name="ck_run_mode"),
-        # Duplicate-signal guard — only one active run per strategy at a time.
+        # Phase 13 — per-leg active-run scoping. F&O packs use leg_id=NULL
+        # which IFNULL collapses to 0; CASH legs use the matched leg.id.
+        # Result: at most one active run per (strategy, pack-or-leg).
         Index(
-            "idx_strategy_runs_active",
-            "strategy_id",
+            "idx_strategy_runs_active_per_leg",
+            text("strategy_id"),
+            text("IFNULL(leg_id, 0)"),
             unique=True,
             sqlite_where=text(
                 "state IN ('ARMED','ENTERING','IN_TRADE','EXITING')"

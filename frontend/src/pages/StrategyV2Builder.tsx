@@ -982,25 +982,34 @@ export default function StrategyV2Builder() {
                 </>
               )}
 
-              <div className="space-y-1">
-                <Label>Position</Label>
-                <div className="flex border rounded-md overflow-hidden">
-                  <button
-                    type="button"
-                    className={`flex-1 py-2 text-sm ${draftLeg.position === 'B' ? 'bg-primary text-primary-foreground' : ''}`}
-                    onClick={() => setDraftLeg((s) => ({ ...s, position: 'B' }))}
-                  >
-                    B
-                  </button>
-                  <button
-                    type="button"
-                    className={`flex-1 py-2 text-sm ${draftLeg.position === 'S' ? 'bg-primary text-primary-foreground' : ''}`}
-                    onClick={() => setDraftLeg((s) => ({ ...s, position: 'S' }))}
-                  >
-                    S
-                  </button>
+              {/* Per-leg Position (B/S) only matters for F&O multi-leg
+                  structures (iron condor, hedge pair, spread) where the
+                  direction is part of the structure itself. CASH legs
+                  are individual symbols routed per-webhook — direction
+                  comes from the strategy Mode + webhook action, so the
+                  per-leg control would just be a redundant override.
+                  Hidden for CASH; defaults to B in form state. */}
+              {draftLeg.segment !== 'CASH' && (
+                <div className="space-y-1">
+                  <Label>Position</Label>
+                  <div className="flex border rounded-md overflow-hidden">
+                    <button
+                      type="button"
+                      className={`flex-1 py-2 text-sm ${draftLeg.position === 'B' ? 'bg-primary text-primary-foreground' : ''}`}
+                      onClick={() => setDraftLeg((s) => ({ ...s, position: 'B' }))}
+                    >
+                      B
+                    </button>
+                    <button
+                      type="button"
+                      className={`flex-1 py-2 text-sm ${draftLeg.position === 'S' ? 'bg-primary text-primary-foreground' : ''}`}
+                      onClick={() => setDraftLeg((s) => ({ ...s, position: 'S' }))}
+                    >
+                      S
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="space-y-1">
                 <Label>Product</Label>

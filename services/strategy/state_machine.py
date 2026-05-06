@@ -214,19 +214,45 @@ def transition_leg(
     return True
 
 
-def has_active_run(strategy_id: int) -> bool:
+def has_active_run(strategy_id: int, leg_id: int | None = None) -> bool:
     """True if the strategy currently has any run in an active state.
 
-    Used by the ingestion service for the duplicate-signal guard. Not
-    race-free on its own — the unique partial index `idx_strategy_runs_active`
-    is the actual enforcement; this is the friendly preflight check.
+    Phase 13 — accepts an optional leg_id for per-leg scoping (CASH per-
+    symbol routing). When leg_id is provided we look only for runs
+    pinned to that leg; pack-style F&O runs (leg_id IS NULL) are ignored.
+    When leg_id is None we look at strategy-level pack runs only.
+
+    Not race-free on its own — the unique partial index
+    `idx_strategy_runs_active_per_leg` is the actual enforcement; this
+    is the friendly preflight check.
     """
     q = (
         db_session.query(StrategyRun.id)
         .filter(StrategyRun.strategy_id == strategy_id)
         .filter(StrategyRun.state.in_(ACTIVE_RUN_STATES))
     )
+    if leg_id is None:
+        q = q.filter(StrategyRun.leg_id.is_(None))
+    else:
+        q = q.filter(StrategyRun.leg_id == leg_id)
     return db_session.query(q.exists()).scalar()
+
+
+def find_active_run(strategy_id: int, leg_id: int | None = None) -> int | None:
+    """Return the id of the current active run for this (strategy, leg)
+    or None if no active run exists. Same scoping rules as has_active_run.
+    Used by the per-symbol exit path to look up the run to close."""
+    q = (
+        db_session.query(StrategyRun.id)
+        .filter(StrategyRun.strategy_id == strategy_id)
+        .filter(StrategyRun.state.in_(ACTIVE_RUN_STATES))
+    )
+    if leg_id is None:
+        q = q.filter(StrategyRun.leg_id.is_(None))
+    else:
+        q = q.filter(StrategyRun.leg_id == leg_id)
+    row = q.order_by(StrategyRun.id.desc()).first()
+    return row[0] if row else None
 
 
 def serialize_state_change(

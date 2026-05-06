@@ -42,7 +42,11 @@ from events.strategy_events import (
 from services.strategy import leg_resolver_service
 from services.strategy.broker_adapter_impls import get_adapter
 from services.strategy.execution_service import execute_entry
-from services.strategy.state_machine import has_active_run, transition_run
+from services.strategy.state_machine import (
+    find_active_run,
+    has_active_run,
+    transition_run,
+)
 from utils.event_bus import bus
 from utils.logging import get_logger
 from utils.webhook_guard import (
@@ -252,11 +256,43 @@ def handle_webhook(
             "strategy_id": strategy.id,
         }
 
-    # 8. Per-strategy duplicate-active-run guard (cheap; before account RMS)
-    if has_active_run(strategy.id):
+    # 8. Publish signal_received — the webhook passed signing so the
+    # signal "arrived" from the operator's perspective. Downstream
+    # routing or dispatch failures still log REJECT events but the
+    # received-event represents "valid signed signal" semantics.
+    bus.publish(
+        StrategySignalReceivedEvent(
+            strategy_id=strategy.id,
+            webhook_id=webhook_id,
+            payload=body,
+            source_ip=source_ip,
+            signing_method=method,
+        )
+    )
+
+    # 8b. Phase 13 — segment-aware routing. CASH strategies route per-
+    # symbol (each leg can have its own active run); F&O strategies are
+    # pack-style (one active run per strategy). Resolve (intent,
+    # target_leg) so the active-run check is correctly scoped and we
+    # can dispatch entry-vs-exit later without re-deriving from the body.
+    routed = _route_for_segment(strategy, body)
+    if isinstance(routed, tuple) and routed[0] == "REJECT":
+        _, msg, code, http_status = routed
         return _reject(
             strategy=strategy, webhook_id=webhook_id,
-            reason="Strategy already has an active run",
+            reason=msg, code=code, status=http_status, source_ip=source_ip,
+        )
+    intent, target_leg = routed  # ("entry"|"exit", StrategyLeg|None)
+
+    target_leg_id = target_leg.id if target_leg is not None else None
+    if intent == "entry" and has_active_run(strategy.id, target_leg_id):
+        return _reject(
+            strategy=strategy, webhook_id=webhook_id,
+            reason=(
+                "Already has an active run for this symbol"
+                if target_leg_id is not None
+                else "Strategy already has an active run"
+            ),
             code="ALREADY_RUNNING",
             status=409, source_ip=source_ip,
         )
@@ -274,18 +310,7 @@ def handle_webhook(
             status=429, source_ip=source_ip,
         )
 
-    # 9. Publish signal received & create run
-    bus.publish(
-        StrategySignalReceivedEvent(
-            strategy_id=strategy.id,
-            webhook_id=webhook_id,
-            payload=body,
-            source_ip=source_ip,
-            signing_method=method,
-        )
-    )
-
-    # Resolve API key for the strategy's user — broker adapters need this.
+    # 9. Resolve API key for the strategy's user — broker adapters need this.
     api_key = get_api_key_for_tradingview(strategy.user_id)
     if not api_key:
         return _reject(
@@ -295,8 +320,149 @@ def handle_webhook(
             status=503, source_ip=source_ip,
         )
 
-    # 10-13: handed off to the engine (run + entry orchestration).
-    return _start_run(strategy=strategy, body=body, api_key=api_key, source_ip=source_ip)
+    # 10. Dispatch to entry or exit based on the resolved intent.
+    if intent == "exit":
+        return _dispatch_exit(
+            strategy=strategy, target_leg=target_leg,
+            api_key=api_key, source_ip=source_ip,
+        )
+    return _start_run(
+        strategy=strategy, body=body, api_key=api_key, source_ip=source_ip,
+        target_leg=target_leg,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Phase 13 — segment-aware routing
+# -----------------------------------------------------------------------------
+
+
+def _route_for_segment(strategy: StrategyV2, body: dict):
+    """Decide whether this webhook is an entry or exit, and pick the
+    target leg (if any) for CASH per-symbol routing.
+
+    Returns either:
+      ("entry"|"exit", StrategyLeg | None)
+      ("REJECT", reason, code, http_status)
+
+    Rules:
+      F&O strategies (INDEX_FO, STOCK_FO):
+        - Always entry; pack-style. target_leg = None (run is strategy-
+          level; all legs fire together via execute_entry).
+      CASH strategies:
+        - Body MUST include `symbol` matching one of the strategy's legs
+          (case-insensitive on symbol_cash). 404 otherwise.
+        - Body MUST include `action` ∈ {BUY, SELL}.
+        - Mode + action + position_size dictate intent:
+            LONG  + BUY  -> entry long
+            LONG  + SELL -> exit long
+            SHORT + SELL -> entry short
+            SHORT + BUY  -> exit short
+            BOTH  + position_size>0 -> entry (BUY=long, SELL=short)
+            BOTH  + position_size=0 -> exit opposite-direction position
+    """
+    # Default to CASH when the attribute is missing (legacy rows / test
+    # fixtures using SimpleNamespace shims).
+    segment = getattr(strategy, "segment", None) or "CASH"
+    if segment != "CASH":
+        # F&O pack — symbol/action are not consulted; the strategy's
+        # legs (with their pre-configured B/S) define the structure.
+        return ("entry", None)
+
+    raw_symbol = (body.get("symbol") or "").strip().upper()
+    if not raw_symbol:
+        return ("REJECT",
+                "Cash webhook must include `symbol`",
+                "MISSING_SYMBOL", 400)
+
+    # Match the leg by symbol_cash (case-insensitive, stripped).
+    target_leg = None
+    for leg in strategy.legs:
+        if leg.segment == "CASH" and (leg.symbol_cash or "").strip().upper() == raw_symbol:
+            target_leg = leg
+            break
+    if target_leg is None:
+        return ("REJECT",
+                f"Symbol {raw_symbol!r} not configured on this strategy",
+                "UNKNOWN_SYMBOL", 404)
+
+    action = (body.get("action") or "").strip().upper()
+    if action not in ("BUY", "SELL"):
+        return ("REJECT",
+                "`action` must be 'BUY' or 'SELL'",
+                "BAD_ACTION", 400)
+
+    trading_mode = (strategy.trading_mode or "LONG").upper()
+
+    if trading_mode == "LONG":
+        return ("entry" if action == "BUY" else "exit", target_leg)
+    if trading_mode == "SHORT":
+        return ("entry" if action == "SELL" else "exit", target_leg)
+
+    # BOTH — position_size disambiguates open vs close.
+    raw_size = body.get("position_size")
+    try:
+        position_size = int(raw_size) if raw_size is not None else None
+    except (TypeError, ValueError):
+        return ("REJECT",
+                "`position_size` must be an integer when mode=BOTH",
+                "BAD_POSITION_SIZE", 400)
+    if position_size is None:
+        return ("REJECT",
+                "BOTH-mode webhook must include `position_size`",
+                "MISSING_POSITION_SIZE", 400)
+    if position_size > 0:
+        return ("entry", target_leg)
+    if position_size == 0:
+        return ("exit", target_leg)
+    return ("REJECT",
+            "`position_size` must be >= 0",
+            "BAD_POSITION_SIZE", 400)
+
+
+def _dispatch_exit(
+    *,
+    strategy: StrategyV2,
+    target_leg,
+    api_key: str,
+    source_ip: str,
+) -> IngestResult:
+    """Webhook arrived requesting an exit (e.g. LONG-mode + SELL). Find
+    the active run for this (strategy, leg) and ask exit_service to
+    flatten it. No-op (404) if there's no open position to close —
+    surfaces TradingView misconfigurations instead of silently dropping.
+    """
+    target_leg_id = target_leg.id if target_leg is not None else None
+    run_id = find_active_run(strategy.id, target_leg_id)
+    if run_id is None:
+        return _reject(
+            strategy=strategy, webhook_id=strategy.webhook_id,
+            reason=(
+                "No active position to close for this symbol"
+                if target_leg_id is not None
+                else "No active run to close"
+            ),
+            code="NO_OPEN_POSITION",
+            status=404, source_ip=source_ip,
+        )
+    # Lazy import to avoid a circular dep at module-load time.
+    from services.strategy.exit_service import exit_strategy
+
+    # exit_strategy takes only run_id + reason; it looks up the strategy
+    # and api_key internally via the run row. The api_key arg here is
+    # unused but kept on _dispatch_exit's signature so callers can stay
+    # uniform with _start_run.
+    _ = api_key
+    success, summary = exit_strategy(
+        run_id=run_id,
+        reason="webhook_exit",
+    )
+    return (200 if success else 500), {
+        "status": "success" if success else "error",
+        "code": "EXIT_REQUESTED" if success else "EXIT_FAILED",
+        "run_id": run_id,
+        "summary": summary,
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -310,13 +476,20 @@ def _start_run(
     body: dict,
     api_key: str,
     source_ip: str,
+    target_leg=None,
 ) -> IngestResult:
     """Create the run row, resolve legs, place entries. Caller already
     validated everything — we only fail on broker / DB / engine issues.
+
+    Phase 13 — when `target_leg` is provided (CASH per-symbol routing),
+    the run is pinned to that leg via run.leg_id and only that leg is
+    fed through resolution + entry. F&O packs pass target_leg=None and
+    every configured leg fires together.
     """
-    # Create ARMED run row
+    # Create ARMED run row.
     run = StrategyRun(
         strategy_id=strategy.id,
+        leg_id=target_leg.id if target_leg is not None else None,
         state="ARMED",
         mode=strategy.mode or "live",
         signal_payload=json.dumps(body, default=str),
@@ -354,8 +527,13 @@ def _start_run(
         return 500, {"status": "error", "code": "STATE_RACE",
                      "message": "Failed to transition ARMED → ENTERING"}
 
-    # Resolve legs (cache symbol / tick_size / lot_size on each leg row)
-    legs = sorted(strategy.legs, key=lambda l: l.leg_index)
+    # Resolve legs (cache symbol / tick_size / lot_size on each leg row).
+    # For CASH per-symbol routing, restrict to just the matched leg —
+    # the run represents a single-symbol order, not the whole basket.
+    if target_leg is not None:
+        legs = [target_leg]
+    else:
+        legs = sorted(strategy.legs, key=lambda l: l.leg_index)
     if not legs:
         transition_run(
             run.id, expected_old="ENTERING", new_state="ENTRY_FAILED",
