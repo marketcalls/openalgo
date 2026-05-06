@@ -195,6 +195,22 @@ interface StrategyForm {
   mode: 'live' | 'sandbox'
 }
 
+// Default Exit Date for positional strategies — one month from today
+// in YYYY-MM-DD form, which is the value the <input type="date"> expects.
+// Users can override or flip Run Forever; this is just a sensible
+// starting point so the form doesn't sit with an empty date that the
+// validator would reject. Keeping the calc here (vs in the date input)
+// avoids the "blank value tomorrow" surprise that comes from computing
+// it on every render.
+const oneMonthFromToday = (): string => {
+  const d = new Date()
+  d.setMonth(d.getMonth() + 1)
+  // toISOString yields UTC; strip to YYYY-MM-DD. The exit_date column
+  // is a calendar date, not a wall-clock instant — UTC vs IST drift on
+  // the boundary day is acceptable for a default.
+  return d.toISOString().slice(0, 10)
+}
+
 const blankStrategy = (): StrategyForm => ({
   name: '',
   segment: 'CASH',
@@ -205,7 +221,7 @@ const blankStrategy = (): StrategyForm => ({
   start_time: '09:35',
   end_time: '15:15',
   squareoff_time: '15:20',
-  exit_date: '',
+  exit_date: oneMonthFromToday(),
   run_forever: false,
   mode: 'live',
 })
@@ -501,7 +517,20 @@ export default function StrategyV2Builder() {
         </div>
       )}
 
-      {/* ---------- Strategy header ---------- */}
+      {/* ---------- Strategy header ----------
+          frozen = true once the strategy has been saved. Locks the
+          structural choices (Segment, Underlying, Strategy Type,
+          Mode, Engine) so the user can't mid-flight invalidate legs,
+          re-route a running webhook, or change which time fields
+          apply. To change those, delete & recreate. Editable post-save:
+          name, times, exit_date, run_forever, leg builder, risk config. */}
+      {!isNew && strategy && (
+        <p className="text-xs text-muted-foreground -mb-2">
+          <span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1 align-middle" />
+          Segment, Underlying, Strategy Type, Mode, and Engine are locked
+          after creation. Delete and recreate to change them.
+        </p>
+      )}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Strategy</CardTitle>
@@ -524,10 +553,11 @@ export default function StrategyV2Builder() {
               NSE_INDEX/BSE_INDEX for indices, NFO for stock F&O. */}
           <div className="space-y-1 lg:col-span-2">
             <Label>Segment</Label>
-            <div className="flex border rounded-md overflow-hidden">
+            <div className={`flex border rounded-md overflow-hidden ${!isNew ? 'opacity-60' : ''}`}>
               <button
                 type="button"
-                className={`flex-1 py-2 text-sm ${form.segment === 'CASH' ? 'bg-primary text-primary-foreground' : ''}`}
+                disabled={!isNew}
+                className={`flex-1 py-2 text-sm ${form.segment === 'CASH' ? 'bg-primary text-primary-foreground' : ''} ${!isNew ? 'cursor-not-allowed' : ''}`}
                 onClick={() =>
                   setForm((s) => ({
                     ...s,
@@ -539,7 +569,8 @@ export default function StrategyV2Builder() {
               </button>
               <button
                 type="button"
-                className={`flex-1 py-2 text-sm ${form.segment === 'INDEX_FO' ? 'bg-primary text-primary-foreground' : ''}`}
+                disabled={!isNew}
+                className={`flex-1 py-2 text-sm ${form.segment === 'INDEX_FO' ? 'bg-primary text-primary-foreground' : ''} ${!isNew ? 'cursor-not-allowed' : ''}`}
                 onClick={() =>
                   setForm((s) => ({
                     ...s,
@@ -556,7 +587,8 @@ export default function StrategyV2Builder() {
               </button>
               <button
                 type="button"
-                className={`flex-1 py-2 text-sm ${form.segment === 'STOCK_FO' ? 'bg-primary text-primary-foreground' : ''}`}
+                disabled={!isNew}
+                className={`flex-1 py-2 text-sm ${form.segment === 'STOCK_FO' ? 'bg-primary text-primary-foreground' : ''} ${!isNew ? 'cursor-not-allowed' : ''}`}
                 onClick={() =>
                   setForm((s) => ({
                     ...s,
@@ -581,6 +613,7 @@ export default function StrategyV2Builder() {
               <div className="space-y-1">
                 <Label>Underlying Index</Label>
                 <Select
+                  disabled={!isNew}
                   value={form.underlying}
                   onValueChange={(v) => {
                     const idxExchange =
@@ -610,6 +643,7 @@ export default function StrategyV2Builder() {
               <div className="space-y-1">
                 <Label>Index Exchange</Label>
                 <Select
+                  disabled={!isNew}
                   value={form.underlying_exchange}
                   onValueChange={(v) =>
                     setForm((s) => ({ ...s, underlying_exchange: v }))
@@ -641,6 +675,7 @@ export default function StrategyV2Builder() {
                 <SymbolSearchInput
                   value={form.underlying}
                   exchange="NSE"
+                  disabled={!isNew}
                   onChange={(v) =>
                     setForm((s) => ({ ...s, underlying: v.toUpperCase() }))
                   }
@@ -656,6 +691,7 @@ export default function StrategyV2Builder() {
               <div className="space-y-1">
                 <Label>F&amp;O Exchange</Label>
                 <Select
+                  disabled={!isNew}
                   value={form.underlying_exchange}
                   onValueChange={(v) =>
                     setForm((s) => ({ ...s, underlying_exchange: v }))
@@ -675,17 +711,19 @@ export default function StrategyV2Builder() {
 
           <div className="space-y-1">
             <Label>Strategy Type</Label>
-            <div className="flex border rounded-md overflow-hidden">
+            <div className={`flex border rounded-md overflow-hidden ${!isNew ? 'opacity-60' : ''}`}>
               <button
                 type="button"
-                className={`flex-1 py-2 text-sm ${form.is_intraday ? 'bg-primary text-primary-foreground' : ''}`}
+                disabled={!isNew}
+                className={`flex-1 py-2 text-sm ${form.is_intraday ? 'bg-primary text-primary-foreground' : ''} ${!isNew ? 'cursor-not-allowed' : ''}`}
                 onClick={() => setForm((s) => ({ ...s, is_intraday: true }))}
               >
                 Intraday
               </button>
               <button
                 type="button"
-                className={`flex-1 py-2 text-sm ${!form.is_intraday ? 'bg-primary text-primary-foreground' : ''}`}
+                disabled={!isNew}
+                className={`flex-1 py-2 text-sm ${!form.is_intraday ? 'bg-primary text-primary-foreground' : ''} ${!isNew ? 'cursor-not-allowed' : ''}`}
                 onClick={() => setForm((s) => ({ ...s, is_intraday: false }))}
               >
                 Positional
@@ -700,6 +738,7 @@ export default function StrategyV2Builder() {
           <div className="space-y-1">
             <Label>Mode</Label>
             <Select
+              disabled={!isNew}
               value={form.trading_mode}
               onValueChange={(v: TradingMode) =>
                 setForm((s) => ({ ...s, trading_mode: v }))
@@ -719,6 +758,7 @@ export default function StrategyV2Builder() {
           <div className="space-y-1">
             <Label>Engine</Label>
             <Select
+              disabled={!isNew}
               value={form.mode}
               onValueChange={(v: 'live' | 'sandbox') => setForm((s) => ({ ...s, mode: v }))}
             >
