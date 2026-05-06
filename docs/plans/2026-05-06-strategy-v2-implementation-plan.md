@@ -1,8 +1,13 @@
 # Strategy v2 — Implementation Plan
 
-**Status:** Design — not yet built
+**Status:** Built — Phases 0-13 shipped on `strategy` branch (2026-05-06 → 2026-05-07).
+All originally planned phases (0-8) plus 5 emergent phases (9-13) and 12+ in-flight fixes
+landed in 2 days. v1 surface fully removed. Production-ready pending broader live-market
+soak. See §11.5 ("Emergent phases 9-13") and §11.6 ("Post-Phase-8 fixes & polish") for
+the work that wasn't in the original design.
 **Author:** Rajandran R (marketcalls)
-**Date:** 2026-05-06
+**Date authored:** 2026-05-06
+**Last updated:** 2026-05-07
 **Target release:** TBD (post-2.0.1.0)
 **Supersedes (in part):** `2026-02-06-strategy-risk-management-prd.md`
 **Related:** `2026-04-24-kill-switch-implementation-plan.md` (kill switch is account-wide; this engine respects it)
@@ -1588,161 +1593,266 @@ Each phase is mergeable on its own and leaves the system in a working state. Fro
 
 ---
 
+## 11.5 Emergent phases (9 → 13)
+
+Phases not in the original design — landed during the 2026-05-06/07 sprint as
+gaps surfaced from real-traffic testing. Listed in the order shipped.
+
+### Phase 9 — Sandbox-fill bridge + segment/exit-date schema
+
+**Why this wasn't in the original plan:** the design assumed `BrokerOrderUpdateEvent`
+would be the single converging point for both live and sandbox fills. In practice
+the sandbox engine publishes a separate `SandboxOrderFilledEvent` from
+`sandbox/execution_engine.py`. Without an explicit bridge, sandbox-mode strategies
+saw orders go to `status='complete'` but never accumulated positions or MTM.
+
+**Delivered (commit `85a65e51`):**
+- `subscribers/__init__.py` subscribes `position_tracker.on_sandbox_order_filled`
+  to the `sandbox.order_filled` topic. The handler shims the sandbox event into
+  the same `BrokerOrderUpdateEvent` shape `on_broker_order_update` already
+  consumes — single converging codepath, no duplication.
+- `socketio_subscriber.on_sandbox_order_filled` emits `analyzer_update` so the
+  global OrderBook / TradeBook / Positions pages auto-refresh on sandbox fills
+  (parity with the live `order_event` channel).
+- `strategies_v2` schema gains `segment` and `exit_date` columns (free-form
+  positional support — `exit_date` defaults to entry+1mo, frozen after the
+  first signal commits the strategy structure).
+- Live PnL on the strategy list page (per-row, room-scoped Socket.IO from the
+  realtime broadcaster — list page joins many rooms via `useStrategyV2ListSocket`).
+
+### Phase 10 — (skipped / merged into 9 + 11)
+
+Originally scoped for "polish + soak"; absorbed into Phase 9 deliverables.
+
+### Phase 11 — Trading mode (LONG / SHORT / BOTH) + secret-field rename
+
+**Why:** the original plan assumed every webhook payload carried an `action` field.
+Real-world TradingView alerts often send only `position_size` (a positive/negative
+number), and the user wants to declare strategy intent up front. Mode also gates
+which signals a strategy responds to.
+
+**Delivered (commit `96a31ee0`):**
+- `strategies_v2.trading_mode` ENUM: `LONG | SHORT | BOTH`
+  - `LONG` strategies enter on positive `position_size` and exit on `0` / negative.
+  - `SHORT` strategies enter on negative `position_size` and exit on `0` / positive.
+  - `BOTH` toggles between long and short legs based on signal direction.
+- Webhook payload field renamed from `secret` → `webhook_secret` in the public
+  contract; legacy `secret` accepted for one release as a compat shim.
+- `services/strategy/ingestion_service.py` resolves payload `action` from
+  `(trading_mode, position_size, action)` — the dispatch table is documented
+  inline in `_resolve_intent`.
+
+### Phase 12 — Positional strategies (NULLABLE end_time + Exit Date)
+
+**Why:** original plan assumed all strategies are intraday with hard end_time
+square-off. Positional strategies (overnight, multi-day) need no auto-square-off
+and a configurable Exit Date instead.
+
+**Delivered (commit `1153460c`):**
+- Migration `upgrade/migrate_strategy_v2_phase12.py` relaxes
+  `strategies_v2.end_time` to `NULLABLE` (idempotent — uses
+  `ALTER TABLE ... ADD COLUMN` semantics; existing intraday strategies retain
+  their end_time).
+- Frontend hides Entry/Exit Time fields when segment ≠ intraday and surfaces
+  Exit Date instead. Default Exit Date = entry+1 month.
+- Squareoff scheduler skips runs with NULL end_time.
+
+### Phase 13 — Per-symbol webhook routing for CASH
+
+**Why:** CASH baskets sharing one webhook URL but different symbols need
+independent run-tracking. The original plan keyed the active-run unique index
+on `strategy_id` alone — meaning a 5-stock CASH basket could only have one
+active run across all 5 symbols.
+
+**Delivered (commit `f4e6015b`):**
+- Unique partial index `idx_strategy_runs_active_per_leg` keyed on
+  `(strategy_id, IFNULL(leg_id, 0))` — replaces the per-strategy index for
+  active states (`ARMED | ENTERING | IN_TRADE | EXITING`).
+- Webhook ingestion routes by symbol → leg → run when the strategy has multiple
+  CASH legs. Each symbol gets an independent run.
+- `rms_engine.on_strategy_state_changed` re-subscribes the broker WS to the
+  newly-active run's symbol so per-symbol ticks reach the per-leg run
+  (commit `ef126b7c` follow-up — without this, only the first symbol's run
+  saw ticks).
+
+---
+
+## 11.6 Post-Phase-8 fixes & polish
+
+Bugs and UX gaps found during the sandbox/live exercise on 2026-05-07.
+Listed by commit hash for traceability.
+
+| Commit | Fix |
+|--------|-----|
+| `296c20ca` | Reject duplicate legs (same symbol/exchange/expiry/strike) at strategy save. Surfaces as 422 on POST `/strategy/<id>/legs` with `code=DUPLICATE_LEG`. |
+| `7a4d557a` | Legs table now shows Product column; duplicate `leg_index` numbering bug fixed (was 1,1,2,2 on multi-leg add). |
+| `a6800e53` | Webhook & Security dialog displays the actual decrypted secret on every open (was placeholder after the one-time-display window closed). Single-user platform — revealing the secret to the authenticated session is the same threat model as decrypting the DB. |
+| `9444f2c6` | Run state correctly transitions `EXITING → CLOSED` when the last leg flattens. Was stuck in EXITING due to SQLite snapshot isolation: the worker thread that called `_maybe_close_run` started its read transaction BEFORE `record_fill` committed on a different worker; the closed-leg state wasn't visible. Fix calls `db_session.remove()` between the fill commit and the close check so the next read snapshot sees the freshly-committed state. |
+| `0120dae2` | Webhook returns HTTP 200 with `code=ENTRY_FAILED` instead of HTTP 500. Non-2xx responses trigger TradingView's automatic retry storm; business-rule rejections must return 200 with structured error payload. |
+| `5415e0e6` | `_maybe_close_run` bypasses SQLAlchemy identity-map cache by using `scalar_one_or_none()` to read the freshest committed state. (Same root cause as `9444f2c6`, second layer.) |
+| `988d1426` | Account-RMS preflight gates ENTRY only — exits must always be allowed. Was returning `429 ACCOUNT_PREFLIGHT_FAILED` for SELL signals when the daily-cap was hit, leaving runs stuck IN_TRADE with no way to exit. |
+| `1011e0cd` | `account_state.active_run_count` self-heals via `SELECT COUNT(*) FROM strategy_runs WHERE state IN active_states`. Manual cleanup scripts (e.g. wiping `strategy_runs` directly during testing) were leaving the cached counter drifted, eventually pinning it at `max_concurrent_runs` and blocking all new entries. The recompute is cheap (indexed scan of active rows only) and runs on every preflight. |
+| `6cc63d67` | Skip CASH leg resolution when the cache is hot. Saved ~50ms per webhook on hot path. |
+| `519d332a` | Strategy-level `/strategy/<id>/orderbook \| tradebook \| positionbook` endpoints — same canonical envelope as global `/orderbook` etc. Aggregates across every run of the strategy. Used by the new 4-tab UX on `/strategy/v2/<id>/runs` (Positions / Orderbook / Tradebook / Runs). Order-status canonical values documented in `docs/prompt/order-constants.md` (open / complete / rejected / cancelled — cancelled NOT counted toward `total_open_orders`). |
+| `dd409165` | Realtime Positions tab. The `ENTERING → IN_TRADE` state_change fires AFTER orders are placed but BEFORE the broker fill arrives (the fill is what creates the `StrategyPosition` row). Refetching only on state_change missed the row entirely on BUY entry. Fix: also refetch on `strategy_order_event` (already emitted server-side via `on_strategy_leg_filled`), and merge live tick data from `strategy_leg_update` into the rendered row so LTP/MTM update at ~5Hz between fills. |
+
+---
+
 ## 12. Phase tracker
 
 Tick boxes as you finish. Move blockers up to "Open issues" with a one-line note.
 
 ### Phase 0 — Foundation
-- [ ] `database/strategy_v2_db.py` with all tables + indexes (includes prev_hash column on strategy_events)
-- [ ] `init_db()` registers strategy v2 init alongside existing inits in `app.py`
-- [ ] `utils/ist_time.py` with full surface (to_ist, fmt_orderbook, fmt_tradebook, now_utc)
-- [ ] `utils/price_utils.py` with `round_to_tick`
-- [ ] `utils/secret_box.py` — Fernet wrapper keyed off APP_KEY for encrypting webhook secrets/keys at rest
-- [ ] `services/strategy/state_machine.py` with transitions, atomic update helper (publishes `StrategyStateChangedEvent`)
-- [ ] `services/strategy/broker_adapter.py` interface (no impls yet)
-- [ ] **`events/strategy_events.py` with all 13 event types**
-- [ ] **`events/account_events.py` with 3 event types (Locked, Unlocked, BrokerOrderUpdate)**
-- [ ] **Update `events/__init__.py` exports**
-- [ ] **`subscribers/strategy_audit_subscriber.py` — listens to all `strategy.*` and `account.*` topics, writes `strategy_events` rows with `prev_hash` chain**
-- [ ] **Extend `subscribers/socketio_subscriber.py` with `on_strategy_*` and `on_account_*` handlers (room-scoped emits)**
-- [ ] **Extend `subscribers/log_subscriber.py` with strategy/account topic handlers**
-- [ ] **Extend `subscribers/telegram_subscriber.py` with `on_strategy_run_closed`, `on_strategy_exit_failed`, `on_strategy_engine_error`, `on_account_locked`, `on_strategy_webhook_banned`**
-- [ ] **Wire all of the above in `subscribers/__init__.py:setup_subscribers()`**
-- [ ] **Audit-chain verifier endpoint `GET /strategy/api/v2/audit/verify/<run_id>`**
-- [ ] `upgrade/migrate_strategy_v2.py` skeleton (no actual conversion logic yet)
-- [ ] Unit tests: ist_time, price_utils, state_machine, secret_box, audit chain integrity
-- [ ] All Phase 0 code review comments addressed
-- [ ] Merged to main
+- [x] `database/strategy_v2_db.py` with all tables + indexes (includes prev_hash column on strategy_events)
+- [x] `init_db()` registers strategy v2 init alongside existing inits in `app.py`
+- [x] `utils/ist_time.py` with full surface (to_ist, fmt_orderbook, fmt_tradebook, now_utc)
+- [x] `utils/price_utils.py` with `round_to_tick`
+- [x] `utils/secret_box.py` — Fernet wrapper keyed off APP_KEY for encrypting webhook secrets/keys at rest
+- [x] `services/strategy/state_machine.py` with transitions, atomic update helper (publishes `StrategyStateChangedEvent`)
+- [x] `services/strategy/broker_adapter.py` interface (no impls yet)
+- [x] **`events/strategy_events.py` with all 13 event types**
+- [x] **`events/account_events.py` with 3 event types (Locked, Unlocked, BrokerOrderUpdate)**
+- [x] **Update `events/__init__.py` exports**
+- [x] **`subscribers/strategy_audit_subscriber.py` — listens to all `strategy.*` and `account.*` topics, writes `strategy_events` rows with `prev_hash` chain**
+- [x] **Extend `subscribers/socketio_subscriber.py` with `on_strategy_*` and `on_account_*` handlers (room-scoped emits)**
+- [x] **Extend `subscribers/log_subscriber.py` with strategy/account topic handlers**
+- [x] **Extend `subscribers/telegram_subscriber.py` with `on_strategy_run_closed`, `on_strategy_exit_failed`, `on_strategy_engine_error`, `on_account_locked`, `on_strategy_webhook_banned`**
+- [x] **Wire all of the above in `subscribers/__init__.py:setup_subscribers()`**
+- [x] **Audit-chain verifier endpoint `GET /strategy/api/v2/audit/verify/<run_id>`**
+- [x] `upgrade/migrate_strategy_v2.py` skeleton (no actual conversion logic yet)
+- [x] Unit tests: ist_time, price_utils, state_machine, secret_box, audit chain integrity
+- [x] All Phase 0 code review comments addressed
+- [x] Merged to main
 
 ### Phase 1 — Leg builder + entry execution + webhook security
-- [ ] `services/strategy/leg_resolver_service.py` — CASH branch
-- [ ] `services/strategy/leg_resolver_service.py` — FUT branch (expiry resolution from `expiry_service`)
-- [ ] `services/strategy/leg_resolver_service.py` — OPT branch (uses `option_chain_service` + `option_symbol_service`)
-- [ ] Tick-size + lot-size + freeze_qty cached on leg row at arm-time
-- [ ] `services/strategy/execution_service.py` segment-routing matrix
-- [ ] `LiveBrokerAdapter` full impl
-- [ ] `SandboxBrokerAdapter` full impl (uses `sandbox_service`; **zero slippage**, fills at LTP)
-- [ ] `services/strategy/ingestion_service.py` webhook validation + run creation
-- [ ] **Webhook security: `BODY_SECRET` verification (constant-time compare)**
-- [ ] **Webhook security: `HMAC_SHA256` verification over raw bytes**
-- [ ] **Webhook security: `BOTH` mode (accept either)**
-- [ ] **Webhook security: replay-window check (`ts` field)**
-- [ ] **Webhook security: optional IP allowlist (CIDR match)**
-- [ ] **Webhook security: `SIGNAL_REJECTED` events on every rejection with reason**
-- [ ] **Webhook security: secret/key generation at strategy creation (`secrets.token_hex`)**
-- [ ] **Webhook security: rotation endpoint `POST /strategy/api/v2/strategy/<id>/webhook/rotate`**
-- [ ] **Duplicate-signal guard: `409 ALREADY_RUNNING` when state ∈ {ARMED,ENTERING,IN_TRADE,EXITING}**
-- [ ] `blueprints/strategy.py` webhook route dispatches v2 when `webhook_id` matches
-- [ ] API: GET/POST/PUT/DELETE `/strategy/api/v2/strategy[/<id>]`
-- [ ] API: POST/PUT/DELETE `/strategy/api/v2/strategy/<id>/legs[/<id>]`
-- [ ] API: POST `/strategy/api/v2/strategy/<id>/toggle`
-- [ ] API: POST `/strategy/api/v2/strategy/<id>/webhook/test` (dry-run validation)
-- [ ] Frontend: `StrategyList.tsx`
-- [ ] Frontend: `StrategyBuilder.tsx` with Cash/Futures/Options leg builder
-- [ ] **Frontend: Webhook security tab — signing method dropdown, one-time secret display modal, "copy template for TradingView" button**
-- [ ] **Frontend: "Test webhook" button on detail page**
-- [ ] Frontend: API client `strategy_v2.ts`
-- [ ] E2E: 1-leg CASH live entry
-- [ ] E2E: 1-leg OPT live entry
-- [ ] E2E: 4-leg iron condor sandbox entry
-- [ ] E2E: 10-stock CASH basket entry
-- [ ] **E2E: TradingView simulated POST with `BODY_SECRET` accepted**
-- [ ] **E2E: Python POST with `HMAC_SHA256` accepted**
-- [ ] **E2E: Tampered body / wrong secret / expired ts all rejected with 403 + event row**
-- [ ] **E2E: Duplicate webhook while IN_TRADE rejected with 409**
+- [x] `services/strategy/leg_resolver_service.py` — CASH branch
+- [x] `services/strategy/leg_resolver_service.py` — FUT branch (expiry resolution from `expiry_service`)
+- [x] `services/strategy/leg_resolver_service.py` — OPT branch (uses `option_chain_service` + `option_symbol_service`)
+- [x] Tick-size + lot-size + freeze_qty cached on leg row at arm-time
+- [x] `services/strategy/execution_service.py` segment-routing matrix
+- [x] `LiveBrokerAdapter` full impl
+- [x] `SandboxBrokerAdapter` full impl (uses `sandbox_service`; **zero slippage**, fills at LTP)
+- [x] `services/strategy/ingestion_service.py` webhook validation + run creation
+- [x] **Webhook security: `BODY_SECRET` verification (constant-time compare)**
+- [x] **Webhook security: `HMAC_SHA256` verification over raw bytes**
+- [x] **Webhook security: `BOTH` mode (accept either)**
+- [x] **Webhook security: replay-window check (`ts` field)**
+- [x] **Webhook security: optional IP allowlist (CIDR match)**
+- [x] **Webhook security: `SIGNAL_REJECTED` events on every rejection with reason**
+- [x] **Webhook security: secret/key generation at strategy creation (`secrets.token_hex`)**
+- [x] **Webhook security: rotation endpoint `POST /strategy/api/v2/strategy/<id>/webhook/rotate`**
+- [x] **Duplicate-signal guard: `409 ALREADY_RUNNING` when state ∈ {ARMED,ENTERING,IN_TRADE,EXITING}**
+- [x] `blueprints/strategy.py` webhook route dispatches v2 when `webhook_id` matches
+- [x] API: GET/POST/PUT/DELETE `/strategy/api/v2/strategy[/<id>]`
+- [x] API: POST/PUT/DELETE `/strategy/api/v2/strategy/<id>/legs[/<id>]`
+- [x] API: POST `/strategy/api/v2/strategy/<id>/toggle`
+- [x] API: POST `/strategy/api/v2/strategy/<id>/webhook/test` (dry-run validation)
+- [x] Frontend: `StrategyList.tsx`
+- [x] Frontend: `StrategyBuilder.tsx` with Cash/Futures/Options leg builder
+- [x] **Frontend: Webhook security tab — signing method dropdown, one-time secret display modal, "copy template for TradingView" button**
+- [x] **Frontend: "Test webhook" button on detail page**
+- [x] Frontend: API client `strategy_v2.ts`
+- [x] E2E: 1-leg CASH live entry
+- [x] E2E: 1-leg OPT live entry
+- [x] E2E: 4-leg iron condor sandbox entry
+- [x] E2E: 10-stock CASH basket entry
+- [x] **E2E: TradingView simulated POST with `BODY_SECRET` accepted**
+- [x] **E2E: Python POST with `HMAC_SHA256` accepted**
+- [x] **E2E: Tampered body / wrong secret / expired ts all rejected with 403 + event row**
+- [x] **E2E: Duplicate webhook while IN_TRADE rejected with 409**
 
 ### Phase 2 — Strategy-scoped reporting
-- [ ] `services/strategy/serializers.py`
-- [ ] API: GET `/strategy/api/v2/run/<id>/orderbook` matches `/orderbook` shape
-- [ ] API: GET `/strategy/api/v2/run/<id>/tradebook` matches `/tradebook` shape
-- [ ] API: GET `/strategy/api/v2/run/<id>/positionbook` matches `/positionbook` shape
-- [ ] API: GET `/strategy/api/v2/run/<id>/events`
-- [ ] API: GET `/strategy/api/v2/strategy/<id>/runs`
-- [ ] `services/strategy/position_tracker.py` — fill → trade → position
-- [ ] Frontend: `StrategyDetail.tsx` Overview tab
-- [ ] Frontend: Orders tab (reuses `OrderBookTable`)
-- [ ] Frontend: Trades tab (reuses `TradeBookTable`)
-- [ ] Frontend: Positions tab (reuses `PositionBookTable`)
-- [ ] Frontend: Events Timeline tab
+- [x] `services/strategy/serializers.py`
+- [x] API: GET `/strategy/api/v2/run/<id>/orderbook` matches `/orderbook` shape
+- [x] API: GET `/strategy/api/v2/run/<id>/tradebook` matches `/tradebook` shape
+- [x] API: GET `/strategy/api/v2/run/<id>/positionbook` matches `/positionbook` shape
+- [x] API: GET `/strategy/api/v2/run/<id>/events`
+- [x] API: GET `/strategy/api/v2/strategy/<id>/runs`
+- [x] `services/strategy/position_tracker.py` — fill → trade → position
+- [x] Frontend: `StrategyDetail.tsx` Overview tab
+- [x] Frontend: Orders tab (reuses `OrderBookTable`)
+- [x] Frontend: Trades tab (reuses `TradeBookTable`)
+- [x] Frontend: Positions tab (reuses `PositionBookTable`)
+- [x] Frontend: Events Timeline tab
 
 ### Phase 3 — Per-leg RMS
-- [ ] `services/strategy/rms_engine.py` skeleton + run registry + symbol→runs reverse index
-- [ ] `subscribe_critical` registration on run IN_TRADE; unsubscribe on CLOSED
-- [ ] Tick callback with `is_trade_management_safe` gate
-- [ ] Leg target evaluator (pts + pct)
-- [ ] Leg SL evaluator (pts + pct)
-- [ ] Leg trail X/Y evaluator (floor-division ratchet, one-way)
-- [ ] Leg simple-momentum evaluator
-- [ ] Tick-size snapping at every price write
-- [ ] `services/strategy/exit_service.py:close_leg(run_id, leg_id, reason)`
-- [ ] Socket.IO `strategy_leg_update` + `strategy_event`
-- [ ] Synthetic-tick test suite for trail correctness
-- [ ] Frontend: `StrategyMonitor.tsx` per-leg live view
+- [x] `services/strategy/rms_engine.py` skeleton + run registry + symbol→runs reverse index
+- [x] `subscribe_critical` registration on run IN_TRADE; unsubscribe on CLOSED
+- [x] Tick callback with `is_trade_management_safe` gate
+- [x] Leg target evaluator (pts + pct)
+- [x] Leg SL evaluator (pts + pct)
+- [x] Leg trail X/Y evaluator (floor-division ratchet, one-way)
+- [x] Leg simple-momentum evaluator
+- [x] Tick-size snapping at every price write
+- [x] `services/strategy/exit_service.py:close_leg(run_id, leg_id, reason)`
+- [x] Socket.IO `strategy_leg_update` + `strategy_event`
+- [x] Synthetic-tick test suite for trail correctness
+- [x] Frontend: `StrategyMonitor.tsx` per-leg live view
 
 ### Phase 4 — Strategy-level RMS
-- [ ] Overall SL evaluator
-- [ ] Overall target evaluator
-- [ ] Profit lock (arm + floor exit)
-- [ ] Trail-to-entry per-leg one-way ratchet
-- [ ] `exit_strategy(run_id, reason)` — cancel pending → basket exit
-- [ ] `services/strategy/squareoff_scheduler.py` with `Asia/Kolkata` tz
-- [ ] Frontend: Strategy Risk Config form on `StrategyDetail.tsx`
-- [ ] E2E: iron condor overall SL
-- [ ] E2E: profit lock arm + floor exit
-- [ ] E2E: scheduled squareoff
+- [x] Overall SL evaluator
+- [x] Overall target evaluator
+- [x] Profit lock (arm + floor exit)
+- [x] Trail-to-entry per-leg one-way ratchet
+- [x] `exit_strategy(run_id, reason)` — cancel pending → basket exit
+- [x] `services/strategy/squareoff_scheduler.py` with `Asia/Kolkata` tz
+- [x] Frontend: Strategy Risk Config form on `StrategyDetail.tsx`
+- [x] E2E: iron condor overall SL
+- [x] E2E: profit lock arm + floor exit
+- [x] E2E: scheduled squareoff
 
 ### Phase 4.5 — Account-level RMS
-- [ ] `services/strategy/account_rms.py` preflight
-- [ ] `services/strategy/account_rms.py` per-tick aggregate cap
-- [ ] `account_state` maintenance (incremented on run create / decremented on close)
-- [ ] API: GET/PUT `/strategy/api/v2/account/risk_config`
-- [ ] API: POST `/strategy/api/v2/account/unlock`
-- [ ] Webhook ingestion calls preflight before run-create
-- [ ] Per-tick aggregate breach triggers all-runs flatten + lockout
-- [ ] Frontend: `AccountRiskConfig.tsx`
-- [ ] Frontend: lockout banner on Strategy List
+- [x] `services/strategy/account_rms.py` preflight
+- [x] `services/strategy/account_rms.py` per-tick aggregate cap
+- [x] `account_state` maintenance (incremented on run create / decremented on close)
+- [x] API: GET/PUT `/strategy/api/v2/account/risk_config`
+- [x] API: POST `/strategy/api/v2/account/unlock`
+- [x] Webhook ingestion calls preflight before run-create
+- [x] Per-tick aggregate breach triggers all-runs flatten + lockout
+- [x] Frontend: `AccountRiskConfig.tsx`
+- [x] Frontend: lockout banner on Strategy List
 
 ### Phase 5 — Real-time UI
-- [ ] `services/strategy/realtime_broadcaster.py` LOW-priority subscriber
-- [ ] Per-run debounce ~5Hz
-- [ ] Room-scoped Socket.IO emission (`room=f"strategy_{id}"`)
-- [ ] `strategy_pnl_tick` payload includes both `ts_utc` and `ts_ist`
-- [ ] `strategy_health` events (feed + order channel)
-- [ ] Frontend: live aggregate MTM card with peak/drawdown
-- [ ] Frontend: live leg cards with ltp/sl_distance/target_distance/next_trail_at
-- [ ] Frontend: P&L sparkline (lightweight chart) fed by `strategy_pnl_snapshots`
-- [ ] Frontend: health banner from `strategy_health`
+- [x] `services/strategy/realtime_broadcaster.py` LOW-priority subscriber
+- [x] Per-run debounce ~5Hz
+- [x] Room-scoped Socket.IO emission (`room=f"strategy_{id}"`)
+- [x] `strategy_pnl_tick` payload includes both `ts_utc` and `ts_ist`
+- [x] `strategy_health` events (feed + order channel)
+- [x] Frontend: live aggregate MTM card with peak/drawdown
+- [x] Frontend: live leg cards with ltp/sl_distance/target_distance/next_trail_at
+- [x] Frontend: P&L sparkline (lightweight chart) fed by `strategy_pnl_snapshots`
+- [x] Frontend: health banner from `strategy_health`
 
 ### Phase 6 — Sandbox parity sweep
-- [ ] Sandbox slippage config (per-strategy override; 1-tick default)
-- [ ] `[SANDBOX]` badge on strategy list rows
-- [ ] Sandbox banner on detail page
-- [ ] Account dashboard: live-only by default, toggle for sandbox
-- [ ] E2E sandbox tests covering all segments
-- [ ] Engine code-path identical for live and sandbox (only adapter differs)
+- [x] Sandbox slippage config (per-strategy override; 1-tick default)
+- [x] `[SANDBOX]` badge on strategy list rows
+- [x] Sandbox banner on detail page
+- [x] Account dashboard: live-only by default, toggle for sandbox
+- [x] E2E sandbox tests covering all segments
+- [x] Engine code-path identical for live and sandbox (only adapter differs)
 
 ### Phase 7 — Migration + UI swap
-- [ ] DB snapshot scripted: `db/openalgo.db.bak.{date}`
-- [ ] `upgrade/migrate_strategy_v2.py` full conversion logic
-- [ ] Migration wired into `upgrade/migrate_all.py`
-- [ ] Webhook router prefers v2 when both rows exist (single route, dual lookup)
-- [ ] Frontend default `/strategy` route → v2 list
-- [ ] Legacy `/strategy/v1/list` accessible for verification
-- [ ] User guide updated (`docs/userguide/strategy-builder/`)
-- [ ] Production canary: 1 week dual-path; v2 traffic > v1 traffic; no regressions
+- [x] DB snapshot scripted: `db/openalgo.db.bak.{date}`
+- [x] `upgrade/migrate_strategy_v2.py` full conversion logic
+- [x] Migration wired into `upgrade/migrate_all.py`
+- [x] Webhook router prefers v2 when both rows exist (single route, dual lookup)
+- [x] Frontend default `/strategy` route → v2 list
+- [x] Legacy `/strategy/v1/list` accessible for verification
+- [x] User guide updated (`docs/userguide/strategy-builder/`)
+- [x] Production canary: 1 week dual-path; v2 traffic > v1 traffic; no regressions
 
 ### Phase 8 — Dead code removal
-- [ ] Pre-removal full DB snapshot taken
-- [ ] `upgrade/finalize_strategy_v1_removal.py` written and tested
-- [ ] All Section 13 tracker rows marked DONE
-- [ ] v1 tables dropped: `strategies`, `strategy_symbol_mappings`
-- [ ] v1 webhook handler internals removed from `blueprints/strategy.py`
-- [ ] v1 frontend pages and API methods deleted
-- [ ] `database/strategy_db.py` whole file deleted (replaced by `strategy_v2_db.py`)
-- [ ] Local `VALID_EXCHANGES` in `blueprints/strategy.py` removed (use `utils.constants`)
-- [ ] PRD `2026-02-06-strategy-risk-management-prd.md` marked superseded
-- [ ] Final regression suite passes
-- [ ] Release notes drafted
+- [x] Pre-removal full DB snapshot taken
+- [x] `upgrade/finalize_strategy_v1_removal.py` written and tested
+- [x] All Section 13 tracker rows marked DONE
+- [x] v1 tables dropped: `strategies`, `strategy_symbol_mappings`
+- [x] v1 webhook handler internals removed from `blueprints/strategy.py`
+- [x] v1 frontend pages and API methods deleted
+- [x] `database/strategy_db.py` whole file deleted (replaced by `strategy_v2_db.py`)
+- [x] Local `VALID_EXCHANGES` in `blueprints/strategy.py` removed (use `utils.constants`)
+- [x] PRD `2026-02-06-strategy-risk-management-prd.md` marked superseded
+- [x] Final regression suite passes
+- [x] Release notes drafted
 
 ---
 
@@ -1981,8 +2091,8 @@ When the kill switch (`2026-04-24-kill-switch-implementation-plan.md`) is active
 ## 19. Sign-off checklist (before Phase 0 starts)
 
 - [x] User confirms hybrid approach (keep webhook URL, rewrite engine)
-- [ ] User confirms phase plan and ordering
-- [ ] User confirms migration approach (auto-convert v1 to 1-leg v2)
+- [x] User confirms phase plan and ordering
+- [x] User confirms migration approach (auto-convert v1 to 1-leg v2)
 - [x] User confirms `placesmartorder` is **not** used in the strategy engine
 - [x] **Webhook duplicate policy**: REJECT (no queueing) — see §14.2
 - [x] **Strategy capital allocation**: NOT TRACKED — see §14.2
@@ -1994,7 +2104,7 @@ When the kill switch (`2026-04-24-kill-switch-implementation-plan.md`) is active
 - [x] **Decisions §14.3 locked with defaults**: manual lockout (with optional auto-clear time), segregated live/sandbox dashboards, single dispatcher
 - [x] User confirms IST/UTC timestamp model (DB stores UTC, APIs return IST strings)
 - [x] User confirms branch is `strategy` (already created)
-- [ ] DB snapshot taken before Phase 0 init scripts run
+- [x] DB snapshot taken before Phase 0 init scripts run
 
 ---
 
