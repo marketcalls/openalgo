@@ -335,16 +335,36 @@ def _maybe_close_run(run_id: int) -> None:
     flat. Idempotent — if already CLOSED or any leg is still OPEN this
     is a no-op. Called from _record_fill after every fill so closing
     multi-leg packs (iron condor etc.) wait for all legs to finish.
+
+    Bus-worker session note: the event-bus dispatcher reuses each
+    worker thread's scoped_session across many events, so this thread
+    likely has the run's previous state cached in the identity map
+    (e.g. IN_TRADE from when it processed the BUY fill earlier). A
+    plain `query(...).first()` returns the cached row without
+    refreshing attributes, so the early-return guard would reject a
+    run that was already moved to EXITING by exit_strategy. Issue a
+    state-only scalar query instead — bypasses the identity map and
+    always sees the latest committed value.
     """
+    from sqlalchemy import select
+
     from database.strategy_v2_db import StrategyPosition, StrategyRun
     from services.strategy.state_machine import transition_run
 
+    state = db_session.execute(
+        select(StrategyRun.state).where(StrategyRun.id == run_id)
+    ).scalar_one_or_none()
+    if state != "EXITING":
+        return
+    # Now load the full row for the strategy_id reference + writes; the
+    # identity-map cache is fine to use beyond this point because we've
+    # already confirmed state via a fresh read.
     run = (
         db_session.query(StrategyRun)
         .filter(StrategyRun.id == run_id)
         .first()
     )
-    if run is None or run.state != "EXITING":
+    if run is None:
         return
 
     open_positions = (
