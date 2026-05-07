@@ -55,8 +55,25 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._heartbeat_stop = None
         self._reconnect_thread = None
         self._reconnect_cancel = None
+        # Set when AliceBlue replies 'ck'/'cf' OK after our auth frame; lets
+        # callers wait for an actually-usable connection instead of a fixed
+        # time.sleep().
+        self._auth_event = threading.Event()
         self.symbol_state = {}  # Store last known state for each symbol
         self.market_snapshots = {}  # Store complete market snapshots with value retention
+
+        # Batch subscription management
+        # AliceBlue allows multiple "EXCHANGE|TOKEN" keys joined by '#' in one message,
+        # so we queue subscriptions briefly and flush them as a single message per feed type.
+        # Leading-edge debounce: the FIRST call after a quiet window flushes
+        # immediately (no timer wait), so a single-symbol UI click pays ~0ms
+        # adapter overhead. Subsequent calls within `batch_delay` of the last
+        # flush coalesce via the timer into one frame — that keeps option-
+        # chain bursts cheap while not penalising single-symbol latency.
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # 500ms window to coalesce subscriptions
+        self._last_sub_flush_at: float = 0.0
 
         # Initialize mappers and registry
         self.exchange_mapper = AliceBlueExchangeMapper()
@@ -271,6 +288,9 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 on_close=on_close,
             )
 
+            # Reset auth signal before launching the new connection
+            self._auth_event.clear()
+
             # Start WebSocket in background thread
             self.ws_thread = threading.Thread(
                 target=self.ws_client.run_forever, kwargs={"sslopt": {"cert_reqs": ssl.CERT_NONE}}
@@ -278,10 +298,16 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.ws_thread.daemon = True
             self.ws_thread.start()
 
-            # Wait a bit for connection to establish
-            time.sleep(2)
+            # Wait for the AliceBlue auth handshake (ck/cf OK) rather than a
+            # fixed sleep — returns immediately on success and gives a clean
+            # timeout signal on failure.
+            if not self._auth_event.wait(timeout=10):
+                self.logger.warning(
+                    "Timed out waiting for AliceBlue auth confirmation"
+                )
+                return False
 
-            return self.ws_client.sock and self.ws_client.sock.connected
+            return bool(self.ws_client.sock and self.ws_client.sock.connected)
 
         except Exception as e:
             self.logger.error(f"Error starting WebSocket: {e}")
@@ -352,6 +378,78 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._heartbeat_thread = t
         t.start()
 
+    def _schedule_sub_flush_locked(self) -> bool:
+        """Decide whether to flush the subscribe queue now (leading edge) or
+        schedule a timer for the end of the current debounce window.
+
+        Caller MUST hold ``self.lock``. Returns ``True`` if the caller should
+        invoke ``_process_batch_subscriptions()`` synchronously after
+        releasing the lock, ``False`` otherwise.
+        """
+        elapsed = time.time() - self._last_sub_flush_at
+        if elapsed >= self.batch_delay:
+            # Quiet window — flush immediately. Stamp the time NOW so any
+            # racing call within `batch_delay` schedules a timer instead of
+            # also flushing.
+            self._last_sub_flush_at = time.time()
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            return True
+
+        # Inside the debounce window — make sure a timer is scheduled to
+        # flush at the end of it. Don't restart an already-running timer
+        # (that would push the deadline back indefinitely under sustained
+        # load).
+        if self.batch_timer is None:
+            delay = max(0.0, self.batch_delay - elapsed)
+            self.batch_timer = threading.Timer(delay, self._process_batch_subscriptions)
+            self.batch_timer.daemon = True
+            self.batch_timer.start()
+        return False
+
+    def _process_batch_subscriptions(self):
+        """Flush queued subscriptions as one message per feed type.
+
+        AliceBlue accepts multiple ``EXCHANGE|TOKEN`` keys joined by ``#`` in a
+        single subscription frame, so we group the queue by feed type ('t' for
+        market data, 'd' for depth) and send one frame per group.
+        """
+        with self.lock:
+            # Whether we got here via the timer or a leading-edge synchronous
+            # call, mark the timer slot free and refresh the flush timestamp.
+            self.batch_timer = None
+            self._last_sub_flush_at = time.time()
+
+            if not self.subscription_queue:
+                return
+
+            feed_groups: dict[str, list[str]] = {}
+            for sub in self.subscription_queue:
+                feed_type = sub["feed_type"]
+                key = f"{sub['ab_exchange']}|{sub['token']}"
+                feed_groups.setdefault(feed_type, []).append(key)
+
+            self.subscription_queue.clear()
+
+        if not (self.ws_client and self.ws_client.sock and self.ws_client.sock.connected):
+            self.logger.warning(
+                "WebSocket not connected during batch flush; subscriptions will be re-sent on reconnect"
+            )
+            return
+
+        for feed_type, keys in feed_groups.items():
+            try:
+                # Deduplicate while preserving order
+                unique_keys = list(dict.fromkeys(keys))
+                batch_msg = {"k": "#".join(unique_keys), "t": feed_type}
+                self.logger.info(
+                    f"Batch subscribing {len(unique_keys)} tokens with feed type '{feed_type}'"
+                )
+                self.ws_client.send(json.dumps(batch_msg))
+            except Exception as e:
+                self.logger.error(f"Batch subscription failed for feed type '{feed_type}': {e}")
+
     def disconnect(self) -> None:
         """Close WebSocket connection and clean up all threads."""
         try:
@@ -360,6 +458,19 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     return
 
                 self.running = False
+
+            # Cancel any pending batch subscription timer and drop queued
+            # items. Capture the timer reference under the lock — otherwise
+            # _process_batch_subscriptions() (which also clears it under the
+            # lock) can race us between the truthiness check and .cancel(),
+            # raising AttributeError and aborting the rest of cleanup
+            # (heartbeat stop, reconnect cancel, ws close).
+            with self.lock:
+                pending_timer = self.batch_timer
+                self.batch_timer = None
+                self.subscription_queue.clear()
+            if pending_timer:
+                pending_timer.cancel()
 
             # Signal heartbeat thread to stop immediately
             if self._heartbeat_stop:
@@ -417,10 +528,17 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     return self._create_error_response(
                         "RECONNECT_FAILED", "Failed to reconnect to WebSocket"
                     )
-                # Wait a bit for connection to stabilize
-                import time
-
-                time.sleep(1)
+                # Wait for the auth handshake to complete before sending any
+                # subscribe frames — connect() already waits, but if it
+                # returned via a different path (e.g. running flag) make sure
+                # auth has actually settled.
+                if not self._auth_event.wait(timeout=5):
+                    self.logger.warning(
+                        "Auth handshake did not complete in time after reconnect"
+                    )
+                    return self._create_error_response(
+                        "RECONNECT_TIMEOUT", "Auth handshake timeout after reconnect"
+                    )
             # Convert exchange to AliceBlue format for sending to websocket
             ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
 
@@ -450,60 +568,76 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Determine feed type based on mode
             feed_type = AliceBlueFeedType.DEPTH if mode == 3 else AliceBlueFeedType.MARKET_DATA
 
-            # Create subscription message
-            sub_msg = self.message_mapper.create_subscription_message(ab_exchange, token, feed_type)
-
-            if self.ws_client and self.ws_client.sock and self.ws_client.sock.connected:
-                self.ws_client.send(json.dumps(sub_msg))
-
-                # Track subscription - use simple key for now
-                sub_key = f"{ab_exchange}|{str(token)}"
-
-                with self.lock:
-                    # If already subscribed with a lower mode, update to higher mode
-                    # AliceBlue sends all data for highest subscribed mode
-                    existing_mode = self.subscriptions.get(sub_key, {}).get("mode", 0)
-                    if mode > existing_mode:
-                        self.subscriptions[sub_key] = {
-                            "symbol": symbol,
-                            "exchange": exchange,
-                            "ab_exchange": ab_exchange,
-                            "token": token,
-                            "mode": mode,  # Store the highest mode subscribed
-                            "depth_level": depth_level,
-                            "original_symbol": symbol,  # Store original OpenAlgo symbol for lookup
-                            "original_exchange": exchange,  # Store original OpenAlgo exchange
-                            "all_modes": self.subscriptions.get(sub_key, {}).get("all_modes", set())
-                            | {mode},  # Track all subscribed modes
-                        }
-                    elif sub_key not in self.subscriptions:
-                        self.subscriptions[sub_key] = {
-                            "symbol": symbol,
-                            "exchange": exchange,
-                            "ab_exchange": ab_exchange,
-                            "token": token,
-                            "mode": mode,
-                            "depth_level": depth_level,
-                            "original_symbol": symbol,
-                            "original_exchange": exchange,
-                            "all_modes": {mode},
-                        }
-                    else:
-                        # Add this mode to the set of subscribed modes
-                        self.subscriptions[sub_key]["all_modes"] = self.subscriptions[sub_key].get(
-                            "all_modes", set()
-                        ) | {mode}
-
-                self.logger.info(f"Subscribed to {symbol} ({ab_exchange}|{token}) for mode {mode}")
-                self.logger.info(f"Stored subscription with key: {sub_key}")
-                self.logger.info(f"Stored symbol: {symbol}, exchange: {exchange}")
-                self.logger.info(f"Token type: {type(token)}, value: {repr(token)}")
-                return self._create_success_response(
-                    f"Subscribed to {symbol} on {exchange} for mode {mode}"
-                )
-            else:
+            if not (self.ws_client and self.ws_client.sock and self.ws_client.sock.connected):
                 self.logger.error("WebSocket not connected")
                 return self._create_error_response("NOT_CONNECTED", "WebSocket not connected")
+
+            # Track subscription - use simple key for now
+            sub_key = f"{ab_exchange}|{str(token)}"
+
+            with self.lock:
+                # If already subscribed with a lower mode, update to higher mode
+                # AliceBlue sends all data for highest subscribed mode
+                existing_mode = self.subscriptions.get(sub_key, {}).get("mode", 0)
+                if mode > existing_mode:
+                    self.subscriptions[sub_key] = {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "ab_exchange": ab_exchange,
+                        "token": token,
+                        "mode": mode,  # Store the highest mode subscribed
+                        "depth_level": depth_level,
+                        "original_symbol": symbol,  # Store original OpenAlgo symbol for lookup
+                        "original_exchange": exchange,  # Store original OpenAlgo exchange
+                        "all_modes": self.subscriptions.get(sub_key, {}).get("all_modes", set())
+                        | {mode},  # Track all subscribed modes
+                    }
+                elif sub_key not in self.subscriptions:
+                    self.subscriptions[sub_key] = {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "ab_exchange": ab_exchange,
+                        "token": token,
+                        "mode": mode,
+                        "depth_level": depth_level,
+                        "original_symbol": symbol,
+                        "original_exchange": exchange,
+                        "all_modes": {mode},
+                    }
+                else:
+                    # Add this mode to the set of subscribed modes
+                    self.subscriptions[sub_key]["all_modes"] = self.subscriptions[sub_key].get(
+                        "all_modes", set()
+                    ) | {mode}
+
+                # Queue the websocket subscribe; processor will flush as a batch.
+                self.subscription_queue.append(
+                    {
+                        "ab_exchange": ab_exchange,
+                        "token": token,
+                        "feed_type": feed_type,
+                    }
+                )
+
+                # Leading-edge dispatch: if this call lands in a quiet
+                # window, flush_now will be True and we send synchronously
+                # below (after releasing the lock). Bursts within the window
+                # coalesce into a timer-fired flush.
+                flush_now = self._schedule_sub_flush_locked()
+
+            if flush_now:
+                # Outside the lock — _process_batch_subscriptions reacquires it.
+                self._process_batch_subscriptions()
+
+            self.logger.info(
+                f"Queued subscription for {symbol} ({ab_exchange}|{token}) for mode {mode}"
+            )
+            self.logger.info(f"Stored subscription with key: {sub_key}")
+            self.logger.info(f"Stored symbol: {symbol}, exchange: {exchange}")
+            self.logger.info(f"Token type: {type(token)}, value: {repr(token)}")
+            return self._create_success_response(
+                f"Subscribed to {symbol} on {exchange} for mode {mode}"
+            )
 
         except Exception as e:
             self.logger.error(f"Error subscribing to {symbol}: {e}")
@@ -699,11 +833,13 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if status == "OK":
                     self.logger.info("WebSocket authentication successful")
                     self.connected = True
+                    self._auth_event.set()
                     # Resubscribe to any existing subscriptions after successful connection
                     self._resubscribe_after_auth()
                 else:
                     self.logger.error(f"WebSocket authentication failed: {data}")
                     self.connected = False
+                    self._auth_event.clear()
                 return
 
             elif msg_type == "cf":
@@ -711,9 +847,11 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if data.get("k") == "OK":
                     self.logger.info("WebSocket authentication successful")
                     self.connected = True
+                    self._auth_event.set()
                 else:
                     self.logger.error(f"WebSocket authentication failed: {data}")
                     self.connected = False
+                    self._auth_event.clear()
                 return
 
             elif msg_type == "tk":
@@ -799,6 +937,10 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Handle WebSocket disconnection"""
         self.logger.warning("AliceBlue WebSocket disconnected")
 
+        # Clear auth signal — the next reconnect must wait for a fresh
+        # ck/cf OK before subscribers may send frames.
+        self._auth_event.clear()
+
         with self.lock:
             was_running = self.running
             self.running = False
@@ -865,29 +1007,38 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(f"Error resubscribing to {sub_key}: {e}")
 
     def _resubscribe_after_auth(self) -> None:
-        """Resubscribe after successful authentication"""
-        # This is called after WebSocket authentication succeeds
-        # Check if we have any pending subscriptions
+        """Resubscribe after successful authentication using batched messages."""
         with self.lock:
-            if self.subscriptions:
-                self.logger.info(
-                    f"Resubscribing to {len(self.subscriptions)} symbols after authentication"
+            if not self.subscriptions:
+                return
+
+            self.logger.info(
+                f"Resubscribing to {len(self.subscriptions)} symbols after authentication"
+            )
+
+            # Group existing subscriptions by feed type for one-shot batch sends
+            feed_groups: dict[str, list[str]] = {}
+            for sub_info in self.subscriptions.values():
+                feed_type = (
+                    AliceBlueFeedType.DEPTH
+                    if sub_info["mode"] == 3
+                    else AliceBlueFeedType.MARKET_DATA
                 )
-                for sub_key, sub_info in self.subscriptions.items():
-                    try:
-                        # Send subscription message
-                        feed_type = (
-                            AliceBlueFeedType.DEPTH
-                            if sub_info["mode"] == 3
-                            else AliceBlueFeedType.MARKET_DATA
-                        )
-                        sub_msg = self.message_mapper.create_subscription_message(
-                            sub_info["ab_exchange"], sub_info["token"], feed_type
-                        )
-                        self.ws_client.send(json.dumps(sub_msg))
-                        self.logger.info(f"Resubscribed to {sub_info['symbol']}")
-                    except Exception as e:
-                        self.logger.error(f"Error resubscribing to {sub_key}: {e}")
+                key = f"{sub_info['ab_exchange']}|{sub_info['token']}"
+                feed_groups.setdefault(feed_type, []).append(key)
+
+        for feed_type, keys in feed_groups.items():
+            try:
+                unique_keys = list(dict.fromkeys(keys))
+                batch_msg = {"k": "#".join(unique_keys), "t": feed_type}
+                self.ws_client.send(json.dumps(batch_msg))
+                self.logger.info(
+                    f"Resubscribed {len(unique_keys)} tokens with feed type '{feed_type}'"
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Error resubscribing batch for feed type '{feed_type}': {e}"
+                )
 
     def is_connected(self) -> bool:
         """Check if WebSocket is connected"""

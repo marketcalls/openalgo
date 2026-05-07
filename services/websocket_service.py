@@ -333,53 +333,6 @@ def unsubscribe_all(username: str, broker: str) -> tuple[bool, dict[str, Any], i
         return False, {"status": "error", "message": str(e)}, 500
 
 
-def get_supported_brokers_list() -> tuple[bool, dict[str, Any], int]:
-    """
-    Get list of brokers that support WebSocket streaming
-
-    Returns:
-        Tuple of (success, response_data, status_code)
-    """
-    try:
-        # Get supported brokers from environment
-        valid_brokers = os.getenv("VALID_BROKERS", "").split(",")
-        supported_brokers = [broker.strip() for broker in valid_brokers if broker.strip()]
-
-        # Define brokers with WebSocket support
-        websocket_enabled_brokers = [
-            "zerodha",
-            "angel",
-            "fivepaisaxts",
-            "aliceblue",
-            "dhan",
-            "flattrade",
-            "shoonya",
-            "upstox",
-            "compositedge",
-            "iifl",
-            "ibulls",
-            "wisdom",
-        ]
-
-        # Filter only WebSocket enabled brokers
-        ws_brokers = [broker for broker in supported_brokers if broker in websocket_enabled_brokers]
-
-        return (
-            True,
-            {
-                "status": "success",
-                "brokers": ws_brokers,
-                "count": len(ws_brokers),
-                "message": "List of brokers supporting WebSocket streaming",
-            },
-            200,
-        )
-
-    except Exception as e:
-        logger.exception(f"Error getting supported brokers: {e}")
-        return False, {"status": "error", "message": str(e)}, 500
-
-
 def get_market_data(
     username: str, symbol: str | None = None, exchange: str | None = None
 ) -> tuple[bool, dict[str, Any], int]:
