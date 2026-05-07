@@ -1126,7 +1126,11 @@ def get_distinct_expiries_cached(
             for exp_set in cache.expiries_by_exchange.values():
                 expiries.update(exp_set)
 
-        # Sort expiries chronologically
+        # Sort expiries chronologically and drop already-expired dates so
+        # dropdowns only surface live expiries. Master-contract caches can
+        # carry recently expired rows for several days; without this filter
+        # the chain defaults to a dead expiry where brokers return empty
+        # depth / volume = 0.
         def parse_expiry(exp_str):
             """Parse an expiry date string into a datetime for chronological sorting."""
             try:
@@ -1137,7 +1141,9 @@ def get_distinct_expiries_cached(
                 except ValueError:
                     return datetime.max
 
-        return sorted(list(expiries), key=parse_expiry)
+        today = datetime.now().date()
+        live_expiries = [e for e in expiries if parse_expiry(e).date() >= today]
+        return sorted(live_expiries, key=parse_expiry)
 
     # Fallback to database
     try:

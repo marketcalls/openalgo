@@ -605,15 +605,17 @@ class GrowwNATSWebSocket:
             logger.error(f"Error processing market data: {e}", exc_info=True)
 
     def _resubscribe_all(self):
-        """Resubscribe to all pending subscriptions"""
+        """Resubscribe to all pending subscriptions in a single batch."""
         # Clear old SIDs as they are no longer valid after reconnection/re-auth
         logger.info(
             f"Clearing old SIDs and resubscribing to {len(self.subscriptions)} subscriptions"
         )
         self.nats_sids.clear()
 
-        for sub_key, sub_info in self.subscriptions.items():
-            self._send_nats_subscription(sub_key, sub_info)
+        sub_list = list(self.subscriptions.items())
+        if sub_list:
+            # One PING + 100ms flush instead of N × 100ms
+            self._send_nats_subscriptions_batch(sub_list)
 
     def _send_nats_subscription(self, sub_key: str, sub_info: dict):
         """Send NATS SUB command for subscription"""
@@ -624,7 +626,7 @@ class GrowwNATSWebSocket:
                 return
 
             topic = self.nats_protocol.format_topic_for_groww(
-                exchange=sub_info.get("exchange", ""),
+                exchange=sub_info.get("groww_exchange") or sub_info.get("exchange", ""),
                 segment=sub_info.get("segment", ""),
                 token=sub_info.get("exchange_token", ""),
                 mode=sub_info.get("mode", "ltp"),
@@ -651,6 +653,128 @@ class GrowwNATSWebSocket:
 
         except Exception as e:
             logger.error(f"Failed to send NATS subscription: {e}")
+
+    def subscribe_batch(self, batch_specs: list[dict]) -> list[str]:
+        """
+        Subscribe to multiple symbols in a single batch.
+
+        Sends every NATS SUB command back-to-back and issues only one PING + flush
+        wait at the end, instead of paying the per-subscription PING/sleep cost.
+
+        Args:
+            batch_specs: list of dicts with keys:
+                type ('ltp'|'depth'), exchange, segment, token,
+                symbol (optional), instrumenttype (optional)
+
+        Returns:
+            list of sub_keys, in the same order as batch_specs.
+        """
+        sub_keys: list[str] = []
+        pending_to_send: list[tuple[str, dict]] = []
+
+        for spec in batch_specs:
+            sub_type = spec.get("type", "ltp")
+            exchange = spec.get("exchange", "")
+            segment = spec.get("segment", "")
+            token = spec.get("token", "")
+            symbol = spec.get("symbol")
+            instrumenttype = spec.get("instrumenttype")
+
+            # Indices don't have depth — redirect to LTP, mirroring subscribe_depth
+            if sub_type == "depth" and (
+                instrumenttype == "INDEX" or "INDEX" in str(exchange).upper()
+            ):
+                logger.warning(
+                    f"⚠️ INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
+                )
+                sub_type = "ltp"
+
+            # Optional sub_key override — used by the adapter for "shadow"
+            # LTP subs paired with a depth sub on the same token. The shadow
+            # needs its own NATS SID even though the topic is identical to
+            # an existing/future real LTP sub, otherwise the SID stored in
+            # nats_sids[sub_key] gets overwritten and the older SID leaks.
+            sub_key = spec.get("sub_key")
+            # OpenAlgo-facing exchange (NFO/BFO/NSE_INDEX/...) for dispatch
+            # back to the adapter; falls back to the broker-side `exchange`
+            # arg (NSE/BSE) when not provided. The topic generator still
+            # needs the broker-side exchange — see groww_exchange below.
+            openalgo_exchange = spec.get("openalgo_exchange") or exchange
+            if sub_type == "depth":
+                if not sub_key:
+                    sub_key = f"depth_{exchange}_{segment}_{token}"
+                self.subscriptions[sub_key] = {
+                    "symbol": symbol if symbol else f"{token}",
+                    "exchange": openalgo_exchange,
+                    "groww_exchange": exchange,
+                    "segment": segment,
+                    "exchange_token": token,
+                    "mode": "depth",
+                    "numeric_mode": 3,
+                    "instrumenttype": instrumenttype,
+                }
+            else:
+                if not sub_key:
+                    sub_key = f"ltp_{exchange}_{segment}_{token}"
+                self.subscriptions[sub_key] = {
+                    "symbol": symbol if symbol else f"{token}",
+                    "exchange": openalgo_exchange,
+                    "groww_exchange": exchange,
+                    "segment": segment,
+                    "exchange_token": token,
+                    "mode": "ltp",
+                    "numeric_mode": 1,
+                    "instrumenttype": instrumenttype,
+                }
+
+            sub_keys.append(sub_key)
+
+            if self.connected:
+                pending_to_send.append((sub_key, self.subscriptions[sub_key]))
+
+        if pending_to_send:
+            self._send_nats_subscriptions_batch(pending_to_send)
+
+        return sub_keys
+
+    def _send_nats_subscriptions_batch(self, sub_list: list[tuple[str, dict]]) -> None:
+        """Send multiple NATS SUB commands followed by a single PING + flush wait."""
+        if not self.nats_protocol or not self.ws:
+            logger.error("NATS protocol handler or websocket not initialized")
+            return
+
+        sent_count = 0
+        for sub_key, sub_info in sub_list:
+            try:
+                # Prefer the broker-side exchange for topic generation; fall
+                # back to `exchange` for callers that don't provide it
+                # separately (legacy paths). sub_info["exchange"] is now the
+                # OpenAlgo exchange used for dispatch, not the Groww one.
+                topic = self.nats_protocol.format_topic_for_groww(
+                    exchange=sub_info.get("groww_exchange") or sub_info.get("exchange", ""),
+                    segment=sub_info.get("segment", ""),
+                    token=sub_info.get("exchange_token", ""),
+                    mode=sub_info.get("mode", "ltp"),
+                )
+
+                sid, sub_cmd = self.nats_protocol.create_subscribe(topic)
+                self.ws.send(sub_cmd)
+                self.nats_sids[sub_key] = sid
+                sent_count += 1
+                logger.debug(f"Batch SUB queued: {topic} sid={sid}")
+            except Exception as e:
+                logger.error(f"Failed to queue batch SUB for {sub_key}: {e}")
+
+        if sent_count == 0:
+            return
+
+        try:
+            self.ws.send(self.nats_protocol.create_ping())
+            logger.info(f"Sent batch of {sent_count} SUB commands followed by PING")
+            # Single flush wait for the whole batch (matches per-sub 100ms in non-batch path)
+            time.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Failed to send batch PING: {e}")
 
     def subscribe_ltp(
         self,

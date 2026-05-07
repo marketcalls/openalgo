@@ -1046,19 +1046,33 @@ class BrokerData:
 
         return self.timeframe_map[requested_interval]
 
-    def get_quotes(self, symbol_list, timeout: int = 5) -> dict[str, Any]:
+    def get_quotes(self, symbol_list, exchange=None, timeout: int = 5) -> dict[str, Any]:
         """
         Get real-time quotes for a list of symbols using direct Groww API calls.
 
         This implementation directly calls Groww API endpoints instead of using the SDK.
 
         Args:
-            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
-            timeout (int): Timeout in seconds
+            symbol_list: A symbol string, dict {symbol, exchange}, or list thereof.
+            exchange: Exchange code when ``symbol_list`` is a bare string.
+                Accepted for compatibility with the ``(symbol, exchange)``
+                calling convention used by the services layer.
+            timeout: Timeout in seconds.
 
         Returns:
             Dict[str, Any]: Quote data in OpenAlgo format
         """
+        # Back-compat: legacy callers passed timeout in the second positional slot.
+        if isinstance(exchange, int) and not isinstance(exchange, bool):
+            timeout = exchange
+            exchange = None
+
+        # Promote bare-string + explicit exchange to a dict so segment mapping
+        # picks the right CASH/FNO segment (otherwise derivatives passed via
+        # the services layer get routed to CASH and Groww 400s).
+        if isinstance(symbol_list, str) and exchange:
+            symbol_list = {"symbol": symbol_list, "exchange": exchange}
+
         logger.info(f"Getting quotes using direct API calls for: {symbol_list}")
 
         # Define exchange and segment constants
@@ -1146,8 +1160,17 @@ class BrokerData:
                     groww_exchange = EXCHANGE_NSE
                     segment = SEGMENT_CASH
 
-                # Get broker-specific symbol if needed
-                trading_symbol = get_br_symbol(symbol, exchange) or symbol
+                # Get broker-specific symbol. For FNO contracts, fall back to
+                # format conversion when the master-contract lookup misses —
+                # without this Groww may resolve loosely and return a partial
+                # payload that's missing bid/ask/volume/OI for option strikes.
+                br_symbol = get_br_symbol(symbol, exchange)
+                if br_symbol:
+                    trading_symbol = br_symbol
+                elif exchange in ("NFO", "BFO"):
+                    trading_symbol = self._convert_openalgo_to_groww_derivative_symbol(symbol)
+                else:
+                    trading_symbol = symbol
 
                 logger.info(
                     f"Requesting quote for {trading_symbol} on {groww_exchange} (segment: {segment})"
@@ -1253,6 +1276,40 @@ class BrokerData:
                             # Determine if this is a derivative instrument
                             is_derivative = exchange in ["NFO", "BFO"] or segment == SEGMENT_FNO
 
+                            # Field aliases — Groww has been observed to use
+                            # alternate keys for some segments. Probe each
+                            # known name so FNO contracts populate bid/ask/
+                            # volume/OI even when the canonical key is absent.
+                            _bid = (
+                                response.get("bid_price")
+                                or response.get("bid")
+                                or response.get("best_bid_price")
+                            )
+                            _ask = (
+                                response.get("offer_price")
+                                or response.get("ask")
+                                or response.get("best_offer_price")
+                                or response.get("best_ask_price")
+                            )
+                            _bid_qty = (
+                                response.get("bid_quantity")
+                                or response.get("bid_size")
+                                or response.get("best_bid_quantity")
+                            )
+                            _ask_qty = (
+                                response.get("offer_quantity")
+                                or response.get("ask_quantity")
+                                or response.get("ask_size")
+                                or response.get("offer_size")
+                                or response.get("best_offer_quantity")
+                            )
+                            _vol = (
+                                response.get("volume")
+                                or response.get("total_volume")
+                                or response.get("traded_volume")
+                            )
+                            _oi = response.get("open_interest") or response.get("oi") or 0
+
                             quote_item = {
                                 "symbol": symbol,
                                 "exchange": exchange,
@@ -1269,21 +1326,19 @@ class BrokerData:
                                 ),  # Using previous day's close
                                 "change": safe_float(response.get("day_change")),
                                 "change_percent": safe_float(response.get("day_change_perc")),
-                                "volume": safe_int(response.get("volume")),
+                                "volume": safe_int(_vol),
                                 # The frontend uses 'bid' and 'ask' without the _price suffix
-                                "bid": safe_float(response.get("bid_price")),
-                                "ask": safe_float(response.get("offer_price")),
+                                "bid": safe_float(_bid),
+                                "ask": safe_float(_ask),
                                 # Also keep original fields
-                                "bid_price": safe_float(response.get("bid_price")),
-                                "bid_qty": safe_int(response.get("bid_quantity")),
-                                "ask_price": safe_float(response.get("offer_price")),
-                                "ask_qty": safe_int(response.get("offer_quantity")),
+                                "bid_price": safe_float(_bid),
+                                "bid_qty": safe_int(_bid_qty),
+                                "ask_price": safe_float(_ask),
+                                "ask_qty": safe_int(_ask_qty),
                                 "total_buy_qty": safe_float(response.get("total_buy_quantity")),
                                 "total_sell_qty": safe_float(response.get("total_sell_quantity")),
                                 # Only show OI for derivatives, 0 for equity
-                                "oi": safe_int(response.get("open_interest", 0))
-                                if is_derivative
-                                else 0,
+                                "oi": safe_int(_oi) if is_derivative else 0,
                                 "timestamp": response.get(
                                     "last_trade_time", int(datetime.now().timestamp() * 1000)
                                 ),
@@ -1448,6 +1503,8 @@ class BrokerData:
             "volume": quote.get("volume", 0),
             "bid": quote.get("bid_price", 0),
             "ask": quote.get("ask_price", 0),
+            "bid_qty": quote.get("bid_qty", 0),
+            "ask_qty": quote.get("ask_qty", 0),
             "oi": quote.get("oi", 0),  # Add Open Interest field
         }
 
@@ -1541,18 +1598,36 @@ class BrokerData:
 
         return result
 
-    def get_depth(self, symbol_list, timeout: int = 5) -> dict[str, Any]:
+    def get_depth(self, symbol_list, exchange=None, timeout: int = 5) -> dict[str, Any]:
         """
         Get market depth for a symbol or list of symbols using Groww API.
         This leverages the direct API endpoint for quotes, which includes market depth information.
 
         Args:
-            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
-            timeout (int): Timeout in seconds
+            symbol_list: A symbol string, dict {symbol, exchange}, or list thereof.
+            exchange: Exchange code (e.g. 'NSE', 'NFO') when ``symbol_list`` is a
+                bare string. Accepted for compatibility with the
+                ``(symbol, exchange)`` calling convention used by the rest of
+                the broker adapters / services layer.
+            timeout: Timeout in seconds.
 
         Returns:
             Dict[str, Any]: Market depth data in OpenAlgo format
         """
+        # Back-compat: legacy callers passed timeout in the second positional
+        # slot. If we got an int there, treat it as the timeout and ignore.
+        if isinstance(exchange, int) and not isinstance(exchange, bool):
+            timeout = exchange
+            exchange = None
+
+        # If a bare-string symbol came in along with an explicit exchange,
+        # promote to a dict so the segment mapping below is correct. This is
+        # the path the services layer (depth_service.get_depth) actually uses;
+        # without it, derivatives like SBIN26MAY26FUT default to NSE/CASH and
+        # Groww returns HTTP 400 GA001 "Bad Request".
+        if isinstance(symbol_list, str) and exchange:
+            symbol_list = {"symbol": symbol_list, "exchange": exchange}
+
         logger.info(f"Getting market depth using direct API calls for: {symbol_list}")
 
         # Make direct API call to get quote and depth data in a single request
@@ -1562,6 +1637,16 @@ class BrokerData:
         SEGMENT_CASH = "CASH"
         SEGMENT_FNO = "FNO"
 
+        # Bare-string symbols arrive without exchange info, so infer it
+        # from the symbol suffix — derivatives (FUT/CE/PE) must go to NFO
+        # so segment=FNO is sent to Groww. Defaulting to NSE/CASH for an
+        # F&O contract triggers HTTP 400 GA001 "Bad Request".
+        def _infer_exchange(sym_str: str) -> str:
+            s = sym_str.strip().upper()
+            if s.endswith("FUT") or s.endswith("CE") or s.endswith("PE"):
+                return "NFO"
+            return "NSE"
+
         # Standardize input to a list of dictionaries with exchange and symbol
         symbols_to_process = []
         if isinstance(symbol_list, dict):
@@ -1570,13 +1655,17 @@ class BrokerData:
             if symbol and exchange:
                 symbols_to_process.append({"symbol": symbol, "exchange": exchange})
         elif isinstance(symbol_list, str):
-            symbols_to_process.append({"symbol": symbol_list, "exchange": "NSE"})
+            symbols_to_process.append(
+                {"symbol": symbol_list, "exchange": _infer_exchange(symbol_list)}
+            )
         elif isinstance(symbol_list, list):
             for sym in symbol_list:
                 if isinstance(sym, dict) and "symbol" in sym and "exchange" in sym:
                     symbols_to_process.append(sym)
                 elif isinstance(sym, str):
-                    symbols_to_process.append({"symbol": sym, "exchange": "NSE"})
+                    symbols_to_process.append(
+                        {"symbol": sym, "exchange": _infer_exchange(sym)}
+                    )
 
         # No valid symbols to process
         if not symbols_to_process:
@@ -1643,7 +1732,7 @@ class BrokerData:
                 debug=True,
             )
 
-            logger.debug(f"Groww API raw response: {response}")
+            logger.info(f"Groww /v1/live-data/quote raw response for {trading_symbol}: {response}")
 
             # Check if we got a valid response with depth data
             if not response or response.get("status") != "SUCCESS" or "payload" not in response:
@@ -1770,17 +1859,13 @@ class BrokerData:
             logger.exception(f"Error getting market depth: {str(e)}")
             return {}
 
-    def get_market_depth(self, symbol_list, timeout: int = 5) -> dict[str, Any]:
+    def get_market_depth(self, symbol_list, exchange=None, timeout: int = 5) -> dict[str, Any]:
         """Alias for get_depth. Maintains API compatibility.
 
-        Args:
-            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
-            timeout (int): Timeout in seconds
-
-        Returns:
-            Dict[str, Any]: Market depth data in OpenAlgo format
+        Accepts both ``(symbol, exchange)`` and the legacy
+        ``(symbol_list, timeout)`` calling conventions.
         """
-        return self.get_depth(symbol_list, timeout)
+        return self.get_depth(symbol_list, exchange=exchange, timeout=timeout)
 
     def get_multiquotes(self, symbols: list) -> list:
         """
@@ -1848,25 +1933,30 @@ class BrokerData:
             exchange = item["exchange"]
 
             try:
-                # Get broker symbol from database - skip if not found
+                # Get broker symbol from database. The brsymbol stored in
+                # SymToken is already the format Groww expects (mirrors what
+                # the CSV's trading_symbol provides). Re-running the OpenAlgo
+                # → Groww regex on it would mangle valid Groww symbols whose
+                # shape happens to match the OpenAlgo pattern (e.g. JUN26
+                # contracts: "NIFTY26JUN22350PE" → "NIFTY22JUN350PE").
+                # Only convert from OpenAlgo when DB lookup misses.
                 br_symbol = get_br_symbol(symbol, exchange)
 
                 if not br_symbol:
-                    logger.warning(
-                        f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol"
-                    )
-                    skipped_symbols.append(
-                        {
-                            "symbol": symbol,
-                            "exchange": exchange,
-                            "error": "Could not resolve broker symbol",
-                        }
-                    )
-                    continue
-
-                # For derivatives, convert symbol format
-                if exchange in ["NFO", "BFO"]:
-                    br_symbol = self._convert_openalgo_to_groww_derivative_symbol(br_symbol)
+                    if exchange in ["NFO", "BFO"]:
+                        br_symbol = self._convert_openalgo_to_groww_derivative_symbol(symbol)
+                    if not br_symbol:
+                        logger.warning(
+                            f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol"
+                        )
+                        skipped_symbols.append(
+                            {
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "error": "Could not resolve broker symbol",
+                            }
+                        )
+                        continue
 
                 # Determine Groww exchange prefix
                 if exchange in ["NSE", "NFO", "NSE_INDEX"]:
@@ -1910,10 +2000,19 @@ class BrokerData:
             cash_results = self._fetch_ohlc_batch(cash_symbols, SEGMENT_CASH, symbol_map)
             results.extend(cash_results)
 
-        # Fetch FNO segment quotes
+        # FNO segment: hybrid path.
+        #   Step 1: OHLC batch (1 call) → fills LTP+OHLC for ALL strikes
+        #           instantly. Bid/ask/qty/volume/OI default to 0.
+        #   Step 2: best-effort per-symbol /v1/live-data/quote overlay
+        #           layers in bid/ask/qty/volume/OI/depth where we can.
+        # Groww has no multi-symbol full-snapshot endpoint and the per-
+        # symbol quote endpoint trips a hard 429 lockout under load, so
+        # this hybrid keeps the chain visible (LTP/OHLC always populated)
+        # while enriching what we can.
         if fno_symbols:
-            logger.info(f"Requesting OHLC for {len(fno_symbols)} FNO instruments")
+            logger.info(f"Requesting OHLC for {len(fno_symbols)} FNO instruments (baseline)")
             fno_results = self._fetch_ohlc_batch(fno_symbols, SEGMENT_FNO, symbol_map)
+            self._overlay_full_quotes(fno_results, fno_symbols, SEGMENT_FNO, symbol_map)
             results.extend(fno_results)
 
         # Include skipped symbols in results
@@ -1951,7 +2050,10 @@ class BrokerData:
                 debug=True,
             )
 
-            logger.debug(f"Groww OHLC API response: {response}")
+            logger.info(
+                f"Groww /v1/live-data/ohlc raw response (segment={segment}, "
+                f"count={len(exchange_symbols)}): {response}"
+            )
 
             # Check for valid response - handle invalid symbol errors with retry
             if not response or response.get("error"):
@@ -2040,17 +2142,43 @@ class BrokerData:
                     )
                     continue
 
-                # Parse OHLC data (can be dict or nested)
+                # Parse OHLC data. Groww's /v1/live-data/ohlc returns each
+                # value as a non-JSON STRING like
+                #   "{open: 149.50,high: 150.50,low: 148.50,close: 149.50}"
+                # so we have to parse manually. Some responses also send a
+                # dict directly, or (rarely) just the scalar LTP.
+                ohlc_dict = None
                 if isinstance(ohlc_data, dict):
-                    open_price = float(ohlc_data.get("open", 0))
-                    high_price = float(ohlc_data.get("high", 0))
-                    low_price = float(ohlc_data.get("low", 0))
-                    close_price = float(ohlc_data.get("close", 0))
+                    ohlc_dict = ohlc_data
+                elif isinstance(ohlc_data, str):
+                    try:
+                        parsed = {}
+                        for part in ohlc_data.strip("{} ").split(","):
+                            if ":" not in part:
+                                continue
+                            k, v = part.split(":", 1)
+                            parsed[k.strip()] = float(v.strip())
+                        if parsed:
+                            ohlc_dict = parsed
+                    except Exception as parse_err:
+                        logger.warning(
+                            f"Failed to parse OHLC string for {exchange_symbol}: "
+                            f"{ohlc_data!r} ({parse_err})"
+                        )
+
+                if ohlc_dict is not None:
+                    open_price = float(ohlc_dict.get("open", 0) or 0)
+                    high_price = float(ohlc_dict.get("high", 0) or 0)
+                    low_price = float(ohlc_dict.get("low", 0) or 0)
+                    close_price = float(ohlc_dict.get("close", 0) or 0)
                     # Use close as LTP for OHLC endpoint
                     ltp = close_price
                 else:
-                    # Scalar value (just LTP)
-                    ltp = float(ohlc_data) if ohlc_data else 0
+                    # Scalar fallback (just LTP)
+                    try:
+                        ltp = float(ohlc_data) if ohlc_data else 0
+                    except (TypeError, ValueError):
+                        ltp = 0
                     open_price = high_price = low_price = close_price = ltp
 
                 result_item = {
@@ -2084,3 +2212,235 @@ class BrokerData:
                 )
 
         return results
+
+    def _overlay_full_quotes(
+        self,
+        existing_results: list,
+        exchange_symbols: list,
+        segment: str,
+        symbol_map: dict,
+    ) -> None:
+        """
+        Best-effort overlay of bid/ask/qty/volume/OI/depth onto results that
+        already carry LTP/OHLC from the batch endpoint. Mutates
+        ``existing_results`` in place.
+
+        Per-symbol /v1/live-data/quote calls are issued sequentially with a
+        wide gap to avoid Groww's 429 lockout, and the loop aborts after a
+        run of consecutive failures so we never spin in a banned state.
+        Symbols whose overlay fails simply keep their LTP/OHLC baseline.
+        """
+        # 250ms gap = ~4 RPS — observed sustained safe rate on Groww Live Data.
+        REQUEST_INTERVAL = 0.25
+        # Stop overlaying after this many back-to-back 429s — Groww has put
+        # us in cooldown and continuing only delays the user.
+        MAX_CONSECUTIVE_429 = 4
+        # Index existing results so we can merge by (symbol, exchange).
+        result_index = {
+            (r.get("symbol"), r.get("exchange")): r for r in existing_results
+        }
+
+        def _fetch_one(exchange_symbol: str) -> dict:
+            original = symbol_map.get(exchange_symbol, {})
+            # exchange_symbol is "NSE_<trading_symbol>" or "BSE_<trading_symbol>"
+            try:
+                groww_exchange, trading_symbol = exchange_symbol.split("_", 1)
+            except ValueError:
+                return {
+                    "symbol": original.get("symbol", exchange_symbol),
+                    "exchange": original.get("exchange", "UNKNOWN"),
+                    "error": f"Malformed exchange_symbol: {exchange_symbol}",
+                }
+
+            try:
+                response = get_api_response(
+                    endpoint="/v1/live-data/quote",
+                    auth_token=self.auth_token,
+                    method="GET",
+                    params={
+                        "exchange": groww_exchange,
+                        "segment": segment,
+                        "trading_symbol": trading_symbol,
+                    },
+                    debug=False,
+                )
+            except Exception as fetch_err:
+                logger.warning(
+                    f"Quote fetch failed for {exchange_symbol}: {fetch_err}"
+                )
+                return {
+                    "symbol": original.get("symbol", exchange_symbol),
+                    "exchange": original.get("exchange", "UNKNOWN"),
+                    "error": str(fetch_err),
+                }
+
+            if (
+                not response
+                or response.get("status") != "SUCCESS"
+                or not isinstance(response.get("payload"), dict)
+            ):
+                err_msg = (response or {}).get("error") or "No quote data available"
+                return {
+                    "symbol": original.get("symbol", exchange_symbol),
+                    "exchange": original.get("exchange", "UNKNOWN"),
+                    "error": err_msg,
+                }
+
+            payload = response["payload"]
+
+            def _safe_float(v, default=0.0):
+                if v is None:
+                    return default
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return default
+
+            def _safe_int(v, default=0):
+                if v is None:
+                    return default
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return default
+
+            ohlc_raw = payload.get("ohlc")
+            ohlc = {}
+            if isinstance(ohlc_raw, dict):
+                ohlc = ohlc_raw
+            elif isinstance(ohlc_raw, str):
+                try:
+                    for part in ohlc_raw.strip("{} ").split(","):
+                        if ":" in part:
+                            k, v = part.split(":", 1)
+                            ohlc[k.strip()] = float(v.strip())
+                except Exception:
+                    ohlc = {}
+
+            depth_raw = payload.get("depth") or {}
+            buy_levels = depth_raw.get("buy") or []
+            sell_levels = depth_raw.get("sell") or []
+
+            top_bid = buy_levels[0] if buy_levels else {}
+            top_ask = sell_levels[0] if sell_levels else {}
+
+            bid = (
+                payload.get("bid_price")
+                if payload.get("bid_price") is not None
+                else top_bid.get("price")
+            )
+            ask = (
+                payload.get("offer_price")
+                if payload.get("offer_price") is not None
+                else top_ask.get("price")
+            )
+            bid_qty = (
+                payload.get("bid_quantity")
+                if payload.get("bid_quantity") is not None
+                else top_bid.get("quantity")
+            )
+            ask_qty = (
+                payload.get("offer_quantity")
+                if payload.get("offer_quantity") is not None
+                else top_ask.get("quantity")
+            )
+
+            depth_normalized = {
+                "buy": [
+                    {
+                        "price": _safe_float(level.get("price")),
+                        "quantity": _safe_int(level.get("quantity")),
+                        "orders": 0,
+                    }
+                    for level in buy_levels
+                    if _safe_float(level.get("price")) > 0
+                ],
+                "sell": [
+                    {
+                        "price": _safe_float(level.get("price")),
+                        "quantity": _safe_int(level.get("quantity")),
+                        "orders": 0,
+                    }
+                    for level in sell_levels
+                    if _safe_float(level.get("price")) > 0
+                ],
+            }
+
+            data = {
+                "ltp": _safe_float(payload.get("last_price")),
+                "open": _safe_float(ohlc.get("open")),
+                "high": _safe_float(ohlc.get("high")),
+                "low": _safe_float(ohlc.get("low")),
+                "close": _safe_float(ohlc.get("close")),
+                "prev_close": _safe_float(ohlc.get("close")),
+                "bid": _safe_float(bid),
+                "ask": _safe_float(ask),
+                "bid_qty": _safe_int(bid_qty),
+                "ask_qty": _safe_int(ask_qty),
+                "volume": _safe_int(payload.get("volume")),
+                "oi": _safe_int(payload.get("open_interest")),
+                "total_buy_qty": _safe_int(payload.get("total_buy_quantity")),
+                "total_sell_qty": _safe_int(payload.get("total_sell_quantity")),
+                "depth": depth_normalized,
+            }
+
+            return {
+                "symbol": original.get("symbol", exchange_symbol),
+                "exchange": original.get("exchange", "UNKNOWN"),
+                "data": data,
+            }
+
+        consecutive_429 = 0
+        overlaid = 0
+
+        for idx, exchange_symbol in enumerate(exchange_symbols):
+            if idx > 0:
+                time.sleep(REQUEST_INTERVAL)
+
+            quote_result = _fetch_one(exchange_symbol)
+            err_str = str(quote_result.get("error", ""))
+
+            if "429" in err_str or "Rate limit" in err_str:
+                consecutive_429 += 1
+                if consecutive_429 >= MAX_CONSECUTIVE_429:
+                    logger.warning(
+                        f"Aborting full-quote overlay after {consecutive_429} "
+                        f"consecutive 429s; remaining {len(exchange_symbols) - idx - 1} "
+                        f"strikes keep LTP/OHLC baseline only."
+                    )
+                    break
+                continue
+            consecutive_429 = 0
+
+            if "error" in quote_result or "data" not in quote_result:
+                continue
+
+            original = symbol_map.get(exchange_symbol, {})
+            target = result_index.get((original.get("symbol"), original.get("exchange")))
+            if not target or "data" not in target:
+                continue
+
+            quote_data = quote_result["data"]
+            # Merge enriched fields onto the OHLC baseline. Keep OHLC values
+            # from the batch (they're the authoritative LTP/open/high/low) and
+            # overlay everything else from the quote endpoint.
+            for key in (
+                "bid",
+                "ask",
+                "bid_qty",
+                "ask_qty",
+                "volume",
+                "oi",
+                "total_buy_qty",
+                "total_sell_qty",
+                "depth",
+            ):
+                if key in quote_data:
+                    target["data"][key] = quote_data[key]
+            overlaid += 1
+
+        logger.info(
+            f"Full-quote overlay: {overlaid}/{len(exchange_symbols)} strikes enriched "
+            f"with bid/ask/qty/volume/OI."
+        )
+
