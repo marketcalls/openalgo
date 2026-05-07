@@ -21,6 +21,69 @@ from .groww_mapping import GrowwCapabilityRegistry, GrowwExchangeMapper
 from .nats_websocket import GrowwNATSWebSocket
 
 
+class _GrowwMarketCache:
+    """Per-token merge cache for Groww.
+
+    Groww splits market data across two NATS topics: an LTP topic that
+    carries `ltp/open/high/low/close/volume/ltt`, and a Depth topic that
+    carries `buy[]/sell[]` book levels. Every other broker in OpenAlgo
+    delivers a unified payload on every depth tick, so the rest of the
+    pipeline (proxy, frontend) implicitly assumes a Depth-mode subscriber
+    sees LTP for free.
+
+    This cache is the broker-side reconciliation: each tick from either
+    topic merges its fields into the per-token entry, and the adapter
+    publishes the merged snapshot on every depth-mode publish. The result
+    looks identical to what Zerodha/Angel/Dhan would have published
+    natively in their full/depth mode.
+
+    Keyed by (groww_exchange, segment, token).
+    """
+
+    _LTP_FIELDS = ("ltp", "open", "high", "low", "close", "volume", "ltt")
+
+    def __init__(self):
+        self._cache: dict[tuple[str, str, str], dict] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(groww_exchange, segment, token):
+        return (str(groww_exchange or ""), str(segment or ""), str(token or ""))
+
+    def update_from_ltp(self, groww_exchange, segment, token, normalized: dict) -> dict:
+        """Merge ltp_data fields into cache; return a copy of the merged entry."""
+        key = self._key(groww_exchange, segment, token)
+        with self._lock:
+            entry = self._cache.setdefault(key, {})
+            for field in self._LTP_FIELDS:
+                v = normalized.get(field)
+                if v is not None:
+                    entry[field] = v
+            return dict(entry)
+
+    def update_from_depth(self, groww_exchange, segment, token, normalized: dict) -> dict:
+        """Merge depth_data into cache; return a copy of the merged entry."""
+        key = self._key(groww_exchange, segment, token)
+        with self._lock:
+            entry = self._cache.setdefault(key, {})
+            if "depth" in normalized:
+                entry["depth"] = normalized["depth"]
+            if "ltt" in normalized:
+                entry["ltt"] = normalized["ltt"]
+            return dict(entry)
+
+    def snapshot(self, groww_exchange, segment, token) -> dict:
+        with self._lock:
+            return dict(self._cache.get(self._key(groww_exchange, segment, token), {}))
+
+    def clear(self, groww_exchange=None, segment=None, token=None) -> None:
+        with self._lock:
+            if groww_exchange is None:
+                self._cache.clear()
+            else:
+                self._cache.pop(self._key(groww_exchange, segment, token), None)
+
+
 class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Groww-specific implementation of the WebSocket adapter"""
 
@@ -33,6 +96,23 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.lock = threading.Lock()
         self.subscription_keys = {}  # Map correlation_id to subscription keys
+
+        # Batch subscription management — hybrid leading+trailing-edge debounce
+        # (mirrors shoonya_adapter). The FIRST call after a quiet window flushes
+        # immediately so a single-symbol UI click pays ~0ms of adapter overhead.
+        # Subsequent calls within `batch_delay` of the last flush wait it out so
+        # bursts (e.g. /optionchain) coalesce into one batch SUB frame.
+        self.subscription_queue = []  # list of pending subscribe specs
+        self.batch_lock = threading.Lock()
+        self.batch_timer = None
+        self._last_batch_flush_at = 0.0
+        self.batch_delay = 0.5  # 500ms debounce window
+
+        # Per-token LTP/Depth merge cache. See _GrowwMarketCache docstring.
+        self.market_cache = _GrowwMarketCache()
+        # primary_correlation_id -> shadow_correlation_id (for depth subs that
+        # spawn an internal LTP sub so the cache stays fed).
+        self.shadow_correlation_ids: dict[str, str] = {}
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -86,10 +166,12 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.connected = True
             self.logger.info("Connected to Groww WebSocket successfully")
 
-            # Resubscribe to existing subscriptions if any
+            # Snapshot existing subscriptions, replay them in one batch.
             with self.lock:
-                for correlation_id, sub_info in self.subscriptions.items():
-                    self._resubscribe(correlation_id, sub_info)
+                existing = list(self.subscriptions.items())
+
+            if existing:
+                self._resubscribe_batch(existing)
 
         except Exception as e:
             self.logger.error(f"Failed to connect to Groww WebSocket: {e}")
@@ -157,6 +239,16 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.subscriptions.clear()
             self.subscription_keys.clear()
 
+            # Cancel any pending batch flush and drop queued specs
+            if self.batch_timer:
+                try:
+                    self.batch_timer.cancel()
+                except Exception:
+                    pass
+                self.batch_timer = None
+            with self.batch_lock:
+                self.subscription_queue.clear()
+
             self.logger.info("Calling disconnect() to terminate Groww connection...")
             try:
                 self.disconnect()
@@ -202,6 +294,16 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Disconnect from Groww WebSocket with proper cleanup"""
         self.logger.info("Starting Groww adapter disconnect sequence...")
         self.running = False
+
+        # Cancel any pending batch flush
+        if self.batch_timer:
+            try:
+                self.batch_timer.cancel()
+            except Exception:
+                pass
+            self.batch_timer = None
+        with self.batch_lock:
+            self.subscription_queue.clear()
 
         try:
             # Disconnect WebSocket client
@@ -306,7 +408,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
-        # Store subscription for reconnection
+        # Store subscription for reconnection. instrumenttype is stored so the
+        # index→LTP redirect in subscribe_batch picks the right path on a
+        # reconnect-driven resubscribe.
         with self.lock:
             self.subscriptions[correlation_id] = {
                 "symbol": symbol,
@@ -317,52 +421,102 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "token": token,
                 "mode": mode,
                 "depth_level": depth_level,
+                "instrumenttype": instrumenttype,
             }
 
-        # Subscribe if connected
+        # Queue subscription for batch processing if connected
         if self.connected and self.ws_client:
-            try:
-                if mode in [1, 2]:  # LTP or Quote mode
-                    if mode == 2:
-                        self.logger.debug(
-                            f"QUOTE subscription for {symbol} - Groww only provides LTP, OHLCV will be 0"
-                        )
-                    sub_key = self.ws_client.subscribe_ltp(
-                        groww_exchange, segment, token, symbol, instrumenttype
+            # Resolve depth->LTP redirect for indices upfront so subscription mode
+            # used for data matching reflects what the server will actually send.
+            sub_type = "ltp"
+            if mode == 3:
+                if instrumenttype == "INDEX" or "INDEX" in exchange:
+                    self.logger.info(
+                        f"Indices don't have depth data. Converting to LTP for {symbol}"
                     )
-                elif mode == 3:  # Depth mode
-                    # Check if this is an index - indices don't have depth data
-                    if instrumenttype == "INDEX" or "INDEX" in exchange:
-                        self.logger.info(
-                            f"Indices don't have depth data. Converting to LTP for {symbol}"
-                        )
-                        # Subscribe to LTP instead for indices
-                        sub_key = self.ws_client.subscribe_ltp(
-                            groww_exchange, segment, token, symbol, instrumenttype
-                        )
-                        # Update the mode in subscription info for proper matching
-                        self.subscriptions[correlation_id]["mode"] = 1  # Change to LTP mode
-                    else:
-                        # Enhanced logging for BSE depth subscriptions
-                        # Subscribe to depth for non-index instruments
-                        sub_key = self.ws_client.subscribe_depth(
-                            groww_exchange, segment, token, symbol, instrumenttype
-                        )
-
-                # Store subscription key for unsubscribe
-                self.subscription_keys[correlation_id] = sub_key
-
-                mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
-                self.logger.info(
-                    f"Subscribed to {symbol}.{exchange} in {mode_name} mode"
+                    with self.lock:
+                        self.subscriptions[correlation_id]["mode"] = 1  # for matching
+                    sub_type = "ltp"
+                else:
+                    sub_type = "depth"
+            elif mode == 2:
+                self.logger.debug(
+                    f"QUOTE subscription for {symbol} - Groww only provides LTP, OHLCV will be 0"
                 )
 
-                if exchange in ["NFO", "BFO"]:
-                    self.logger.debug(f"F&O subscription key created: {sub_key}")
+            with self.batch_lock:
+                self.subscription_queue.append(
+                    {
+                        "correlation_id": correlation_id,
+                        "sub_type": sub_type,
+                        "groww_exchange": groww_exchange,
+                        "segment": segment,
+                        "token": token,
+                        "symbol": symbol,
+                        "instrumenttype": instrumenttype,
+                        "exchange": exchange,
+                        "mode": mode,
+                    }
+                )
 
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+                # Auto-shadow LTP for non-index Depth subscriptions.
+                # Groww's depth NATS topic carries no LTP/OHLC/volume — without
+                # this shadow, Depth-mode clients would never see those fields.
+                # The shadow uses a unique sub_key so its NATS SID doesn't
+                # collide with a real LTP sub on the same token.
+                if (
+                    sub_type == "depth"
+                    and instrumenttype != "INDEX"
+                    and "INDEX" not in exchange.upper()
+                ):
+                    shadow_correlation_id = f"_shadow_ltp_{correlation_id}"
+                    shadow_sub_key = f"_shadow_ltp_{correlation_id}"
+                    self.shadow_correlation_ids[correlation_id] = shadow_correlation_id
+                    # Track the shadow in self.subscriptions so reconnect-driven
+                    # _resubscribe_batch replays it. is_shadow=True keeps it out
+                    # of the _on_data fan-out.
+                    with self.lock:
+                        self.subscriptions[shadow_correlation_id] = {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "groww_exchange": groww_exchange,
+                            "segment": segment,
+                            "brexchange": brexchange,
+                            "token": token,
+                            "mode": 1,
+                            "depth_level": 0,
+                            "instrumenttype": instrumenttype,
+                            "is_shadow": True,
+                            "primary_correlation_id": correlation_id,
+                        }
+                    self.subscription_queue.append(
+                        {
+                            "correlation_id": shadow_correlation_id,
+                            "sub_type": "ltp",
+                            "groww_exchange": groww_exchange,
+                            "segment": segment,
+                            "token": token,
+                            "symbol": symbol,
+                            "instrumenttype": instrumenttype,
+                            "exchange": exchange,
+                            "mode": 1,
+                            "sub_key_override": shadow_sub_key,
+                        }
+                    )
+                    self.logger.debug(
+                        f"Auto-shadow LTP for {symbol}.{exchange} (paired with depth sub)"
+                    )
+
+                flush_now = self._schedule_batch_flush_locked()
+
+            if flush_now:
+                # Outside the lock — _process_batch_subscriptions reacquires it.
+                self._process_batch_subscriptions()
+
+            mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
+            self.logger.info(
+                f"Queued subscription for {symbol}.{exchange} in {mode_name} mode"
+            )
 
         mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
         return self._create_success_response(
@@ -389,54 +543,221 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
         # Check if subscribed
+        sub_info_for_cache: dict[str, Any] | None = None
         with self.lock:
             if correlation_id not in self.subscriptions:
                 return self._create_error_response(
                     "NOT_SUBSCRIBED", f"Not subscribed to {symbol}.{exchange}"
                 )
 
+            # Capture cache key fields before removing
+            sub_info_for_cache = dict(self.subscriptions[correlation_id])
             # Remove from subscriptions
             del self.subscriptions[correlation_id]
 
-        # Unsubscribe if we have a subscription key
-        if correlation_id in self.subscription_keys:
-            sub_key = self.subscription_keys[correlation_id]
+        # If this primary had a shadow LTP, remove that too. The shadow
+        # exists only for depth-mode primaries.
+        shadow_correlation_id = self.shadow_correlation_ids.pop(correlation_id, None)
+        if shadow_correlation_id is not None:
+            with self.lock:
+                self.subscriptions.pop(shadow_correlation_id, None)
 
-            if self.connected and self.ws_client:
-                try:
-                    self.ws_client.unsubscribe(sub_key)
-                    self.logger.info(f"Unsubscribed from {symbol}.{exchange}")
-                except Exception as e:
-                    self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+        # Take batch_lock to either drop a still-queued spec, or pop the
+        # subscription key written by an in-flight flush. Holding this lock
+        # serializes us against _process_batch_subscriptions, which is what
+        # closes the unsubscribe-vs-in-flight race.
+        sub_key = None
+        shadow_sub_key = None
+        with self.batch_lock:
+            self.subscription_queue = [
+                item
+                for item in self.subscription_queue
+                if item.get("correlation_id") not in (correlation_id, shadow_correlation_id)
+            ]
+            sub_key = self.subscription_keys.pop(correlation_id, None)
+            if shadow_correlation_id is not None:
+                shadow_sub_key = self.subscription_keys.pop(shadow_correlation_id, None)
 
-            del self.subscription_keys[correlation_id]
+        # Network I/O outside the lock
+        if sub_key is not None and self.connected and self.ws_client:
+            try:
+                self.ws_client.unsubscribe(sub_key)
+                self.logger.info(f"Unsubscribed from {symbol}.{exchange}")
+            except Exception as e:
+                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+
+        if shadow_sub_key is not None and self.connected and self.ws_client:
+            try:
+                self.ws_client.unsubscribe(shadow_sub_key)
+                self.logger.debug(
+                    f"Unsubscribed shadow LTP for {symbol}.{exchange}"
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Error unsubscribing shadow LTP for {symbol}.{exchange}: {e}"
+                )
+
+        # Clear the cache entry — only if no other sub still uses this token.
+        if sub_info_for_cache:
+            self._maybe_clear_cache_entry(sub_info_for_cache)
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
         )
 
-    def _resubscribe(self, correlation_id: str, sub_info: dict):
-        """Resubscribe to a symbol after reconnection"""
+    def _maybe_clear_cache_entry(self, sub_info: dict) -> None:
+        """Drop the merge cache entry for this token if no live subscription
+        still references it. Walks self.subscriptions under self.lock."""
+        groww_exch = sub_info.get("groww_exchange")
+        segment = sub_info.get("segment")
+        token = sub_info.get("token")
+        if groww_exch is None or token is None:
+            return
+        with self.lock:
+            for sub in self.subscriptions.values():
+                if (
+                    sub.get("groww_exchange") == groww_exch
+                    and sub.get("segment") == segment
+                    and str(sub.get("token")) == str(token)
+                ):
+                    return  # still in use
+        self.market_cache.clear(groww_exch, segment, token)
+
+    def _schedule_batch_flush_locked(self) -> bool:
+        """Decide whether to flush the subscribe queue now (leading edge) or
+        schedule a timer for the end of the current debounce window.
+        Caller must hold ``self.batch_lock``. Returns True if the caller
+        should call ``_process_batch_subscriptions`` synchronously after
+        releasing the lock.
+        """
+        elapsed = time.time() - self._last_batch_flush_at
+        if elapsed >= self.batch_delay:
+            # Quiet window — flush immediately. Mark the time now so any
+            # racing call within batch_delay schedules a timer instead.
+            self._last_batch_flush_at = time.time()
+            if self.batch_timer:
+                try:
+                    self.batch_timer.cancel()
+                except Exception:
+                    pass
+                self.batch_timer = None
+            return True
+
+        # In the debounce window — ensure a timer is scheduled to flush
+        # at the end of it. Don't restart an already-running timer (that
+        # would push the deadline back indefinitely under sustained load).
+        if self.batch_timer is None:
+            delay = max(0.0, self.batch_delay - elapsed)
+            self.batch_timer = threading.Timer(delay, self._process_batch_subscriptions)
+            self.batch_timer.daemon = True
+            self.batch_timer.start()
+        return False
+
+    def _process_batch_subscriptions(self):
+        """Drain the subscription queue and submit it as a single batch.
+
+        The whole flush — drain, WS network call, ``subscription_keys`` write —
+        runs under ``batch_lock``. That gives ``unsubscribe()`` two clean cases
+        (acquired before the flush → spec still in queue, drop it; acquired
+        after → ``subscription_keys`` already populated, send WS UNSUB) instead
+        of a window where the spec is "in flight" with no key yet written.
+        """
+        with self.batch_lock:
+            self.batch_timer = None
+            if not self.subscription_queue:
+                return
+            queue = list(self.subscription_queue)
+            self.subscription_queue.clear()
+            self._last_batch_flush_at = time.time()
+
+            if not self.connected or not self.ws_client:
+                self.logger.warning(
+                    f"Skipping batch flush of {len(queue)} subscriptions - not connected"
+                )
+                return
+
+            try:
+                batch_specs = []
+                for item in queue:
+                    spec = {
+                        "type": item["sub_type"],
+                        # Broker-side exchange (NSE/BSE) — used by topic gen.
+                        "exchange": item["groww_exchange"],
+                        # OpenAlgo-facing exchange (NFO/BFO/NSE_INDEX/...) —
+                        # used by the WS dispatcher to set data["exchange"]
+                        # so the adapter's match loop sees the same string
+                        # the user subscribed with.
+                        "openalgo_exchange": item["exchange"],
+                        "segment": item["segment"],
+                        "token": item["token"],
+                        "symbol": item["symbol"],
+                        "instrumenttype": item["instrumenttype"],
+                    }
+                    # sub_key_override is set for shadow LTP specs so they
+                    # don't collide with a real LTP sub on the same token.
+                    if item.get("sub_key_override"):
+                        spec["sub_key"] = item["sub_key_override"]
+                    batch_specs.append(spec)
+
+                self.logger.info(f"📦 Batch subscribing {len(batch_specs)} symbols")
+                sub_keys = self.ws_client.subscribe_batch(batch_specs)
+
+                for item, sub_key in zip(queue, sub_keys):
+                    self.subscription_keys[item["correlation_id"]] = sub_key
+
+                    if item["exchange"] in ["NFO", "BFO"]:
+                        self.logger.debug(
+                            f"F&O subscription key created: {sub_key}"
+                        )
+            except Exception as e:
+                self.logger.error(f"Batch subscription failed: {e}", exc_info=True)
+
+    def _resubscribe_batch(self, existing: list) -> None:
+        """Replay all known subscriptions to the WS in a single batch flush.
+
+        Mirrors _process_batch_subscriptions: holds batch_lock across the WS
+        round-trip and the subscription_keys writes, so a concurrent
+        unsubscribe() observes a consistent state.
+        """
+        if not self.connected or not self.ws_client:
+            return
+
+        batch_specs: list[dict] = []
+        correlation_ids: list[str] = []
+        for correlation_id, sub_info in existing:
+            mode = sub_info.get("mode")
+            sub_type = "depth" if mode == 3 else "ltp"
+            spec = {
+                "type": sub_type,
+                "exchange": sub_info["groww_exchange"],
+                "openalgo_exchange": sub_info["exchange"],
+                "segment": sub_info["segment"],
+                "token": sub_info["token"],
+                "symbol": sub_info["symbol"],
+                "instrumenttype": sub_info.get("instrumenttype"),
+            }
+            # Shadow LTP subs replay with the same unique sub_key so they
+            # don't collide with a real LTP sub on the same token after
+            # reconnect. correlation_id `_shadow_ltp_<...>` is stable.
+            if sub_info.get("is_shadow"):
+                spec["sub_key"] = correlation_id
+            batch_specs.append(spec)
+            correlation_ids.append(correlation_id)
+
+        if not batch_specs:
+            return
+
         try:
-            groww_exchange = sub_info["groww_exchange"]
-            segment = sub_info["segment"]
-            token = sub_info["token"]
-            mode = sub_info["mode"]
-
-            if mode in [1, 2]:  # LTP or Quote mode
-                sub_key = self.ws_client.subscribe_ltp(
-                    groww_exchange, segment, token, sub_info["symbol"]
-                )
-            elif mode == 3:  # Depth mode
-                sub_key = self.ws_client.subscribe_depth(
-                    groww_exchange, segment, token, sub_info["symbol"]
-                )
-
-            self.subscription_keys[correlation_id] = sub_key
-            self.logger.info(f"Resubscribed to {sub_info['symbol']}.{sub_info['exchange']}")
-
+            self.logger.info(
+                f"📦 Reconnect: batch resubscribing {len(batch_specs)} symbols"
+            )
+            with self.batch_lock:
+                sub_keys = self.ws_client.subscribe_batch(batch_specs)
+                for cid, sub_key in zip(correlation_ids, sub_keys):
+                    self.subscription_keys[cid] = sub_key
+                self._last_batch_flush_at = time.time()
         except Exception as e:
-            self.logger.error(f"Error resubscribing: {e}")
+            self.logger.error(f"Error in batch resubscribe: {e}", exc_info=True)
 
     def _on_data(self, data: dict[str, Any]) -> None:
         """Callback for market data from WebSocket"""
@@ -458,9 +779,10 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 return
 
-            # Find matching subscription based on the data
-            subscription = None
-            correlation_id = None
+            # Collect matching primary subscriptions (shadows skipped). One
+            # tick can fan out to multiple primaries when an LTP tick lands
+            # for a token that has both LTP/Quote and Depth subs active.
+            matches: list[tuple[str, dict]] = []
 
             # Data from NATS will have symbol, exchange, and mode fields
             if "symbol" in data and "exchange" in data:
@@ -485,15 +807,22 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
 
-                # Find matching subscription based on symbol, exchange and mode
+                # Find matching subscription(s) based on symbol, exchange, mode.
+                # Multiple matches per tick are possible: an LTP tick can fan
+                # out to BOTH a primary LTP/Quote sub and a primary Depth sub
+                # for the same symbol (the depth sub uses the LTP via the
+                # merge cache). Shadow subs are skipped — they exist only to
+                # keep the LTP NATS topic subscribed.
                 with self.lock:
                     for cid, sub in self.subscriptions.items():
+                        if sub.get("is_shadow"):
+                            continue
+
                         self.logger.debug(
                             f"Checking {cid}: symbol={sub.get('symbol')}, exchange={sub.get('exchange')}, groww_exchange={sub.get('groww_exchange')}, mode={sub.get('mode')}"
                         )
 
                         # For index subscriptions, the OpenAlgo exchange is NSE_INDEX/BSE_INDEX but Groww sends NSE/BSE
-                        # Check if this is an index subscription
                         is_index_match = (
                             (mode == "index" or mode == "index_depth")
                             and (
@@ -503,14 +832,14 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             and sub["symbol"] == symbol_from_data
                         )
 
-                        # Regular match based on symbol, exchange and mode
-                        # CRITICAL: Match with the original exchange, not groww_exchange
-                        # Data from NATS has exchange='NSE' which should match sub['exchange']='NSE'
+                        # Regular match — note that an LTP tick now matches
+                        # depth-mode subs too (sub.mode in [1,2,3]) so the
+                        # cache stays fed for the merged-payload publish.
                         is_regular_match = (
                             sub["symbol"] == symbol_from_data
                             and sub["exchange"] == exchange
                             and (
-                                (mode == "ltp" and sub["mode"] in [1, 2])
+                                (mode == "ltp" and sub["mode"] in [1, 2, 3])
                                 or (mode == "depth" and sub["mode"] == 3)
                                 or (mode == "index" and sub["mode"] in [1, 2])
                                 or (mode == "index_depth" and sub["mode"] == 3)
@@ -518,12 +847,12 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         )
 
                         if is_index_match or is_regular_match:
-                            subscription = sub
-                            correlation_id = cid
+                            matches.append((cid, sub))
                             self.logger.debug(f"Matched subscription: {cid}")
-                            break
 
-            # Try to match based on exchange token from protobuf data
+            # Token-based fallback path (non-NATS legacy callers).
+            # Build a single-match `matches` list so the publish loop below
+            # handles both code paths uniformly.
             elif "exchange_token" in data or "token" in data:
                 token = data.get("exchange_token") or data.get("token")
                 segment = data.get("segment", "CASH")
@@ -533,127 +862,57 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"Processing message with token: {token}, segment: {segment}, exchange: {exchange}"
                 )
 
-                # Find matching subscription
                 with self.lock:
                     for cid, sub in self.subscriptions.items():
+                        if sub.get("is_shadow"):
+                            continue
                         if (
                             str(sub["token"]) == str(token)
                             and sub["segment"] == segment
                             and sub["groww_exchange"] == exchange
                         ):
-                            subscription = sub
-                            correlation_id = cid
+                            matches.append((cid, sub))
                             break
 
-            if not subscription:
+            if not matches:
                 self.logger.debug(f"Received data for unsubscribed token/symbol: {data}")
                 return
 
-            # Extract symbol and exchange from subscription
-            symbol = subscription["symbol"]
-            # Always use the subscription's exchange for correct labeling (NSE_INDEX, BSE_INDEX, etc.)
-            exchange = subscription["exchange"]
-            subscription_mode = subscription["mode"]
-
-            # CRITICAL FIX: Like Angel, use the actual data mode from the message if available
-            # This ensures proper mode handling for all data types
-            actual_mode = data.get("mode", subscription_mode)
-
-            # If we have ltp_data, it's always LTP mode (mode 1)
+            # Determine the tick type from the data shape — independent of
+            # any specific match's subscription mode, since one tick can fan
+            # out to multiple matches with different modes.
             if "ltp_data" in data:
-                actual_mode = 1
+                tick_kind = 1  # LTP/Quote-shaped tick
             elif "depth_data" in data:
-                actual_mode = 3
-            elif subscription_mode == 2:  # Quote mode
-                actual_mode = 2
+                tick_kind = 3  # Depth-shaped tick
+            elif "index_data" in data:
+                tick_kind = 1  # Treat index ticks as LTP-shaped
+            else:
+                tick_kind = 1  # default — same as before
 
-            # Important: Create topic in the same format as Angel using ACTUAL mode
-            # Format: EXCHANGE_SYMBOL_MODE (without broker name, like Angel does)
-            mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}[actual_mode]
-            topic = f"{exchange}_{symbol}_{mode_str}"
+            # Normalize once for this tick. For ltp_data ticks we use mode=2
+            # (Quote) so the normalizer keeps OHLC/volume — the cache needs
+            # them to build a complete merged payload for depth-mode subs.
+            # The mode arg only affects the ltp_data branch of the normalizer.
+            if tick_kind == 1:
+                normalized = self._normalize_market_data(data, 2)
+            else:
+                normalized = self._normalize_market_data(data, tick_kind)
 
-            # Normalize the data using actual mode
-            market_data = self._normalize_market_data(data, actual_mode)
-
-            # Add metadata - ensure all required fields for frontend
-            market_data.update(
-                {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "mode": actual_mode,  # Use actual mode, not subscription mode
-                    "timestamp": int(time.time() * 1000),
-                    "broker": "groww",  # Add broker identifier
-                    "topic": topic,  # Add topic for debugging
-                    "subscription_mode": subscription_mode,  # Keep original subscription mode for reference
-                }
-            )
-
-            # Add mode-specific enhancements for frontend compatibility
-            if actual_mode == 1:  # LTP mode
-                # Ensure we have a valid LTP value - CRITICAL for frontend display
-                if (
-                    "ltp" not in market_data
-                    or market_data["ltp"] is None
-                    or market_data["ltp"] == 0
-                ):
-                    # Try to get LTP from different possible fields
-                    ltp_value = (
-                        market_data.get("ltp")
-                        or market_data.get("last_price")
-                        or market_data.get("last_traded_price")
-                        or data.get("ltp_data", {}).get("ltp")
-                        if "ltp_data" in data
-                        else None or data.get("ltp") or 0.0
-                    )
-                    market_data["ltp"] = float(ltp_value) if ltp_value else 0.0
-
-                    if market_data["ltp"] == 0:
-                        self.logger.warning(f"⚠️ NO VALID LTP DATA for {symbol}, check data source")
-                    else:
-                        self.logger.debug(f"LTP recovered for {symbol}: {market_data['ltp']}")
-
-                # Ensure LTP timestamp
-                if "ltt" not in market_data:
-                    market_data["ltt"] = int(time.time() * 1000)
-
-                self.logger.debug(
-                    f"LTP MODE: {exchange}:{symbol} = {market_data['ltp']} at {market_data.get('ltt')}"
+            # Update the per-token merge cache. The cache key is
+            # (groww_exchange, segment, token) — consistent across all
+            # matches for the same instrument.
+            sample_sub = matches[0][1]
+            cache_groww_exch = sample_sub.get("groww_exchange")
+            cache_segment = sample_sub.get("segment")
+            cache_token = sample_sub.get("token")
+            if tick_kind == 3:
+                merged = self.market_cache.update_from_depth(
+                    cache_groww_exch, cache_segment, cache_token, normalized
                 )
-
-            elif actual_mode == 2:  # Quote mode
-                # Ensure all quote fields are present for frontend
-                quote_fields = ["open", "high", "low", "close", "volume", "ltp"]
-                for field in quote_fields:
-                    if field not in market_data:
-                        market_data[field] = 0.0 if field != "volume" else 0
-
-                # Ensure LTP is also available in quote mode
-                if "ltp" not in market_data or market_data["ltp"] is None:
-                    ltp_value = (
-                        data.get("ltp_data", {}).get("ltp")
-                        if "ltp_data" in data
-                        else None or data.get("ltp") or 0.0
-                    )
-                    market_data["ltp"] = float(ltp_value) if ltp_value else 0.0
-
-                self.logger.debug(
-                    f"QUOTE MODE: {exchange}:{symbol} = {market_data['ltp']} (Vol: {market_data.get('volume', 0)})"
-                )
-
-            elif actual_mode == 3:  # Depth mode
-                # Ensure depth structure is complete
-                if "depth" not in market_data:
-                    market_data["depth"] = {"buy": [], "sell": []}
-                    self.logger.warning(f"No depth data for {symbol}, creating empty structure")
-
-                # Also ensure LTP is available in depth mode
-                if "ltp" not in market_data:
-                    market_data["ltp"] = 0.0
-
-                buy_levels = len(market_data["depth"].get("buy", []))
-                sell_levels = len(market_data["depth"].get("sell", []))
-                self.logger.debug(
-                    f"DEPTH MODE: {exchange}:{symbol} = {buy_levels}B/{sell_levels}S levels"
+            else:
+                merged = self.market_cache.update_from_ltp(
+                    cache_groww_exch, cache_segment, cache_token, normalized
                 )
 
             # Track message count for periodic logging
@@ -661,22 +920,123 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._message_count = 0
             self._message_count += 1
 
-            # Periodic logging - log first message and then every 500th
-            if self._message_count == 1 or self._message_count % 500 == 0:
-                mode_name = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}[actual_mode]
-                ltp_info = (
-                    f"LTP: {market_data.get('ltp', 'N/A')}"
-                    if actual_mode in [1, 2]
-                    else f"Depth: {len(market_data.get('depth', {}).get('buy', []))}B/{len(market_data.get('depth', {}).get('sell', []))}S"
-                )
-                self.logger.info(
-                    f"Publishing #{self._message_count}: {topic} ({mode_name}) -> {ltp_info}"
+            # Publish per match — each user subscription gets its own topic
+            # and an appropriately shaped payload. Depth-mode users always
+            # see the merged snapshot (LTP+OHLC+volume+depth); LTP/Quote-mode
+            # users see the raw normalized LTP fields.
+            for cid, subscription in matches:
+                sub_symbol = subscription["symbol"]
+                sub_exchange = subscription["exchange"]
+                sub_mode = subscription["mode"]
+
+                if sub_mode == 3:
+                    # Depth user — always publish merged snapshot, regardless
+                    # of which topic this tick came from. Merged contains the
+                    # latest LTP/OHLC/volume from the most recent LTP tick
+                    # PLUS the latest depth from the most recent Depth tick.
+                    if not merged:
+                        # Cache empty — nothing useful to publish yet.
+                        continue
+                    market_data = dict(merged)
+                    actual_mode = 3
+                elif sub_mode in (1, 2):
+                    # LTP/Quote user — only LTP-shaped ticks apply. Skip
+                    # depth ticks (they don't add anything for these subs).
+                    if tick_kind == 3:
+                        continue
+                    market_data = dict(normalized)
+                    actual_mode = sub_mode
+                else:
+                    continue
+
+                mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}[actual_mode]
+                topic = f"{sub_exchange}_{sub_symbol}_{mode_str}"
+
+                market_data.update(
+                    {
+                        "symbol": sub_symbol,
+                        "exchange": sub_exchange,
+                        "mode": actual_mode,
+                        "timestamp": int(time.time() * 1000),
+                        "broker": "groww",
+                        "topic": topic,
+                        "subscription_mode": sub_mode,
+                    }
                 )
 
-            # Publish to ZeroMQ
-            self.publish_market_data(topic, market_data)
+                # Mode-specific guarantees, lifted from the previous single-
+                # publish block.
+                if actual_mode == 1:
+                    if "ltt" not in market_data:
+                        market_data["ltt"] = int(time.time() * 1000)
+                    self.logger.debug(
+                        f"LTP MODE: {sub_exchange}:{sub_symbol} = {market_data.get('ltp')} at {market_data.get('ltt')}"
+                    )
+                elif actual_mode == 2:
+                    quote_fields = ["open", "high", "low", "close", "volume", "ltp"]
+                    for field in quote_fields:
+                        if field not in market_data:
+                            market_data[field] = 0.0 if field != "volume" else 0
+                    self.logger.debug(
+                        f"QUOTE MODE: {sub_exchange}:{sub_symbol} = {market_data.get('ltp')} (Vol: {market_data.get('volume', 0)})"
+                    )
+                elif actual_mode == 3:
+                    if "depth" not in market_data:
+                        market_data["depth"] = {"buy": [], "sell": []}
+                        self.logger.warning(
+                            f"No depth data for {sub_symbol}, creating empty structure"
+                        )
+                    buy_levels = market_data["depth"].get("buy", [])
+                    sell_levels = market_data["depth"].get("sell", [])
 
-            self.logger.debug(f"ZMQ Published: {topic}")
+                    # Lift top-of-book into flat top-level fields so consumers
+                    # that don't unpack the depth array (option chain merger
+                    # via bid_price fallback, snapshot endpoint, WebSocketTest
+                    # UI) still see populated bid/ask/qty. Only emit fields
+                    # that have real values — leaving them absent lets
+                    # downstream `??` fallbacks retain previous good values
+                    # instead of overwriting with 0.
+                    if buy_levels:
+                        top_bid = buy_levels[0]
+                        bid_price = top_bid.get("price")
+                        bid_qty = top_bid.get("quantity")
+                        if bid_price:
+                            market_data["bid"] = bid_price
+                            market_data["bid_price"] = bid_price
+                        if bid_qty:
+                            market_data["bid_qty"] = bid_qty
+                            market_data["bid_size"] = bid_qty
+                            market_data["bid_quantity"] = bid_qty
+                    if sell_levels:
+                        top_ask = sell_levels[0]
+                        ask_price = top_ask.get("price")
+                        ask_qty = top_ask.get("quantity")
+                        if ask_price:
+                            market_data["ask"] = ask_price
+                            market_data["ask_price"] = ask_price
+                            market_data["offer_price"] = ask_price
+                        if ask_qty:
+                            market_data["ask_qty"] = ask_qty
+                            market_data["ask_size"] = ask_qty
+                            market_data["ask_quantity"] = ask_qty
+                            market_data["offer_quantity"] = ask_qty
+
+                    self.logger.debug(
+                        f"DEPTH MODE: {sub_exchange}:{sub_symbol} = {len(buy_levels)}B/{len(sell_levels)}S levels (merged with LTP={market_data.get('ltp', 'N/A')}, bid={market_data.get('bid', 'N/A')}, ask={market_data.get('ask', 'N/A')})"
+                    )
+
+                if self._message_count == 1 or self._message_count % 500 == 0:
+                    ltp_info = (
+                        f"LTP: {market_data.get('ltp', 'N/A')}"
+                        if actual_mode in [1, 2]
+                        else f"Depth: {len(market_data.get('depth', {}).get('buy', []))}B/{len(market_data.get('depth', {}).get('sell', []))}S, LTP: {market_data.get('ltp', 'N/A')}"
+                    )
+                    self.logger.info(
+                        f"Publishing #{self._message_count}: {topic} ({mode_str}) -> {ltp_info}"
+                    )
+
+                self.publish_market_data(topic, market_data)
+                self.logger.debug(f"ZMQ Published: {topic}")
 
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
@@ -742,37 +1102,34 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "volume": ltp_data.get("volume", 0),
                 }
 
-        # Handle depth data from protobuf
+        # Handle depth data from protobuf.
+        #
+        # Groww splits LTP/OHLC/volume (LTP topic) and bid/ask depth (Depth
+        # topic) into separate NATS feeds, so a depth tick legitimately
+        # carries no LTP/OHLC/volume. We deliberately omit those keys from
+        # the published payload — emitting them as 0 here would clobber the
+        # last good values cached downstream (frontend MarketDataManager,
+        # WebSocket proxy, option chain merger), since their `??` fallbacks
+        # only catch null/undefined.
+        #
+        # Same logic for empty depth levels: Groww pads buy/sell with
+        # placeholder `{price:0, quantity:0}` entries when fewer than 5
+        # levels exist. Filtering them out lets the frontend see
+        # `depth.buy[0]` as undefined and fall back to its previous bid via
+        # `??`, instead of overwriting it with 0.
         if "depth_data" in message:
             depth_data = message["depth_data"]
             result = {
-                "ltp": 0,  # Will be filled from ltp_data if available
                 "ltt": depth_data.get("timestamp", int(time.time() * 1000)),
-                "volume": 0,
-                "open": 0,
-                "high": 0,
-                "low": 0,
-                "close": 0,
             }
 
-            # Add depth data in the same format as Angel
-            result["depth"] = {"buy": [], "sell": []}
+            def _is_real_level(lvl: dict) -> bool:
+                return lvl.get("price", 0) > 0 or lvl.get("quantity", 0) > 0
 
-            # Extract buy levels
-            buy_levels = depth_data.get("buy", [])
-            for i in range(5):  # Groww supports 5 levels
-                if i < len(buy_levels):
-                    result["depth"]["buy"].append(buy_levels[i])
-                else:
-                    result["depth"]["buy"].append({"price": 0.0, "quantity": 0, "orders": 0})
-
-            # Extract sell levels
-            sell_levels = depth_data.get("sell", [])
-            for i in range(5):  # Groww supports 5 levels
-                if i < len(sell_levels):
-                    result["depth"]["sell"].append(sell_levels[i])
-                else:
-                    result["depth"]["sell"].append({"price": 0.0, "quantity": 0, "orders": 0})
+            result["depth"] = {
+                "buy": [lvl for lvl in depth_data.get("buy", [])[:5] if _is_real_level(lvl)],
+                "sell": [lvl for lvl in depth_data.get("sell", [])[:5] if _is_real_level(lvl)],
+            }
 
             return result
 
