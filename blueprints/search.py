@@ -240,11 +240,24 @@ def api_expiries():
 @search_bp.route("/api/underlyings")
 @check_session_validity
 def api_underlyings():
-    """API endpoint to get available underlying symbols for FNO"""
-    exchange = request.args.get("exchange", "").strip() or None
+    """API endpoint to get available underlying symbols for FNO.
 
-    logger.debug(f"Fetching underlyings: exchange={exchange}")
-    underlyings = get_distinct_underlyings(exchange=exchange)
+    By default returns options-bearing underlyings only — the right shape for
+    option-chain / IV-chart / GEX dropdowns. Pass ``include_futures=true`` to
+    also include underlyings whose only live derivatives are futures (e.g. MCX
+    commodities like NATURALGASMINI, COPPER, LEADMINI). Used by /search/token.
+    """
+    exchange = request.args.get("exchange", "").strip() or None
+    include_futures = request.args.get("include_futures", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    logger.debug(
+        f"Fetching underlyings: exchange={exchange}, include_futures={include_futures}"
+    )
+    underlyings = get_distinct_underlyings(exchange=exchange, include_futures=include_futures)
 
     # Filter out exchange test symbols (e.g. 011NSETEST, 021BSETEST)
     underlyings = [u for u in underlyings if "NSETEST" not in u and "BSETEST" not in u]
