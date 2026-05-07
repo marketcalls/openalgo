@@ -112,7 +112,7 @@ dependencies = [
   "python-dateutil==2.9.0.post0",
   "python-dotenv==1.2.2",
   "python-engineio==4.13.1",
-  "python-multipart==0.0.26",
+  "python-multipart==0.0.27",
   "python-socketio==5.16.1",
   "python-telegram-bot==22.6",
   "pytz==2026.1.post1",
@@ -212,6 +212,9 @@ dev = [
     "bandit[sarif]>=1.9.3",
     "detect-secrets>=1.5.0",
     "pip-audit>=2.10.0",
+    # Pulled in transitively via pip-api -> pip-audit; pinned here to satisfy
+    # Dependabot's >=26.1 advisory on the lockfile.
+    "pip>=26.1",
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.14",
 ]
