@@ -1933,25 +1933,30 @@ class BrokerData:
             exchange = item["exchange"]
 
             try:
-                # Get broker symbol from database - skip if not found
+                # Get broker symbol from database. The brsymbol stored in
+                # SymToken is already the format Groww expects (mirrors what
+                # the CSV's trading_symbol provides). Re-running the OpenAlgo
+                # → Groww regex on it would mangle valid Groww symbols whose
+                # shape happens to match the OpenAlgo pattern (e.g. JUN26
+                # contracts: "NIFTY26JUN22350PE" → "NIFTY22JUN350PE").
+                # Only convert from OpenAlgo when DB lookup misses.
                 br_symbol = get_br_symbol(symbol, exchange)
 
                 if not br_symbol:
-                    logger.warning(
-                        f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol"
-                    )
-                    skipped_symbols.append(
-                        {
-                            "symbol": symbol,
-                            "exchange": exchange,
-                            "error": "Could not resolve broker symbol",
-                        }
-                    )
-                    continue
-
-                # For derivatives, convert symbol format
-                if exchange in ["NFO", "BFO"]:
-                    br_symbol = self._convert_openalgo_to_groww_derivative_symbol(br_symbol)
+                    if exchange in ["NFO", "BFO"]:
+                        br_symbol = self._convert_openalgo_to_groww_derivative_symbol(symbol)
+                    if not br_symbol:
+                        logger.warning(
+                            f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol"
+                        )
+                        skipped_symbols.append(
+                            {
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "error": "Could not resolve broker symbol",
+                            }
+                        )
+                        continue
 
                 # Determine Groww exchange prefix
                 if exchange in ["NSE", "NFO", "NSE_INDEX"]:

@@ -202,31 +202,30 @@ def get_expiry_dates(
                     logger.info(f"Found matches with alternative pattern: {alt_pattern}")
                     break
 
-        # Convert to sorted list (sort by date, not alphabetically)
+        # Drop expired dates and sort chronologically. Master-contract DBs
+        # can carry recently expired rows for several days, which would
+        # otherwise surface in the dropdown and trigger empty-data fetches
+        # downstream (expired contracts have no live orderbook).
         from datetime import datetime
 
-        def sort_expiry_dates(date_list):
-            """Sort expiry dates chronologically"""
-
-            def parse_date(date_str):
+        def parse_expiry_date(date_str):
+            """Parse '31-JUL-25' or '31-JUL-2025' to datetime; unparseable → max."""
+            try:
+                return datetime.strptime(date_str, "%d-%b-%y")
+            except ValueError:
                 try:
-                    # Parse date format like "31-JUL-25"
-                    return datetime.strptime(date_str, "%d-%b-%y")
+                    return datetime.strptime(date_str, "%d-%b-%Y")
                 except ValueError:
-                    try:
-                        # Try alternative format like "31-JUL-2025"
-                        return datetime.strptime(date_str, "%d-%b-%Y")
-                    except ValueError:
-                        # If parsing fails, return a very distant future date to put unparseable dates at the end
-                        logger.warning(
-                            f"Could not parse expiry date: {date_str}, placing at end of list"
-                        )
-                        return datetime.max
+                    logger.warning(
+                        f"Could not parse expiry date: {date_str}, placing at end of list"
+                    )
+                    return datetime.max
 
-            # Sort by parsed date
-            return sorted(date_list, key=parse_date)
-
-        expiry_dates = sort_expiry_dates(list(filtered_expiry_dates))
+        today = datetime.now().date()
+        live_expiry_dates = [
+            d for d in filtered_expiry_dates if parse_expiry_date(d).date() >= today
+        ]
+        expiry_dates = sorted(live_expiry_dates, key=parse_expiry_date)
 
         logger.info(f"Found {len(expiry_dates)} expiry dates for symbol: {symbol}")
 
