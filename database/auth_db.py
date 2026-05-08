@@ -52,13 +52,43 @@ if len(_pepper_value) < 32:
 PEPPER = _pepper_value
 
 
-# Setup Fernet encryption for auth tokens
+# Setup Fernet encryption for auth tokens.
+#
+# The KDF salt has two sources, in order of preference:
+#   1. FERNET_SALT env var (per-install random hex, 32+ chars). This is the
+#      production path. utils/env_check.py auto-provisions it on first boot
+#      (and migrates existing ciphertext) so by the time this module imports,
+#      the env var is set.
+#   2. The legacy hardcoded literal b"openalgo_static_salt". This is the
+#      fallback for one-off scripts that import auth_db directly without
+#      going through the env_check bootstrap (CLI utilities, ad-hoc REPL,
+#      docs/typecheck runs). A one-time stderr warning fires so the operator
+#      notices if a real production process ever hits this path.
+def _resolve_fernet_salt() -> bytes:
+    raw = (os.getenv("FERNET_SALT") or "").strip()
+    if raw and len(raw) >= 32:
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            pass
+    # Fallback path. Print once so prod misuse is visible without spamming.
+    if not getattr(_resolve_fernet_salt, "_warned", False):
+        import sys as _sys
+        _sys.stderr.write(
+            "[auth_db] WARNING: FERNET_SALT not set or invalid; using legacy\n"
+            "static salt. Run the app once via app.py so utils/env_check.py\n"
+            "auto-provisions a per-install salt.\n"
+        )
+        _resolve_fernet_salt._warned = True  # type: ignore[attr-defined]
+    return b"openalgo_static_salt"
+
+
 def get_encryption_key():
-    """Generate a Fernet key from the pepper"""
+    """Generate a Fernet key from PEPPER + per-install FERNET_SALT."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b"openalgo_static_salt",
+        salt=_resolve_fernet_salt(),
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(PEPPER.encode()))
