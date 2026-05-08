@@ -424,6 +424,32 @@ def _atomic_replace_text(path: str, content: str) -> None:
 PLACEHOLDER_FERNET_SALT = "OPENALGO_PLACEHOLDER_FERNET_SALT_REGENERATE_BEFORE_USE"
 
 
+def _warn_fernet_write_failed(reason: str, error: BaseException) -> None:
+    """Print a warning when FERNET_SALT can't be persisted to .env.
+
+    The migration is non-fatal — when the file write fails (typically
+    because the container's appuser can't write the bind-mounted .env,
+    or /app itself is root-owned), the app falls back to the legacy
+    static salt so it still boots. The security upgrade is *deferred*
+    until the operator fixes the permissions, but service is preserved.
+    See marketcalls/openalgo#1394.
+    """
+    sys.stderr.write(
+        "\n\033[93m\033[1m[OpenAlgo Fernet salt]\033[0m "
+        f"\033[93m{reason}: {error}\n"
+        "Continuing with the legacy static salt — the app will boot, but the\n"
+        "per-install salt rotation is deferred until .env becomes writable.\n"
+        "\n"
+        "Common causes inside Docker:\n"
+        "  - container's appuser UID does not match the host .env owner\n"
+        "    (fix: rebuild with the latest Dockerfile which pins UID 1000)\n"
+        "  - .env or /app/ permissions don't allow writes from appuser\n"
+        "    (fix on host: chown 1000:1000 .env && chmod 600 .env)\n"
+        "  - selinux / apparmor blocking writes through the bind mount\n"
+        "\033[0m\n"
+    )
+
+
 def _ensure_fernet_salt(env_path: str) -> None:
     """Provision per-install FERNET_SALT and migrate stored ciphertext.
 
@@ -549,11 +575,8 @@ def _ensure_fernet_salt(env_path: str) -> None:
         try:
             _atomic_rewrite_dotenv(env_path, [(PLACEHOLDER_FERNET_SALT, new_salt)])
         except OSError as e:
-            sys.stderr.write(
-                "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
-                f"\033[91mCould not rotate FERNET_SALT placeholder ({e}).\033[0m\n"
-            )
-            sys.exit(1)
+            _warn_fernet_write_failed("Could not rotate FERNET_SALT placeholder", e)
+            return  # legacy static salt remains in effect via auth_db fallback
         os.environ["FERNET_SALT"] = new_salt
         # No DB migration on fresh install (no rows yet) — but we still call
         # the migration helper which is a no-op when rows can't be found.
@@ -563,17 +586,18 @@ def _ensure_fernet_salt(env_path: str) -> None:
     # ---- Case B: existing valid hex, but on the wrong line → MOVE it.
     # Preserve the value so DB ciphertext stays decryptable.
     if fernet_m and is_valid and not _adjacent(fernet_m):
+        # FERNET_SALT is already valid and active in os.environ via load_dotenv;
+        # the move is purely cosmetic. If we can't relocate the line, the app
+        # works fine — auth_db reads the existing value from env. Just warn.
         new_content = _move_fernet_line_after_pepper(
             content, pepper_pat, fernet_line_pat, existing_value, eol
         )
         try:
             _atomic_replace_text(env_path, new_content)
         except OSError as e:
-            sys.stderr.write(
-                "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
-                f"\033[91mCould not relocate FERNET_SALT line in .env ({e}).\033[0m\n"
-            )
-            sys.exit(1)
+            _warn_fernet_write_failed("Could not relocate FERNET_SALT line in .env", e)
+            os.environ["FERNET_SALT"] = existing_value
+            return
         os.environ["FERNET_SALT"] = existing_value
         return
 
@@ -636,12 +660,8 @@ def _ensure_fernet_salt(env_path: str) -> None:
     try:
         _atomic_replace_text(env_path, new_content)
     except OSError as e:
-        sys.stderr.write(
-            "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
-            f"\033[91mCould not write FERNET_SALT to .env ({e}).\n"
-            "Migration aborted before any DB changes; safe to retry.\033[0m\n"
-        )
-        sys.exit(1)
+        _warn_fernet_write_failed("Could not write FERNET_SALT to .env", e)
+        return  # legacy static salt remains in effect via auth_db fallback
     os.environ["FERNET_SALT"] = new_salt
 
     _migrate_fernet_db(env_path, pepper, new_salt)
