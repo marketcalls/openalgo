@@ -148,7 +148,7 @@ def place_order_api(data, auth_token):
     client = get_httpx_client()
 
     token_id = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token_id, auth_token)
+    newdata = transform_data(data, token_id)
 
     json_string = json.dumps(newdata)
     payload = f"jData={urllib.parse.quote(json_string)}"
@@ -166,6 +166,7 @@ def place_order_api(data, auth_token):
 
     try:
         response = client.post(url, headers=headers, content=payload)
+        logger.info(f"PLACE ORDER API Response: {response.status_code} {response.text}")
 
         # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
@@ -380,7 +381,7 @@ def modify_order(data, auth_token):
     client = get_httpx_client()
 
     token_id = get_token(data["symbol"], data["exchange"])
-    newdata = transform_modify_order_data(data, token_id, auth_token)
+    newdata = transform_modify_order_data(data, token_id)
 
     logger.info(f"MODIFY ORDER - Transformed data: {newdata}")
 
