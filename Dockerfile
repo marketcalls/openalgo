@@ -39,8 +39,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
-# 1 – user & workdir
-RUN useradd --create-home appuser
+# 1 – user & workdir.
+#     Pin appuser to UID/GID 1000 explicitly. install-docker.sh and
+#     install-docker-multi-custom-ssl.sh chown the host's .env to UID 1000
+#     before bind-mounting it into the container; if the container's
+#     appuser ends up at a different UID (which can happen on ARM64 base
+#     images that already have system users at low UIDs, or if the base
+#     image bumps its useradd defaults), the bind-mounted .env becomes
+#     unwritable to the running process. See marketcalls/openalgo#1394.
+RUN groupadd --gid 1000 appuser && \
+    useradd --create-home --uid 1000 --gid 1000 appuser
 WORKDIR /app
 # 2 – copy the ready-made venv and source with correct ownership
 COPY --from=python-builder --chown=appuser:appuser /app/.venv /app/.venv
