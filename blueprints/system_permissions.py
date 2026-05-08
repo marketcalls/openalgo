@@ -42,16 +42,19 @@ def get_permission_checks():
     # Extract db directory from main database path
     db_dir = os.path.dirname(main_db) if main_db else "db"
 
-    # Inside Docker, .env is bind-mounted read-only and must be readable to
-    # the container's appuser (UID 1000). Mode 0o600 with a root-owned host
-    # file makes the file unreadable to the container and crash-loops it
-    # with "Error: .env file not found." (See issue #960.) On Docker we
-    # therefore expect the file to be world-readable (0o644); on bare-metal
-    # gunicorn deployments it is owned by www-data and stays at 0o600.
-    is_docker = os.path.exists("/.dockerenv") or os.environ.get(
-        "APP_MODE", ""
-    ).strip().strip("'\"") == "standalone"
-    env_expected_mode = 0o644 if is_docker else 0o600
+    # .env contains APP_KEY, API_KEY_PEPPER, FERNET_SALT, BROKER_API_SECRET —
+    # ALL secrets. Expected mode is 0o600 (rw for owner only) on every
+    # platform. The previous Docker-specific 0o644 expectation is a
+    # security regression: it makes the file world-readable and lets any
+    # local user on the host run `cat .env` to harvest credentials.
+    #
+    # The historical justification for 0o644 inside Docker (issue #960:
+    # ".env unreadable to container's appuser when host file is root-owned")
+    # is obsolete. Every official install script now does
+    # `chown 1000:1000 .env && chmod 600 .env`, and the Dockerfile pins
+    # appuser to UID 1000 so the bind-mounted file is owner-readable
+    # without needing world-read.
+    env_expected_mode = 0o600
 
     # Define expected permissions for each path
     # Format: (relative_path, expected_unix_mode, description, is_sensitive)

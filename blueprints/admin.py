@@ -659,6 +659,61 @@ def _db_secrets_status() -> dict:
     return out
 
 
+def _secret_strength_status() -> dict:
+    """Per-secret randomization status.
+
+    Reports True when a secret is plausibly install-specific (random hex of
+    sufficient length, not a known placeholder, not a leaked literal). False
+    means the secret is the publicly-known sample value, the placeholder
+    string from .sample.env, blank, or otherwise weak — i.e. functionally
+    no protection. This surfaces the kind of regression where an operator
+    skipped install.sh and just `cp .sample.env .env`.
+
+    Reading-side notes:
+        - We never include the actual values, only the boolean verdict.
+        - The set of "compromised" sentinels is imported from utils.env_check
+          so it stays in sync with the auto-rotation logic that runs on first
+          boot. Adding a new placeholder there auto-flows through to here.
+    """
+    try:
+        from utils.env_check import (
+            COMPROMISED_APP_KEYS,
+            COMPROMISED_PEPPERS,
+            PLACEHOLDER_FERNET_SALT,
+        )
+    except Exception:
+        # Module shape changed — skip the section rather than crash diagnostics.
+        return {}
+
+    import re as _re
+
+    def _is_random_hex(value: str, min_chars: int = 32) -> bool:
+        if not value:
+            return False
+        if len(value) < min_chars:
+            return False
+        return bool(_re.fullmatch(r"[0-9a-fA-F]+", value))
+
+    out: dict[str, bool] = {}
+
+    app_key = os.getenv("APP_KEY", "")
+    out["APP_KEY randomized"] = bool(
+        app_key and app_key not in COMPROMISED_APP_KEYS and len(app_key) >= 32
+    )
+
+    pepper = os.getenv("API_KEY_PEPPER", "")
+    out["API_KEY_PEPPER randomized"] = bool(
+        pepper and pepper not in COMPROMISED_PEPPERS and len(pepper) >= 32
+    )
+
+    salt = (os.getenv("FERNET_SALT") or "").strip()
+    out["FERNET_SALT per-install"] = bool(
+        salt and salt != PLACEHOLDER_FERNET_SALT and _is_random_hex(salt)
+    )
+
+    return out
+
+
 def _errors_file_path():
     """Resolve log/errors.jsonl, ensuring it stays inside LOG_DIR."""
     log_dir = Path(os.getenv("LOG_DIR", "log")).resolve()
@@ -1248,6 +1303,9 @@ def _safe_config_snapshot():
     # users with fully-configured features see "not set" because those creds
     # never lived in env to begin with — see issue #1388.
     secret_status.update(_db_secrets_status())
+    # Per-secret randomization status (APP_KEY / API_KEY_PEPPER / FERNET_SALT
+    # not the publicly-known sample placeholder values). Surfaces operators
+    # who skipped install.sh and copied .sample.env directly. See #1394.
     return {
         "valid_brokers": [
             b.strip() for b in (os.getenv("VALID_BROKERS") or "").split(",") if b.strip()
@@ -1262,6 +1320,7 @@ def _safe_config_snapshot():
         "api_rate_limit": os.getenv("API_RATE_LIMIT", "50 per second"),
         "flask_debug": (os.getenv("FLASK_DEBUG") or "False").lower() == "true",
         "secrets_present": secret_status,
+        "secret_strength": _secret_strength_status(),
     }
 
 
@@ -1668,6 +1727,12 @@ def _render_report(payload, errors_summary, errors_recent, fmt):
         lines.append(f"{h2}Secrets (presence only)")
         for k, v in sorted(secrets.items()):
             lines.append(f"{bullet}{k}: {'set' if v else 'not set'}")
+    strength = cfg.get("secret_strength") or {}
+    if strength:
+        lines.append("")
+        lines.append(f"{h2}Secret strength")
+        for k, v in sorted(strength.items()):
+            lines.append(f"{bullet}{k}: {'yes' if v else 'NO — using default/placeholder'}")
     lines.append("")
 
     brokers = payload.get("brokers") or {}

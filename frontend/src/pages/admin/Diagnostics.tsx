@@ -384,6 +384,23 @@ export default function Diagnostics() {
             </div>
           </div>
         ) : null}
+        {info?.config.secret_strength && Object.keys(info.config.secret_strength).length > 0 ? (
+          <div className="mt-4">
+            <div className="text-sm font-semibold mb-2">
+              Secret strength{' '}
+              <span className="text-xs text-muted-foreground font-normal">
+                (random vs default placeholder)
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(info.config.secret_strength).map(([key, isRandom]) => (
+                <Badge key={key} variant={isRandom ? 'default' : 'destructive'}>
+                  {key}: {isRandom ? 'yes' : 'NO — using default'}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </Section>
 
       {/* Databases */}

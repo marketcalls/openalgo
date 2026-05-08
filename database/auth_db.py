@@ -451,6 +451,15 @@ def encrypt_token(token):
     return fernet.encrypt(token.encode()).decode()
 
 
+# Track ciphertext fingerprints we've already failed to decrypt so we log each
+# orphan row's full traceback once, then suppress the noise on every subsequent
+# call. Without this, a single un-migrated row encrypted under a lost salt
+# (e.g. the row left as-is after a Fernet salt rotation, see issue #1394)
+# triggers a full ERROR + traceback on every WebSocket re-connect attempt,
+# spamming the logs with hundreds of identical entries.
+_decrypt_failure_fingerprints: set[str] = set()
+
+
 def decrypt_token(encrypted_token):
     """Decrypt auth token"""
     if not encrypted_token:
@@ -458,7 +467,33 @@ def decrypt_token(encrypted_token):
     try:
         return fernet.decrypt(encrypted_token.encode()).decode()
     except Exception as e:
-        logger.exception(f"Error decrypting token: {e}")
+        # Hash the ciphertext (not the plaintext — there is no plaintext yet)
+        # so we don't keep the full token in memory just to dedupe log lines.
+        import hashlib
+
+        try:
+            payload = (
+                encrypted_token.encode()
+                if isinstance(encrypted_token, str)
+                else encrypted_token
+            )
+            fp = hashlib.blake2s(payload, digest_size=8).hexdigest()
+        except Exception:
+            fp = "unknown"
+
+        if fp in _decrypt_failure_fingerprints:
+            # Already reported the full traceback once — keep the signal
+            # but at debug level so it doesn't spam ERROR logs.
+            logger.debug(f"Repeat decrypt failure (fingerprint={fp})")
+        else:
+            _decrypt_failure_fingerprints.add(fp)
+            logger.exception(
+                f"Error decrypting token (fingerprint={fp}): {e}. "
+                "This row may have been encrypted under a previous "
+                "API_KEY_PEPPER or FERNET_SALT and survived a rotation. "
+                "Re-authenticate the affected broker / user to overwrite "
+                "the orphan ciphertext with a fresh value."
+            )
         return None
 
 
@@ -512,6 +547,22 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         # Don't fail auth operation if cache invalidation fails
         # The database fallback in other processes will handle it
         logger.warning(f"Failed to publish cache invalidation for user {name}: {e}")
+
+    # Same-process invalidation. Production runs `gunicorn -w 1` per CLAUDE.md
+    # (single worker required for SocketIO state), so the WebSocket proxy's
+    # _POOLED_ADAPTERS registry lives in this very process. The ZeroMQ
+    # publish above is for hypothetical multi-process deployments; without
+    # also discarding the in-process cache here, the next WS connect after
+    # re-login reuses the pool that was initialised with the *old* token
+    # and fails with "Adapter initialization failed: No authentication
+    # token found" until the process is restarted. See issue #1394.
+    try:
+        from websocket_proxy.broker_factory import cleanup_pools_for_user
+        cleanup_pools_for_user(name, broker_name=broker)
+    except Exception as e:
+        # Don't fail auth on cleanup error — the user can still trade via
+        # HTTP endpoints; only the WS layer is affected.
+        logger.warning(f"Failed to invalidate WS adapter pool for {name}/{broker}: {e}")
 
     return auth_obj.id
 

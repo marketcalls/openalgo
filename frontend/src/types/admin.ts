@@ -174,6 +174,13 @@ export interface SystemConfig {
   api_rate_limit: string
   flask_debug: boolean
   secrets_present: Record<string, boolean>
+  /**
+   * Per-secret randomization status. True = the value is plausibly
+   * install-specific (random hex of sufficient length, not the publicly-
+   * known sample placeholder). False = the value is a default/placeholder
+   * — i.e. functionally no protection. See blueprints/admin.py:_secret_strength_status.
+   */
+  secret_strength?: Record<string, boolean>
 }
 
 export interface SystemBrokers {
