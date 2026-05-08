@@ -60,7 +60,9 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Each entry: {"kotak_exchange": str, "token": str, "sub_type": str, "channelnum": str}
         self._subscription_queue = []
         self._batch_timer = None
-        self._batch_delay = 0.5  # 500ms collection window
+        # 50ms is enough to coalesce a burst (e.g. option chain load) without
+        # adding a perceptible floor to single-symbol cold subscribes.
+        self._batch_delay = 0.05
         self._max_batch_size = 100  # HSI MAX_SCRIPS limit per frame
 
     def initialize(self, broker_name: str, user_id: str, auth_data=None):

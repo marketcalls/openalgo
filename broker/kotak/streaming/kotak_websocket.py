@@ -154,6 +154,9 @@ class KotakWebSocket:
         # HSI protocol uses '&' as the scrip separator (see HSWebSocketLib.is_scrip_ok)
         scrip_str = "&".join(f"{ex}|{tk}" for ex, tk in scrips)
         msg = {"type": sub_type, "scrips": scrip_str, "channelnum": channelnum}
+        logger.info(
+            f"[KOTAK WSS BATCH] sub_type={sub_type} count={len(scrips)} scrips={scrip_str}"
+        )
         self._send(msg)
 
     def unsubscribe_batch(self, scrips, sub_type="mwu", channelnum="1"):
