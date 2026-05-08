@@ -326,54 +326,12 @@ def _atomic_rewrite_dotenv(env_path: str, pairs: list) -> None:
         raise last_err
 
 
-def _atomic_set_env_var(env_path: str, key: str, value: str) -> None:
-    """Set ``KEY = '<value>'`` in .env, replacing an existing line or appending.
-
-    Used for env vars that don't have a placeholder line in .sample.env to
-    swap (so the existing ``_atomic_rewrite_dotenv`` substring-replace approach
-    doesn't apply). Cross-platform safe with the same guarantees as
-    ``_atomic_rewrite_dotenv``: preserves the file's line endings, atomic
-    rename, mode 0600 on POSIX, retry on Windows ERROR_ACCESS_DENIED.
-
-    Args:
-        env_path: Absolute path to the .env file.
-        key: Env var name. Must match ``[A-Za-z_][A-Za-z0-9_]*``.
-        value: New value. Single-quote-wrapped on disk; embedded single
-            quotes are rejected (matches the .env hand-edit convention).
-
-    Raises:
-        OSError: If the file cannot be rewritten (read-only mount, persistent
-            file lock on Windows, etc.).
-        ValueError: If key/value contain disallowed characters.
+def _atomic_replace_text(path: str, content: str) -> None:
+    """Atomic-write ``content`` to ``path``. Same cross-platform safeguards as
+    ``_atomic_rewrite_dotenv``: preserves line endings, mode 0600 on POSIX,
+    retries on Windows ERROR_ACCESS_DENIED.
     """
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-        raise ValueError(f"invalid env var name: {key!r}")
-    if "'" in value or "\n" in value or "\r" in value:
-        raise ValueError("env value cannot contain single-quote or newline")
-
-    with open(env_path, "r", encoding="utf-8", newline="") as f:
-        content = f.read()
-
-    # Preserve the file's existing line ending convention (LF on Unix,
-    # CRLF on Windows-saved files). Default to LF if the file is empty.
-    eol = "\r\n" if "\r\n" in content else "\n"
-
-    # Match an existing line for this key (commented or not, any spacing
-    # around `=`, any quoting of the value) so re-runs replace in place
-    # rather than appending duplicates.
-    pat = re.compile(
-        rf"^[ \t]*#?[ \t]*{re.escape(key)}[ \t]*=.*?(?=\r?\n|\Z)",
-        re.MULTILINE,
-    )
-    new_line = f"{key} = '{value}'"
-    if pat.search(content):
-        content = pat.sub(new_line, content, count=1)
-    else:
-        if content and not content.endswith(("\n", "\r")):
-            content += eol
-        content += new_line + eol
-
-    tmp = env_path + ".tmp"
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="") as f:
         f.write(content)
     if os.name != "nt":
@@ -382,7 +340,7 @@ def _atomic_set_env_var(env_path: str, key: str, value: str) -> None:
     last_err = None
     for _ in range(3):
         try:
-            os.replace(tmp, env_path)
+            os.replace(tmp, path)
             return
         except OSError as e:
             last_err = e
@@ -393,71 +351,349 @@ def _atomic_set_env_var(env_path: str, key: str, value: str) -> None:
         raise last_err
 
 
+# .sample.env ships this placeholder so install scripts and the bootstrap
+# rotation can swap it the same way they swap APP_KEY / API_KEY_PEPPER.
+PLACEHOLDER_FERNET_SALT = "OPENALGO_PLACEHOLDER_FERNET_SALT_REGENERATE_BEFORE_USE"
+
+
 def _ensure_fernet_salt(env_path: str) -> None:
-    """Generate per-install FERNET_SALT on first boot and migrate stored ciphertext.
+    """Provision per-install FERNET_SALT and migrate stored ciphertext.
 
     Background:
         ``database/auth_db.py`` originally derived the Fernet key from
         ``API_KEY_PEPPER`` with a hardcoded static salt
         (``b"openalgo_static_salt"``). Identical salt across every OpenAlgo
         install removes the rainbow-table / cross-install-correlation
-        protections that PBKDF2 salts exist for — see issue analysis in
-        commit history. Fix: rotate to a per-install random salt persisted
-        as ``FERNET_SALT`` in .env.
+        protections that PBKDF2 salts exist for. Fix: rotate to a per-install
+        random salt persisted as ``FERNET_SALT`` in .env, placed adjacent to
+        ``API_KEY_PEPPER`` (the .sample.env template ships with the
+        placeholder ``OPENALGO_PLACEHOLDER_FERNET_SALT_REGENERATE_BEFORE_USE``
+        in that exact spot).
 
-    Behaviour matrix:
+    Behaviour matrix — five disjoint cases, decided from the .env file
+    contents on disk plus the DB state. The function is idempotent: any case
+    that arrives in a "good" state returns immediately without touching .env
+    or the DB.
 
-        +-----------------------------------+-------------------------------+
-        | State on entry                    | Action                        |
-        +===================================+===============================+
-        | FERNET_SALT set, valid hex        | fast-path skip                |
-        +-----------------------------------+-------------------------------+
-        | FERNET_SALT missing/invalid AND   | refuse + exit (sanity check;  |
-        | DB rows don't decrypt with the    | prevents bricking after a     |
-        | legacy static salt                | manual .env wipe)             |
-        +-----------------------------------+-------------------------------+
-        | FERNET_SALT missing AND DB rows   | generate new salt, write to   |
-        | decrypt cleanly with static salt  | .env, then re-encrypt rows    |
-        | (or DB is empty / fresh)          |                               |
-        +-----------------------------------+-------------------------------+
+        Case A: ``FERNET_SALT = '<valid hex>'`` is already on the line directly
+                following the ``API_KEY_PEPPER`` line.
+            → fast-path skip (no I/O).
 
-    Crash safety: .env is written *before* the DB migration. If the process
-    dies mid-migration, the next boot sees FERNET_SALT in .env and skips
-    re-migration; rows that didn't get re-encrypted will fail decrypt under
-    the new key and trigger forced re-login. Same failure mode as the daily
-    3 AM IST broker-token expiry. No data loss.
+        Case B: ``FERNET_SALT`` line exists with valid hex but is NOT directly
+                after ``API_KEY_PEPPER`` (e.g. an earlier auto-migration
+                appended it at end-of-file, or a hand-edit moved it).
+            → MOVE the line to be adjacent to ``API_KEY_PEPPER``. Preserve
+              the existing hex value — DB ciphertext encrypted with that
+              salt stays decryptable. No DB migration runs.
 
-    Cross-platform: pure Python, sqlite3, and the existing atomic file-write
-    helpers all work identically on Windows, Ubuntu, Ubuntu Server, macOS.
+        Case C: ``FERNET_SALT`` line is the placeholder string
+                (``PLACEHOLDER_FERNET_SALT``). This is the fresh-install /
+                install-script path matching APP_KEY/PEPPER conventions.
+            → swap placeholder → real hex via ``_atomic_rewrite_dotenv``
+              (same primitive APP_KEY/PEPPER use). Run DB migration *only* if
+              there's anything to migrate — fresh installs have no DB yet.
 
-    Non-SQLite databases: salt is generated and persisted, but no automated
-    migration is attempted. Operators using Postgres/MySQL run a one-shot
-    re-encryption against their backend and set FERNET_SALT manually.
+        Case D: No ``FERNET_SALT`` line in .env, and DB rows decrypt cleanly
+                with the legacy static salt (or DB is empty/fresh).
+            → generate a new salt, insert a new line directly after
+              ``API_KEY_PEPPER``, then re-encrypt DB rows.
+
+        Case E: No ``FERNET_SALT`` line in .env, but existing DB ciphertext
+                does NOT decrypt with the legacy static salt either. This
+                means the salt was rotated previously and its value has been
+                lost (a hand-edit deleted it).
+            → refuse + exit cleanly. Re-running would generate a third salt
+              and silently brick every stored broker token / API key / TOTP
+              secret a second time.
+
+    Crash safety: .env is written before the DB migration in cases C and D.
+    If the process dies mid-migration, the next boot sees ``FERNET_SALT`` in
+    .env and falls into case A or B — un-migrated DB rows will fail decrypt
+    under the new key and trigger forced re-login. Same failure mode as the
+    daily 3 AM IST broker-token expiry. No data loss.
+
+    Cross-platform: pure Python, sqlite3, and atomic file-write helpers all
+    work identically on Windows, Ubuntu, Ubuntu Server, macOS.
+
+    Non-SQLite ``DATABASE_URL`` (Postgres/MySQL): salt is generated and
+    persisted, but no automated DB migration is attempted. Operators run a
+    one-shot re-encryption against their backend.
 
     Args:
         env_path: Absolute path to the .env file.
     """
-    salt_hex = (os.getenv("FERNET_SALT") or "").strip()
-    if salt_hex and len(salt_hex) >= 32 and re.fullmatch(r"[0-9a-fA-F]+", salt_hex):
-        return  # Fast path — already provisioned.
-
     pepper = os.getenv("API_KEY_PEPPER", "")
     if not pepper or len(pepper) < 32:
-        # PEPPER is invalid or placeholder. The required-vars check downstream
-        # in load_and_check_env_variables will surface the real error. Don't
-        # generate a salt against a bad pepper — would just need re-doing.
+        # PEPPER is invalid or placeholder. The required-vars / strength check
+        # downstream in load_and_check_env_variables will surface the real
+        # error. Don't generate a salt against a bad pepper.
         return
 
-    # Lazy-import: cryptography is in the project's required deps so this
-    # always succeeds in normal runs, but env_check is also imported by the
-    # docs build / mypy / linters where the dep may not be present. Failing
-    # silently in those contexts is correct (they don't run the migration).
+    # Read the .env so we can decide based on placement, not just env value.
+    try:
+        with open(env_path, "r", encoding="utf-8", newline="") as f:
+            content = f.read()
+    except OSError:
+        return
+
+    # Locate the API_KEY_PEPPER line — it's the placement anchor for FERNET_SALT.
+    pepper_pat = re.compile(
+        r"^[ \t]*API_KEY_PEPPER[ \t]*=.*?(?=\r?\n|\Z)", re.MULTILINE
+    )
+    pepper_m = pepper_pat.search(content)
+    if pepper_m is None:
+        # PEPPER line missing — required-vars check will surface this.
+        return
+    pepper_end = pepper_m.end()
+
+    # Locate any existing FERNET_SALT line (anywhere in the file).
+    fernet_line_pat = re.compile(
+        r"^[ \t]*FERNET_SALT[ \t]*=[ \t]*'?([^'\r\n]*)'?[ \t]*(?=\r?\n|\Z)",
+        re.MULTILINE,
+    )
+    fernet_m = fernet_line_pat.search(content)
+
+    eol = "\r\n" if "\r\n" in content else "\n"
+
+    def _is_valid_hex(s: str) -> bool:
+        return bool(s and len(s) >= 32 and re.fullmatch(r"[0-9a-fA-F]+", s))
+
+    # Adjacency: the FERNET_SALT line starts immediately after the EOL that
+    # ends the API_KEY_PEPPER line — exactly one line break in between.
+    def _adjacent(fm) -> bool:
+        between = content[pepper_end : fm.start()]
+        return between == eol
+
+    existing_value = fernet_m.group(1).strip() if fernet_m else ""
+    is_placeholder = existing_value == PLACEHOLDER_FERNET_SALT
+    is_valid = _is_valid_hex(existing_value)
+
+    # ---- Case A: valid hex, already in the right place → fast-path skip.
+    if fernet_m and is_valid and _adjacent(fernet_m):
+        os.environ["FERNET_SALT"] = existing_value
+        return
+
+    # ---- Case C: fresh install / install-script swap of the placeholder.
+    # Use the existing _atomic_rewrite_dotenv helper — same primitive that
+    # APP_KEY and API_KEY_PEPPER use for their first-run rotation.
+    if fernet_m and is_placeholder and _adjacent(fernet_m):
+        new_salt = secrets.token_hex(16)
+        try:
+            _atomic_rewrite_dotenv(env_path, [(PLACEHOLDER_FERNET_SALT, new_salt)])
+        except OSError as e:
+            sys.stderr.write(
+                "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
+                f"\033[91mCould not rotate FERNET_SALT placeholder ({e}).\033[0m\n"
+            )
+            sys.exit(1)
+        os.environ["FERNET_SALT"] = new_salt
+        # No DB migration on fresh install (no rows yet) — but we still call
+        # the migration helper which is a no-op when rows can't be found.
+        _migrate_fernet_db(env_path, pepper, new_salt)
+        return
+
+    # ---- Case B: existing valid hex, but on the wrong line → MOVE it.
+    # Preserve the value so DB ciphertext stays decryptable.
+    if fernet_m and is_valid and not _adjacent(fernet_m):
+        new_content = _move_fernet_line_after_pepper(
+            content, pepper_pat, fernet_line_pat, existing_value, eol
+        )
+        try:
+            _atomic_replace_text(env_path, new_content)
+        except OSError as e:
+            sys.stderr.write(
+                "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
+                f"\033[91mCould not relocate FERNET_SALT line in .env ({e}).\033[0m\n"
+            )
+            sys.exit(1)
+        os.environ["FERNET_SALT"] = existing_value
+        return
+
+    # ---- Cases D / E: no valid FERNET_SALT line. Generate one, after
+    # confirming the DB doesn't look like a previous-rotation orphan.
     try:
         import base64
         from cryptography.fernet import Fernet, InvalidToken
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     except ImportError:
+        return  # cryptography not available (docs build, lint env) — silent skip.
+
+    def _make_fernet(salt: bytes) -> "Fernet":
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        return Fernet(base64.urlsafe_b64encode(kdf.derive(pepper.encode())))
+
+    old_fernet = _make_fernet(b"openalgo_static_salt")
+
+    # ---- Sanity check (case E detection).
+    db_url = os.getenv("DATABASE_URL", "")
+    db_path = _resolve_sqlite_path(db_url, env_path)
+
+    if db_path and os.path.exists(db_path):
+        sample_cts = _sample_ciphertexts(db_path, limit=20)
+        if sample_cts:
+            decryptable = any(
+                _try_decrypt(old_fernet, ct, InvalidToken) for ct in sample_cts
+            )
+            if not decryptable:
+                sys.stderr.write(
+                    "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m\n"
+                    "\033[91mFERNET_SALT is missing from .env, but stored ciphertext\n"
+                    "in the database does not decrypt with the legacy static salt\n"
+                    "either. The salt was rotated previously and the value has been\n"
+                    "lost — running the migration now would generate yet another\n"
+                    "salt and invalidate every stored broker token / API key /\n"
+                    "TOTP secret a second time.\n"
+                    "\n"
+                    "Resolve by either:\n"
+                    "  (a) Restoring the previous FERNET_SALT line to .env\n"
+                    "      (typical value: hex string ~32 chars), OR\n"
+                    "  (b) Accepting the loss — wipe the auth/api_keys/users/\n"
+                    "      flow_workflows ciphertext columns and re-issue all\n"
+                    "      stored credentials, then restart.\n"
+                    "\033[0m\n"
+                )
+                sys.exit(1)
+
+    # ---- Case D: insert a new FERNET_SALT line directly after API_KEY_PEPPER.
+    new_salt = secrets.token_hex(16)
+    new_content = _move_fernet_line_after_pepper(
+        content, pepper_pat, fernet_line_pat, new_salt, eol
+    )
+    try:
+        _atomic_replace_text(env_path, new_content)
+    except OSError as e:
+        sys.stderr.write(
+            "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
+            f"\033[91mCould not write FERNET_SALT to .env ({e}).\n"
+            "Migration aborted before any DB changes; safe to retry.\033[0m\n"
+        )
+        sys.exit(1)
+    os.environ["FERNET_SALT"] = new_salt
+
+    _migrate_fernet_db(env_path, pepper, new_salt)
+
+
+def _move_fernet_line_after_pepper(
+    content: str,
+    pepper_pat: "re.Pattern",
+    fernet_line_pat: "re.Pattern",
+    new_value: str,
+    eol: str,
+) -> str:
+    """Return ``content`` with the ``FERNET_SALT`` line directly after the
+    ``API_KEY_PEPPER`` line, set to ``new_value``. Removes any pre-existing
+    ``FERNET_SALT`` line from elsewhere in the file (and its trailing newline)
+    so the result has exactly one ``FERNET_SALT`` line in the canonical spot.
+    """
+    # Remove any existing FERNET_SALT line (plus its trailing newline) from
+    # wherever it appears. Run in a loop so a malformed file with duplicates
+    # gets cleaned up too.
+    new_content = content
+    while True:
+        m = fernet_line_pat.search(new_content)
+        if m is None:
+            break
+        end = m.end()
+        if new_content[end : end + 2] == "\r\n":
+            end += 2
+        elif new_content[end : end + 1] in ("\n", "\r"):
+            end += 1
+        new_content = new_content[: m.start()] + new_content[end:]
+
+    # Re-locate API_KEY_PEPPER in the cleaned content.
+    pepper_m = pepper_pat.search(new_content)
+    if pepper_m is None:
+        # Shouldn't happen — caller already verified PEPPER is present.
+        return content
+    insert_at = pepper_m.end()
+    new_line = f"FERNET_SALT = '{new_value}'"
+    return new_content[:insert_at] + eol + new_line + new_content[insert_at:]
+
+
+def _resolve_sqlite_path(db_url: str, env_path: str) -> str | None:
+    """Return absolute path to the openalgo.db SQLite file, or None for non-SQLite."""
+    m = re.match(r"sqlite:///(.+)", db_url)
+    if not m:
+        return None
+    db_path = m.group(1)
+    if not os.path.isabs(db_path):
+        env_dir = os.path.dirname(os.path.abspath(env_path))
+        db_path = os.path.join(env_dir, db_path)
+    return db_path
+
+
+def _sample_ciphertexts(db_path: str, limit: int = 20) -> list:
+    """Read up to ``limit`` non-null ciphertext values across the auth_db
+    Fernet-protected columns. Used by the sanity check in case E.
+    """
+    targets = [
+        ("auth", "auth"),
+        ("auth", "feed_token"),
+        ("auth", "secret_api_key"),
+        ("api_keys", "api_key_encrypted"),
+        ("users", "totp_secret"),
+        ("flow_workflows", "api_key"),
+    ]
+    samples: list = []
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            for table, col in targets:
+                if len(samples) >= limit:
+                    break
+                cur = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                )
+                if cur.fetchone() is None:
+                    continue
+                cur = conn.execute(
+                    f"SELECT {col} FROM {table} "
+                    f"WHERE {col} IS NOT NULL AND {col} != '' LIMIT ?",
+                    (limit - len(samples),),
+                )
+                samples.extend(r[0] for r in cur.fetchall())
+    except sqlite3.Error:
+        pass
+    return samples
+
+
+def _try_decrypt(fernet, ct, invalid_token_exc) -> bool:
+    """Return True if ``fernet`` can decrypt ``ct``."""
+    try:
+        fernet.decrypt(ct.encode() if isinstance(ct, str) else ct)
+        return True
+    except (invalid_token_exc, AttributeError, ValueError):
+        return False
+
+
+def _migrate_fernet_db(env_path: str, pepper: str, new_salt: str) -> None:
+    """Re-encrypt every Fernet-protected column in openalgo.db.
+
+    Decrypts each ciphertext with the legacy static-salt key and re-encrypts
+    with the per-install ``new_salt`` key. Rows whose ciphertext can't be
+    decrypted with the static salt are left untouched — they'll fail decrypt
+    under the new key and trigger forced re-login (same outcome as daily
+    token expiry).
+
+    Skips silently for non-SQLite ``DATABASE_URL`` and for fresh installs
+    where the DB file doesn't exist yet.
+    """
+    try:
+        import base64
+        from cryptography.fernet import Fernet, InvalidToken
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    except ImportError:
+        return
+
+    db_path = _resolve_sqlite_path(os.getenv("DATABASE_URL", ""), env_path)
+    if not db_path or not os.path.exists(db_path):
         return
 
     def _make_fernet(salt: bytes) -> "Fernet":
@@ -469,43 +705,9 @@ def _ensure_fernet_salt(env_path: str) -> None:
         )
         return Fernet(base64.urlsafe_b64encode(kdf.derive(pepper.encode())))
 
-    new_salt = secrets.token_hex(16)  # 16 bytes → 32 hex chars
-    new_salt_bytes = bytes.fromhex(new_salt)
     old_fernet = _make_fernet(b"openalgo_static_salt")
-    new_fernet = _make_fernet(new_salt_bytes)
+    new_fernet = _make_fernet(bytes.fromhex(new_salt))
 
-    # Resolve sqlite DB path. Skip the migration cleanly for non-SQLite engines.
-    db_url = os.getenv("DATABASE_URL", "")
-    m = re.match(r"sqlite:///(.+)", db_url)
-
-    flask_debug = os.getenv("FLASK_DEBUG", "").lower() in ("true", "1", "t")
-    is_reloader_parent = flask_debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
-
-    if not m:
-        # Non-SQLite — caller is expected to migrate manually. Persist the salt
-        # so subsequent boots are stable and auth_db has something deterministic.
-        try:
-            _atomic_set_env_var(env_path, "FERNET_SALT", new_salt)
-        except OSError as e:
-            sys.stderr.write(
-                "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
-                f"\033[91mCould not write FERNET_SALT to .env ({e}).\n"
-                "Add this line manually and restart:\n"
-                f"\n  FERNET_SALT = '{new_salt}'\n\n\033[0m"
-            )
-            sys.exit(1)
-        os.environ["FERNET_SALT"] = new_salt
-        return
-
-    db_path = m.group(1)
-    env_dir = os.path.dirname(os.path.abspath(env_path))
-    if not os.path.isabs(db_path):
-        db_path = os.path.join(env_dir, db_path)
-
-    # (table, primary-key, ciphertext-column) tuples for every column the
-    # auth_db Fernet protects. Telegram bot token and SMTP password use
-    # different keys (TELEGRAM_KEY_SALT and a separate scheme respectively)
-    # and are NOT migrated here — they are independent.
     targets = [
         ("auth", "id", "auth"),
         ("auth", "id", "feed_token"),
@@ -515,94 +717,6 @@ def _ensure_fernet_salt(env_path: str) -> None:
         ("flow_workflows", "id", "api_key"),
     ]
 
-    # Fresh install — DB file not yet created. No migration needed; just set
-    # the salt for first-boot use.
-    if not os.path.exists(db_path):
-        try:
-            _atomic_set_env_var(env_path, "FERNET_SALT", new_salt)
-        except OSError as e:
-            sys.stderr.write(
-                "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
-                f"\033[91mCould not write FERNET_SALT to .env ({e}).\033[0m\n"
-            )
-            sys.exit(1)
-        os.environ["FERNET_SALT"] = new_salt
-        return
-
-    # Sanity check: sample up to 20 non-null ciphertexts. If none decrypt with
-    # the legacy static salt, FERNET_SALT was rotated previously and the value
-    # has been lost. Re-running the migration would generate a third salt and
-    # invalidate all stored secrets a second time. Bail loudly.
-    sample_cts: list = []
-    try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            for table, _pk, col in targets:
-                cur = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                    (table,),
-                )
-                if cur.fetchone() is None:
-                    continue
-                if len(sample_cts) >= 20:
-                    break
-                cur = conn.execute(
-                    f"SELECT {col} FROM {table} WHERE {col} IS NOT NULL AND {col} != '' LIMIT ?",
-                    (20 - len(sample_cts),),
-                )
-                sample_cts.extend(r[0] for r in cur.fetchall())
-    except sqlite3.Error:
-        # Read-only probe failed (locked, schema mismatch). Skip the sanity
-        # check — proceed to migration which has its own error handling.
-        sample_cts = []
-
-    if sample_cts:
-        decryptable = 0
-        for ct in sample_cts:
-            try:
-                old_fernet.decrypt(ct.encode() if isinstance(ct, str) else ct)
-                decryptable += 1
-                break  # one is enough to confirm we're pre-migration
-            except (InvalidToken, AttributeError, ValueError):
-                continue
-        if decryptable == 0:
-            sys.stderr.write(
-                "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m\n"
-                "\033[91mFERNET_SALT is missing from .env, but stored ciphertext\n"
-                "in the database does not decrypt with the legacy static salt\n"
-                "either. The salt was rotated previously and the value has been\n"
-                "lost — running the migration now would generate yet another\n"
-                "salt and invalidate every stored broker token / API key /\n"
-                "TOTP secret a second time.\n"
-                "\n"
-                "Resolve by either:\n"
-                "  (a) Restoring the previous FERNET_SALT line to .env\n"
-                "      (typical value: hex string ~32 chars), OR\n"
-                "  (b) Accepting the loss — wipe the auth/api_keys/users/\n"
-                "      flow_workflows ciphertext columns and re-issue all\n"
-                "      stored credentials, then restart.\n"
-                "\033[0m\n"
-            )
-            sys.exit(1)
-
-    # Step 1: write FERNET_SALT to .env *first*. This is the durable marker
-    # that the rotation has begun — if we crash later, the next boot sees the
-    # marker and won't try to migrate again (idempotent fast-path skip).
-    try:
-        _atomic_set_env_var(env_path, "FERNET_SALT", new_salt)
-    except OSError as e:
-        sys.stderr.write(
-            "\n\033[91m\033[1m[OpenAlgo Fernet salt]\033[0m "
-            f"\033[91mCould not write FERNET_SALT to .env ({e}).\n"
-            "Migration aborted before any DB changes; safe to retry.\033[0m\n"
-        )
-        sys.exit(1)
-    os.environ["FERNET_SALT"] = new_salt
-
-    # Step 2: re-encrypt every stored ciphertext in the DB. SQLite default
-    # transaction semantics give us atomicity for the inner UPDATEs; an
-    # exception before commit() rolls back the batch, and the next boot
-    # leaves auth_db using the new salt — old-static-salt rows fail decrypt
-    # and trigger forced re-login (same outcome as daily token expiry).
     migrated = skipped = 0
     try:
         with sqlite3.connect(db_path) as conn:
@@ -618,8 +732,7 @@ def _ensure_fernet_salt(env_path: str) -> None:
                     f"SELECT {pk} AS pk, {col} AS ct FROM {table} "
                     f"WHERE {col} IS NOT NULL AND {col} != ''"
                 )
-                rows = cur.fetchall()
-                for row in rows:
+                for row in cur.fetchall():
                     ct = row["ct"]
                     try:
                         plaintext = old_fernet.decrypt(
@@ -645,6 +758,8 @@ def _ensure_fernet_salt(env_path: str) -> None:
         )
         return
 
+    flask_debug = os.getenv("FLASK_DEBUG", "").lower() in ("true", "1", "t")
+    is_reloader_parent = flask_debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
     if not is_reloader_parent and (migrated or skipped):
         print(
             "\n\033[92m\033[1m[OpenAlgo Fernet salt rotation]\033[0m "
