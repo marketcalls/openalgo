@@ -152,6 +152,12 @@ export function installGlobalErrorReporter(): void {
       stack: event.error?.stack,
       url: event.filename || window.location.href,
     })
+    // Stale-bundle recovery: if a top-level script tag failed to load
+    // (e.g. preload of the new entry chunk after a deploy), reload once
+    // to fetch the fresh index.html.
+    void import('@/utils/chunkReload').then(({ tryAutoReloadOnChunkError }) => {
+      tryAutoReloadOnChunkError(event.message)
+    })
   })
 
   window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
@@ -171,5 +177,12 @@ export function installGlobalErrorReporter(): void {
       }
     }
     reportClientError({ message, stack })
+    // Defense-in-depth: React.lazy() rejections normally land in the
+    // ErrorBoundary, but rapid navigation or non-React import() callers
+    // can let them surface here instead. tryAutoReloadOnChunkError is a
+    // no-op for unrelated rejections.
+    void import('@/utils/chunkReload').then(({ tryAutoReloadOnChunkError }) => {
+      tryAutoReloadOnChunkError(message)
+    })
   })
 }
