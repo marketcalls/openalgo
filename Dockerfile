@@ -49,7 +49,16 @@ COPY --chown=appuser:appuser . .
 COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
 # 4 – create required directories with proper ownership and permissions
 #     Also create empty .env file with write permissions for Railway deployment
+#
+#     NOTE: chown /app itself (not just its contents). WORKDIR creates /app
+#     as root:root mode 755, and that ownership persists even after we
+#     COPY --chown=appuser:appuser into it. Without this chown the running
+#     appuser process can read/execute /app but cannot create new files
+#     there — which breaks any atomic-write helper that needs to put a
+#     temp file in /app (e.g. utils/env_check.py rotating FERNET_SALT in
+#     /app/.env). See marketcalls/openalgo#1394.
 RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache /app/tmp/matplotlib /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys && \
+    chown appuser:appuser /app && \
     chown -R appuser:appuser /app/log /app/db /app/tmp /app/strategies /app/keys && \
     chmod -R 755 /app/strategies /app/log /app/tmp && \
     chmod 700 /app/keys && \

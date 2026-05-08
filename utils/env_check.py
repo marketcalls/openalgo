@@ -1,3 +1,4 @@
+import errno
 import os
 import re
 import secrets
@@ -306,49 +307,116 @@ def _atomic_rewrite_dotenv(env_path: str, pairs: list) -> None:
         content = f.read()
     for old, new in pairs:
         content = content.replace(old, new)
-    tmp = env_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(content)
-    if os.name != "nt":
-        os.chmod(tmp, 0o600)
+    _atomic_replace_text(env_path, content)
 
-    last_err = None
-    for attempt in range(3):
-        try:
-            os.replace(tmp, env_path)
-            return
-        except OSError as e:
-            last_err = e
-            if os.name != "nt":
-                raise
-            time.sleep(0.15)
-    if last_err is not None:
-        raise last_err
+
+# Errors that mean "the temp-file-then-rename pattern can't work in this
+# environment" and we should silently fall back to an in-place rewrite:
+#
+#   EACCES / EPERM — parent directory not writable by us. This is the common
+#       case in Docker containers where /app is root-owned (created by
+#       Dockerfile WORKDIR before any chown) but the process runs as appuser.
+#       See marketcalls/openalgo#1394.
+#
+#   EXDEV / EBUSY — cross-filesystem rename. When .env is bind-mounted as a
+#       single file inside Docker (`./.env:/app/.env`), .env lives on the
+#       host filesystem but .env.tmp would be on the container's overlay
+#       filesystem. rename(2) refuses to span those mounts and returns
+#       EXDEV (Linux) or EBUSY (some kernels).
+#
+#   ENOENT — race against rmdir / a watcher cleaning up tmp files.
+_FALLBACK_TO_INPLACE_ERRNOS = frozenset(
+    {errno.EACCES, errno.EPERM, errno.EXDEV, errno.EBUSY, errno.ENOENT}
+)
 
 
 def _atomic_replace_text(path: str, content: str) -> None:
-    """Atomic-write ``content`` to ``path``. Same cross-platform safeguards as
-    ``_atomic_rewrite_dotenv``: preserves line endings, mode 0600 on POSIX,
-    retries on Windows ERROR_ACCESS_DENIED.
+    """Atomic-write ``content`` to ``path``, falling back to in-place rewrite
+    when the strict atomic pattern can't work in the current environment.
+
+    Cross-platform safeguards:
+
+    - ``newline=""`` preserves the file's existing line-ending convention
+      (LF on Unix, CRLF on Windows-saved files).
+    - On POSIX, the rewritten file is chmod 0o600 to match secret-file
+      conventions; on Windows it inherits the parent directory's ACL.
+    - Windows ``ERROR_ACCESS_DENIED`` (file watcher / antivirus briefly
+      holding the file) is retried up to 3 times.
+    - ``EACCES``, ``EPERM``, ``EXDEV``, ``EBUSY`` (POSIX) and
+      ``ERROR_ACCESS_DENIED`` (Windows, last-resort) trigger a fallback to
+      an in-place rewrite — open the destination directly, truncate, write,
+      fsync. Not crash-atomic in the strictest sense, but acceptable for
+      configuration files written once at startup and the only viable path
+      for Docker bind-mounted single files (issue #1394).
+
+    Strategy:
+
+    1. Write content to ``path + ".tmp"`` and ``os.replace`` it onto ``path``.
+    2. If creating the tmp file fails with a recoverable errno OR the rename
+       fails with a recoverable errno, clean up the tmp file and fall through
+       to in-place rewrite.
+    3. In-place rewrite: open ``path`` for write+truncate, write, fsync.
     """
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(content)
-    if os.name != "nt":
-        os.chmod(tmp, 0o600)
 
-    last_err = None
-    for _ in range(3):
+    def _cleanup_tmp() -> None:
         try:
-            os.replace(tmp, path)
-            return
-        except OSError as e:
-            last_err = e
-            if os.name != "nt":
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+    # Pattern 1 — write tmp + atomic rename.
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                # fsync failure on tmp is non-fatal — the rename below either
+                # succeeds (durable enough) or we fall through to in-place.
+                pass
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
+
+        last_err = None
+        for _ in range(3):
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError as e:
+                last_err = e
+                if e.errno in _FALLBACK_TO_INPLACE_ERRNOS:
+                    # Cross-FS rename or permission issue — break out to fallback.
+                    break
+                if os.name == "nt":
+                    time.sleep(0.15)
+                    continue
+                # Unrecognised POSIX error — propagate.
                 raise
-            time.sleep(0.15)
-    if last_err is not None:
-        raise last_err
+        if last_err is not None and last_err.errno not in _FALLBACK_TO_INPLACE_ERRNOS:
+            _cleanup_tmp()
+            raise last_err
+    except OSError as e:
+        if e.errno not in _FALLBACK_TO_INPLACE_ERRNOS:
+            raise
+        # Tmp creation/fsync hit a recoverable errno (EACCES on /app/.env.tmp
+        # in the user's report). Fall through.
+
+    _cleanup_tmp()
+
+    # Pattern 2 — in-place rewrite. Triggered when the parent directory
+    # is not writable by us (Docker /app root-owned) or path is a single-file
+    # bind mount (Docker .env). We've already burned one OSError attempt;
+    # this open() is the path of last resort. If it also raises, we let
+    # the caller handle it.
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(content)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
 
 
 # .sample.env ships this placeholder so install scripts and the bootstrap
