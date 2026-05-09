@@ -1,0 +1,10 @@
+{
+  "environment": "backtesting",
+  "algorithm-type-name": "__ALGORITHM_TYPE__",
+  "algorithm-language": "Python",
+  "algorithm-location": "__ALGORITHM_LOCATION__",
+  "data-folder": "__DATA_FOLDER__",
+  "python-venv": "__PYTHON_VENV__",
+  "debugging": false,
+  "debugging-method": "LocalCmdline"
+}

@@ -1,0 +1,20 @@
+# Secrets
+.env
+.env.*
+
+# Generated runtime config
+.tmp/
+config/generated/
+
+# Logs and runtime artifacts
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# OS/Editor
+.DS_Store
+.vscode/
+.idea/

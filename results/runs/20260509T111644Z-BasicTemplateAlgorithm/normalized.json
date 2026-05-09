@@ -1,0 +1,96 @@
+{
+  "algorithmType": "BasicTemplateAlgorithm",
+  "status": "Completed",
+  "startedAt": "2026-05-09T11:16:27Z",
+  "finishedAt": "2026-05-09T11:16:29Z",
+  "dateRange": {
+    "start": "2013-10-07T00:00:00Z",
+    "end": "2013-10-11T23:59:59Z"
+  },
+  "summary": {
+    "startEquity": 100000.0,
+    "endEquity": 101691.92,
+    "netProfitPct": 1.692,
+    "drawdownPct": 2.2,
+    "sharpeRatio": 8.854,
+    "sortinoRatio": 0.0,
+    "totalOrders": 1,
+    "totalFees": 3.44,
+    "runtimeReturn": "1.69 %"
+  },
+  "equity": [
+    {
+      "t": 1381118400,
+      "v": 100000.0
+    },
+    {
+      "t": 1381377600,
+      "v": 98878.2174
+    }
+  ],
+  "drawdown": [
+    {
+      "t": 1381118400,
+      "v": 0.0
+    },
+    {
+      "t": 1381377600,
+      "v": -1.121782600000006
+    }
+  ],
+  "trades": [],
+  "raw": {
+    "statistics": {
+      "Total Orders": "1",
+      "Average Win": "0%",
+      "Average Loss": "0%",
+      "Compounding Annual Return": "271.453%",
+      "Drawdown": "2.200%",
+      "Expectancy": "0",
+      "Start Equity": "100000",
+      "End Equity": "101691.92",
+      "Net Profit": "1.692%",
+      "Sharpe Ratio": "8.854",
+      "Sortino Ratio": "0",
+      "Probabilistic Sharpe Ratio": "67.609%",
+      "Loss Rate": "0%",
+      "Win Rate": "0%",
+      "Profit-Loss Ratio": "0",
+      "Alpha": "-0.005",
+      "Beta": "0.996",
+      "Annual Standard Deviation": "0.222",
+      "Annual Variance": "0.049",
+      "Information Ratio": "-14.565",
+      "Tracking Error": "0.001",
+      "Treynor Ratio": "1.97",
+      "Total Fees": "$3.44",
+      "Estimated Strategy Capacity": "$56000000.00",
+      "Lowest Capacity Asset": "SPY R735QTJ8XC9X",
+      "Portfolio Turnover": "19.93%",
+      "Drawdown Recovery": "3"
+    },
+    "runtimeStatistics": {
+      "Equity": "$101,691.92",
+      "Fees": "-$3.44",
+      "Holdings": "$101,305.19",
+      "Net Profit": "$-3.44",
+      "Probabilistic Sharpe Ratio": "67.609%",
+      "Return": "1.69 %",
+      "Unrealized": "$1,656.23",
+      "Volume": "$99,609.83"
+    },
+    "state": {
+      "StartTime": "2026-05-09T11:16:27Z",
+      "EndTime": "2026-05-09T11:16:29Z",
+      "RuntimeError": "",
+      "StackTrace": "",
+      "LogCount": "4",
+      "OrderCount": "1",
+      "InsightCount": "0",
+      "Name": "local",
+      "Hostname": "192",
+      "Status": "Completed"
+    }
+  },
+  "runId": "20260509T111644Z-BasicTemplateAlgorithm"
+}

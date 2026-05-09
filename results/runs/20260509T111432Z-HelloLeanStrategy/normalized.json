@@ -1,0 +1,88 @@
+{
+  "algorithmType": "HelloLeanStrategy",
+  "status": "Completed",
+  "startedAt": "2026-05-09T11:14:17Z",
+  "finishedAt": "2026-05-09T11:14:20Z",
+  "dateRange": {
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2024-01-31T23:59:59Z"
+  },
+  "summary": {
+    "startEquity": 100000.0,
+    "endEquity": 100000.0,
+    "netProfitPct": 0.0,
+    "drawdownPct": 0.0,
+    "sharpeRatio": 0.0,
+    "sortinoRatio": 0.0,
+    "totalOrders": 0,
+    "totalFees": 0.0,
+    "runtimeReturn": "0.00 %"
+  },
+  "equity": [
+    {
+      "t": 1704085200,
+      "v": 100000.0
+    }
+  ],
+  "drawdown": [
+    {
+      "t": 1704085200,
+      "v": 0.0
+    }
+  ],
+  "trades": [],
+  "raw": {
+    "statistics": {
+      "Total Orders": "0",
+      "Average Win": "0%",
+      "Average Loss": "0%",
+      "Compounding Annual Return": "0%",
+      "Drawdown": "0%",
+      "Expectancy": "0",
+      "Start Equity": "100000",
+      "End Equity": "100000",
+      "Net Profit": "0%",
+      "Sharpe Ratio": "0",
+      "Sortino Ratio": "0",
+      "Probabilistic Sharpe Ratio": "0%",
+      "Loss Rate": "0%",
+      "Win Rate": "0%",
+      "Profit-Loss Ratio": "0",
+      "Alpha": "0",
+      "Beta": "0",
+      "Annual Standard Deviation": "0",
+      "Annual Variance": "0",
+      "Information Ratio": "0",
+      "Tracking Error": "0",
+      "Treynor Ratio": "0",
+      "Total Fees": "$0.00",
+      "Estimated Strategy Capacity": "$0",
+      "Lowest Capacity Asset": "",
+      "Portfolio Turnover": "0%",
+      "Drawdown Recovery": "0"
+    },
+    "runtimeStatistics": {
+      "Equity": "$100,000.00",
+      "Fees": "-$0.00",
+      "Holdings": "$0.00",
+      "Net Profit": "$0.00",
+      "Probabilistic Sharpe Ratio": "0%",
+      "Return": "0.00 %",
+      "Unrealized": "$0.00",
+      "Volume": "$0.00"
+    },
+    "state": {
+      "StartTime": "2026-05-09T11:14:17Z",
+      "EndTime": "2026-05-09T11:14:20Z",
+      "RuntimeError": "",
+      "StackTrace": "",
+      "LogCount": "3",
+      "OrderCount": "0",
+      "InsightCount": "0",
+      "Name": "local",
+      "Hostname": "192",
+      "Status": "Completed"
+    }
+  },
+  "runId": "20260509T111432Z-HelloLeanStrategy"
+}

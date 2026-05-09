@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lean Backtest Visualizer</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="page">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h1>Run History</h1>
+          <p>All previous backtest runs</p>
+        </div>
+        <div id="runsList" class="runs-list"></div>
+      </aside>
+
+      <main class="content">
+        <header class="content-header">
+          <h2 id="runTitle">No run selected</h2>
+          <p id="runMeta">Run metadata appears here.</p>
+        </header>
+
+        <section class="kpi-grid">
+          <article class="kpi-card">
+            <h3>Net Profit</h3>
+            <p id="kpiNetProfit">-</p>
+          </article>
+          <article class="kpi-card">
+            <h3>Drawdown</h3>
+            <p id="kpiDrawdown">-</p>
+          </article>
+          <article class="kpi-card">
+            <h3>Sharpe</h3>
+            <p id="kpiSharpe">-</p>
+          </article>
+          <article class="kpi-card">
+            <h3>Total Orders</h3>
+            <p id="kpiOrders">-</p>
+          </article>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel">
+            <h3>Equity Curve</h3>
+            <div id="equityChart" class="tv-chart" aria-label="Equity curve chart"></div>
+          </article>
+          <article class="panel">
+            <h3>Drawdown (%)</h3>
+            <div id="drawdownChart" class="tv-chart" aria-label="Drawdown chart"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <h3>Trades</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Qty</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>P/L</th>
+                  <th>Start</th>
+                  <th>End</th>
+                </tr>
+              </thead>
+              <tbody id="tradesBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h3>Executions</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="ordersBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <p id="statusMessage" class="status-message"></p>
+      </main>
+    </div>
+
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
