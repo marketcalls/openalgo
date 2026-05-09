@@ -39,6 +39,22 @@ Environment flags:
 
 Run history is retained indefinitely unless you manually delete entries from results/runs/ and results/index.json.
 
+## Start visualizer separately
+
+If you already have archived runs and want to start only the visualizer server:
+
+- macOS/Linux:
+   scripts/run-visualizer.sh
+
+- Windows:
+   scripts\run-visualizer.cmd
+
+Optional arguments/env:
+- pass port as first argument, e.g. scripts/run-visualizer.sh 3010
+- VISUALIZER_PORT=3000 (default)
+- VISUALIZER_OPEN=true to auto-open browser
+- VISUALIZER_RUN_ID=<run-id> to open a specific run
+
 ## Run live with IB Gateway
 
 1. Start IB Gateway and enable API access.

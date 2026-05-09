@@ -4,7 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lean Backtest Visualizer</title>
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css?v=3?v=3" />
   </head>
   <body>
     <div class="page">
@@ -13,7 +16,34 @@
           <h1>Run History</h1>
           <p>All previous backtest runs</p>
         </div>
+        <div class="filter-bar">
+          <div class="filter-row search-row">
+            <div class="filter-group search-group">
+              <input type="text" id="searchInput" placeholder="Search strategies..." autocomplete="off" />
+            </div>
+          </div>
+          <div class="filter-row controls-row">
+            <div class="filter-group filter-dates">
+              <input type="date" id="dateFrom" title="Backtest start date" />
+              <span class="date-separator">→</span>
+              <input type="date" id="dateTo" title="Backtest end date" />
+            </div>
+            <div class="filter-group sort-group">
+              <select id="sortSelect">
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="profit">Best profit</option>
+                <option value="drawdown">Lowest drawdown</option>
+              </select>
+            </div>
+            <button type="button" id="clearFilters" class="clear-btn" title="Clear all filters">✕</button>
+          </div>
+        </div>
+        <div class="runs-count" id="runsCount"></div>
         <div id="runsList" class="runs-list"></div>
+        <div id="emptyState" class="empty-state" style="display:none;">
+          <p>No runs match your filters.</p>
+        </div>
       </aside>
 
       <main class="content">
@@ -97,6 +127,6 @@
     </div>
 
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=2?v=2"></script>
   </body>
 </html>

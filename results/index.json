@@ -1,5 +1,45 @@
 [
   {
+    "runId": "20260509T135550Z-SpyQqqMomentumAtrStrategy",
+    "algorithmType": "SpyQqqMomentumAtrStrategy",
+    "timestamp": "2026-05-09T13:55:50.945704+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2018-01-01T00:00:00Z",
+      "end": "2024-12-31T23:59:59Z"
+    },
+    "metrics": {
+      "netProfitPct": 16.651,
+      "drawdownPct": 3.6,
+      "sharpeRatio": -0.487,
+      "totalOrders": 57
+    },
+    "paths": {
+      "normalized": "runs/20260509T135550Z-SpyQqqMomentumAtrStrategy/normalized.json",
+      "runDir": "runs/20260509T135550Z-SpyQqqMomentumAtrStrategy"
+    }
+  },
+  {
+    "runId": "20260509T135318Z-SpyQqqMomentumAtrStrategy",
+    "algorithmType": "SpyQqqMomentumAtrStrategy",
+    "timestamp": "2026-05-09T13:53:18.983367+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2018-01-01T00:00:00Z",
+      "end": "2024-12-31T23:59:59Z"
+    },
+    "metrics": {
+      "netProfitPct": 16.651,
+      "drawdownPct": 3.6,
+      "sharpeRatio": -0.487,
+      "totalOrders": 57
+    },
+    "paths": {
+      "normalized": "runs/20260509T135318Z-SpyQqqMomentumAtrStrategy/normalized.json",
+      "runDir": "runs/20260509T135318Z-SpyQqqMomentumAtrStrategy"
+    }
+  },
+  {
     "runId": "20260509T111644Z-BasicTemplateAlgorithm",
     "algorithmType": "BasicTemplateAlgorithm",
     "timestamp": "2026-05-09T11:16:44.563159+00:00",

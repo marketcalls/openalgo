@@ -53,8 +53,9 @@ def _load_run_payload(results_dir: Path, run_id: str) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
 
-    # Backward compatibility: older normalized payloads don't include parsed orders.
-    if "orders" not in data:
+    # Backward compatibility: older normalized payloads don't include parsed orders
+    # or have an empty orders list. Enrich from raw-detailed.json when needed.
+    if not data.get("orders"):
         detailed_path = results_dir / "runs" / run_id / "raw-detailed.json"
         if detailed_path.exists():
             with detailed_path.open("r", encoding="utf-8") as handle:
@@ -81,6 +82,13 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, results_dir: Path, static_dir: Path, **kwargs: Any) -> None:
         self.results_dir = results_dir
         super().__init__(*args, directory=str(static_dir), **kwargs)
+
+    def end_headers(self) -> None:
+        # Prevent caching of static assets so code changes are picked up immediately.
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)

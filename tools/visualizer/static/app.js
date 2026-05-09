@@ -13,6 +13,8 @@ let drawdownChart = null;
 let equitySeries = null;
 let drawdownSeries = null;
 let chartResizeObserver = null;
+let allRuns = [];
+let filteredRuns = [];
 
 function queryRunId() {
   const params = new URLSearchParams(globalThis.location.search);
@@ -35,6 +37,13 @@ function fmtDateTime(value) {
     return value;
   }
   return dt.toLocaleString();
+}
+
+function formatShortDate(value) {
+  if (!value || value === "?") return "?";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return value;
+  return dt.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 function toEpochSeconds(value) {
@@ -68,11 +77,17 @@ async function fetchJson(url) {
 
 function renderRuns(runs, selectedRunId) {
   runsListEl.innerHTML = "";
+  const emptyStateEl = document.getElementById("emptyState");
+  const runsCountEl = document.getElementById("runsCount");
 
   if (!runs.length) {
-    runsListEl.innerHTML = '<p class="status-message">No saved runs yet.</p>';
+    if (emptyStateEl) emptyStateEl.style.display = "block";
+    if (runsCountEl) runsCountEl.textContent = "";
     return;
   }
+
+  if (emptyStateEl) emptyStateEl.style.display = "none";
+  if (runsCountEl) runsCountEl.textContent = `${runs.length} of ${allRuns.length} run${allRuns.length !== 1 ? "s" : ""}`;
 
   runs.forEach((run) => {
     const runId = run.runId || "";
@@ -83,21 +98,97 @@ function renderRuns(runs, selectedRunId) {
 
     const start = run.dateRange?.start || "?";
     const end = run.dateRange?.end || "?";
-    const netProfit = typeof run.metrics?.netProfitPct === "number" ? `${run.metrics.netProfitPct.toFixed(2)}%` : "-";
+    const netProfit = run.metrics?.netProfitPct;
+    const pnlClass = typeof netProfit === "number" ? (netProfit >= 0 ? "pnl-positive" : "pnl-negative") : "";
+    const pnlText = typeof netProfit === "number" ? `${netProfit >= 0 ? "+" : ""}${netProfit.toFixed(2)}%` : "-";
+    const status = (run.status || "Unknown").toLowerCase();
+    const statusClass = status === "completed" ? "completed" : "failed";
 
     item.innerHTML = `
-      <h4>${run.algorithmType || "Unknown Strategy"}</h4>
+      <h4>
+        <span>${run.algorithmType || "Unknown Strategy"}</span>
+        <span class="status-badge ${statusClass}">${run.status || "Unknown"}</span>
+      </h4>
       <p>${fmtDateTime(run.timestamp)}</p>
-      <p>${start} to ${end}</p>
-      <p>Net ${netProfit}</p>
+      <p>${formatShortDate(start)} → ${formatShortDate(end)}</p>
+      <p class="${pnlClass}">Net ${pnlText}</p>
     `;
 
     item.addEventListener("click", () => {
-      void loadRun(runId, runs);
+      void loadRun(runId, allRuns);
     });
 
     runsListEl.appendChild(item);
   });
+}
+
+function applyFilters() {
+  const searchText = (document.getElementById("searchInput")?.value || "").toLowerCase().trim();
+  const dateFrom = document.getElementById("dateFrom")?.value || "";
+  const dateTo = document.getElementById("dateTo")?.value || "";
+  const sortBy = document.getElementById("sortSelect")?.value || "newest";
+
+  filteredRuns = allRuns.filter((run) => {
+    // Text search: match algorithm name or runId
+    if (searchText) {
+      const name = (run.algorithmType || "").toLowerCase();
+      const id = (run.runId || "").toLowerCase();
+      if (!name.includes(searchText) && !id.includes(searchText)) {
+        return false;
+      }
+    }
+
+    // Date range filter: check overlap with backtest date range
+    if (dateFrom || dateTo) {
+      const runStart = run.dateRange?.start ? new Date(run.dateRange.start).getTime() : null;
+      const runEnd = run.dateRange?.end ? new Date(run.dateRange.end).getTime() : null;
+
+      if (dateFrom) {
+        const fromMs = new Date(dateFrom).getTime();
+        if (runEnd && runEnd < fromMs) return false;
+      }
+
+      if (dateTo) {
+        const toMs = new Date(dateTo + "T23:59:59Z").getTime();
+        if (runStart && runStart > toMs) return false;
+      }
+    }
+
+    return true;
+  });
+
+  // Sort
+  filteredRuns.sort((a, b) => {
+    switch (sortBy) {
+      case "newest":
+        return new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime();
+      case "oldest":
+        return new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime();
+      case "profit":
+        return (b.metrics?.netProfitPct ?? -Infinity) - (a.metrics?.netProfitPct ?? -Infinity);
+      case "drawdown":
+        return (a.metrics?.drawdownPct ?? Infinity) - (b.metrics?.drawdownPct ?? Infinity);
+      default:
+        return 0;
+    }
+  });
+
+  // Re-render with current active run
+  renderRuns(filteredRuns, activeRunId);
+}
+
+function clearFilters() {
+  const searchInput = document.getElementById("searchInput");
+  const dateFrom = document.getElementById("dateFrom");
+  const dateTo = document.getElementById("dateTo");
+  const sortSelect = document.getElementById("sortSelect");
+
+  if (searchInput) searchInput.value = "";
+  if (dateFrom) dateFrom.value = "";
+  if (dateTo) dateTo.value = "";
+  if (sortSelect) sortSelect.value = "newest";
+
+  applyFilters();
 }
 
 function setKpi(id, value) {
@@ -160,19 +251,29 @@ function ensureCharts() {
     height: 260,
   });
 
-  equitySeries = equityChart.addLineSeries({
+  const lineSeriesOpts = {
     color: "#006a6a",
     lineWidth: 2,
     priceLineVisible: false,
     lastValueVisible: true,
-  });
+  };
 
-  drawdownSeries = drawdownChart.addLineSeries({
+  const drawdownSeriesOpts = {
     color: "#9d2a2a",
     lineWidth: 2,
     priceLineVisible: false,
     lastValueVisible: true,
-  });
+  };
+
+  // Lightweight Charts v5+ uses addSeries(LineSeries, options) instead of addLineSeries(options)
+  const LineSeries = globalThis.LightweightCharts.LineSeries;
+  if (LineSeries && typeof equityChart.addSeries === "function") {
+    equitySeries = equityChart.addSeries(LineSeries, lineSeriesOpts);
+    drawdownSeries = drawdownChart.addSeries(LineSeries, drawdownSeriesOpts);
+  } else if (typeof equityChart.addLineSeries === "function") {
+    equitySeries = equityChart.addLineSeries(lineSeriesOpts);
+    drawdownSeries = drawdownChart.addLineSeries(drawdownSeriesOpts);
+  }
 
   if (typeof ResizeObserver !== "undefined" && !chartResizeObserver) {
     chartResizeObserver = new ResizeObserver(() => {
@@ -217,14 +318,16 @@ function applySeriesMarkers(series, markers) {
     return;
   }
 
-  if (typeof series.setMarkers === "function") {
-    series.setMarkers(markers);
-    return;
-  }
-
+  // Lightweight Charts v5+ uses createSeriesMarkers(series, markers)
   const createSeriesMarkers = globalThis.LightweightCharts?.createSeriesMarkers;
   if (createSeriesMarkers !== undefined) {
     createSeriesMarkers(series, markers);
+    return;
+  }
+
+  // Fallback for older versions
+  if (typeof series.setMarkers === "function") {
+    series.setMarkers(markers);
   }
 }
 
@@ -406,8 +509,10 @@ async function loadRun(runId, runsCache = null) {
     renderTrades(runPayload.trades || []);
     renderOrders(runPayload.orders || []);
 
-    const runs = runsCache || (await fetchJson("/api/runs")).runs || [];
-    renderRuns(runs, runId);
+    if (runsCache) {
+      allRuns = runsCache;
+    }
+    applyFilters();
 
     statusEl.textContent = "";
   } catch (error) {
@@ -421,10 +526,21 @@ async function bootstrap() {
     const runs = Array.isArray(runsResp.runs) ? runsResp.runs : [];
 
     if (!runs.length) {
+      allRuns = [];
       renderRuns([], "");
       statusEl.textContent = "No archived backtests yet. Run a strategy first.";
       return;
     }
+
+    allRuns = runs;
+    filteredRuns = runs;
+
+    // Wire up filter event listeners
+    document.getElementById("searchInput")?.addEventListener("input", () => applyFilters());
+    document.getElementById("dateFrom")?.addEventListener("change", () => applyFilters());
+    document.getElementById("dateTo")?.addEventListener("change", () => applyFilters());
+    document.getElementById("sortSelect")?.addEventListener("change", () => applyFilters());
+    document.getElementById("clearFilters")?.addEventListener("click", () => clearFilters());
 
     const requestedRunId = queryRunId();
     const selected = runs.find((run) => run.runId === requestedRunId)?.runId || runs[0].runId;
