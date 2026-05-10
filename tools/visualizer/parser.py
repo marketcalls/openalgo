@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 
+STRATEGY_EQUITY_KEY = "Strategy Equity"
+EQUITY_KEY = "Equity"
+
+
 @dataclass(frozen=True)
 class LeanArtifacts:
     algorithm_type: str
@@ -63,19 +67,51 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 def _extract_equity_points(summary: dict[str, Any]) -> list[dict[str, float | int]]:
     charts = summary.get("charts") if isinstance(summary.get("charts"), dict) else {}
-    strategy_equity = charts.get("Strategy Equity") if isinstance(charts.get("Strategy Equity"), dict) else {}
+    strategy_equity = charts.get(STRATEGY_EQUITY_KEY) if isinstance(charts.get(STRATEGY_EQUITY_KEY), dict) else {}
     series = strategy_equity.get("series") if isinstance(strategy_equity.get("series"), dict) else {}
-    equity = series.get("Equity") if isinstance(series.get("Equity"), dict) else {}
+    equity = series.get(EQUITY_KEY) if isinstance(series.get(EQUITY_KEY), dict) else {}
     values = equity.get("values") if isinstance(equity.get("values"), list) else []
 
     points: list[dict[str, float | int]] = []
     for entry in values:
-        if not isinstance(entry, list) or len(entry) < 5:
+        if not isinstance(entry, list) or len(entry) < 2:
             continue
         timestamp = int(_to_float(entry[0]))
-        close = _to_float(entry[4])
-        points.append({"t": timestamp, "v": close})
+        # Lean can emit either line-series [t, v] points or OHLC [t, o, h, l, c] points.
+        value_index = 4 if len(entry) >= 5 else 1
+        value = _to_float(entry[value_index])
+        points.append({"t": timestamp, "v": value})
     return points
+
+
+def _extract_equity_candles(summary: dict[str, Any]) -> list[dict[str, float | int]]:
+    charts = summary.get("charts") if isinstance(summary.get("charts"), dict) else {}
+    strategy_equity = charts.get(STRATEGY_EQUITY_KEY) if isinstance(charts.get(STRATEGY_EQUITY_KEY), dict) else {}
+    series = strategy_equity.get("series") if isinstance(strategy_equity.get("series"), dict) else {}
+    equity = series.get(EQUITY_KEY) if isinstance(series.get(EQUITY_KEY), dict) else {}
+    values = equity.get("values") if isinstance(equity.get("values"), list) else []
+
+    candles: list[dict[str, float | int]] = []
+    for entry in values:
+        if not isinstance(entry, list) or len(entry) < 2:
+            continue
+
+        timestamp = int(_to_float(entry[0]))
+
+        if len(entry) >= 5:
+            open_v = _to_float(entry[1])
+            high_v = _to_float(entry[2])
+            low_v = _to_float(entry[3])
+            close_v = _to_float(entry[4])
+        else:
+            close_v = _to_float(entry[1])
+            open_v = close_v
+            high_v = close_v
+            low_v = close_v
+
+        candles.append({"t": timestamp, "o": open_v, "h": high_v, "l": low_v, "c": close_v})
+
+    return candles
 
 
 def _compute_drawdown_series(equity_points: list[dict[str, float | int]]) -> list[dict[str, float | int]]:
@@ -130,6 +166,17 @@ def _direction_to_text(value: Any) -> str:
     return text or "Unknown"
 
 
+def _extract_iso_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    if "T" in text:
+        return text.split("T", 1)[0]
+
+    return text[:10] if len(text) >= 10 else text
+
+
 def extract_orders_from_detailed(detailed: dict[str, Any]) -> list[dict[str, Any]]:
     orders_obj = detailed.get("orders") if isinstance(detailed.get("orders"), dict) else {}
 
@@ -167,11 +214,27 @@ def extract_orders_from_detailed(detailed: dict[str, Any]) -> list[dict[str, Any
     return orders
 
 
-def _extract_date_range(summary: dict[str, Any], equity_points: list[dict[str, float | int]]) -> dict[str, str]:
+def _extract_date_range(
+    summary: dict[str, Any],
+    detailed: dict[str, Any],
+    equity_points: list[dict[str, float | int]],
+) -> dict[str, str]:
     configuration = summary.get("algorithmConfiguration") if isinstance(summary.get("algorithmConfiguration"), dict) else {}
+    performance = detailed.get("totalPerformance") if isinstance(detailed.get("totalPerformance"), dict) else {}
+    trade_statistics = (
+        performance.get("tradeStatistics") if isinstance(performance.get("tradeStatistics"), dict) else {}
+    )
 
     start_date = str(configuration.get("startDate", "")).strip()
     end_date = str(configuration.get("endDate", "")).strip()
+
+    trade_start_date = _extract_iso_date(trade_statistics.get("startDateTime"))
+    trade_end_date = _extract_iso_date(trade_statistics.get("endDateTime"))
+
+    if trade_start_date:
+        start_date = trade_start_date
+    if trade_end_date:
+        end_date = trade_end_date
 
     if not start_date and equity_points:
         start_date = datetime.fromtimestamp(int(equity_points[0]["t"]), tz=UTC).date().isoformat()
@@ -202,10 +265,11 @@ def parse_lean_results(launcher_dir: Path, algorithm_type: str) -> tuple[dict[st
     state = summary.get("state") if isinstance(summary.get("state"), dict) else {}
 
     equity_points = _extract_equity_points(summary)
+    equity_candles = _extract_equity_candles(summary)
     drawdown_points = _compute_drawdown_series(equity_points)
     trades = _extract_trades(detailed)
     orders = extract_orders_from_detailed(detailed)
-    date_range = _extract_date_range(summary, equity_points)
+    date_range = _extract_date_range(summary, detailed, equity_points)
 
     payload: dict[str, Any] = {
         "algorithmType": algorithm_type,
@@ -225,6 +289,7 @@ def parse_lean_results(launcher_dir: Path, algorithm_type: str) -> tuple[dict[st
             "runtimeReturn": str(runtime_statistics.get("Return", "")),
         },
         "equity": equity_points,
+        "equityCandles": equity_candles,
         "drawdown": drawdown_points,
         "trades": trades,
         "orders": orders,

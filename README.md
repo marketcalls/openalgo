@@ -29,19 +29,22 @@ The second argument is optional. If omitted, class name defaults to file name wi
 After a successful backtest, the script now:
 1. Archives the run under results/runs/<run-id>/
 2. Updates results/index.json (all previous runs)
-3. Starts the visualizer at http://localhost:3000 and auto-opens the browser
+3. Starts the Streamlit visualizer at http://localhost:3000 and auto-opens the browser
 
 Use the run history list in the visualizer sidebar to open any previous run.
 
 Environment flags:
 - VISUALIZER_PORT=3000 (default)
 - VISUALIZER_ENABLED=true (default). Set to false to skip visualizer startup.
+- VISUALIZER_OPEN=true (default). Set to false to run headless.
+- VISUALIZER_RUN_ID=<run-id> optional default run selection.
+- VISUALIZER_RESULTS_DIR=<path> optional results directory override.
 
 Run history is retained indefinitely unless you manually delete entries from results/runs/ and results/index.json.
 
 ## Start visualizer separately
 
-If you already have archived runs and want to start only the visualizer server:
+If you already have archived runs and want to start only the visualizer:
 
 - macOS/Linux:
    scripts/run-visualizer.sh
@@ -55,6 +58,12 @@ Optional arguments/env:
 - VISUALIZER_OPEN=true to auto-open browser
 - VISUALIZER_RUN_ID=<run-id> to open a specific run
 
+### Streamlit dependency
+
+Install Streamlit in your Python environment if needed:
+
+python -m pip install streamlit
+
 ## Run live with IB Gateway
 
 1. Start IB Gateway and enable API access.
@@ -67,3 +76,10 @@ Optional arguments/env:
 - Keep .env private and never commit it.
 - Generated runtime config lives in .tmp and is git-ignored.
 - Prefer API session auth via gateway host/port and avoid storing IB password unless required.
+
+
+### Command to activate leans conda environment
+````
+conda activate /Users/arifkhan/github/Lean/.conda/lean-py311
+````
+

@@ -15,7 +15,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from archive import archive_run
-from parser import ParseError, extract_orders_from_detailed, parse_lean_results
+from data_store import latest_run_id, load_run_payload, read_index
+from parser import ParseError, parse_lean_results
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,48 +35,15 @@ def _json_response(handler: SimpleHTTPRequestHandler, payload: Any, status: int 
 
 
 def _read_index(results_dir: Path) -> list[dict[str, Any]]:
-    path = results_dir / "index.json"
-    if not path.exists():
-        return []
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, list):
-        return []
-    return [entry for entry in data if isinstance(entry, dict)]
+    return read_index(results_dir)
 
 
 def _load_run_payload(results_dir: Path, run_id: str) -> dict[str, Any] | None:
-    run_file = results_dir / "runs" / run_id / "normalized.json"
-    if not run_file.exists():
-        return None
-    with run_file.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, dict):
-        return None
-
-    # Backward compatibility: older normalized payloads don't include parsed orders
-    # or have an empty orders list. Enrich from raw-detailed.json when needed.
-    if not data.get("orders"):
-        detailed_path = results_dir / "runs" / run_id / "raw-detailed.json"
-        if detailed_path.exists():
-            with detailed_path.open("r", encoding="utf-8") as handle:
-                detailed = json.load(handle)
-            if isinstance(detailed, dict):
-                data["orders"] = extract_orders_from_detailed(detailed)
-
-    if "orders" not in data:
-        data["orders"] = []
-
-    return data
+    return load_run_payload(results_dir, run_id)
 
 
 def _latest_run_id(results_dir: Path) -> str | None:
-    entries = _read_index(results_dir)
-    if not entries:
-        return None
-    latest = entries[0]
-    run_id = latest.get("runId")
-    return str(run_id) if isinstance(run_id, str) and run_id else None
+    return latest_run_id(results_dir)
 
 
 class VisualizerHandler(SimpleHTTPRequestHandler):

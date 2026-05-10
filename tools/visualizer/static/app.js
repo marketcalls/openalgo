@@ -66,6 +66,130 @@ function toEpochSeconds(value) {
   return Math.floor(parsed / 1000);
 }
 
+function toIsoDateFromEpoch(epochSeconds) {
+  if (!Number.isFinite(epochSeconds)) {
+    return "?";
+  }
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
+}
+
+function deriveTradeWindow(trades) {
+  if (!Array.isArray(trades) || !trades.length) {
+    return { start: null, end: null };
+  }
+
+  let start = null;
+  let end = null;
+
+  trades.forEach((trade) => {
+    if (!trade || typeof trade !== "object") {
+      return;
+    }
+
+    const tradeStart = toEpochSeconds(trade.startDateTime);
+    const tradeEnd = toEpochSeconds(trade.endDateTime);
+
+    if (Number.isFinite(tradeStart)) {
+      start = start === null ? tradeStart : Math.min(start, tradeStart);
+    }
+
+    if (Number.isFinite(tradeEnd)) {
+      end = end === null ? tradeEnd : Math.max(end, tradeEnd);
+    }
+  });
+
+  return { start, end };
+}
+
+function deriveOrderWindow(orders) {
+  if (!Array.isArray(orders) || !orders.length) {
+    return { start: null, end: null };
+  }
+
+  let start = null;
+  let end = null;
+
+  orders.forEach((order) => {
+    if (!order || typeof order !== "object") {
+      return;
+    }
+
+    const orderTime = toEpochSeconds(order.time);
+    if (!Number.isFinite(orderTime)) {
+      return;
+    }
+
+    start = start === null ? orderTime : Math.min(start, orderTime);
+    end = end === null ? orderTime : Math.max(end, orderTime);
+  });
+
+  return { start, end };
+}
+
+function derivePointWindow(points) {
+  if (!Array.isArray(points) || !points.length) {
+    return { start: null, end: null };
+  }
+
+  let start = null;
+  let end = null;
+
+  points.forEach((point) => {
+    if (!point || typeof point !== "object") {
+      return;
+    }
+    const t = toEpochSeconds(point.t);
+    if (!Number.isFinite(t)) {
+      return;
+    }
+    start = start === null ? t : Math.min(start, t);
+    end = end === null ? t : Math.max(end, t);
+  });
+
+  return { start, end };
+}
+
+function deriveEffectiveRange(dateRange, trades, orders, points) {
+  const tradeWindow = deriveTradeWindow(trades);
+  const orderWindow = deriveOrderWindow(orders);
+
+  const activityStarts = [tradeWindow.start, orderWindow.start].filter((v) => Number.isFinite(v));
+  const activityEnds = [tradeWindow.end, orderWindow.end].filter((v) => Number.isFinite(v));
+  if (activityStarts.length && activityEnds.length) {
+    return {
+      start: Math.min(...activityStarts),
+      end: Math.max(...activityEnds),
+    };
+  }
+
+  const configuredStart = toEpochSeconds(dateRange?.start);
+  const configuredEnd = toEpochSeconds(dateRange?.end);
+  if (Number.isFinite(configuredStart) && Number.isFinite(configuredEnd)) {
+    return { start: configuredStart, end: configuredEnd };
+  }
+
+  return derivePointWindow(points);
+}
+
+function filterPointsByRange(points, range) {
+  if (!Array.isArray(points)) {
+    return [];
+  }
+
+  const hasRange = range && Number.isFinite(range.start) && Number.isFinite(range.end);
+  if (hasRange) {
+    return points.filter((point) => {
+      if (!point || typeof point !== "object") {
+        return false;
+      }
+      const t = toEpochSeconds(point.t);
+      return Number.isFinite(t) && t >= range.start && t <= range.end;
+    });
+  }
+
+  return points;
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -391,7 +515,7 @@ function buildTradeAndOrderMarkers(trades, orders) {
   return markers;
 }
 
-function renderEquityChart(points, trades, orders) {
+function renderEquityChart(points, trades, orders, effectiveRange) {
   if (!chartLibReady()) {
     equityChartContainerEl.textContent = "Chart library did not load.";
     return;
@@ -402,10 +526,16 @@ function renderEquityChart(points, trades, orders) {
     return;
   }
 
-  const lineData = toLineData(points);
+  const filteredPoints = filterPointsByRange(points, effectiveRange);
+  const lineData = toLineData(filteredPoints);
   equitySeries.setData(lineData);
 
-  const markers = buildTradeAndOrderMarkers(trades, orders);
+  const markers = buildTradeAndOrderMarkers(trades, orders).filter((marker) => {
+    if (!effectiveRange || !Number.isFinite(effectiveRange.start) || !Number.isFinite(effectiveRange.end)) {
+      return true;
+    }
+    return marker.time >= effectiveRange.start && marker.time <= effectiveRange.end;
+  });
   applySeriesMarkers(equitySeries, markers);
 
   if (lineData.length) {
@@ -413,7 +543,7 @@ function renderEquityChart(points, trades, orders) {
   }
 }
 
-function renderDrawdownChart(points) {
+function renderDrawdownChart(points, effectiveRange) {
   if (!chartLibReady()) {
     drawdownChartContainerEl.textContent = "Chart library did not load.";
     return;
@@ -424,7 +554,8 @@ function renderDrawdownChart(points) {
     return;
   }
 
-  const lineData = toLineData(points);
+  const filteredPoints = filterPointsByRange(points, effectiveRange);
+  const lineData = toLineData(filteredPoints);
   drawdownSeries.setData(lineData);
   applySeriesMarkers(drawdownSeries, []);
 
@@ -493,19 +624,25 @@ async function loadRun(runId, runsCache = null) {
     const runPayload = await fetchJson(`/api/runs/${runId}`);
     const summary = runPayload.summary || {};
     const dateRange = runPayload.dateRange || {};
+    const effectiveRange = deriveEffectiveRange(
+      dateRange,
+      runPayload.trades || [],
+      runPayload.orders || [],
+      runPayload.equity || []
+    );
 
     activeRunId = runId;
 
     runTitleEl.textContent = `${runPayload.algorithmType || "Strategy"} (${runId})`;
-    runMetaEl.textContent = `Range: ${dateRange.start || "?"} to ${dateRange.end || "?"} | Status: ${runPayload.status || "Unknown"}`;
+    runMetaEl.textContent = `Range: ${toIsoDateFromEpoch(effectiveRange.start)} to ${toIsoDateFromEpoch(effectiveRange.end)} | Status: ${runPayload.status || "Unknown"}`;
 
     setKpi("kpiNetProfit", `${fmtNumber(summary.netProfitPct, "%")}`);
     setKpi("kpiDrawdown", `${fmtNumber(summary.drawdownPct, "%")}`);
     setKpi("kpiSharpe", fmtNumber(summary.sharpeRatio));
     setKpi("kpiOrders", String(summary.totalOrders ?? 0));
 
-    renderEquityChart(runPayload.equity || [], runPayload.trades || [], runPayload.orders || []);
-    renderDrawdownChart(runPayload.drawdown || []);
+    renderEquityChart(runPayload.equity || [], runPayload.trades || [], runPayload.orders || [], effectiveRange);
+    renderDrawdownChart(runPayload.drawdown || [], effectiveRange);
     renderTrades(runPayload.trades || []);
     renderOrders(runPayload.orders || []);
 
