@@ -87,10 +87,10 @@ All brokers share a unified API interface, making it easy to switch between brok
 
 ### Unified REST API Layer (`/api/v1/`)
 A single, standardized API across all brokers with 30+ endpoints:
-- **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing
+- **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing, and native bracket orders with OCO legs
 - **Portfolio**: Get positions, holdings, order book, trade book, funds
 - **Market Data**: Real-time quotes, historical data, market depth (Level 5), symbol search
-- **Advanced**: Option Greeks calculator, margin calculator, synthetic futures, auto-split orders
+- **Advanced**: Option Greeks calculator, margin calculator, synthetic futures, auto-split orders, and native OCO logic for simulated bracket orders
 
 ### Real-Time WebSocket Streaming
 - Unified WebSocket proxy server for all brokers (port 8765)

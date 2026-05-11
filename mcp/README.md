@@ -132,6 +132,9 @@ The MCP server provides the following categories of tools:
 - `modify_order` - Modify existing orders
 - `cancel_order` - Cancel specific orders
 - `cancel_all_orders` - Cancel all orders for a strategy
+- `bracket_order` - Place native bracket order with target and stop-loss
+- `bracket_order_status` - Check status of a bracket order and its legs
+- `cancel_bracket_order` - Cancel a bracket order and all its legs
 
 ### Position Management
 - `close_all_positions` - Close all positions for a strategy
@@ -193,6 +196,8 @@ Once configured, you can ask your AI assistant to:
 - "Is 2026-01-26 a holiday on NSE?"
 - "Get the last 5 days of NIFTY 1m candles from the local Historify DB" (uses `source='db'`)
 - "Get all instruments for NSE"
+- "Place a bracket order for SBIN with 5 points target and 3 points SL"
+- "Cancel my bracket order for CRUDEOIL"
 
 ## Supported Exchanges
 
