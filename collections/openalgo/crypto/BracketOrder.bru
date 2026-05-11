@@ -1,0 +1,28 @@
+meta {
+  name: BracketOrder
+  type: http
+  seq: 14
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/bracketorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Python",
+      "symbol": "BTCUSDT",
+      "action": "BUY",
+      "exchange": "BINANCE",
+      "product": "NRML",
+      "quantity": 0.001,
+      "price_type": "MARKET",
+      "target_type": "percentage",
+      "target_value": 2.0,
+      "sl_type": "percentage",
+      "sl_value": 1.0
+  }
+}

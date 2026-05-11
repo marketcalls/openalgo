@@ -121,6 +121,44 @@ class FlowOpenAlgoClient:
         success, response, status_code = place_smart_order(order_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
+    def bracket_order(
+        self,
+        symbol: str,
+        exchange: str,
+        action: str,
+        quantity: int,
+        target_type: str,
+        target_value: float,
+        sl_type: str,
+        sl_value: float,
+        price_type: str = "MARKET",
+        product_type: str = "MIS",
+        price: float = 0,
+        strategy: str = "flow_workflow",
+    ) -> dict[str, Any]:
+        """Place a bracket order with entry, target, and stop-loss legs"""
+        from services.bracket_order_service import place_bracket_order
+
+        order_data = {
+            "apikey": self.api_key,
+            "strategy": strategy,
+            "symbol": symbol,
+            "exchange": exchange,
+            "action": action.upper(),
+            "quantity": quantity,
+            "price_type": price_type.upper(),
+            "product": product_type,
+            "price": price,
+            "target_type": target_type,
+            "target_value": target_value,
+            "sl_type": sl_type,
+            "sl_value": sl_value,
+        }
+
+        success, response, status_code = place_bracket_order(order_data, api_key=self.api_key)
+        return self._handle_response(success, response, status_code)
+
+
     def modify_order(
         self,
         order_id: str,

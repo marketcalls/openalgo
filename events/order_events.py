@@ -164,3 +164,48 @@ class GTTExpiredEvent(OrderEvent):
     symbol: str = ""
     exchange: str = ""
     trigger_id: str = ""
+
+
+# -----------------------------------------------------------------------------
+# Bracket Order events
+# -----------------------------------------------------------------------------
+
+@dataclass
+class BracketOrderPlacedEvent(OrderEvent):
+    """Fired when a bracket order entry is placed."""
+    topic: str = "bracket_order.placed"
+    bo_id: str = ""
+    symbol: str = ""
+    exchange: str = ""
+    action: str = ""
+    entry_order_id: str = ""
+
+@dataclass
+class BracketOrderFilledEvent(OrderEvent):
+    """Fired when a bracket order entry is filled."""
+    topic: str = "bracket_order.entry_filled"
+    bo_id: str = ""
+    symbol: str = ""
+    entry_price: float = 0.0
+
+@dataclass
+class BracketOrderCompletedEvent(OrderEvent):
+    """Fired when a bracket order is completed (target or SL hit)."""
+    topic: str = "bracket_order.completed"
+    bo_id: str = ""
+    exit_type: str = ""  # "TARGET" or "STOPLOSS"
+    exit_price: float = 0.0
+
+@dataclass
+class BracketOrderFailedEvent(OrderEvent):
+    """Fired when a bracket order fails (entry rejected, or leg placement fails)."""
+    topic: str = "bracket_order.failed"
+    bo_id: str = ""
+    error_message: str = ""
+
+@dataclass
+class BracketOrderCancelledEvent(OrderEvent):
+    """Fired when a bracket order is manually cancelled."""
+    topic: str = "bracket_order.cancelled"
+    bo_id: str = ""
+

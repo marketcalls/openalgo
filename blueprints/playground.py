@@ -196,6 +196,7 @@ def categorize_endpoint(path):
             "/orderstatus",
             "/openposition",
             "/closeall",
+            "/bracketorder",
         ]
     ):
         return "orders"

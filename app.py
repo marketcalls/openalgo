@@ -586,6 +586,7 @@ def setup_environment(app):
             from database.strategy_portfolio_db import (
                 ensure_strategy_portfolio_tables_exists,
             )
+            from database.bracket_order_db import init_db as ensure_bracket_order_tables_exists
 
             db_init_functions = [
                 ("Auth DB", ensure_auth_tables_exists),
@@ -607,6 +608,7 @@ def setup_environment(app):
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
+                ("Bracket Order DB", ensure_bracket_order_tables_exists),
             ]
 
             db_init_start = time.time()
@@ -647,6 +649,13 @@ def setup_environment(app):
                 logger.debug("Historify scheduler initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
+
+            try:
+                from services.bracket_order_manager import start_bo_manager
+                start_bo_manager()
+                logger.debug("Bracket Order Manager initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Bracket Order Manager: {e}")
 
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
@@ -804,6 +813,7 @@ def shutdown_database_sessions(exception=None):
         ("database.market_calendar_db", "db_session"),
         ("database.telegram_db", "db_session"),
         ("database.symbol", "db_session"),
+        ("database.bracket_order_db", "db_session"),
     ]
 
     for module_name, session_attr in _sessions:
@@ -940,4 +950,4 @@ if __name__ == "__main__":
             f"{C}{BL}{H*(_W-2)}{BR}{R}", "",
         ]), flush=True)
 
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options, allow_unsafe_werkzeug=True)

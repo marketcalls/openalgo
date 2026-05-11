@@ -559,6 +559,107 @@ def cancel_all_orders(strategy: str = MCP_STRATEGY) -> str:
         return f"Error canceling all orders: {str(e)}"
 
 
+# BRACKET ORDER TOOLS
+
+
+@mcp.tool()
+def bracket_order(
+    symbol: str,
+    quantity: int,
+    action: str,
+    target_type: str,
+    target_value: float,
+    sl_type: str,
+    sl_value: float,
+    exchange: str = "NSE",
+    price_type: str = "MARKET",
+    product: str = "MIS",
+    price: float = 0.0,
+    strategy: str = MCP_STRATEGY,
+) -> str:
+    """
+    Place a bracket order with entry, target, and stop-loss legs.
+
+    Args:
+        symbol: Stock symbol
+        quantity: Order quantity
+        action: 'BUY' or 'SELL'
+        target_type: 'points', 'percentage', or 'absolute'
+        target_value: Target value
+        sl_type: 'points', 'percentage', or 'absolute'
+        sl_value: Stop-loss value
+        exchange: Exchange name (defaults to 'NSE')
+        price_type: 'MARKET' or 'LIMIT' (defaults to 'MARKET')
+        product: Product type (defaults to 'MIS')
+        price: Limit price (required if price_type is 'LIMIT')
+        strategy: Strategy name (defaults to 'python mcp')
+    """
+    try:
+        payload = {
+            "apikey": api_key,
+            "strategy": strategy,
+            "symbol": symbol.upper(),
+            "exchange": exchange.upper(),
+            "action": action.upper(),
+            "product": product.upper(),
+            "quantity": quantity,
+            "price_type": price_type.upper(),
+            "price": price,
+            "target_type": target_type,
+            "target_value": target_value,
+            "sl_type": sl_type,
+            "sl_value": sl_value
+        }
+        res = httpx.post(f"{host}/api/v1/bracketorder", json=payload)
+        return json.dumps(res.json(), indent=2)
+    except Exception as e:
+        return f"Error placing bracket order: {str(e)}"
+
+
+@mcp.tool()
+def bracket_order_status(bo_id: str, strategy: str = MCP_STRATEGY) -> str:
+    """
+    Get the status of an active bracket order.
+
+    Args:
+        bo_id: Bracket Order ID
+        strategy: Strategy name (defaults to 'python mcp')
+    """
+    try:
+        payload = {
+            "apikey": api_key,
+            "strategy": strategy,
+            "bo_id": bo_id
+        }
+        res = httpx.post(f"{host}/api/v1/bracketorder/status", json=payload)
+        return json.dumps(res.json(), indent=2)
+    except Exception as e:
+        return f"Error checking bracket order status: {str(e)}"
+
+
+@mcp.tool()
+def cancel_bracket_order(bo_id: str, square_off: bool = False, strategy: str = MCP_STRATEGY) -> str:
+    """
+    Cancel an active bracket order.
+
+    Args:
+        bo_id: Bracket Order ID
+        square_off: If True, square off the active position at market price (defaults to False)
+        strategy: Strategy name (defaults to 'python mcp')
+    """
+    try:
+        payload = {
+            "apikey": api_key,
+            "strategy": strategy,
+            "bo_id": bo_id,
+            "square_off": square_off
+        }
+        res = httpx.post(f"{host}/api/v1/bracketorder/cancel", json=payload)
+        return json.dumps(res.json(), indent=2)
+    except Exception as e:
+        return f"Error canceling bracket order: {str(e)}"
+
+
 # POSITION MANAGEMENT TOOLS
 
 

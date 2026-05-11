@@ -564,3 +564,32 @@ class GTTOrderBookSchema(Schema):
     """Schema for listing all GTT triggers for a user."""
 
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+
+class BracketOrderSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    strategy = fields.Str(required=True)
+    symbol = fields.Str(required=True)
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
+    product = fields.Str(missing="MIS", validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    quantity = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
+    price_type = fields.Str(missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT"]))
+    price = fields.Float(missing=0.0, validate=validate.Range(min=0))
+    target_type = fields.Str(required=True, validate=validate.OneOf(["points", "percentage", "absolute"]))
+    target_value = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
+    sl_type = fields.Str(required=True, validate=validate.OneOf(["points", "percentage", "absolute"]))
+    sl_value = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
+
+    @post_load
+    def coerce_quantity(self, data, **kwargs):
+        return _coerce_quantity_to_int(data)
+
+class CancelBracketOrderSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    strategy = fields.Str(required=True)
+    bo_id = fields.Str(required=True, validate=validate.Length(min=1))
+    square_off = fields.Bool(missing=False)
+
+class BracketOrderStatusSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    bo_id = fields.Str(required=True, validate=validate.Length(min=1))

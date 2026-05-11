@@ -91,3 +91,6 @@ yarn-error.log*
 
 # Windows NUL file
 nul
+.gitnexus
+scratch/
+.claude/

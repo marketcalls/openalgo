@@ -31,6 +31,7 @@ IMMEDIATE_EXECUTION_OPERATIONS = {
     "modifygttorder",
     "cancelgttorder",
     "gttorderbook",
+    "bracketorder",
 }
 
 

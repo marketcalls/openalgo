@@ -1,0 +1,19 @@
+meta {
+  name: CancelBracketOrder
+  type: http
+  seq: 16
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/bracketorder/cancel
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "bo_id": "",
+      "square_off": false
+  }
+}

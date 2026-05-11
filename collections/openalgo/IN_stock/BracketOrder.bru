@@ -1,0 +1,28 @@
+meta {
+  name: BracketOrder
+  type: http
+  seq: 14
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/bracketorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Python",
+      "symbol": "SBIN",
+      "action": "BUY",
+      "exchange": "NSE",
+      "product": "MIS",
+      "quantity": 1,
+      "price_type": "MARKET",
+      "target_type": "points",
+      "target_value": 5,
+      "sl_type": "points",
+      "sl_value": 3
+  }
+}

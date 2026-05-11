@@ -24,6 +24,11 @@ from events.order_events import (
     OrderModifyFailedEvent,
     OrderPlacedEvent,
     SmartOrderNoActionEvent,
+    BracketOrderPlacedEvent,
+    BracketOrderFilledEvent,
+    BracketOrderCompletedEvent,
+    BracketOrderFailedEvent,
+    BracketOrderCancelledEvent,
 )
 from events.position_events import AllOrdersCancelledEvent, PositionClosedEvent
 from events.sandbox_events import (
@@ -59,4 +64,9 @@ __all__ = [
     "GTTCancelFailedEvent",
     "GTTTriggeredEvent",
     "GTTExpiredEvent",
+    "BracketOrderPlacedEvent",
+    "BracketOrderFilledEvent",
+    "BracketOrderCompletedEvent",
+    "BracketOrderFailedEvent",
+    "BracketOrderCancelledEvent",
 ]

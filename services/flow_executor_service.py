@@ -733,6 +733,44 @@ class NodeExecutor:
         self.store_output(node_data, result)
         return result
 
+    def execute_bracket_order(self, node_data: dict) -> dict:
+        """Execute Bracket Order node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        action = self.get_str(node_data, "action", "BUY")
+        quantity = self.get_int(node_data, "quantity", 1)
+        price_type = self.get_str(node_data, "priceType", "MARKET")
+        product_type = self.get_str(node_data, "productType", "MIS")
+        price = self.get_float(node_data, "price", 0)
+        target_type = self.get_str(node_data, "targetType", "points")
+        target_value = self.get_float(node_data, "targetValue", 0)
+        sl_type = self.get_str(node_data, "slType", "points")
+        sl_value = self.get_float(node_data, "slValue", 0)
+        
+        self.log(f"Placing Bracket order: {action} {quantity} {symbol} (Target: {target_value} {target_type}, SL: {sl_value} {sl_type})")
+        
+        result = self.client.bracket_order(
+            symbol=symbol,
+            exchange=exchange,
+            action=action,
+            quantity=quantity,
+            target_type=target_type,
+            target_value=target_value,
+            sl_type=sl_type,
+            sl_value=sl_value,
+            price_type=price_type,
+            product_type=product_type,
+            price=price,
+            strategy=f"flow_{self.workflow_id}",
+        )
+        
+        self.log(
+            f"Bracket order result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
+        self.store_output(node_data, result)
+        return result
+
     # === Data Nodes ===
 
     def execute_get_quote(self, node_data: dict) -> dict:
@@ -2085,6 +2123,8 @@ def execute_node_chain(
         result = executor.execute_basket_order(node_data)
     elif node_type == "splitOrder":
         result = executor.execute_split_order(node_data)
+    elif node_type == "bracketOrder":
+        result = executor.execute_bracket_order(node_data)
     elif node_type == "getQuote":
         result = executor.execute_get_quote(node_data)
     elif node_type == "getDepth":

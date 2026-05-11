@@ -1,0 +1,18 @@
+meta {
+  name: BracketOrderStatus
+  type: http
+  seq: 15
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/bracketorder/status
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "bo_id": ""
+  }
+}
