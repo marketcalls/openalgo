@@ -62,6 +62,8 @@ TOOL_SCOPES: dict[str, str] = {
     "cancel_order": SCOPE_WRITE_ORDERS,
     "cancel_all_orders": SCOPE_WRITE_ORDERS,
     "close_all_positions": SCOPE_WRITE_ORDERS,
+    "bracket_order": SCOPE_WRITE_ORDERS,
+    "cancel_bracket_order": SCOPE_WRITE_ORDERS,
     # analyzer_toggle flips between live and analyze (paper) modes — a
     # mistaken True silently routes future orders to the real broker.
     # Treated as a write because the blast radius is the same.
@@ -69,6 +71,7 @@ TOOL_SCOPES: dict[str, str] = {
     # ---- Account state ----
     "get_open_position": SCOPE_READ_ACCOUNT,
     "get_order_status": SCOPE_READ_ACCOUNT,
+    "bracket_order_status": SCOPE_READ_ACCOUNT,
     "get_order_book": SCOPE_READ_ACCOUNT,
     "get_trade_book": SCOPE_READ_ACCOUNT,
     "get_position_book": SCOPE_READ_ACCOUNT,
