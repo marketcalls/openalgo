@@ -137,6 +137,46 @@ class KotakWebSocket:
         msg = {"type": sub_type, "scrips": f"{exchange}|{token}", "channelnum": channelnum}
         self._send(msg)
 
+    def subscribe_batch(self, scrips, sub_type="mws", channelnum="1"):
+        """Subscribe to multiple scrips in a single WebSocket frame.
+
+        Args:
+            scrips: iterable of (exchange, token) tuples
+            sub_type: mws (quote), dps (depth), ifs (index)
+            channelnum: HSI channel number
+        """
+        scrips = list(scrips)
+        if not scrips:
+            return
+        with self._lock:
+            for exchange, token in scrips:
+                self._subscriptions.add((exchange, token, sub_type))
+        # HSI protocol uses '&' as the scrip separator (see HSWebSocketLib.is_scrip_ok)
+        scrip_str = "&".join(f"{ex}|{tk}" for ex, tk in scrips)
+        msg = {"type": sub_type, "scrips": scrip_str, "channelnum": channelnum}
+        logger.info(
+            f"[KOTAK WSS BATCH] sub_type={sub_type} count={len(scrips)} scrips={scrip_str}"
+        )
+        self._send(msg)
+
+    def unsubscribe_batch(self, scrips, sub_type="mwu", channelnum="1"):
+        """Unsubscribe from multiple scrips in a single WebSocket frame."""
+        scrips = list(scrips)
+        if not scrips:
+            return
+        with self._lock:
+            for exchange, token in scrips:
+                self._subscriptions.discard((exchange, token, sub_type))
+                symbol_key = f"{exchange}|{token}"
+                has_remaining = any(
+                    ex == exchange and tk == token for ex, tk, _ in self._subscriptions
+                )
+                if not has_remaining:
+                    self._symbol_state.pop(symbol_key, None)
+        scrip_str = "&".join(f"{ex}|{tk}" for ex, tk in scrips)
+        msg = {"type": sub_type, "scrips": scrip_str, "channelnum": channelnum}
+        self._send(msg)
+
     def _send(self, msg):
         with self._lock:
             if not self._is_connected or self.ws is None:

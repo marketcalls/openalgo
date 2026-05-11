@@ -55,6 +55,16 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Track active subscription modes per symbol - CRITICAL FOR MULTI-CLIENT SUPPORT
         self._symbol_modes = {}  # {(kotak_exchange, token): set of active modes}
 
+        # Batch subscription management - debounced fan-in so a burst of
+        # subscribe() calls collapses into one HSI frame per sub_type.
+        # Each entry: {"kotak_exchange": str, "token": str, "sub_type": str, "channelnum": str}
+        self._subscription_queue = []
+        self._batch_timer = None
+        # 50ms is enough to coalesce a burst (e.g. option chain load) without
+        # adding a perceptible floor to single-symbol cold subscribes.
+        self._batch_delay = 0.05
+        self._max_batch_size = 100  # HSI MAX_SCRIPS limit per frame
+
     def initialize(self, broker_name: str, user_id: str, auth_data=None):
         """Initialize adapter for a specific user/session - following AliceBlue pattern."""
         self._broker_name = broker_name.lower()
@@ -465,6 +475,69 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         return False  # Default to processing the update
 
+    def _start_batch_timer(self):
+        """Arm the debounce timer that flushes the subscription queue."""
+        if self._batch_timer:
+            self._batch_timer.cancel()
+
+        self._batch_timer = threading.Timer(
+            self._batch_delay, self._process_batch_subscriptions
+        )
+        self._batch_timer.daemon = True
+        self._batch_timer.start()
+
+    def _enqueue_subscription(self, kotak_exchange, token, sub_type, channelnum="1"):
+        """Append a subscription to the queue and arm the batch timer if idle."""
+        with self._lock:
+            self._subscription_queue.append(
+                {
+                    "kotak_exchange": kotak_exchange,
+                    "token": str(token),
+                    "sub_type": sub_type,
+                    "channelnum": channelnum,
+                }
+            )
+            should_start = len(self._subscription_queue) == 1
+        if should_start:
+            self._start_batch_timer()
+
+    def _process_batch_subscriptions(self):
+        """Drain the queue, group by (sub_type, channelnum), send batched frames."""
+        with self._lock:
+            self._batch_timer = None
+            if not self._subscription_queue:
+                return
+
+            # Group by (sub_type, channelnum) and dedupe per group so we
+            # never send the same scrip twice in one frame.
+            groups = {}
+            for sub in self._subscription_queue:
+                key = (sub["sub_type"], sub["channelnum"])
+                groups.setdefault(key, [])
+                pair = (sub["kotak_exchange"], sub["token"])
+                if pair not in groups[key]:
+                    groups[key].append(pair)
+            self._subscription_queue.clear()
+            ws = self._ws_client
+
+        if not ws:
+            logger.warning("Batch subscribe skipped — WebSocket client not available")
+            return
+
+        for (sub_type, channelnum), scrips in groups.items():
+            for i in range(0, len(scrips), self._max_batch_size):
+                chunk = scrips[i : i + self._max_batch_size]
+                try:
+                    logger.info(
+                        f"Batch subscribing {len(chunk)} scrips "
+                        f"(sub_type={sub_type}, channel={channelnum})"
+                    )
+                    ws.subscribe_batch(chunk, sub_type=sub_type, channelnum=channelnum)
+                except Exception as e:
+                    logger.error(
+                        f"Batch subscribe failed for sub_type={sub_type}: {e}"
+                    )
+
     def connect(self):
         """Connect to WebSocket - following AliceBlue pattern."""
         if not self._ws_client:
@@ -501,6 +574,12 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer.cancel()
                 self._reconnect_timer = None
                 logger.debug("Cancelled pending reconnection timer")
+
+            # Cancel any pending batch subscription timer and drop unsent items
+            if self._batch_timer:
+                self._batch_timer.cancel()
+                self._batch_timer = None
+            self._subscription_queue.clear()
 
         try:
             if self._ws_client:
@@ -691,6 +770,10 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if self._reconnect_timer:
                     self._reconnect_timer.cancel()
                     self._reconnect_timer = None
+                if self._batch_timer:
+                    self._batch_timer.cancel()
+                    self._batch_timer = None
+                self._subscription_queue.clear()
 
             # Disconnect WebSocket if connected
             if self._ws_client:
@@ -881,15 +964,16 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 logger.debug(f"Stored mapping: {mapping_key} -> ({exchange}, {symbol})")
                 logger.debug(f"Active modes for {mapping_key}: {self._symbol_modes[mapping_key]}")
 
-            # Subscribe using Kotak's market watch streaming
             # Re-check ws_client after releasing lock to avoid race with disconnect()
-            ws = self._ws_client
-            if not ws:
+            if not self._ws_client:
                 logger.error("WebSocket client became None during subscribe_quote")
                 return False
-            ws.subscribe(kotak_exchange, token, sub_type="mws")
+
+            # Enqueue for batched dispatch — flushed by _process_batch_subscriptions.
+            self._enqueue_subscription(kotak_exchange, token, sub_type="mws")
             logger.debug(
-                f"Subscribed to quote: {exchange}:{symbol} (kotak: {kotak_exchange}|{token})"
+                f"Queued quote subscription: {exchange}:{symbol} "
+                f"(kotak: {kotak_exchange}|{token})"
             )
             return True
 
@@ -977,13 +1061,15 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._symbol_modes[mapping_key].add(mode)
 
             # Re-check ws_client after releasing lock to avoid race with disconnect()
-            ws = self._ws_client
-            if not ws:
+            if not self._ws_client:
                 logger.error("WebSocket client became None during subscribe_depth")
                 return False
-            ws.subscribe(kotak_exchange, token, sub_type="dps")
+
+            # Enqueue for batched dispatch — flushed by _process_batch_subscriptions.
+            self._enqueue_subscription(kotak_exchange, token, sub_type="dps")
             logger.debug(
-                f"Subscribed to depth: {exchange}:{symbol} (kotak: {kotak_exchange}|{token})"
+                f"Queued depth subscription: {exchange}:{symbol} "
+                f"(kotak: {kotak_exchange}|{token})"
             )
             return True
 
