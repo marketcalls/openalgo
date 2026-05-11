@@ -132,6 +132,41 @@ Change price / quantity / type / trigger on a working order.
 
 ---
 
+### `bracket_order`
+
+Place a native bracket order with automatic target and stop-loss legs.
+
+| Param | Required | Notes |
+|---|---|---|
+| `symbol`, `quantity`, `action`, `exchange`, `product` | Yes | — |
+| `target_type`, `target_value` | Yes | `points`, `percentage`, `absolute` |
+| `sl_type`, `sl_value` | Yes | `points`, `percentage`, `absolute` |
+| `price_type` | No | `MARKET`, `LIMIT`. Default `MARKET` |
+| `strategy` | No | Default `python mcp` |
+
+**Prompts:**
+- *"Place a bracket order for SBIN: buy 100 shares with 5 points target and 3 points SL"*
+- *"Market buy CRUDEOIL futures with 10% target and 5% stop-loss"*
+- *"Set a bracket order for INFY at limit 1550, target 1600, sl 1540"*
+
+---
+
+### `bracket_order_status`
+
+Check the current status and leg details of a bracket order.
+
+**Prompt:** *"What's the status of bracket order dbcd7997-f847-44d1-87c2-00022c43a7cf?"*
+
+---
+
+### `cancel_bracket_order`
+
+Cancel an active bracket order and all its pending legs.
+
+**Prompt:** *"Cancel my bracket order for SBIN"*
+
+---
+
 ## 📊 Positions & Holdings
 
 ### `close_all_positions`

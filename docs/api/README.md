@@ -41,6 +41,7 @@ Execute and manage trading orders across all supported exchanges.
 | [ModifyGTTOrder](./order-management/modifygttorder.md) | Modify an active GTT trigger |
 | [CancelGTTOrder](./order-management/cancelgttorder.md) | Cancel an active GTT trigger |
 | [GTTOrderBook](./order-management/gttorderbook.md) | List active GTT triggers |
+| [BracketOrder](./order-management/bracketorder.md) | Place native bracket order with OCO target and stop-loss |
 
 ### Order Information
 Query order status and position information.
