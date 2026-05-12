@@ -1,3 +1,4 @@
+import atexit
 import json
 import logging
 import os
@@ -36,6 +37,24 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         # Map to track scripId -> (symbol, exchange) for reverse lookup
         self.token_map = {}
+        # Reconnect gate. Only one _connect_with_retry thread may exist
+        # at a time, otherwise multiple concurrent ws_client.connect()
+        # calls would each create a WebSocketApp and orphan the earlier
+        # one's socket. Both connect() and _on_close funnel through
+        # _start_reconnect, which respects this flag.
+        self._reconnecting = False
+        self._reconnect_thread: Optional[threading.Thread] = None
+        # Interruptible-sleep handle for the retry backoff. disconnect()
+        # sets this so we don't keep retrying for up to 60s after the
+        # adapter has been asked to shut down.
+        self._shutdown_event = threading.Event()
+        # Guards against double-disconnect: atexit may fire disconnect()
+        # after Flask has already called it, which would re-run
+        # cleanup_zmq() against already-closed sockets.
+        self._disconnected = False
+        # Track whether we've registered an atexit handler so repeated
+        # initialize() calls don't pile up duplicate callbacks.
+        self._atexit_registered = False
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -51,6 +70,16 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Raises:
             ValueError: If required authentication tokens are not found
         """
+        # If re-initializing (e.g. account switch, re-auth), tear down the
+        # previous ws_client first so its WebSocketApp and reconnect thread
+        # don't outlive the new ws_client assignment below. We don't touch
+        # ZMQ here — that stays alive for the new lifecycle.
+        if self.ws_client is not None:
+            self._teardown_ws_client()
+            self._shutdown_event.clear()
+            self._reconnect_thread = None
+            self.reconnect_attempts = 0
+
         self.user_id = user_id
         self.broker_name = broker_name
 
@@ -75,10 +104,9 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required public access token")
                 raise ValueError("Missing required public access token")
 
-        # Create PaytmWebSocket instance
-        self.ws_client = PaytmWebSocket(
-            public_access_token=public_access_token, max_retry_attempt=5
-        )
+        # Create PaytmWebSocket instance. Reconnect policy lives in this
+        # adapter (see _on_close), not in PaytmWebSocket itself.
+        self.ws_client = PaytmWebSocket(public_access_token=public_access_token)
 
         # Set callbacks
         self.ws_client.on_open = self._on_open
@@ -88,42 +116,128 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client.on_message = self._on_message
 
         self.running = True
+        self._disconnected = False
+
+        # Ensure ZMQ + WS cleanup runs even if the process exits without an
+        # explicit disconnect() call (e.g. unhandled exception, sys.exit()).
+        # disconnect() is idempotent so calling it twice is safe.
+        if not self._atexit_registered:
+            atexit.register(self.disconnect)
+            self._atexit_registered = True
 
     def connect(self) -> None:
         """Establish connection to Paytm WebSocket"""
         if not self.ws_client:
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
+        self._start_reconnect("initial connect")
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+    def _start_reconnect(self, reason: str) -> None:
+        """
+        Spawn the single _connect_with_retry background thread if one isn't
+        already running. Both connect() (initial) and _on_close (reconnect)
+        funnel through here so we never have two threads racing to call
+        ws_client.connect() and overwriting self.ws_client.wsapp.
+        """
+        with self.lock:
+            if self._reconnecting:
+                self.logger.debug(f"Reconnect already in progress; skipping ({reason})")
+                return
+            self._reconnecting = True
+            self._shutdown_event.clear()
+            self._reconnect_thread = threading.Thread(
+                target=self._connect_with_retry, daemon=True
+            )
+        self._reconnect_thread.start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to Paytm WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                self.logger.info(
-                    f"Connecting to Paytm WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
+        """
+        Single reconnect loop. Owns the lifecycle of ws_client.connect().
 
-            except Exception as e:
-                self.reconnect_attempts += 1
+        ws_client.connect() blocks inside run_forever() until the socket
+        closes; on return we either back off and reconnect (if still
+        running) or exit. _on_close does NOT spawn parallel threads;
+        otherwise concurrent connect() calls would orphan WebSocketApp
+        sockets.
+        """
+        try:
+            while self.running:
+                if self.reconnect_attempts >= self.max_reconnect_attempts:
+                    self.logger.error("Max reconnection attempts reached. Giving up.")
+                    break
+
+                connect_start = time.monotonic()
+                try:
+                    self.logger.info(
+                        f"Connecting to Paytm WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    self.ws_client.connect()  # blocks until the socket closes
+                except Exception as e:
+                    self.logger.error(f"Connection error: {e}")
+
+                if not self.running:
+                    break
+
+                # If the connection stayed up for a meaningful period treat
+                # this return as a recovery (reset the backoff). Otherwise
+                # count it as a failed attempt and back off exponentially.
+                duration = time.monotonic() - connect_start
+                if duration >= 30:
+                    self.reconnect_attempts = 0
+                else:
+                    self.reconnect_attempts += 1
+
                 delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+                    self.reconnect_delay * (2 ** max(0, self.reconnect_attempts - 1)),
+                    self.max_reconnect_delay,
                 )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                self.logger.info(
+                    f"Paytm WS closed after {duration:.1f}s; reconnecting in {delay}s"
+                )
+                # Interruptible sleep: disconnect() sets the event so we
+                # don't keep retrying after shutdown.
+                if self._shutdown_event.wait(delay):
+                    break
+        finally:
+            with self.lock:
+                self._reconnecting = False
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
-
-    def disconnect(self) -> None:
-        """Disconnect from Paytm WebSocket"""
+    def _teardown_ws_client(self) -> None:
+        """
+        Tear down only the WebSocket side: stop the retry loop, close the
+        socket, and wait for the reconnect thread to exit. Does NOT
+        release ZMQ resources — the caller decides whether to also call
+        cleanup_zmq() (e.g. disconnect() does, initialize() doesn't).
+        """
         self.running = False
+        # Wake the retry loop out of its backoff sleep before it spins up
+        # another connection.
+        self._shutdown_event.set()
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
+
+        # Wait for the reconnect thread to exit. It should die quickly:
+        # shutdown_event unblocks the sleep, and wsapp.close() unblocks
+        # run_forever().
+        thread = self._reconnect_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=10)
+            if thread.is_alive():
+                self.logger.warning("Paytm reconnect thread did not exit within 10s")
+
+    def disconnect(self) -> None:
+        """
+        Disconnect from Paytm WebSocket and release resources.
+
+        Idempotent: safe to call multiple times. atexit may invoke this
+        after Flask has already torn the adapter down, and we don't want
+        cleanup_zmq() to run twice against the same socket.
+        """
+        if self._disconnected:
+            return
+        self._disconnected = True
+
+        self._teardown_ws_client()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
@@ -338,13 +452,17 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.error(f"Paytm WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
-        """Callback when connection is closed"""
+        """
+        Callback when connection is closed.
+
+        Reconnect is NOT spawned here. The single _connect_with_retry
+        loop (already alive on its own thread) will return from
+        ws_client.connect() now that the socket has closed, then back off
+        and reconnect on its own. Spawning another thread here would
+        race against that loop and orphan WebSocketApp sockets.
+        """
         self.logger.info("Paytm WebSocket connection closed")
         self.connected = False
-
-        # Attempt to reconnect if we're still running
-        if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""

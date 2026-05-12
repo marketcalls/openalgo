@@ -18,7 +18,6 @@ class PaytmWebSocket:
     ROOT_URI = "wss://developer-ws.paytmmoney.com/broadcast/user/v1/data"
     HEART_BEAT_INTERVAL = 30  # Paytm sends ping every 30 seconds
     LITTLE_ENDIAN_BYTE_ORDER = "<"
-    RESUBSCRIBE_FLAG = False
 
     # Action types
     ADD_ACTION = "ADD"
@@ -48,31 +47,30 @@ class PaytmWebSocket:
     PACKET_CODE_INDEX_QUOTE = 65
     PACKET_CODE_INDEX_FULL = 66
 
-    wsapp = None
-    subscriptions = {}
-    current_retry_attempt = 0
-
-    def __init__(self, public_access_token, max_retry_attempt=5, retry_delay=5, retry_multiplier=2):
+    def __init__(self, public_access_token):
         """
-        Initialize the PaytmWebSocket instance
+        Initialize the PaytmWebSocket instance.
+
+        Reconnect / retry policy is owned by the consumer (e.g.
+        PaytmWebSocketAdapter), which observes on_close and decides when
+        to call connect() again. This class no longer self-reconnects.
 
         Parameters
         ----------
         public_access_token: string
             Public access token received from Paytm Money API
-        max_retry_attempt: int
-            Maximum number of retry attempts
-        retry_delay: int
-            Initial retry delay in seconds
-        retry_multiplier: int
-            Multiplier for exponential backoff
         """
         self.public_access_token = public_access_token
-        self.MAX_RETRY_ATTEMPT = max_retry_attempt
-        self.retry_delay = retry_delay
-        self.retry_multiplier = retry_multiplier
         self.DISCONNECT_FLAG = True
         self.last_pong_timestamp = None
+
+        # Per-instance state. These used to live as class attributes, which
+        # caused subscriptions to be shared across all PaytmWebSocket
+        # instances (one user's resubscribe would replay another user's
+        # tokens).
+        self.wsapp = None
+        self.subscriptions = {}
+        self.RESUBSCRIBE_FLAG = False
 
         if not self._sanity_check():
             logger.error("Invalid initialization parameters. Provide a valid public access token.")
@@ -119,27 +117,24 @@ class PaytmWebSocket:
             self.on_open(wsapp)
 
     def _on_error(self, wsapp, error):
-        """Handle WebSocket errors with retry logic"""
+        """
+        Log the WebSocket error and notify the user callback.
+
+        Reconnect is intentionally NOT performed here. The previous
+        implementation called close_connection() followed by connect()
+        from inside this callback, which runs on the WebSocketApp's own
+        thread inside run_forever(). That recursively re-entered
+        run_forever() and could leave the old WebSocketApp's socket
+        descriptor open while a new one was being created.
+
+        The websocket-client library will fire _on_close() naturally once
+        the socket terminates; the consumer (e.g. PaytmWebSocketAdapter)
+        owns the reconnect strategy in its on_close handler.
+        """
         logger.error(f"WebSocket error: {error}")
         self.RESUBSCRIBE_FLAG = True
-
-        if self.current_retry_attempt < self.MAX_RETRY_ATTEMPT:
-            logger.warning(f"Attempting to reconnect (Attempt {self.current_retry_attempt + 1})...")
-            self.current_retry_attempt += 1
-            delay = self.retry_delay * (self.retry_multiplier ** (self.current_retry_attempt - 1))
-            time.sleep(delay)
-
-            try:
-                self.close_connection()
-                self.connect()
-            except Exception as e:
-                logger.error(f"Error during reconnect: {e}")
-                if hasattr(self, "on_error"):
-                    self.on_error(wsapp, str(e) if str(e) else "Unknown error")
-        else:
-            self.close_connection()
-            if hasattr(self, "on_error"):
-                self.on_error(wsapp, "Max retry attempts reached")
+        if hasattr(self, "on_error"):
+            self.on_error(wsapp, error)
 
     def _on_close(self, wsapp, close_status_code=None, close_msg=None):
         """Callback when WebSocket connection is closed"""
@@ -248,9 +243,19 @@ class PaytmWebSocket:
                 on_pong=self._on_pong,
             )
 
-            # Run WebSocket in a separate thread to avoid blocking
+            # ping_timeout closes half-open sockets: if the server stops
+            # responding to pings, websocket-client tears the connection
+            # down instead of holding the FD forever. Must be strictly less
+            # than ping_interval.
+            #
+            # ssl.CERT_REQUIRED: Paytm's WSS endpoint serves a valid
+            # public-CA cert (DigiCert / GeoTrust, wildcard *.paytmmoney.com).
+            # The rest of the codebase still uses CERT_NONE on most brokers
+            # but there's no Paytm-specific reason to skip verification.
             self.wsapp.run_forever(
-                sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=self.HEART_BEAT_INTERVAL
+                sslopt={"cert_reqs": ssl.CERT_REQUIRED},
+                ping_interval=self.HEART_BEAT_INTERVAL,
+                ping_timeout=10,
             )
 
         except Exception as e:
@@ -258,11 +263,27 @@ class PaytmWebSocket:
             raise e
 
     def close_connection(self):
-        """Close WebSocket connection"""
+        """
+        Close the WebSocket connection.
+
+        wsapp.close() can raise if the underlying socket is in a weird
+        state (e.g. already torn down by a parallel error path). Swallow
+        and log so the caller's shutdown sequence (event signaling,
+        thread joins, ZMQ cleanup) always runs to completion.
+
+        self.wsapp is nulled after close so subscribe/unsubscribe paths
+        don't try to send() on a stale, already-closed object — the next
+        connect() reassigns a fresh WebSocketApp.
+        """
         self.RESUBSCRIBE_FLAG = False
         self.DISCONNECT_FLAG = True
         if self.wsapp:
-            self.wsapp.close()
+            try:
+                self.wsapp.close()
+            except Exception as e:
+                logger.warning(f"Error during wsapp.close(): {e}")
+            finally:
+                self.wsapp = None
             logger.info("WebSocket connection closed")
 
     def _parse_binary_data(self, binary_data):
