@@ -89,61 +89,101 @@ class Config:
 # ─── Sector Universe ──────────────────────────────────────────────────────────
 # NSE_INDEX symbols used by OpenAlgo / Dhan
 SECTOR_INDICES: Dict[str, Dict[str, str]] = {
-    "NIFTY BANK":        {"symbol": "BANKNIFTY",          "exchange": "NSE_INDEX"},
-    "NIFTY IT":          {"symbol": "NIFTYIT",            "exchange": "NSE_INDEX"},
-    "NIFTY AUTO":        {"symbol": "NIFTYAUTO",          "exchange": "NSE_INDEX"},
-    "NIFTY PHARMA":      {"symbol": "NIFTYPHARMA",        "exchange": "NSE_INDEX"},
-    "NIFTY FMCG":        {"symbol": "NIFTYFMCG",          "exchange": "NSE_INDEX"},
-    "NIFTY METAL":       {"symbol": "NIFTYMETAL",         "exchange": "NSE_INDEX"},
-    "NIFTY ENERGY":      {"symbol": "NIFTYENERGY",        "exchange": "NSE_INDEX"},
-    "NIFTY REALTY":      {"symbol": "NIFTYREALTY",        "exchange": "NSE_INDEX"},
-    "NIFTY MEDIA":       {"symbol": "NIFTYMEDIA",         "exchange": "NSE_INDEX"},
-    "NIFTY INFRA":       {"symbol": "NIFTYINFRA",         "exchange": "NSE_INDEX"},
-    "NIFTY PSE":         {"symbol": "NIFTYPSE",           "exchange": "NSE_INDEX"},
-    "NIFTY HEALTHCARE":  {"symbol": "NIFTYHEALTHCARE",    "exchange": "NSE_INDEX"},
-    "NIFTY OIL GAS":     {"symbol": "NIFTYOILGAS",        "exchange": "NSE_INDEX"},
-    "NIFTY FIN SVC":     {"symbol": "FINNIFTY",           "exchange": "NSE_INDEX"},
+    "NIFTY BANK":              {"symbol": "BANKNIFTY",          "exchange": "NSE_INDEX"},
+    "NIFTY IT":                {"symbol": "NIFTYIT",            "exchange": "NSE_INDEX"},
+    "NIFTY AUTO":              {"symbol": "NIFTYAUTO",          "exchange": "NSE_INDEX"},
+    "NIFTY PHARMA":            {"symbol": "NIFTYPHARMA",        "exchange": "NSE_INDEX"},
+    "NIFTY FMCG":              {"symbol": "NIFTYFMCG",          "exchange": "NSE_INDEX"},
+    "NIFTY METAL":             {"symbol": "NIFTYMETAL",         "exchange": "NSE_INDEX"},
+    "NIFTY ENERGY":            {"symbol": "NIFTYENERGY",        "exchange": "NSE_INDEX"},
+    "NIFTY REALTY":            {"symbol": "NIFTYREALTY",        "exchange": "NSE_INDEX"},
+    "NIFTY MEDIA":             {"symbol": "NIFTYMEDIA",         "exchange": "NSE_INDEX"},
+    "NIFTY INFRA":             {"symbol": "NIFTYINFRA",         "exchange": "NSE_INDEX"},
+    "NIFTY PSE":               {"symbol": "NIFTYPSE",           "exchange": "NSE_INDEX"},
+    "NIFTY HEALTHCARE":        {"symbol": "NIFTYHEALTHCARE",    "exchange": "NSE_INDEX"},
+    "NIFTY OIL GAS":           {"symbol": "NIFTYOILGAS",        "exchange": "NSE_INDEX"},
+    "NIFTY FIN SVC":           {"symbol": "FINNIFTY",           "exchange": "NSE_INDEX"},
+    "NIFTY CHEMICALS":         {"symbol": "NIFTYCHEMICALS",     "exchange": "NSE_INDEX"},
+    "NIFTY CONSUMER DURABLES": {"symbol": "NIFTYCONDURAB",      "exchange": "NSE_INDEX"},
 }
 
 # Stock → sector name (STOCK_SECTOR)
 STOCK_SECTOR: Dict[str, str] = {
-    # Banking
-    "HDFCBANK": "NIFTY BANK",   "ICICIBANK": "NIFTY BANK",   "KOTAKBANK": "NIFTY BANK",
-    "AXISBANK":  "NIFTY BANK",  "SBIN":       "NIFTY BANK",   "BANKBARODA":"NIFTY BANK",
-    "INDUSINDBK":"NIFTY BANK",  "CANBK":      "NIFTY BANK",   "PNB":       "NIFTY BANK",
-    # IT
-    "TCS":    "NIFTY IT",   "INFY":   "NIFTY IT",   "WIPRO":  "NIFTY IT",
-    "HCLTECH":"NIFTY IT",   "TECHM":  "NIFTY IT",   "LTIM":   "NIFTY IT",
-    "NAUKRI": "NIFTY IT",   "ZOMATO": "NIFTY IT",
-    # Auto
-    "MARUTI":    "NIFTY AUTO",  "TATAMOTORS":"NIFTY AUTO",  "BAJAJ-AUTO":"NIFTY AUTO",
-    "HEROMOTOCO":"NIFTY AUTO",  "EICHERMOT": "NIFTY AUTO",  "M&M":       "NIFTY AUTO",
-    # Pharma
-    "SUNPHARMA":"NIFTY PHARMA", "CIPLA":    "NIFTY PHARMA", "DRREDDY": "NIFTY PHARMA",
-    "DIVISLAB": "NIFTY PHARMA", "APOLLOHOSP":"NIFTY PHARMA","UPL":     "NIFTY PHARMA",
-    # FMCG
-    "HINDUNILVR":"NIFTY FMCG",  "ITC":       "NIFTY FMCG",  "BRITANNIA":"NIFTY FMCG",
-    "NESTLEIND": "NIFTY FMCG",  "TATACONSUM":"NIFTY FMCG",  "DMART":    "NIFTY FMCG",
-    "TRENT":     "NIFTY FMCG",
-    # Metal
-    "JSWSTEEL":"NIFTY METAL",   "HINDALCO":"NIFTY METAL",
-    "TATASTEEL":"NIFTY METAL",  "VEDL":    "NIFTY METAL",
-    # Energy / Power
-    "RELIANCE":"NIFTY ENERGY",  "ONGC":    "NIFTY ENERGY",
-    "BPCL":    "NIFTY ENERGY",  "COALINDIA":"NIFTY ENERGY",
-    # Infra / Capital Goods
-    "NTPC":      "NIFTY INFRA", "POWERGRID":"NIFTY INFRA",   "LT":        "NIFTY INFRA",
-    "ADANIPORTS":"NIFTY INFRA", "ULTRACEMCO":"NIFTY INFRA",  "GRASIM":    "NIFTY INFRA",
-    "SHREECEM":  "NIFTY INFRA", "ADANIENT": "NIFTY INFRA",
-    # Fin Services
-    "BAJFINANCE":"NIFTY FIN SVC","SBILIFE":  "NIFTY FIN SVC",
-    # Consumer Durables / others
-    "TITAN":     "NIFTY IT",    "ASIANPAINT":"NIFTY FMCG",
-    "PIDILITIND":"NIFTY FMCG",
-    # PSE
-    "IRCTC":    "NIFTY PSE",
-    # Healthcare
-    "APOLLOHOSP":"NIFTY HEALTHCARE",
+    # Banking (9)
+    "HDFCBANK":   "NIFTY BANK",  "ICICIBANK":  "NIFTY BANK",  "KOTAKBANK":  "NIFTY BANK",
+    "AXISBANK":   "NIFTY BANK",  "SBIN":       "NIFTY BANK",  "BANKBARODA": "NIFTY BANK",
+    "INDUSINDBK": "NIFTY BANK",  "CANBK":      "NIFTY BANK",  "PNB":        "NIFTY BANK",
+    # IT (12)
+    "TCS":        "NIFTY IT",    "INFY":       "NIFTY IT",    "WIPRO":      "NIFTY IT",
+    "HCLTECH":    "NIFTY IT",    "TECHM":      "NIFTY IT",    "LTIM":       "NIFTY IT",
+    "NAUKRI":     "NIFTY IT",    "ZOMATO":     "NIFTY IT",    "COFORGE":    "NIFTY IT",
+    "PERSISTENT": "NIFTY IT",    "MPHASIS":    "NIFTY IT",    "OFSS":       "NIFTY IT",
+    # Auto (15)
+    "MARUTI":     "NIFTY AUTO",  "TATAMOTORS": "NIFTY AUTO",  "BAJAJ-AUTO": "NIFTY AUTO",
+    "HEROMOTOCO": "NIFTY AUTO",  "EICHERMOT":  "NIFTY AUTO",  "M&M":        "NIFTY AUTO",
+    "TVSMOTOR":   "NIFTY AUTO",  "MOTHERSON":  "NIFTY AUTO",  "ASHOKLEY":   "NIFTY AUTO",
+    "SONACOMS":   "NIFTY AUTO",  "BHARATFORG": "NIFTY AUTO",  "TIINDIA":    "NIFTY AUTO",
+    "EXIDEIND":   "NIFTY AUTO",  "UNOMINDA":   "NIFTY AUTO",  "BOSCHLTD":   "NIFTY AUTO",
+    # Pharma (20)
+    "SUNPHARMA":  "NIFTY PHARMA","CIPLA":      "NIFTY PHARMA","DRREDDY":    "NIFTY PHARMA",
+    "DIVISLAB":   "NIFTY PHARMA","BIOCON":     "NIFTY PHARMA","LUPIN":      "NIFTY PHARMA",
+    "LAURUSLABS": "NIFTY PHARMA","AUROPHARMA": "NIFTY PHARMA","GLENMARK":   "NIFTY PHARMA",
+    "WOCKPHARMA": "NIFTY PHARMA","JBCHEPHARM": "NIFTY PHARMA","MANKIND":    "NIFTY PHARMA",
+    "TORNTPHARM": "NIFTY PHARMA","PPLPHARMA":  "NIFTY PHARMA","IPCALAB":    "NIFTY PHARMA",
+    "AJANTPHARM": "NIFTY PHARMA","ZYDUSLIFE":  "NIFTY PHARMA","ABBOTINDIA": "NIFTY PHARMA",
+    "ALKEM":      "NIFTY PHARMA","GLAND":      "NIFTY PHARMA",
+    # FMCG (18)
+    "HINDUNILVR": "NIFTY FMCG",  "ITC":        "NIFTY FMCG",  "BRITANNIA":  "NIFTY FMCG",
+    "NESTLEIND":  "NIFTY FMCG",  "TATACONSUM": "NIFTY FMCG",  "DMART":      "NIFTY FMCG",
+    "TRENT":      "NIFTY FMCG",  "ASIANPAINT": "NIFTY FMCG",  "GODREJCP":   "NIFTY FMCG",
+    "VBL":        "NIFTY FMCG",  "MARICO":     "NIFTY FMCG",  "RADICO":     "NIFTY FMCG",
+    "PATANJALI":  "NIFTY FMCG",  "DABUR":      "NIFTY FMCG",  "UNITDSPR":   "NIFTY FMCG",
+    "COLPAL":     "NIFTY FMCG",  "UBL":        "NIFTY FMCG",  "EMAMILTD":   "NIFTY FMCG",
+    # Metal (14)
+    "JSWSTEEL":   "NIFTY METAL", "HINDALCO":   "NIFTY METAL", "TATASTEEL":  "NIFTY METAL",
+    "VEDL":       "NIFTY METAL", "HINDZINC":   "NIFTY METAL", "HINDCOPPER": "NIFTY METAL",
+    "SAIL":       "NIFTY METAL", "NATIONALUM": "NIFTY METAL", "JINDALSTEL": "NIFTY METAL",
+    "NMDC":       "NIFTY METAL", "LLOYDSME":   "NIFTY METAL", "APLAPOLLO":  "NIFTY METAL",
+    "WELCORP":    "NIFTY METAL", "JSL":        "NIFTY METAL",
+    # Energy / Power (4)
+    "RELIANCE":   "NIFTY ENERGY","ONGC":       "NIFTY ENERGY","BPCL":       "NIFTY ENERGY",
+    "COALINDIA":  "NIFTY ENERGY",
+    # Infra / Capital Goods + Cement (21)
+    "NTPC":       "NIFTY INFRA", "POWERGRID":  "NIFTY INFRA", "LT":         "NIFTY INFRA",
+    "ADANIPORTS": "NIFTY INFRA", "ADANIENT":   "NIFTY INFRA", "ULTRACEMCO": "NIFTY INFRA",
+    "GRASIM":     "NIFTY INFRA", "SHREECEM":   "NIFTY INFRA", "AMBUJACEM":  "NIFTY INFRA",
+    "DALBHARAT":  "NIFTY INFRA", "ACC":        "NIFTY INFRA", "BIRLACORPN": "NIFTY INFRA",
+    "JKCEMENT":   "NIFTY INFRA", "RAMCOCEM":   "NIFTY INFRA", "JSWCEMENT":  "NIFTY INFRA",
+    "NUVOCO":     "NIFTY INFRA", "INDIACEM":   "NIFTY INFRA", "JKLAKSHMI":  "NIFTY INFRA",
+    "PRSMJOHNSN": "NIFTY INFRA", "ORIENTCEM":  "NIFTY INFRA", "STARCEMENT": "NIFTY INFRA",
+    # Fin Services (2)
+    "BAJFINANCE": "NIFTY FIN SVC","SBILIFE":   "NIFTY FIN SVC",
+    # Chemicals (20)
+    "HSCL":       "NIFTY CHEMICALS","UPL":     "NIFTY CHEMICALS","PIDILITIND":"NIFTY CHEMICALS",
+    "TATACHEM":   "NIFTY CHEMICALS","SOLARINDS":"NIFTY CHEMICALS","SRF":      "NIFTY CHEMICALS",
+    "COROMANDEL": "NIFTY CHEMICALS","NAVINFLUOR":"NIFTY CHEMICALS","DEEPAKNTR":"NIFTY CHEMICALS",
+    "PIIND":      "NIFTY CHEMICALS","AARTIIND": "NIFTY CHEMICALS","DEEPAKFERT":"NIFTY CHEMICALS",
+    "ATUL":       "NIFTY CHEMICALS","FLUOROCHEM":"NIFTY CHEMICALS","LINDEINDIA":"NIFTY CHEMICALS",
+    "SWANCORP":   "NIFTY CHEMICALS","PCBL":     "NIFTY CHEMICALS","CHAMBLFERT":"NIFTY CHEMICALS",
+    "SUMICHEM":   "NIFTY CHEMICALS","BAYERCROP":"NIFTY CHEMICALS",
+    # Consumer Durables (13)
+    "DIXON":      "NIFTY CONSUMER DURABLES","TITAN":     "NIFTY CONSUMER DURABLES",
+    "KALYANKJIL": "NIFTY CONSUMER DURABLES","AMBER":     "NIFTY CONSUMER DURABLES",
+    "BLUESTARCO": "NIFTY CONSUMER DURABLES","CROMPTON":  "NIFTY CONSUMER DURABLES",
+    "VOLTAS":     "NIFTY CONSUMER DURABLES","HAVELLS":   "NIFTY CONSUMER DURABLES",
+    "LGEINDIA":   "NIFTY CONSUMER DURABLES","PGEL":      "NIFTY CONSUMER DURABLES",
+    "KAJARIACER": "NIFTY CONSUMER DURABLES","WHIRLPOOL": "NIFTY CONSUMER DURABLES",
+    "BATAINDIA":  "NIFTY CONSUMER DURABLES",
+    # Realty (10)
+    "DLF":        "NIFTY REALTY", "ANANTRAJ":  "NIFTY REALTY", "LODHA":      "NIFTY REALTY",
+    "GODREJPROP": "NIFTY REALTY", "OBEROIRLTY":"NIFTY REALTY", "PRESTIGE":   "NIFTY REALTY",
+    "PHOENIXLTD": "NIFTY REALTY", "ABREL":     "NIFTY REALTY", "BRIGADE":    "NIFTY REALTY",
+    "SOBHA":      "NIFTY REALTY",
+    # PSE (1)
+    "IRCTC":      "NIFTY PSE",
+    # Healthcare Services (4)
+    "APOLLOHOSP": "NIFTY HEALTHCARE","MAXHEALTH": "NIFTY HEALTHCARE",
+    "FORTIS":     "NIFTY HEALTHCARE","SYNGENE":   "NIFTY HEALTHCARE",
 }
 
 
