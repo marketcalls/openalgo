@@ -146,9 +146,11 @@ def reformat_symbol(row):
     if instrument_type in ["ES"]:
         return symbol
 
-    # For index instruments, use name without spaces and set it as both symbol and brsymbol
+    # For index instruments, use name without spaces (uppercased) and set it
+    # as both symbol and brsymbol. Index normalization to OpenAlgo's standard
+    # naming happens later in process_paytm_csv via INDEX_SYMBOL_MAP_*.
     elif instrument_type in ["I"]:
-        symbol = "".join(row["name"].split())
+        symbol = "".join(row["name"].split()).upper()
         row["symbol"] = symbol  # Set the symbol in the row
         return symbol
 
@@ -251,7 +253,7 @@ def process_paytm_csv(path):
     # For indices, set brsymbol to be the same as the formatted symbol
     indices_mask = df["instrument_type"] == "I"
     df.loc[indices_mask, "brsymbol"] = df.loc[indices_mask, "name"].apply(
-        lambda x: "".join(x.split())
+        lambda x: "".join(x.split()).upper()
     )
 
     # Apply the function to get exchange mappings
@@ -284,10 +286,52 @@ def process_paytm_csv(path):
     # Removing the specified columns
     token_df = df.drop(columns=columns_to_remove)
 
-    # Common Index Symbol Formats
+    # Normalize index symbols to OpenAlgo's standard naming (see symbol_Openalgo.md).
+    # Mapping is scoped per exchange to avoid colliding with equity symbols that
+    # happen to share short BSE-index codes (e.g. AUTO, METAL, POWER, REALTY).
+    # Only Paytm names listed in OpenAlgo's standard index list are rewritten;
+    # unlisted indices keep their uppercased joined-name form.
+    nse_index_map = {
+        "NIFTYNEXT50": "NIFTYNXT50",
+        "NIFTYMCAP50": "NIFTYMIDCAP50",
+        "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+        "NIFTYMIDSELECT": "MIDCPNIFTY",
+    }
+    bse_index_map = {
+        "SNSX50": "SENSEX50",
+        "SNXT50": "BSESENSEXNEXT50",
+        "AUTO": "BSEAUTO",
+        "BSECD": "BSECONSUMERDURABLES",
+        "BSECG": "BSECAPITALGOODS",
+        "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "BSEHC": "BSEHEALTHCARE",
+        "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+        "ENERGY": "BSEENERGY",
+        "FINSER": "BSEFINANCIALSERVICES",
+        "INDSTR": "BSEINDUSTRIALS",
+        "LMI250": "BSE250LARGEMIDCAPINDEX",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MID150": "BSE150MIDCAPINDEX",
+        "MIDCAP": "BSEMIDCAP",
+        "MIDSEL": "BSEMIDCAPSELECTINDEX",
+        "MSL400": "BSE400MIDSMALLCAPINDEX",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "REALTY": "BSEREALTY",
+        "SMLCAP": "BSESMALLCAP",
+        "SMLSEL": "BSESMALLCAPSELECTINDEX",
+        "TECK": "BSETECK",
+        "TELCOM": "BSETELECOM",
+    }
 
-    token_df["symbol"] = token_df["symbol"].replace(
-        {"NIFTYNEXT50": "NIFTYNXT50", "NIFTYMIDCAP150": "MIDCPNIFTY", "SNSX50": "SENSEX50"}
+    nse_idx_mask = token_df["exchange"] == "NSE_INDEX"
+    bse_idx_mask = token_df["exchange"] == "BSE_INDEX"
+    token_df.loc[nse_idx_mask, "symbol"] = (
+        token_df.loc[nse_idx_mask, "symbol"].replace(nse_index_map)
+    )
+    token_df.loc[bse_idx_mask, "symbol"] = (
+        token_df.loc[bse_idx_mask, "symbol"].replace(bse_index_map)
     )
 
     return token_df
