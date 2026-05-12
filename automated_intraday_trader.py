@@ -14,6 +14,12 @@ import logging
 import os
 import sys
 import time
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
+except ImportError:
+    pass  # dotenv not installed — rely on shell environment
 from io import TextIOWrapper
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
