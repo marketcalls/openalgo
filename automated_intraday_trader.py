@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 class Config:
     # OpenAlgo connection
     openalgo_url: str = os.getenv("OPENALGO_URL", "http://127.0.0.1:5000")
-    api_key: str = os.getenv("OPENALGO_API_KEY", "ded5b5ee2c7ed67e6290c1c4b889fd8bc311efd04863b6fcc9d8facd2e959bda")
+    api_key: str = os.getenv("OPENALGO_API_KEY", "ebb5694faae8023439faf2d4b84fd46872d9cc04df67034549c39b0b7de630d3")
 
     # Paper trading — no real orders sent, uses live market data for signals
     paper_trade: bool = os.getenv("PAPER_TRADE", "true").lower() != "false"
@@ -479,8 +479,13 @@ class TradeManager:
 
         # ── Trail SL for remaining quantity ───────────────────────────────────
         if trade.partial_done and trade.remaining > 0:
-            if profit_pts > trade.peak_profit_pts:
-                trade.peak_profit_pts = profit_pts
+            # Measure excess profit ABOVE the 1:1 target so that at exactly
+            # 1:1 (where partial booking fires) excess=0, steps=0, new_sl=entry.
+            # Without this, steps=4 and new_sl jumps to the target price,
+            # causing an immediate close on the same tick as partial booking.
+            excess = profit_pts - trade.risk_pts
+            if excess > trade.peak_profit_pts:
+                trade.peak_profit_pts = excess
 
             trig  = trade.risk_pts * self.config.trailing_trigger_pct
             step  = trade.risk_pts * self.config.trailing_step_pct
