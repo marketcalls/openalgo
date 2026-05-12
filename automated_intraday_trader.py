@@ -20,6 +20,7 @@ try:
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
 except ImportError:
     pass  # dotenv not installed — rely on shell environment
+
 from io import TextIOWrapper
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -407,17 +408,17 @@ class TradeManager:
         is_long = stock.direction == "BUY"
 
         if is_long:
-            sl = stock.fc_high - (stock.fc_high - stock.fc_open) * 0.60
+            sl = stock.fc_low               # classic ORB: SL below first candle low
             if sl >= entry:
                 logger.warning(f"Skip {stock.base}: SL {sl:.2f} >= entry {entry:.2f}")
                 return False
-            target = entry + (entry - sl)
+            target = entry + (entry - sl)   # 1:1 risk-reward target
         else:
-            sl = stock.fc_low + (stock.fc_open - stock.fc_low) * 0.60
+            sl = stock.fc_high              # classic ORB: SL above first candle high
             if sl <= entry:
                 logger.warning(f"Skip {stock.base}: SL {sl:.2f} <= entry {entry:.2f}")
                 return False
-            target = entry - (sl - entry)
+            target = entry - (sl - entry)   # 1:1 risk-reward target
 
         qty = self.risk.calc_qty(entry, sl)
         if qty <= 0:
@@ -614,10 +615,11 @@ class Scanner:
         logger.info(f"F&O universe: {len(result)} equity symbols fetched from master contract")
         return result
 
-    def _oi_long_buildup(self, base: str) -> bool:
+    def _oi_buildup(self, base: str, direction: str) -> bool:
         """
-        ChartInk 'OI F&O Buy': OI and price both rose yesterday vs the prior day.
-        Returns True (pass) when OI data is unavailable so the filter degrades gracefully.
+        ChartInk OI F&O filter — degrades gracefully when OI data is absent.
+          BUY  (long buildup):  OI up + price up   → smart money accumulating longs.
+          SELL (short buildup): OI up + price down  → smart money accumulating shorts.
         """
         fut_sym = self._sym_map.get(base)
         if not fut_sym:
@@ -627,10 +629,10 @@ class Scanner:
         df = self.api.history(fut_sym, "D", hist_start, hist_end, exchange="NFO")
         if df is None or len(df) < 2 or "oi" not in df.columns:
             return True  # OI column absent for this broker — don't penalise
-        return bool(
-            df["oi"].iloc[-1] > df["oi"].iloc[-2] and
-            df["close"].iloc[-1] > df["close"].iloc[-2]
-        )
+        oi_up      = bool(df["oi"].iloc[-1]    > df["oi"].iloc[-2])
+        price_up   = bool(df["close"].iloc[-1] > df["close"].iloc[-2])
+        price_down = bool(df["close"].iloc[-1] < df["close"].iloc[-2])
+        return (oi_up and price_up) if direction == "BUY" else (oi_up and price_down)
 
     def scan(self) -> List[ScannedStock]:
         # Use yesterday as end date — today's incomplete daily candle during the
@@ -657,13 +659,13 @@ class Scanner:
 
         qualified.sort(key=lambda s: s.score, reverse=True)
 
-        # ChartInk OI F&O Buy filter — applied to BUY signals only
+        # ChartInk OI F&O filter — long buildup for BUY, short buildup for SELL
         oi_confirmed: List[ScannedStock] = []
         for s in qualified:
-            if s.direction == "SELL" or self._oi_long_buildup(s.base):
+            if self._oi_buildup(s.base, s.direction):
                 oi_confirmed.append(s)
             else:
-                logger.debug(f"Drop {s.base}: OI long buildup not confirmed")
+                logger.debug(f"Drop {s.base}: OI {s.direction} buildup not confirmed")
         qualified = oi_confirmed
 
         selected = qualified[: self.config.max_trades]
@@ -700,19 +702,21 @@ class Scanner:
         c20 = close.iloc[-20]
 
         # ── LONG setup (ChartInk: Fast Stoch crossed above 90) ────────────────
-        # stk_prev < 90 <= stk_curr  ↔  "crossed above 90" crossover condition
-        if c > e and c > s and 55 <= rsi_val <= 70 and hist_val > 0 and stk_prev < 90 <= stk_curr:
+        # RSI upper bound is 80 (not 70) — when stoch crosses 90 the stock is
+        # in strong momentum and RSI is often in the 70-80 range, not below 70.
+        if c > e and c > s and 55 <= rsi_val <= 80 and hist_val > 0 and stk_prev < 90 <= stk_curr:
             direction = "BUY"
             price_str = (c - c20) / c20 * 100
             trend_str = (c - s) / c * 100
-            rsi_norm  = (rsi_val - 55) / 15
+            rsi_norm  = (rsi_val - 55) / 25
 
-        # ── SHORT setup ───────────────────────────────────────────────────────
-        elif c < e and c < s and 30 <= rsi_val <= 45 and hist_val < 0:
+        # ── SHORT setup (ChartInk: Fast Stoch crossed below 10) ──────────────
+        # Mirror of BUY: stoch crosses below 10 (oversold breakdown), RSI 20-45.
+        elif c < e and c < s and 20 <= rsi_val <= 45 and hist_val < 0 and stk_curr <= 10 < stk_prev:
             direction = "SELL"
             price_str = (c20 - c) / c20 * 100
             trend_str = (s - c) / c * 100
-            rsi_norm  = (45 - rsi_val) / 15
+            rsi_norm  = (45 - rsi_val) / 25
 
         else:
             return None
@@ -756,6 +760,7 @@ class AutomatedTrader:
         self.selected: List[ScannedStock] = []
         self._scan_done = False
         self._candles_done = False
+        self._last_5m_bar: Dict[str, datetime] = {}  # symbol → last seen 5m bar open time
 
     @staticmethod
     def _now() -> str:
@@ -786,24 +791,36 @@ class AutomatedTrader:
             logger.info("Late-start recovery complete — entering monitoring loop")
 
     def _check_breakouts(self):
-        today = date.today().strftime("%Y-%m-%d")
+        today  = date.today().strftime("%Y-%m-%d")
+        now_ts = datetime.now()
+        cutoff = now_ts - timedelta(minutes=5)
+
         for stock in self.selected:
             if not stock.candle_captured:
                 continue
             if not self.trade_mgr.can_enter(stock.symbol):
                 continue
 
+            # Skip fetch if the last 5m bar we acted on hasn't rolled yet.
+            # A new bar closes every 5 minutes, so re-fetching sooner is wasteful.
+            last = self._last_5m_bar.get(stock.symbol)
+            if last is not None and now_ts < last + timedelta(minutes=5):
+                continue
+
             df5 = self.api.history(stock.symbol, "5m", today, today, exchange="NSE")
             if df5 is None or df5.empty:
                 continue
 
-            now_ts = datetime.now()
-            cutoff = now_ts - timedelta(minutes=5)
             closed = df5[df5.index < cutoff]
             if closed.empty:
                 continue
 
-            latest  = closed.iloc[-1]
+            latest = closed.iloc[-1]
+            bar_ts = latest.name
+            if hasattr(bar_ts, "to_pydatetime"):
+                bar_ts = bar_ts.to_pydatetime().replace(tzinfo=None)
+            self._last_5m_bar[stock.symbol] = bar_ts  # cache so we skip until next bar
+
             is_long = stock.direction == "BUY"
             triggered = (
                 (is_long     and latest["close"] > stock.fc_high) or
@@ -855,16 +872,23 @@ class AutomatedTrader:
                     self.selected = self.scanner.scan()
                     self._scan_done = True
 
-                # ── After 9:30  Capture first 15-min candle ───────────────────
+                # ── After 9:30  Capture / retry first 15-min candle ──────────
+                # Retries every loop tick until all captured or 9:35 is reached.
                 if (
                     self._scan_done
                     and not self._candles_done
                     and self._after(self.config.scan_end)
                 ):
                     for s in self.selected:
-                        self.scanner.capture_first_candle(s)
-                    self._candles_done = True
-                    logger.info("First candles captured — waiting for 9:35 entry window")
+                        if not s.candle_captured:
+                            self.scanner.capture_first_candle(s)
+                    all_captured = all(s.candle_captured for s in self.selected)
+                    if all_captured or self._after(self.config.entry_start):
+                        self._candles_done = True
+                        n = sum(1 for s in self.selected if s.candle_captured)
+                        logger.info(
+                            f"Candle capture complete — {n}/{len(self.selected)} ready"
+                        )
 
                 # ── 9:35–14:20  Breakout / Breakdown entries ──────────────────
                 if (
