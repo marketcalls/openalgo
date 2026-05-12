@@ -143,7 +143,10 @@ class OpenAlgoClient:
         df = pd.DataFrame(resp["data"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=False)
         df = df.set_index("timestamp")
-        df = cast(pd.DataFrame, df[["open", "high", "low", "close", "volume"]].astype(float))
+        base_cols = ["open", "high", "low", "close", "volume"]
+        if "oi" in df.columns:
+            base_cols.append("oi")
+        df = cast(pd.DataFrame, df[base_cols].astype(float))
         if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
             df.index = df.index.tz_localize(None)
         return df
@@ -239,6 +242,14 @@ class TA:
         h, l, pc = df["high"], df["low"], df["close"].shift()
         tr = cast(pd.Series, pd.concat([(h - l), (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1))
         return cast(pd.Series, tr.ewm(com=n - 1, adjust=False).mean())
+
+    @staticmethod
+    def stoch_k(df: pd.DataFrame, k_period: int = 14) -> pd.Series:
+        """Fast Stochastic %K (raw, unsmoothed). Returns 50 when price range is zero."""
+        lo  = df["low"].rolling(k_period).min()
+        hi  = df["high"].rolling(k_period).max()
+        rng = hi - lo
+        return cast(pd.Series, (df["close"] - lo).div(rng).mul(100).where(rng != 0, 50.0))
 
     @staticmethod
     def supertrend(df: pd.DataFrame, n: int = 7, m: float = 3.0) -> pd.Series:
@@ -547,6 +558,7 @@ class Scanner:
     def __init__(self, config: Config, api: OpenAlgoClient):
         self.config = config
         self.api = api
+        self._sym_map: Dict[str, str] = {}   # base → near-month FUT symbol (e.g. "RELIANCE28MAY26FUT")
 
     def fetch_fno_symbols(self) -> List[str]:
         """
@@ -565,7 +577,8 @@ class Scanner:
             logger.warning("Master contract unavailable — falling back to built-in universe")
             return list(EQUITY_UNIVERSE)
 
-        bases: set = set()
+        # near[base] = (expiry_date, fut_symbol) — keep only the nearest-expiry contract
+        near: Dict[str, tuple] = {}
         for inst in instruments:
             if inst.get("instrumenttype") != "FUT":
                 continue
@@ -579,15 +592,39 @@ class Scanner:
             if sym.endswith(expected_tail):
                 base = sym[: -len(expected_tail)]     # "RELIANCE"
                 if base and base not in _INDEX_FUTURES:
-                    bases.add(base)
+                    try:
+                        exp_dt = datetime.strptime(expiry, "%d-%b-%y").date()
+                    except ValueError:
+                        exp_dt = date.max
+                    if base not in near or exp_dt < near[base][0]:
+                        near[base] = (exp_dt, sym)
 
-        if not bases:
+        if not near:
             logger.warning("No FUT base symbols extracted — falling back to built-in universe")
             return list(EQUITY_UNIVERSE)
 
-        result = sorted(bases)
+        self._sym_map = {b: sym for b, (_, sym) in near.items()}
+        result = sorted(near.keys())
         logger.info(f"F&O universe: {len(result)} equity symbols fetched from master contract")
         return result
+
+    def _oi_long_buildup(self, base: str) -> bool:
+        """
+        ChartInk 'OI F&O Buy': OI and price both rose yesterday vs the prior day.
+        Returns True (pass) when OI data is unavailable so the filter degrades gracefully.
+        """
+        fut_sym = self._sym_map.get(base)
+        if not fut_sym:
+            return True
+        hist_end   = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        hist_start = (date.today() - timedelta(days=5)).strftime("%Y-%m-%d")
+        df = self.api.history(fut_sym, "D", hist_start, hist_end, exchange="NFO")
+        if df is None or len(df) < 2 or "oi" not in df.columns:
+            return True  # OI column absent for this broker — don't penalise
+        return bool(
+            df["oi"].iloc[-1] > df["oi"].iloc[-2] and
+            df["close"].iloc[-1] > df["close"].iloc[-2]
+        )
 
     def scan(self) -> List[ScannedStock]:
         # Use yesterday as end date — today's incomplete daily candle during the
@@ -613,9 +650,19 @@ class Scanner:
                 logger.warning(f"Error scanning {base}: {e}")
 
         qualified.sort(key=lambda s: s.score, reverse=True)
+
+        # ChartInk OI F&O Buy filter — applied to BUY signals only
+        oi_confirmed: List[ScannedStock] = []
+        for s in qualified:
+            if s.direction == "SELL" or self._oi_long_buildup(s.base):
+                oi_confirmed.append(s)
+            else:
+                logger.debug(f"Drop {s.base}: OI long buildup not confirmed")
+        qualified = oi_confirmed
+
         selected = qualified[: self.config.max_trades]
         logger.info(
-            f"Scan done: {len(qualified)} qualified → top {len(selected)}: "
+            f"Scan done: {len(qualified)} qualified (OI-filtered) → top {len(selected)}: "
             f"{[(s.base, s.direction) for s in selected]}"
         )
         return selected
@@ -637,13 +684,18 @@ class Scanner:
         hist_val = TA.macd_hist(close).iloc[-1]
         rel_vol  = vol.iloc[-1] / vol_sma10.iloc[-1]
 
+        stk      = TA.stoch_k(df, 14)
+        stk_prev = stk.iloc[-2]
+        stk_curr = stk.iloc[-1]
+
         c   = close.iloc[-1]
         s   = st.iloc[-1]
         e   = ema20.iloc[-1]
         c20 = close.iloc[-20]
 
-        # ── LONG setup ────────────────────────────────────────────────────────
-        if c > e and c > s and 55 <= rsi_val <= 70 and hist_val > 0:
+        # ── LONG setup (ChartInk: Fast Stoch crossed above 90) ────────────────
+        # stk_prev < 90 <= stk_curr  ↔  "crossed above 90" crossover condition
+        if c > e and c > s and 55 <= rsi_val <= 70 and hist_val > 0 and stk_prev < 90 <= stk_curr:
             direction = "BUY"
             price_str = (c - c20) / c20 * 100
             trend_str = (c - s) / c * 100
