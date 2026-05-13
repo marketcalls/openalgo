@@ -188,6 +188,29 @@ def reformat_symbol(row):
         return symbol
 
 
+def _paytm_option_ce_pe(row):
+    """
+    Derive the OpenAlgo option instrumenttype ("CE" or "PE") from the
+    Paytm row's `name` field (e.g. "NIFTY 12 MAY 17850 CALL" -> "CE").
+
+    The shared option lookup services (services/option_symbol_service.py
+    and services/option_chain_service.py) filter SymToken rows by
+    `instrumenttype == "CE"` / `"PE"`. If we stored "OPT" here, those
+    queries would return zero rows and the option chain page would
+    render empty for Paytm users.
+    """
+    name_upper = str(row["name"]).upper()
+    if "CALL" in name_upper:
+        return "CE"
+    if "PUT" in name_upper:
+        return "PE"
+    # Some rows may carry CE/PE explicitly as the last whitespace-token.
+    parts = str(row["name"]).split()
+    if parts and parts[-1].upper() in ("CE", "PE"):
+        return parts[-1].upper()
+    return "OPT"
+
+
 # Define the function to apply conditions
 def assign_values(row):
     # Paytm Exchange Mappings are simply NSE and BSE. No other complications
@@ -213,11 +236,12 @@ def assign_values(row):
     elif row["exchange"] == "BSE" and row["instrument_type"] in ["FUTIDX", "FUTSTK"]:
         return "BFO", "BSE", "FUT"
 
-    # Handle options
+    # Handle options — write CE/PE so the shared option lookup services
+    # match. Storing "OPT" here breaks /optionchain and tools pages.
     elif row["exchange"] == "NSE" and row["instrument_type"] in ["OPTIDX", "OPTSTK"]:
-        return "NFO", "NSE", "OPT"
+        return "NFO", "NSE", _paytm_option_ce_pe(row)
     elif row["exchange"] == "BSE" and row["instrument_type"] in ["OPTIDX", "OPTSTK"]:
-        return "BFO", "BSE", "OPT"
+        return "BFO", "BSE", _paytm_option_ce_pe(row)
 
     # Handle unknown cases
     else:
@@ -358,9 +382,18 @@ def master_contract_download():
         token_df = process_paytm_csv(output_path)
         copy_from_dataframe(token_df)
         delete_paytm_temp_data(output_path)
-        # token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
 
-        # token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+        # Invalidate the in-process strikes cache in option_symbol_service.
+        # Without this, an empty result cached before refresh (e.g. when
+        # instrumenttype was still stored as "OPT") survives the rebuild
+        # and the option chain / tools pages keep rendering empty until
+        # the Flask process is restarted.
+        try:
+            from services.option_symbol_service import clear_strikes_cache
+
+            clear_strikes_cache()
+        except Exception as cache_err:
+            logger.warning(f"Could not clear strikes cache after master refresh: {cache_err}")
 
         return socketio.emit(
             "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}
