@@ -27,9 +27,12 @@ from typing import Dict, List, Optional, cast
 
 import pandas as pd
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()  # load .env so OPENALGO_API_KEY and PAPER_TRADE are picked up
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # load .env so OPENALGO_API_KEY and PAPER_TRADE are picked up
+except ImportError:
+    pass  # python-dotenv not installed — rely on shell environment
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 try:
@@ -83,7 +86,9 @@ class Config:
     # Sector / filter params
     gap_filter_pct: float = 2.0          # skip if opening gap > ±2%
     sector_rs_lookback: int = 5          # days for relative-strength calculation
-    require_sector_filter: bool = True   # False = allow stocks with no sector mapping
+    # False = scan ALL F&O stocks; unmapped stocks use both-direction indicator logic.
+    # True  = only stocks explicitly in STOCK_SECTOR (mapped to a tracked sector).
+    require_sector_filter: bool = False
 
 
 # ─── Sector Universe ──────────────────────────────────────────────────────────
@@ -103,35 +108,41 @@ SECTOR_INDICES: Dict[str, Dict[str, str]] = {
     "NIFTY HEALTHCARE":        {"symbol": "NIFTY HEALTHCARE",   "exchange": "NSE_INDEX"},
     "NIFTY OIL GAS":           {"symbol": "NIFTY OIL AND GAS",  "exchange": "NSE_INDEX"},
     "NIFTY FIN SVC":           {"symbol": "FINNIFTY",           "exchange": "NSE_INDEX"},
-    # NIFTY CHEMICALS not available as NSE_INDEX in Dhan; sector skipped
     "NIFTY CONSUMER DURABLES": {"symbol": "NIFTY CONSR DURBL",  "exchange": "NSE_INDEX"},
+    "NIFTY CHEMICALS":         {"symbol": "NIFTY CHEMICALS",    "exchange": "NSE_INDEX"},
 }
 
 # Stock → sector name (STOCK_SECTOR)
+# Stocks not listed here are still scanned when require_sector_filter=False;
+# they get "BOTH" direction treatment based on daily indicators alone.
 STOCK_SECTOR: Dict[str, str] = {
-    # Banking (9)
+    # Banking (15)
     "HDFCBANK":   "NIFTY BANK",  "ICICIBANK":  "NIFTY BANK",  "KOTAKBANK":  "NIFTY BANK",
     "AXISBANK":   "NIFTY BANK",  "SBIN":       "NIFTY BANK",  "BANKBARODA": "NIFTY BANK",
     "INDUSINDBK": "NIFTY BANK",  "CANBK":      "NIFTY BANK",  "PNB":        "NIFTY BANK",
-    # IT (12)
+    "FEDERALBNK": "NIFTY BANK",  "IDFCFIRSTB": "NIFTY BANK",  "AUBANK":     "NIFTY BANK",
+    "BANDHANBNK": "NIFTY BANK",  "RBLBANK":    "NIFTY BANK",  "YESBANK":    "NIFTY BANK",
+    # IT (14)
     "TCS":        "NIFTY IT",    "INFY":       "NIFTY IT",    "WIPRO":      "NIFTY IT",
     "HCLTECH":    "NIFTY IT",    "TECHM":      "NIFTY IT",    "LTIM":       "NIFTY IT",
     "NAUKRI":     "NIFTY IT",    "ZOMATO":     "NIFTY IT",    "COFORGE":    "NIFTY IT",
     "PERSISTENT": "NIFTY IT",    "MPHASIS":    "NIFTY IT",    "OFSS":       "NIFTY IT",
-    # Auto (15)
+    "LTTS":       "NIFTY IT",    "KPITTECH":   "NIFTY IT",
+    # Auto (17)
     "MARUTI":     "NIFTY AUTO",  "TATAMOTORS": "NIFTY AUTO",  "BAJAJ-AUTO": "NIFTY AUTO",
     "HEROMOTOCO": "NIFTY AUTO",  "EICHERMOT":  "NIFTY AUTO",  "M&M":        "NIFTY AUTO",
     "TVSMOTOR":   "NIFTY AUTO",  "MOTHERSON":  "NIFTY AUTO",  "ASHOKLEY":   "NIFTY AUTO",
     "SONACOMS":   "NIFTY AUTO",  "BHARATFORG": "NIFTY AUTO",  "TIINDIA":    "NIFTY AUTO",
     "EXIDEIND":   "NIFTY AUTO",  "UNOMINDA":   "NIFTY AUTO",  "BOSCHLTD":   "NIFTY AUTO",
-    # Pharma (20)
+    "APOLLOTYRE": "NIFTY AUTO",  "BALKRISIND": "NIFTY AUTO",
+    # Pharma (21)
     "SUNPHARMA":  "NIFTY PHARMA","CIPLA":      "NIFTY PHARMA","DRREDDY":    "NIFTY PHARMA",
     "DIVISLAB":   "NIFTY PHARMA","BIOCON":     "NIFTY PHARMA","LUPIN":      "NIFTY PHARMA",
     "LAURUSLABS": "NIFTY PHARMA","AUROPHARMA": "NIFTY PHARMA","GLENMARK":   "NIFTY PHARMA",
     "WOCKPHARMA": "NIFTY PHARMA","JBCHEPHARM": "NIFTY PHARMA","MANKIND":    "NIFTY PHARMA",
     "TORNTPHARM": "NIFTY PHARMA","PPLPHARMA":  "NIFTY PHARMA","IPCALAB":    "NIFTY PHARMA",
     "AJANTPHARM": "NIFTY PHARMA","ZYDUSLIFE":  "NIFTY PHARMA","ABBOTINDIA": "NIFTY PHARMA",
-    "ALKEM":      "NIFTY PHARMA","GLAND":      "NIFTY PHARMA",
+    "ALKEM":      "NIFTY PHARMA","GLAND":      "NIFTY PHARMA","NATCOPHARM": "NIFTY PHARMA",
     # FMCG (18)
     "HINDUNILVR": "NIFTY FMCG",  "ITC":        "NIFTY FMCG",  "BRITANNIA":  "NIFTY FMCG",
     "NESTLEIND":  "NIFTY FMCG",  "TATACONSUM": "NIFTY FMCG",  "DMART":      "NIFTY FMCG",
@@ -139,16 +150,21 @@ STOCK_SECTOR: Dict[str, str] = {
     "VBL":        "NIFTY FMCG",  "MARICO":     "NIFTY FMCG",  "RADICO":     "NIFTY FMCG",
     "PATANJALI":  "NIFTY FMCG",  "DABUR":      "NIFTY FMCG",  "UNITDSPR":   "NIFTY FMCG",
     "COLPAL":     "NIFTY FMCG",  "UBL":        "NIFTY FMCG",  "EMAMILTD":   "NIFTY FMCG",
-    # Metal (14)
+    # Metal (15)
     "JSWSTEEL":   "NIFTY METAL", "HINDALCO":   "NIFTY METAL", "TATASTEEL":  "NIFTY METAL",
     "VEDL":       "NIFTY METAL", "HINDZINC":   "NIFTY METAL", "HINDCOPPER": "NIFTY METAL",
     "SAIL":       "NIFTY METAL", "NATIONALUM": "NIFTY METAL", "JINDALSTEL": "NIFTY METAL",
     "NMDC":       "NIFTY METAL", "LLOYDSME":   "NIFTY METAL", "APLAPOLLO":  "NIFTY METAL",
-    "WELCORP":    "NIFTY METAL", "JSL":        "NIFTY METAL",
-    # Energy / Power (4)
-    "RELIANCE":   "NIFTY ENERGY","ONGC":       "NIFTY ENERGY","BPCL":       "NIFTY ENERGY",
-    "COALINDIA":  "NIFTY ENERGY",
-    # Infra / Capital Goods + Cement (21)
+    "WELCORP":    "NIFTY METAL", "JSL":        "NIFTY METAL", "MOIL":       "NIFTY METAL",
+    # Oil & Gas (7)  — tracks NIFTY OIL AND GAS index
+    "RELIANCE":   "NIFTY OIL GAS","ONGC":      "NIFTY OIL GAS","BPCL":      "NIFTY OIL GAS",
+    "COALINDIA":  "NIFTY OIL GAS","IOC":       "NIFTY OIL GAS","HINDPETRO": "NIFTY OIL GAS",
+    "GAIL":       "NIFTY OIL GAS",
+    # Power & Renewable Energy (7)  — tracks NIFTY ENERGY index
+    "TATAPOWER":  "NIFTY ENERGY","TORNTPOWER": "NIFTY ENERGY","ADANIGREEN": "NIFTY ENERGY",
+    "JSWENERGY":  "NIFTY ENERGY","CESC":       "NIFTY ENERGY","NHPC":       "NIFTY ENERGY",
+    "SJVN":       "NIFTY ENERGY",
+    # Infra / Capital Goods + Cement + Telecom (28)
     "NTPC":       "NIFTY INFRA", "POWERGRID":  "NIFTY INFRA", "LT":         "NIFTY INFRA",
     "ADANIPORTS": "NIFTY INFRA", "ADANIENT":   "NIFTY INFRA", "ULTRACEMCO": "NIFTY INFRA",
     "GRASIM":     "NIFTY INFRA", "SHREECEM":   "NIFTY INFRA", "AMBUJACEM":  "NIFTY INFRA",
@@ -156,8 +172,13 @@ STOCK_SECTOR: Dict[str, str] = {
     "JKCEMENT":   "NIFTY INFRA", "RAMCOCEM":   "NIFTY INFRA", "JSWCEMENT":  "NIFTY INFRA",
     "NUVOCO":     "NIFTY INFRA", "INDIACEM":   "NIFTY INFRA", "JKLAKSHMI":  "NIFTY INFRA",
     "PRSMJOHNSN": "NIFTY INFRA", "ORIENTCEM":  "NIFTY INFRA", "STARCEMENT": "NIFTY INFRA",
-    # Fin Services (2)
-    "BAJFINANCE": "NIFTY FIN SVC","SBILIFE":   "NIFTY FIN SVC",
+    "ABB":        "NIFTY INFRA", "SIEMENS":    "NIFTY INFRA", "CGPOWER":    "NIFTY INFRA",
+    "BHEL":       "NIFTY INFRA", "GMRINFRA":   "NIFTY INFRA", "BHARTIARTL": "NIFTY INFRA",
+    # Fin Services (12)
+    "BAJFINANCE": "NIFTY FIN SVC","SBILIFE":   "NIFTY FIN SVC","BAJAJFINSV": "NIFTY FIN SVC",
+    "HDFCLIFE":   "NIFTY FIN SVC","ICICIPRULI":"NIFTY FIN SVC","SBICARD":    "NIFTY FIN SVC",
+    "CHOLAFIN":   "NIFTY FIN SVC","M&MFIN":    "NIFTY FIN SVC","LICHSGFIN":  "NIFTY FIN SVC",
+    "MFSL":       "NIFTY FIN SVC","ABCAPITAL":  "NIFTY FIN SVC","PNBHOUSING": "NIFTY FIN SVC",
     # Chemicals (20)
     "HSCL":       "NIFTY CHEMICALS","UPL":     "NIFTY CHEMICALS","PIDILITIND":"NIFTY CHEMICALS",
     "TATACHEM":   "NIFTY CHEMICALS","SOLARINDS":"NIFTY CHEMICALS","SRF":      "NIFTY CHEMICALS",
@@ -166,24 +187,28 @@ STOCK_SECTOR: Dict[str, str] = {
     "ATUL":       "NIFTY CHEMICALS","FLUOROCHEM":"NIFTY CHEMICALS","LINDEINDIA":"NIFTY CHEMICALS",
     "SWANCORP":   "NIFTY CHEMICALS","PCBL":     "NIFTY CHEMICALS","CHAMBLFERT":"NIFTY CHEMICALS",
     "SUMICHEM":   "NIFTY CHEMICALS","BAYERCROP":"NIFTY CHEMICALS",
-    # Consumer Durables (13)
+    # Consumer Durables (14)
     "DIXON":      "NIFTY CONSUMER DURABLES","TITAN":     "NIFTY CONSUMER DURABLES",
     "KALYANKJIL": "NIFTY CONSUMER DURABLES","AMBER":     "NIFTY CONSUMER DURABLES",
     "BLUESTARCO": "NIFTY CONSUMER DURABLES","CROMPTON":  "NIFTY CONSUMER DURABLES",
     "VOLTAS":     "NIFTY CONSUMER DURABLES","HAVELLS":   "NIFTY CONSUMER DURABLES",
     "LGEINDIA":   "NIFTY CONSUMER DURABLES","PGEL":      "NIFTY CONSUMER DURABLES",
     "KAJARIACER": "NIFTY CONSUMER DURABLES","WHIRLPOOL": "NIFTY CONSUMER DURABLES",
-    "BATAINDIA":  "NIFTY CONSUMER DURABLES",
+    "BATAINDIA":  "NIFTY CONSUMER DURABLES","NYKAA":     "NIFTY CONSUMER DURABLES",
     # Realty (10)
     "DLF":        "NIFTY REALTY", "ANANTRAJ":  "NIFTY REALTY", "LODHA":      "NIFTY REALTY",
     "GODREJPROP": "NIFTY REALTY", "OBEROIRLTY":"NIFTY REALTY", "PRESTIGE":   "NIFTY REALTY",
     "PHOENIXLTD": "NIFTY REALTY", "ABREL":     "NIFTY REALTY", "BRIGADE":    "NIFTY REALTY",
     "SOBHA":      "NIFTY REALTY",
-    # PSE (1)
-    "IRCTC":      "NIFTY PSE",
+    # PSE / Government (8)
+    "IRCTC":      "NIFTY PSE",   "HAL":        "NIFTY PSE",   "BEL":        "NIFTY PSE",
+    "RVNL":       "NIFTY PSE",   "IRFC":       "NIFTY PSE",   "PFC":        "NIFTY PSE",
+    "REC":        "NIFTY PSE",   "LICI":       "NIFTY PSE",
     # Healthcare Services (4)
     "APOLLOHOSP": "NIFTY HEALTHCARE","MAXHEALTH": "NIFTY HEALTHCARE",
     "FORTIS":     "NIFTY HEALTHCARE","SYNGENE":   "NIFTY HEALTHCARE",
+    # Media (3)
+    "PVRINOX":    "NIFTY MEDIA", "SUNTVNETWORK":"NIFTY MEDIA", "ZEEL":       "NIFTY MEDIA",
 }
 
 
@@ -827,6 +852,7 @@ class AutomatedTrader:
         self.selected: List[ScannedStock] = []
         self._scan_done    = False
         self._candles_done = False
+        self._last_5m_bar: Dict[str, datetime] = {}  # symbol → last seen 5m bar open time
 
     @staticmethod
     def _now() -> str:
@@ -855,24 +881,35 @@ class AutomatedTrader:
             self._candles_done = True
 
     def _check_breakouts(self):
-        today = date.today().strftime("%Y-%m-%d")
+        today  = date.today().strftime("%Y-%m-%d")
+        now_ts = datetime.now()
+        cutoff = now_ts - timedelta(minutes=5)
+
         for stock in self.selected:
             if not stock.candle_captured:
                 continue
             if not self.trade_mgr.can_enter(stock.symbol):
                 continue
 
+            # Skip fetch if the last 5m bar we acted on hasn't rolled yet.
+            last = self._last_5m_bar.get(stock.symbol)
+            if last is not None and now_ts < last + timedelta(minutes=5):
+                continue
+
             df5 = self.api.history(stock.symbol, "5m", today, today, exchange="NSE")
             if df5 is None or df5.empty:
                 continue
 
-            now_ts  = datetime.now()
-            cutoff  = now_ts - timedelta(minutes=5)
-            closed  = df5[df5.index < cutoff]
+            closed = df5[df5.index < cutoff]
             if closed.empty:
                 continue
 
-            latest  = closed.iloc[-1]
+            latest = closed.iloc[-1]
+            bar_ts = latest.name
+            if hasattr(bar_ts, "to_pydatetime"):
+                bar_ts = bar_ts.to_pydatetime().replace(tzinfo=None)
+            self._last_5m_bar[stock.symbol] = bar_ts  # cache so we skip until next bar
+
             is_long = stock.direction == "BUY"
             triggered = (
                 (is_long     and latest["close"] > stock.fc_high) or

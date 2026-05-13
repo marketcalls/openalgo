@@ -89,21 +89,69 @@ class Config:
     monitor_interval_sec: int = 5
 
 
-# ─── NSE Equity Universe ──────────────────────────────────────────────────────────
-# Large-cap liquid NSE stocks suitable for intraday ORB
+# ─── NSE F&O Equity Universe ─────────────────────────────────────────────────────
+# Fallback list used when the master-contract API is unavailable.
+# The live path (fetch_fno_symbols) dynamically pulls all F&O stocks at runtime.
 EQUITY_UNIVERSE: List[str] = [
-    "RELIANCE",   "TCS",        "HDFCBANK",   "INFY",       "ICICIBANK",
-    "KOTAKBANK",  "HINDUNILVR", "SBIN",        "BAJFINANCE", "BHARTIARTL",
-    "AXISBANK",   "ASIANPAINT", "MARUTI",      "SUNPHARMA",  "TATAMOTORS",
-    "WIPRO",      "ULTRACEMCO", "HCLTECH",     "TITAN",      "TECHM",
-    "ONGC",       "NTPC",       "COALINDIA",   "ITC",        "POWERGRID",
-    "M&M",        "JSWSTEEL",   "HINDALCO",    "NESTLEIND",  "CIPLA",
-    "DRREDDY",    "APOLLOHOSP", "ADANIENT",    "ADANIPORTS", "BAJAJ-AUTO",
-    "BPCL",       "BRITANNIA",  "DIVISLAB",    "EICHERMOT",  "GRASIM",
-    "HEROMOTOCO", "INDUSINDBK", "LTIM",        "LT",         "TATACONSUM",
-    "TATASTEEL",  "TRENT",      "UPL",         "VEDL",       "ZOMATO",
-    "BANKBARODA", "CANBK",      "PNB",         "IRCTC",      "PIDILITIND",
-    "DMART",      "SHREECEM",   "NAUKRI",      "SBILIFE",
+    # ── Banking ──────────────────────────────────────────────────────────────────
+    "HDFCBANK",   "ICICIBANK",  "KOTAKBANK",   "AXISBANK",   "SBIN",
+    "BANKBARODA", "INDUSINDBK", "CANBK",        "PNB",        "FEDERALBNK",
+    "IDFCFIRSTB", "AUBANK",     "BANDHANBNK",   "RBLBANK",    "YESBANK",
+    # ── Financial Services ───────────────────────────────────────────────────────
+    "BAJFINANCE", "BAJAJFINSV", "HDFCLIFE",    "ICICIPRULI", "SBILIFE",
+    "SBICARD",    "CHOLAFIN",   "M&MFIN",       "LICHSGFIN",  "MFSL",
+    # ── IT & Technology ──────────────────────────────────────────────────────────
+    "TCS",        "INFY",       "WIPRO",         "HCLTECH",    "TECHM",
+    "LTIM",       "NAUKRI",     "ZOMATO",        "COFORGE",    "PERSISTENT",
+    "MPHASIS",    "OFSS",       "LTTS",          "KPITTECH",
+    # ── Auto & Components ────────────────────────────────────────────────────────
+    "MARUTI",     "TATAMOTORS", "BAJAJ-AUTO",    "HEROMOTOCO", "EICHERMOT",
+    "M&M",        "TVSMOTOR",   "MOTHERSON",     "ASHOKLEY",   "BHARATFORG",
+    "APOLLOTYRE", "BALKRISIND", "EXIDEIND",      "UNOMINDA",   "BOSCHLTD",
+    "TIINDIA",    "SONACOMS",
+    # ── Pharma & Healthcare ──────────────────────────────────────────────────────
+    "SUNPHARMA",  "CIPLA",      "DRREDDY",       "DIVISLAB",   "BIOCON",
+    "LUPIN",      "LAURUSLABS", "AUROPHARMA",    "GLENMARK",   "WOCKPHARMA",
+    "JBCHEPHARM", "MANKIND",    "TORNTPHARM",    "IPCALAB",    "AJANTPHARM",
+    "ZYDUSLIFE",  "ABBOTINDIA", "ALKEM",         "GLAND",      "NATCOPHARM",
+    "APOLLOHOSP", "MAXHEALTH",  "FORTIS",        "SYNGENE",
+    # ── FMCG & Consumer ──────────────────────────────────────────────────────────
+    "HINDUNILVR", "ITC",        "BRITANNIA",     "NESTLEIND",  "TATACONSUM",
+    "DMART",      "TRENT",      "ASIANPAINT",    "GODREJCP",   "VBL",
+    "MARICO",     "RADICO",     "DABUR",         "COLPAL",     "UBL",
+    "EMAMILTD",
+    # ── Metals & Mining ──────────────────────────────────────────────────────────
+    "JSWSTEEL",   "HINDALCO",   "TATASTEEL",     "VEDL",       "HINDZINC",
+    "HINDCOPPER", "SAIL",       "NATIONALUM",    "JINDALSTEL", "NMDC",
+    "MOIL",       "LLOYDSME",   "APLAPOLLO",     "WELCORP",    "JSL",
+    # ── Oil, Gas & Power ─────────────────────────────────────────────────────────
+    "RELIANCE",   "ONGC",       "BPCL",          "COALINDIA",  "IOC",
+    "HINDPETRO",  "GAIL",       "TATAPOWER",     "TORNTPOWER", "ADANIGREEN",
+    "JSWENERGY",  "CESC",       "NHPC",           "SJVN",
+    # ── Infrastructure & Capital Goods ───────────────────────────────────────────
+    "NTPC",       "POWERGRID",  "LT",            "ADANIPORTS", "ADANIENT",
+    "ULTRACEMCO", "GRASIM",     "SHREECEM",      "AMBUJACEM",  "DALBHARAT",
+    "ACC",        "JKCEMENT",   "RAMCOCEM",      "ABB",        "SIEMENS",
+    "CGPOWER",    "BHEL",       "HAL",           "BEL",        "GMRINFRA",
+    "RVNL",       "IRFC",       "BHARTIARTL",
+    # ── Chemicals ────────────────────────────────────────────────────────────────
+    "UPL",        "PIDILITIND", "TATACHEM",      "SRF",        "NAVINFLUOR",
+    "DEEPAKNTR",  "COROMANDEL", "PIIND",         "AARTIIND",   "DEEPAKFERT",
+    "ATUL",       "FLUOROCHEM", "LINDEINDIA",    "SOLARINDS",  "PCBL",
+    "CHAMBLFERT", "BAYERCROP",  "SUMICHEM",      "HSCL",
+    # ── Consumer Durables ────────────────────────────────────────────────────────
+    "DIXON",      "TITAN",      "KALYANKJIL",    "AMBER",      "BLUESTARCO",
+    "CROMPTON",   "VOLTAS",     "HAVELLS",       "WHIRLPOOL",  "BATAINDIA",
+    "KAJARIACER",
+    # ── Realty ───────────────────────────────────────────────────────────────────
+    "DLF",        "ANANTRAJ",   "LODHA",         "GODREJPROP", "OBEROIRLTY",
+    "PRESTIGE",   "PHOENIXLTD", "BRIGADE",       "SOBHA",
+    # ── PSE & Government ─────────────────────────────────────────────────────────
+    "IRCTC",      "PFC",        "REC",           "LICI",
+    # ── Media & Entertainment ────────────────────────────────────────────────────
+    "PVRINOX",    "SUNTVNETWORK",
+    # ── Diversified / New-Age ────────────────────────────────────────────────────
+    "INDIGO",     "INDIANHOTEL","NYKAA",         "POLICYBZR",  "PAYTM",
 ]
 
 
@@ -132,6 +180,9 @@ class OpenAlgoClient:
                 except Exception:
                     pass
                 logger.error(f"API error {endpoint}: {e}{' — ' + body if body else ''}")
+                break
+            except ValueError as e:
+                logger.error(f"Invalid JSON from {endpoint}: {e}")
                 break
         return {"status": "error", "message": "request failed"}
 
@@ -215,7 +266,9 @@ class OpenAlgoClient:
         params = {**params, "apikey": self.config.api_key}
         url = f"{self.config.openalgo_url}{endpoint}"
         try:
-            r = self.session.get(url, params=params, timeout=30)
+            # Clear Content-Type for GET — Flask rejects application/json on empty-body GET
+            r = self.session.get(url, params=params, timeout=30,
+                                 headers={"Content-Type": None})
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
