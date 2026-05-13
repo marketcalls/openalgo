@@ -13,7 +13,7 @@ OpenAlgo is a production-ready algorithmic trading platform built with Flask (ba
 | **Flow (No-Code Builder)** | `/flow` | Drag-and-drop nodes: market data → indicators → conditions → order execution; JSON import/export |
 | **Options Trading Suite** | `/tools` | 12 analytical tools: Strategy Builder, Option Chain, IV Smile, Max Pain, Vol Surface, GEX, OI Tracker, Straddle Chart, etc. |
 
-All surfaces share the Sandbox engine (₹1 Crore virtual capital, exchange-aligned auto square-off) and support Telegram alerts.
+All surfaces share the Sandbox engine (₹1 Crore sandbox capital, exchange-aligned auto square-off) and support Telegram alerts.
 
 **Repository**: https://github.com/marketcalls/openalgo
 **Documentation**: https://docs.openalgo.in
@@ -122,7 +122,7 @@ OpenAlgo uses **6 separate databases** for isolation:
 - `db/logs.db` - Traffic and API logs
 - `db/latency.db` - Latency monitoring data
 - `db/health.db` - Health monitoring data
-- `db/sandbox.db` - Analyzer/sandbox mode (isolated sandbox trading)
+- `db/sandbox.db` - Sandbox trading mode (isolated from live trading)
 - `db/historify.duckdb` - Historical market data (DuckDB)
 
 Each database has its own initialization function in `/database/`.
@@ -310,13 +310,13 @@ Orders can flow through two modes:
 
 Approval workflow in `database/action_center_db.py` and `services/action_center_service.py`
 
-### Analyzer Mode (Sandbox Trading)
+### Sandbox Trading Mode
 
 Separate database (`sandbox.db`) with ₹1 Crore sandbox capital:
 - Realistic margin system with leverage
 - Auto square-off at exchange timings
 - Complete isolation from live trading
-- Toggle via `/analyzer` blueprint
+- Sandbox controls (capital, leverage, reset schedule) live at `/sandbox` (`blueprints/sandbox.py`); request/response inspection is at `/analyzer` (`blueprints/analyzer.py`)
 
 ### Python Strategy Host
 
