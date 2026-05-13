@@ -126,7 +126,12 @@ class OpenAlgoClient:
                 logger.warning(f"Timeout {endpoint} (attempt {attempt+1})")
                 time.sleep(1)
             except requests.RequestException as e:
-                logger.error(f"API error {endpoint}: {e}")
+                body = ""
+                try:
+                    body = e.response.text[:200] if e.response is not None else ""
+                except Exception:
+                    pass
+                logger.error(f"API error {endpoint}: {e}{' — ' + body if body else ''}")
                 break
         return {"status": "error", "message": "request failed"}
 
@@ -145,7 +150,10 @@ class OpenAlgoClient:
             "start_date": start_date,
             "end_date": end_date,
         })
-        if resp.get("status") != "success" or not resp.get("data"):
+        if resp.get("status") != "success":
+            return None
+        if not resp.get("data"):
+            logger.debug(f"No history data for {symbol} ({exchange} {interval} {start_date}→{end_date})")
             return None
         df = pd.DataFrame(resp["data"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=False)
@@ -210,6 +218,14 @@ class OpenAlgoClient:
             r = self.session.get(url, params=params, timeout=30)
             r.raise_for_status()
             return r.json()
+        except requests.RequestException as e:
+            body = ""
+            try:
+                body = e.response.text[:300] if e.response is not None else ""
+            except Exception:
+                pass
+            logger.error(f"GET {endpoint} failed: {e}{' — ' + body if body else ''}")
+            return {"status": "error"}
         except Exception as e:
             logger.error(f"GET {endpoint} failed: {e}")
             return {"status": "error"}
