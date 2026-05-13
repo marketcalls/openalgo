@@ -100,11 +100,11 @@ SECTOR_INDICES: Dict[str, Dict[str, str]] = {
     "NIFTY MEDIA":             {"symbol": "NIFTYMEDIA",         "exchange": "NSE_INDEX"},
     "NIFTY INFRA":             {"symbol": "NIFTYINFRA",         "exchange": "NSE_INDEX"},
     "NIFTY PSE":               {"symbol": "NIFTYPSE",           "exchange": "NSE_INDEX"},
-    "NIFTY HEALTHCARE":        {"symbol": "NIFTYHEALTHCARE",    "exchange": "NSE_INDEX"},
-    "NIFTY OIL GAS":           {"symbol": "NIFTYOILGAS",        "exchange": "NSE_INDEX"},
+    "NIFTY HEALTHCARE":        {"symbol": "NIFTY HEALTHCARE",   "exchange": "NSE_INDEX"},
+    "NIFTY OIL GAS":           {"symbol": "NIFTY OIL AND GAS",  "exchange": "NSE_INDEX"},
     "NIFTY FIN SVC":           {"symbol": "FINNIFTY",           "exchange": "NSE_INDEX"},
-    "NIFTY CHEMICALS":         {"symbol": "NIFTYCHEMICALS",     "exchange": "NSE_INDEX"},
-    "NIFTY CONSUMER DURABLES": {"symbol": "NIFTYCONDURAB",      "exchange": "NSE_INDEX"},
+    # NIFTY CHEMICALS not available as NSE_INDEX in Dhan; sector skipped
+    "NIFTY CONSUMER DURABLES": {"symbol": "NIFTY CONSR DURBL",  "exchange": "NSE_INDEX"},
 }
 
 # Stock → sector name (STOCK_SECTOR)
@@ -214,7 +214,9 @@ class OpenAlgoClient:
         params = {**params, "apikey": self.config.api_key}
         url = f"{self.config.openalgo_url}{endpoint}"
         try:
-            r = self.session.get(url, params=params, timeout=30)
+            # Clear Content-Type for GET requests — Flask rejects application/json with empty body
+            r = self.session.get(url, params=params, timeout=30,
+                                 headers={"Content-Type": None})
             r.raise_for_status()
             return r.json()
         except Exception as e:
@@ -341,7 +343,7 @@ class SectorAnalyzer:
     Called once during the 9:15 scan window; result cached for the session.
     """
 
-    NIFTY_SYMBOL   = "NIFTY 50"
+    NIFTY_SYMBOL   = "NIFTY"
     NIFTY_EXCHANGE = "NSE_INDEX"
 
     def __init__(self, api: OpenAlgoClient, config: Config):
