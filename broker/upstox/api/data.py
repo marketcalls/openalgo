@@ -159,6 +159,13 @@ class BrokerData:
             # URL encode the instrument key
             encoded_symbol = urllib.parse.quote(instrument_key)
 
+            # GLOBAL_INDICATOR feeds (USDINR, BRENTOIL, WTIOIL) are LTP-only on
+            # Upstox — /v3/market-quote/ohlc and /v2/market-quote/quotes both
+            # return UDAPI100500 for them. Short-circuit to /v2/market-quote/ltp
+            # and return a quote dict with only ltp populated.
+            if instrument_key.startswith("GLOBAL_INDICATOR|"):
+                return self._get_indicator_ltp(instrument_key)
+
             # Use v3 OHLC endpoint
             url = f"/market-quote/ohlc?instrument_key={encoded_symbol}&interval=1d"
             response = get_api_response(url, self.auth_token)
@@ -271,6 +278,49 @@ class BrokerData:
             logger.exception(f"Error fetching quotes for {symbol} on {exchange}")
             raise
 
+    def _get_indicator_ltp(self, instrument_key: str) -> dict:
+        """
+        Fetch LTP for a single GLOBAL_INDICATOR instrument via /v2/market-quote/ltp.
+        Upstox does not expose OHLC/depth/OI for indicators, so the returned
+        quote has only ltp populated; all other fields are 0.
+        """
+        encoded = urllib.parse.quote(instrument_key)
+        client = get_httpx_client()
+        headers = {
+            "Authorization": f"Bearer {self.auth_token}",
+            "Accept": "application/json",
+        }
+        url = f"https://api.upstox.com/v2/market-quote/ltp?instrument_key={encoded}"
+        resp = client.get(url, headers=headers)
+        body = resp.json()
+
+        if body.get("status") != "success":
+            errors = body.get("errors") or []
+            err = errors[0] if errors else {}
+            msg = err.get("message", body.get("message", "Unknown error"))
+            code = err.get("errorCode", "NO_CODE")
+            raise Exception(f"API Error - Code: {code}, Message: {msg}")
+
+        # Upstox bug: outer key is "GLOBAL_INDICATOR:null"; match on inner
+        # instrument_token instead.
+        ltp = 0.0
+        for value in (body.get("data") or {}).values():
+            if value.get("instrument_token") == instrument_key:
+                ltp = float(value.get("last_price", 0) or 0)
+                break
+
+        return {
+            "ask": 0,
+            "bid": 0,
+            "high": 0,
+            "low": 0,
+            "ltp": ltp,
+            "open": 0,
+            "prev_close": 0,
+            "volume": 0,
+            "oi": 0,
+        }
+
     def get_multiquotes(self, symbols: list) -> list:
         """
         Get real-time quotes for multiple symbols with automatic batching
@@ -359,10 +409,32 @@ class BrokerData:
                 skipped_symbols.append({"symbol": symbol, "exchange": exchange, "error": str(e)})
                 continue
 
-        # Return skipped symbols if no valid keys
+        # Split out GLOBAL_INDICATOR keys — these are LTP-only on Upstox and
+        # collide on the buggy "GLOBAL_INDICATOR:null" outer dict key when
+        # batched, so we must fetch each one individually.
+        indicator_keys = [k for k in instrument_keys if k.startswith("GLOBAL_INDICATOR|")]
+        instrument_keys = [k for k in instrument_keys if not k.startswith("GLOBAL_INDICATOR|")]
+
+        indicator_results = []
+        for ind_key in indicator_keys:
+            original = key_map.pop(ind_key)
+            try:
+                indicator_results.append({
+                    "symbol": original["symbol"],
+                    "exchange": original["exchange"],
+                    "data": self._get_indicator_ltp(ind_key),
+                })
+            except Exception as e:
+                logger.warning(f"Failed to fetch LTP for indicator {ind_key}: {e}")
+                indicator_results.append({
+                    "symbol": original["symbol"],
+                    "exchange": original["exchange"],
+                    "error": str(e),
+                })
+
+        # Return early if only indicators were requested
         if not instrument_keys:
-            logger.warning("No valid instrument keys to fetch quotes for")
-            return skipped_symbols
+            return skipped_symbols + indicator_results
 
         # Build comma-separated instrument keys and URL encode
         keys_param = ",".join(instrument_keys)
@@ -457,8 +529,8 @@ class BrokerData:
             }
             results.append(result_item)
 
-        # Include skipped symbols in results
-        return skipped_symbols + results
+        # Include skipped symbols and indicator (LTP-only) results
+        return skipped_symbols + indicator_results + results
 
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str

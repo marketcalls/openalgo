@@ -139,6 +139,11 @@ def process_upstox_json(path):
         "BSE_FO": "BFO",
         "BCD_FO": "BCD",
         "MCX_FO": "MCX",
+        # Upstox quote-only world feeds — folded into OpenAlgo's GLOBAL_INDEX
+        # bucket (mirrors Zerodha). Without this, these rows would silently
+        # land with exchange=NULL after the .map() call.
+        "GLOBAL_INDEX": "GLOBAL_INDEX",
+        "GLOBAL_INDICATOR": "GLOBAL_INDEX",
     }
     segment_copy = df["segment"].copy()
     df["segment"] = df["segment"].map(exchange_map)
@@ -280,6 +285,26 @@ def process_upstox_json(path):
         "SMEIPO": "BSESMEIPO",
         "TECK": "BSETECK",
         "TELCOM": "BSETELECOM",
+    })
+
+    # GLOBAL_INDEX symbol normalisation (Upstox world indices & indicators).
+    # Mapped to OpenAlgo standard symbols listed in docs/prompt/symbol-format.md.
+    global_idx_mask = df["exchange"] == "GLOBAL_INDEX"
+    df.loc[global_idx_mask, "symbol"] = df.loc[global_idx_mask, "symbol"].replace({
+        # World indices
+        "^HSI": "HANGSENG",
+        "^DJI": "DOWJONES",
+        "^FTSE": "UK100",
+        "^GSPC": "US500",
+        "^GDAXI": "GERMANY40",
+        "^FCHI": "FRANCE40",
+        "^N225": "JAPAN225",
+        "IXIX": "US100",
+        "GIFT NIFTY": "GIFTNIFTY",
+        "DOW FUTURES": "US30",
+        # Global indicators (commodities / FX reference rates)
+        "BZUSD": "BRENTOIL",
+        "CLUSD": "WTIOIL",
     })
 
     return df

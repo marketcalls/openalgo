@@ -17,6 +17,7 @@ import sys
 import threading
 from datetime import date, datetime, time
 from pathlib import Path
+from time import monotonic, sleep
 
 import psutil
 import pytz
@@ -728,8 +729,25 @@ def terminate_process_cross_platform(pid):
         # Terminate main process
         process.terminate()
 
-        # Wait and kill if necessary
-        gone, alive = psutil.wait_procs([process] + children, timeout=3)
+        # Wait up to 3s for graceful exit, then kill any survivors.
+        # Manual polling — psutil.wait_procs calls select.poll(), which
+        # eventlet's monkey-patched select does not expose on Linux
+        # (gunicorn-eventlet production deployment). Plain time.sleep is
+        # cooperatively patched under eventlet and is a no-op cost on
+        # Windows/Mac dev servers using standard threading.
+        all_procs = [process] + children
+        deadline = monotonic() + 3
+        alive = list(all_procs)
+        while alive and monotonic() < deadline:
+            sleep(0.1)
+            alive = []
+            for p in all_procs:
+                try:
+                    if p.is_running() and p.status() != psutil.STATUS_ZOMBIE:
+                        alive.append(p)
+                except psutil.NoSuchProcess:
+                    pass
+
         for p in alive:
             try:
                 p.kill()
