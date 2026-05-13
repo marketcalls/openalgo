@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-OpenAlgo is a production-ready algorithmic trading platform built with Flask (backend) and React 19 (frontend). It provides a unified API layer across 30+ Indian brokers, enabling seamless integration with TradingView, Amibroker, Excel, Python, and AI agents.
+OpenAlgo is a production-ready algorithmic trading platform built with Flask (backend) and React 19 (frontend). It is **four products in one self-hosted instance**, all sharing a single broker session and WebSocket feed:
+
+| Surface | Route | Purpose |
+| --- | --- | --- |
+| **Unified Broker API** | `/api/v1/` | External platforms (TradingView, Amibroker, ChartInk, Excel, Python, MCP) |
+| **Python Strategy Host** | `/python` | In-browser CodeMirror editor — paste scripts, schedule on IST times, run parallel strategies with process isolation and live logs |
+| **Flow (No-Code Builder)** | `/flow` | Drag-and-drop nodes: market data → indicators → conditions → order execution; JSON import/export |
+| **Options Trading Suite** | `/tools` | 12 analytical tools: Strategy Builder, Option Chain, IV Smile, Max Pain, Vol Surface, GEX, OI Tracker, Straddle Chart, etc. |
+
+All surfaces share the Sandbox engine (₹1 Crore virtual capital, exchange-aligned auto square-off) and support Telegram alerts.
 
 **Repository**: https://github.com/marketcalls/openalgo
 **Documentation**: https://docs.openalgo.in
@@ -309,6 +318,18 @@ Separate database (`sandbox.db`) with ₹1 Crore sandbox capital:
 - Complete isolation from live trading
 - Toggle via `/analyzer` blueprint
 
+### Python Strategy Host
+
+In-browser Python editor (`blueprints/python_strategy.py`) powered by **APScheduler** (`services/historify_scheduler_service.py` and `services/flow_scheduler_service.py` share the same scheduler instance). Each strategy runs in a subprocess for process isolation. Logs stream to the UI via SocketIO. Strategy metadata is persisted in `openalgo.db` via `database/strategy_db.py`.
+
+### Flow (No-Code Builder)
+
+Node-based visual strategy builder (`blueprints/flow.py`). Flow definitions are stored as JSON in `database/flow_db.py`. At runtime, `services/flow_executor_service.py` interprets the node graph, `services/flow_price_monitor_service.py` watches live prices, and `services/flow_scheduler_service.py` manages scheduled triggers via APScheduler.
+
+### MCP Integration
+
+Two MCP endpoints exist: `blueprints/mcp_http.py` (streamable HTTP transport for MCP) and `blueprints/mcp_oauth.py` (OAuth2 authorization for remote MCP clients). OAuth state is stored in `database/oauth_db.py`. The stdio MCP server (`mcp/mcpserver.py`) remains local-only.
+
 ### Real-Time Communication (Event-Driven Architecture)
 
 OpenAlgo uses an event-driven architecture where state changes are broadcast to the UI in real-time:
@@ -343,7 +364,7 @@ Critical variables to configure:
 
 There are **two independent versions** in this repo. Do not confuse them.
 
-### 1. Platform version (e.g. `2.0.0.6`)
+### 1. Platform version (e.g. `2.0.1.0`)
 
 This is the OpenAlgo platform itself. Source of truth: `utils/version.py`. Bumping touches **two files** and regenerates the lockfile — **never** the requirements files.
 
@@ -352,15 +373,15 @@ This is the OpenAlgo platform itself. Source of truth: `utils/version.py`. Bumpi
 3. Run `uv sync` to regenerate `uv.lock` with the new version
 
 ```bash
-# Example: bumping platform 2.0.0.6 → 2.0.0.7
-# 1. Edit utils/version.py     → VERSION = "2.0.0.7"
-# 2. Edit pyproject.toml line 4 → version = "2.0.0.7"
+# Example: bumping platform 2.0.1.0 → 2.0.1.1
+# 1. Edit utils/version.py     → VERSION = "2.0.1.1"
+# 2. Edit pyproject.toml line 4 → version = "2.0.1.1"
 # 3. Sync the lockfile
 uv sync
 
 # 4. Verify
 uv run python -c "from utils.version import get_version; print(get_version())"
-# → 2.0.0.7
+# → 2.0.1.1
 ```
 
 The platform version surfaces in:
@@ -388,10 +409,28 @@ uv sync
 ## Code Style and Conventions
 
 ### Python
-- Follow PEP 8 style guide
+
+The project uses **Ruff** for linting and formatting (configured in `pyproject.toml`):
+
+```bash
+uv run ruff check .          # lint (errors + warnings)
+uv run ruff check . --fix    # auto-fix safe issues
+uv run ruff format .         # format (replaces Black)
+```
+
+Ruff rules enabled: `E`, `F`, `W` (pycodestyle/pyflakes), `I` (isort), `B` (bugbear), `C4` (comprehensions), `UP` (pyupgrade). Line-length 100, target Python 3.12. Directories excluded: `.venv`, `frontend`, `db`, `log`, `strategies`.
+
 - Use 4 spaces for indentation
 - Use Google-style docstrings
 - Imports: Standard library → Third-party → Local
+
+Dev security tooling (in `dev` dependency group):
+
+```bash
+uv run --group dev bandit -r . -x .venv,frontend   # security scan
+uv run --group dev pip-audit                        # CVE check on deps
+uv run --group dev detect-secrets scan              # secret leak scan
+```
 
 ### React/TypeScript
 - Follow Biome.js linting rules (`frontend/biome.json`)
