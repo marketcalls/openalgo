@@ -87,7 +87,17 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.ws_client is not None:
             self._teardown_ws_client()
             self._shutdown_event.clear()
-            self._reconnect_thread = None
+            # Force-clear the reconnect gate. If _teardown_ws_client's
+            # join() timed out the orphan thread is still alive but
+            # unreachable; without this reset _reconnecting stays True
+            # and all subsequent connect() → _start_reconnect() calls
+            # are silently skipped, permanently breaking the adapter.
+            # The orphan's finally is gated by a thread-identity check
+            # (see _connect_with_retry) so it cannot later clobber a
+            # newly spawned thread's _reconnecting=True state.
+            with self.lock:
+                self._reconnecting = False
+                self._reconnect_thread = None
             self.reconnect_attempts = 0
 
         self.user_id = user_id
@@ -210,7 +220,15 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     break
         finally:
             with self.lock:
-                self._reconnecting = False
+                # Only clear the gate if we are still the active thread.
+                # If initialize() timed out joining us, it has already
+                # cleared _reconnect_thread (or replaced it with a new
+                # thread). In that case our finally must not clobber the
+                # new thread's _reconnecting=True state, otherwise a
+                # concurrent connect() could start a duplicate thread
+                # and orphan a WebSocketApp socket.
+                if self._reconnect_thread is threading.current_thread():
+                    self._reconnecting = False
 
     def _start_batch_timer(self) -> None:
         """
