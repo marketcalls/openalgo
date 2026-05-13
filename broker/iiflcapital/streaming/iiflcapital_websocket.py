@@ -388,15 +388,23 @@ class IiflcapitalWebSocket:
         if not instruments:
             return
 
-        total_after = len(self._subscriptions) + len(instruments)
-        if total_after > MAX_INSTRUMENTS_PER_CONNECTION:
-            self.logger.error(
-                f"Cannot subscribe to {len(instruments)} — would exceed "
-                f"{MAX_INSTRUMENTS_PER_CONNECTION} per-connection cap"
-            )
-            return
+        # Cap check must count only NEW keys — duplicates within the call or
+        # symbols already in _subscriptions are re-subscribes (no new broker
+        # slot consumed). Computing this under the lock keeps the count
+        # consistent with the dict update that follows.
+        incoming_keys = {_topic_key(seg, tok) for seg, tok in instruments}
 
         with self._lock:
+            new_keys = incoming_keys - self._subscriptions.keys()
+            total_after = len(self._subscriptions) + len(new_keys)
+            if total_after > MAX_INSTRUMENTS_PER_CONNECTION:
+                self.logger.error(
+                    f"Cannot subscribe to {len(new_keys)} new instruments — "
+                    f"would exceed {MAX_INSTRUMENTS_PER_CONNECTION} per-connection cap "
+                    f"(currently {len(self._subscriptions)})"
+                )
+                return
+
             for segment, token in instruments:
                 key = _topic_key(segment, token)
                 self._subscriptions[key] = {
@@ -419,10 +427,15 @@ class IiflcapitalWebSocket:
             self._sub_thread.start()
 
     def unsubscribe_instruments(self, instruments: list[tuple[str, str | int]]) -> None:
-        """Send UNSUBSCRIBE for each (segment, token) and drop local state."""
+        """Send UNSUBSCRIBE for each (segment, token) and drop local state.
+
+        Local state is cleared even when the socket is down — otherwise the
+        next reconnect would re-subscribe to symbols the caller already
+        dropped via _resubscribe_all(). The network UNSUBSCRIBE is best-
+        effort and skipped when disconnected; the broker drops our
+        subscriptions on reconnect anyway because we use clean_session=True.
+        """
         if not instruments:
-            return
-        if not self.is_connected():
             return
 
         topics_to_drop: list[str] = []
@@ -438,7 +451,10 @@ class IiflcapitalWebSocket:
                 if sub.get("oi"):
                     topics_to_drop.append(self._OI_TOPIC_PREFIX + key)
 
-        if topics_to_drop and self._mqtt is not None:
+        # Network UNSUBSCRIBE only when we have a live broker session. When
+        # offline we have already updated local state above; the broker will
+        # not redeliver these topics on reconnect (clean_session=True).
+        if topics_to_drop and self._mqtt is not None and self.is_connected():
             try:
                 self._mqtt.unsubscribe(topics_to_drop)
             except Exception as e:

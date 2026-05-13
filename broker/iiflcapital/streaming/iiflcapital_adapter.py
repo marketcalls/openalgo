@@ -149,11 +149,27 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return {"status": "success", "message": "Already connected"}
 
             started = self.ws_client.start()
-            self.running = True
 
             if started and self.ws_client.wait_for_connection(timeout=15.0):
+                # Only flip running/connected once we know the broker
+                # session is live. Leaving running=True on failure would
+                # let subscribe() — which only checks self.running — push
+                # work into a dead client and return success to the caller.
+                self.running = True
                 self.connected = True
                 return {"status": "success", "message": "Connected"}
+
+            # Connection failed: make sure no half-started state survives,
+            # so the next subscribe() correctly rejects with "not connected".
+            self.running = False
+            self.connected = False
+            # Best-effort teardown of any threads start() may have spawned
+            # (reader/keepalive run only on accepted CONNACK, but reconnect
+            # workers can be running after a transient timeout).
+            try:
+                self.ws_client.stop()
+            except Exception as e:
+                self.logger.debug(f"Error stopping ws_client after failed connect: {e}")
 
             if self.ws_client._fatal_error:  # noqa: SLF001 — surface auth failure quickly
                 return {
