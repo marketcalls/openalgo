@@ -113,6 +113,18 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.auth_token = auth_token
 
+        # If initialize() is called a second time (e.g. issue #765 force re-init
+        # after a token refresh) we must stop the previous feed client first.
+        # Just dropping the reference is not enough: its reader/keepalive
+        # threads hold a back-reference to the IiflMqttClient via `self`,
+        # which would keep the old TLS socket and threads alive indefinitely.
+        if self.ws_client is not None:
+            try:
+                self.ws_client.stop()
+            except Exception as e:
+                self.logger.debug(f"Error stopping previous IIFL feed client: {e}")
+            self.ws_client = None
+
         try:
             self.ws_client = IiflcapitalWebSocket(
                 user_session=auth_token,

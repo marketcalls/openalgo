@@ -620,7 +620,16 @@ class IiflcapitalWebSocket:
             if self._stop_event.wait(delay):
                 return
 
-            if self._fatal_error:
+            # Re-check liveness *after* the backoff wakes. stop() can flip
+            # `running` or set `_fatal_error` between the wait and the
+            # connect call; without this guard we would open a new TLS
+            # socket the caller is actively trying to tear down — leaking
+            # both the FD and the reader/keepalive threads tied to it.
+            if (
+                not self.running
+                or self._stop_event.is_set()
+                or self._fatal_error
+            ):
                 return
 
             if self._do_connect():

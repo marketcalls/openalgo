@@ -175,24 +175,45 @@ class IiflMqttClient:
             raw.close()
             raise
 
-        # Now switch to blocking with no read deadline — reader thread blocks.
-        self._sock.settimeout(None)
-
-        self._send_connect()
-
-        # Read CONNACK inline; we need its return code before we start the
-        # reader thread. Use a temporary deadline so a broker that hangs at
-        # this stage does not block the caller forever.
-        self._sock.settimeout(timeout)
+        # Anything below here happens AFTER we own a live TLS FD — any
+        # exception in send_connect / read_packet / CONNACK parsing must
+        # close that FD before propagating, otherwise we leak a socket on
+        # every failed handshake (caller will just create a new client and
+        # retry — the abandoned socket sits in CLOSE_WAIT until GC).
         try:
-            packet_type, _flags, body = self._read_packet()
-        finally:
+            # Now switch to blocking with no read deadline — reader thread blocks.
             self._sock.settimeout(None)
 
-        if packet_type != _CONNACK >> 4:
-            raise MqttError(f"Expected CONNACK, got packet type {packet_type}")
-        if len(body) < 2:
-            raise MqttError("Truncated CONNACK")
+            self._send_connect()
+
+            # Read CONNACK inline; we need its return code before we start the
+            # reader thread. Use a temporary deadline so a broker that hangs at
+            # this stage does not block the caller forever.
+            self._sock.settimeout(timeout)
+            try:
+                packet_type, _flags, body = self._read_packet()
+            finally:
+                # Restore blocking mode only if we still own the socket; the
+                # close-on-failure branch below nulls it out.
+                if self._sock is not None:
+                    self._sock.settimeout(None)
+
+            if packet_type != _CONNACK >> 4:
+                raise MqttError(f"Expected CONNACK, got packet type {packet_type}")
+            if len(body) < 2:
+                raise MqttError("Truncated CONNACK")
+        except BaseException:
+            # Cover both regular exceptions and bare control-flow exits
+            # (timeouts, KeyboardInterrupt) — we must not leave a TLS FD
+            # behind regardless of how we got here.
+            sock = self._sock
+            self._sock = None
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            raise
 
         # Byte 0: session present flag (ignored — we use clean_session)
         # Byte 1: return code
@@ -441,6 +462,28 @@ class IiflMqttClient:
                     pass
         finally:
             self._connected.clear()
+            # Close the FD here, not in disconnect(), because the broker
+            # FIN path (or any reader-side exception) gets us here without
+            # any external code knowing the socket is dead. Without this
+            # explicit close, the FD sits in CLOSE_WAIT until garbage
+            # collection — one leaked FD per reconnect cycle. disconnect()
+            # remains idempotent because it nulls _sock and tolerates a
+            # None value.
+            sock = self._sock
+            self._sock = None
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+            # Wake the keepalive thread so it exits promptly instead of
+            # blocking on its next wait(keepalive/2) tick. `_stop_event`
+            # is per-instance, so signalling here only affects this
+            # client; a fresh IiflMqttClient on reconnect has its own
+            # event and is unaffected.
+            self._stop_event.set()
+
             if self.on_disconnect:
                 try:
                     self.on_disconnect(None)
