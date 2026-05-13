@@ -146,9 +146,11 @@ def reformat_symbol(row):
     if instrument_type in ["ES"]:
         return symbol
 
-    # For index instruments, use name without spaces and set it as both symbol and brsymbol
+    # For index instruments, use name without spaces (uppercased) and set it
+    # as both symbol and brsymbol. Index normalization to OpenAlgo's standard
+    # naming happens later in process_paytm_csv via INDEX_SYMBOL_MAP_*.
     elif instrument_type in ["I"]:
-        symbol = "".join(row["name"].split())
+        symbol = "".join(row["name"].split()).upper()
         row["symbol"] = symbol  # Set the symbol in the row
         return symbol
 
@@ -186,6 +188,29 @@ def reformat_symbol(row):
         return symbol
 
 
+def _paytm_option_ce_pe(row):
+    """
+    Derive the OpenAlgo option instrumenttype ("CE" or "PE") from the
+    Paytm row's `name` field (e.g. "NIFTY 12 MAY 17850 CALL" -> "CE").
+
+    The shared option lookup services (services/option_symbol_service.py
+    and services/option_chain_service.py) filter SymToken rows by
+    `instrumenttype == "CE"` / `"PE"`. If we stored "OPT" here, those
+    queries would return zero rows and the option chain page would
+    render empty for Paytm users.
+    """
+    name_upper = str(row["name"]).upper()
+    if "CALL" in name_upper:
+        return "CE"
+    if "PUT" in name_upper:
+        return "PE"
+    # Some rows may carry CE/PE explicitly as the last whitespace-token.
+    parts = str(row["name"]).split()
+    if parts and parts[-1].upper() in ("CE", "PE"):
+        return parts[-1].upper()
+    return "OPT"
+
+
 # Define the function to apply conditions
 def assign_values(row):
     # Paytm Exchange Mappings are simply NSE and BSE. No other complications
@@ -211,11 +236,12 @@ def assign_values(row):
     elif row["exchange"] == "BSE" and row["instrument_type"] in ["FUTIDX", "FUTSTK"]:
         return "BFO", "BSE", "FUT"
 
-    # Handle options
+    # Handle options — write CE/PE so the shared option lookup services
+    # match. Storing "OPT" here breaks /optionchain and tools pages.
     elif row["exchange"] == "NSE" and row["instrument_type"] in ["OPTIDX", "OPTSTK"]:
-        return "NFO", "NSE", "OPT"
+        return "NFO", "NSE", _paytm_option_ce_pe(row)
     elif row["exchange"] == "BSE" and row["instrument_type"] in ["OPTIDX", "OPTSTK"]:
-        return "BFO", "BSE", "OPT"
+        return "BFO", "BSE", _paytm_option_ce_pe(row)
 
     # Handle unknown cases
     else:
@@ -251,7 +277,7 @@ def process_paytm_csv(path):
     # For indices, set brsymbol to be the same as the formatted symbol
     indices_mask = df["instrument_type"] == "I"
     df.loc[indices_mask, "brsymbol"] = df.loc[indices_mask, "name"].apply(
-        lambda x: "".join(x.split())
+        lambda x: "".join(x.split()).upper()
     )
 
     # Apply the function to get exchange mappings
@@ -284,10 +310,52 @@ def process_paytm_csv(path):
     # Removing the specified columns
     token_df = df.drop(columns=columns_to_remove)
 
-    # Common Index Symbol Formats
+    # Normalize index symbols to OpenAlgo's standard naming (see symbol_Openalgo.md).
+    # Mapping is scoped per exchange to avoid colliding with equity symbols that
+    # happen to share short BSE-index codes (e.g. AUTO, METAL, POWER, REALTY).
+    # Only Paytm names listed in OpenAlgo's standard index list are rewritten;
+    # unlisted indices keep their uppercased joined-name form.
+    nse_index_map = {
+        "NIFTYNEXT50": "NIFTYNXT50",
+        "NIFTYMCAP50": "NIFTYMIDCAP50",
+        "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+        "NIFTYMIDSELECT": "MIDCPNIFTY",
+    }
+    bse_index_map = {
+        "SNSX50": "SENSEX50",
+        "SNXT50": "BSESENSEXNEXT50",
+        "AUTO": "BSEAUTO",
+        "BSECD": "BSECONSUMERDURABLES",
+        "BSECG": "BSECAPITALGOODS",
+        "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "BSEHC": "BSEHEALTHCARE",
+        "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+        "ENERGY": "BSEENERGY",
+        "FINSER": "BSEFINANCIALSERVICES",
+        "INDSTR": "BSEINDUSTRIALS",
+        "LMI250": "BSE250LARGEMIDCAPINDEX",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MID150": "BSE150MIDCAPINDEX",
+        "MIDCAP": "BSEMIDCAP",
+        "MIDSEL": "BSEMIDCAPSELECTINDEX",
+        "MSL400": "BSE400MIDSMALLCAPINDEX",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "REALTY": "BSEREALTY",
+        "SMLCAP": "BSESMALLCAP",
+        "SMLSEL": "BSESMALLCAPSELECTINDEX",
+        "TECK": "BSETECK",
+        "TELCOM": "BSETELECOM",
+    }
 
-    token_df["symbol"] = token_df["symbol"].replace(
-        {"NIFTYNEXT50": "NIFTYNXT50", "NIFTYMIDCAP150": "MIDCPNIFTY", "SNSX50": "SENSEX50"}
+    nse_idx_mask = token_df["exchange"] == "NSE_INDEX"
+    bse_idx_mask = token_df["exchange"] == "BSE_INDEX"
+    token_df.loc[nse_idx_mask, "symbol"] = (
+        token_df.loc[nse_idx_mask, "symbol"].replace(nse_index_map)
+    )
+    token_df.loc[bse_idx_mask, "symbol"] = (
+        token_df.loc[bse_idx_mask, "symbol"].replace(bse_index_map)
     )
 
     return token_df
@@ -314,9 +382,18 @@ def master_contract_download():
         token_df = process_paytm_csv(output_path)
         copy_from_dataframe(token_df)
         delete_paytm_temp_data(output_path)
-        # token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
 
-        # token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+        # Invalidate the in-process strikes cache in option_symbol_service.
+        # Without this, an empty result cached before refresh (e.g. when
+        # instrumenttype was still stored as "OPT") survives the rebuild
+        # and the option chain / tools pages keep rendering empty until
+        # the Flask process is restarted.
+        try:
+            from services.option_symbol_service import clear_strikes_cache
+
+            clear_strikes_cache()
+        except Exception as cache_err:
+            logger.warning(f"Could not clear strikes cache after master refresh: {cache_err}")
 
         return socketio.emit(
             "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}

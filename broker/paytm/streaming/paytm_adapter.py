@@ -1,3 +1,4 @@
+import atexit
 import json
 import logging
 import os
@@ -36,6 +37,34 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         # Map to track scripId -> (symbol, exchange) for reverse lookup
         self.token_map = {}
+        # Reconnect gate. Only one _connect_with_retry thread may exist
+        # at a time, otherwise multiple concurrent ws_client.connect()
+        # calls would each create a WebSocketApp and orphan the earlier
+        # one's socket. Both connect() and _on_close funnel through
+        # _start_reconnect, which respects this flag.
+        self._reconnecting = False
+        self._reconnect_thread: Optional[threading.Thread] = None
+        # Interruptible-sleep handle for the retry backoff. disconnect()
+        # sets this so we don't keep retrying for up to 60s after the
+        # adapter has been asked to shut down.
+        self._shutdown_event = threading.Event()
+        # Guards against double-disconnect: atexit may fire disconnect()
+        # after Flask has already called it, which would re-run
+        # cleanup_zmq() against already-closed sockets.
+        self._disconnected = False
+        # Track whether we've registered an atexit handler so repeated
+        # initialize() calls don't pile up duplicate callbacks.
+        self._atexit_registered = False
+
+        # Batch subscription queueing. Modeled on the Zerodha adapter:
+        # subscribe() appends preferences to subscription_queue and arms a
+        # 500ms debounced Timer; the timer fires _process_batch_subscriptions
+        # which drains the queue and sends one JSON-array frame to Paytm.
+        # This cuts wire chatter when many symbols are subscribed in quick
+        # succession (e.g. a watchlist load).
+        self.subscription_queue: List[dict] = []
+        self.batch_timer: Optional[threading.Timer] = None
+        self.batch_delay = 0.5  # seconds
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -51,6 +80,26 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Raises:
             ValueError: If required authentication tokens are not found
         """
+        # If re-initializing (e.g. account switch, re-auth), tear down the
+        # previous ws_client first so its WebSocketApp and reconnect thread
+        # don't outlive the new ws_client assignment below. We don't touch
+        # ZMQ here — that stays alive for the new lifecycle.
+        if self.ws_client is not None:
+            self._teardown_ws_client()
+            self._shutdown_event.clear()
+            # Force-clear the reconnect gate. If _teardown_ws_client's
+            # join() timed out the orphan thread is still alive but
+            # unreachable; without this reset _reconnecting stays True
+            # and all subsequent connect() → _start_reconnect() calls
+            # are silently skipped, permanently breaking the adapter.
+            # The orphan's finally is gated by a thread-identity check
+            # (see _connect_with_retry) so it cannot later clobber a
+            # newly spawned thread's _reconnecting=True state.
+            with self.lock:
+                self._reconnecting = False
+                self._reconnect_thread = None
+            self.reconnect_attempts = 0
+
         self.user_id = user_id
         self.broker_name = broker_name
 
@@ -75,10 +124,9 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required public access token")
                 raise ValueError("Missing required public access token")
 
-        # Create PaytmWebSocket instance
-        self.ws_client = PaytmWebSocket(
-            public_access_token=public_access_token, max_retry_attempt=5
-        )
+        # Create PaytmWebSocket instance. Reconnect policy lives in this
+        # adapter (see _on_close), not in PaytmWebSocket itself.
+        self.ws_client = PaytmWebSocket(public_access_token=public_access_token)
 
         # Set callbacks
         self.ws_client.on_open = self._on_open
@@ -88,42 +136,190 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client.on_message = self._on_message
 
         self.running = True
+        self._disconnected = False
+
+        # Ensure ZMQ + WS cleanup runs even if the process exits without an
+        # explicit disconnect() call (e.g. unhandled exception, sys.exit()).
+        # disconnect() is idempotent so calling it twice is safe.
+        if not self._atexit_registered:
+            atexit.register(self.disconnect)
+            self._atexit_registered = True
 
     def connect(self) -> None:
         """Establish connection to Paytm WebSocket"""
         if not self.ws_client:
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
+        self._start_reconnect("initial connect")
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+    def _start_reconnect(self, reason: str) -> None:
+        """
+        Spawn the single _connect_with_retry background thread if one isn't
+        already running. Both connect() (initial) and _on_close (reconnect)
+        funnel through here so we never have two threads racing to call
+        ws_client.connect() and overwriting self.ws_client.wsapp.
+        """
+        with self.lock:
+            if self._reconnecting:
+                self.logger.debug(f"Reconnect already in progress; skipping ({reason})")
+                return
+            self._reconnecting = True
+            self._shutdown_event.clear()
+            self._reconnect_thread = threading.Thread(
+                target=self._connect_with_retry, daemon=True
+            )
+        self._reconnect_thread.start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to Paytm WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                self.logger.info(
-                    f"Connecting to Paytm WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
+        """
+        Single reconnect loop. Owns the lifecycle of ws_client.connect().
 
-            except Exception as e:
-                self.reconnect_attempts += 1
+        ws_client.connect() blocks inside run_forever() until the socket
+        closes; on return we either back off and reconnect (if still
+        running) or exit. _on_close does NOT spawn parallel threads;
+        otherwise concurrent connect() calls would orphan WebSocketApp
+        sockets.
+        """
+        try:
+            while self.running:
+                if self.reconnect_attempts >= self.max_reconnect_attempts:
+                    self.logger.error("Max reconnection attempts reached. Giving up.")
+                    break
+
+                connect_start = time.monotonic()
+                try:
+                    self.logger.info(
+                        f"Connecting to Paytm WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    self.ws_client.connect()  # blocks until the socket closes
+                except Exception as e:
+                    self.logger.error(f"Connection error: {e}")
+
+                if not self.running:
+                    break
+
+                # If the connection stayed up for a meaningful period treat
+                # this return as a recovery (reset the backoff). Otherwise
+                # count it as a failed attempt and back off exponentially.
+                duration = time.monotonic() - connect_start
+                if duration >= 30:
+                    self.reconnect_attempts = 0
+                else:
+                    self.reconnect_attempts += 1
+
                 delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+                    self.reconnect_delay * (2 ** max(0, self.reconnect_attempts - 1)),
+                    self.max_reconnect_delay,
                 )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                self.logger.info(
+                    f"Paytm WS closed after {duration:.1f}s; reconnecting in {delay}s"
+                )
+                # Interruptible sleep: disconnect() sets the event so we
+                # don't keep retrying after shutdown.
+                if self._shutdown_event.wait(delay):
+                    break
+        finally:
+            with self.lock:
+                # Only clear the gate if we are still the active thread.
+                # If initialize() timed out joining us, it has already
+                # cleared _reconnect_thread (or replaced it with a new
+                # thread). In that case our finally must not clobber the
+                # new thread's _reconnecting=True state, otherwise a
+                # concurrent connect() could start a duplicate thread
+                # and orphan a WebSocketApp socket.
+                if self._reconnect_thread is threading.current_thread():
+                    self._reconnecting = False
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+    def _start_batch_timer(self) -> None:
+        """
+        (Re)arm the batch-subscription debounce timer.
 
-    def disconnect(self) -> None:
-        """Disconnect from Paytm WebSocket"""
+        Must be called with self.lock held. Cancels any existing pending
+        timer so a fresh batch window starts cleanly.
+        """
+        if self.batch_timer:
+            self.batch_timer.cancel()
+        self.batch_timer = threading.Timer(
+            self.batch_delay, self._process_batch_subscriptions
+        )
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """
+        Drain the subscription queue and send all queued preferences in a
+        single JSON-array frame.
+
+        Paytm's WS protocol accepts mixed-mode preferences in one payload,
+        so we don't need Zerodha-style grouping by mode. If the socket
+        isn't connected yet, the queued items are dropped — the adapter's
+        existing on_open / paytm_websocket.resubscribe path will replay
+        from the stored subscription state on the next successful connect.
+        """
+        with self.lock:
+            if not self.subscription_queue:
+                return
+            preferences = list(self.subscription_queue)
+            self.subscription_queue.clear()
+            self.batch_timer = None  # timer has already fired
+
+        if not (self.connected and self.ws_client):
+            self.logger.debug(
+                f"Dropping {len(preferences)} queued subscription(s) — not connected; "
+                "they will be replayed on reconnect from stored subscriptions."
+            )
+            return
+
+        try:
+            self.ws_client.subscribe(preferences)
+            self.logger.info(f"Batch-subscribed {len(preferences)} preference(s)")
+        except Exception as e:
+            self.logger.error(f"Error sending batch subscription: {e}")
+
+    def _teardown_ws_client(self) -> None:
+        """
+        Tear down only the WebSocket side: stop the retry loop, close the
+        socket, and wait for the reconnect thread to exit. Does NOT
+        release ZMQ resources — the caller decides whether to also call
+        cleanup_zmq() (e.g. disconnect() does, initialize() doesn't).
+        """
+        # Cancel any pending batch flush so its Timer thread doesn't fire
+        # against a torn-down ws_client.
+        with self.lock:
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+
         self.running = False
+        # Wake the retry loop out of its backoff sleep before it spins up
+        # another connection.
+        self._shutdown_event.set()
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
+
+        # Wait for the reconnect thread to exit. It should die quickly:
+        # shutdown_event unblocks the sleep, and wsapp.close() unblocks
+        # run_forever().
+        thread = self._reconnect_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=10)
+            if thread.is_alive():
+                self.logger.warning("Paytm reconnect thread did not exit within 10s")
+
+    def disconnect(self) -> None:
+        """
+        Disconnect from Paytm WebSocket and release resources.
+
+        Idempotent: safe to call multiple times. atexit may invoke this
+        after Flask has already torn the adapter down, and we don't want
+        cleanup_zmq() to run twice against the same socket.
+        """
+        if self._disconnected:
+            return
+        self._disconnected = True
+
+        self._teardown_ws_client()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
@@ -189,7 +385,11 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
-        # Store subscription for reconnection and reverse lookup
+        # Store subscription for reconnection and reverse lookup, and
+        # enqueue the preference for the next batched send. The batch
+        # timer is (re)armed only when the queue transitions from empty
+        # to non-empty, giving us a stable 500ms collection window
+        # regardless of how many subscribes pile in.
         with self.lock:
             self.subscriptions[correlation_id] = {
                 "symbol": symbol,
@@ -202,17 +402,15 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
             # Store token mapping for reverse lookup
             self.token_map[str(token)] = (symbol, exchange, mode)
-            self.logger.info(
-                f"Subscribed: token={token}, symbol={symbol}, exchange={exchange}, preference={preference}"
-            )
 
-        # Subscribe if connected
-        if self.connected and self.ws_client:
-            try:
-                self.ws_client.subscribe([preference])
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+            self.subscription_queue.append(preference)
+            if len(self.subscription_queue) == 1:
+                self._start_batch_timer()
+
+            self.logger.info(
+                f"Queued subscribe: token={token}, symbol={symbol}, exchange={exchange}, "
+                f"queue_size={len(self.subscription_queue)}"
+            )
 
         # Return success
         return self._create_success_response(
@@ -256,17 +454,51 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "NOT_SUBSCRIBED", f"Not subscribed to {symbol}.{exchange}"
                 )
 
-            # Create unsubscribe preference
-            preference = subscription["preference"].copy()
-            preference["actionType"] = PaytmWebSocket.REMOVE_ACTION
-
+            stored_pref = subscription["preference"]
             # Remove from subscriptions
             del self.subscriptions[correlation_id]
             # Remove from token map
             if str(token) in self.token_map:
                 del self.token_map[str(token)]
 
-        # Unsubscribe if connected
+            # If the corresponding ADD(s) are still sitting in the batch
+            # queue (subscribed within the last 500ms and not yet flushed),
+            # drop them in place — there's no wire ADD to undo and sending
+            # a REMOVE here would race the still-queued ADD, leaving the
+            # caller subscribed to a symbol they thought they cancelled.
+            # Remove ALL matching entries: duplicate subscribes for the
+            # same scrip+mode are idempotent, so one unsubscribe must
+            # fully cancel them — leaving any behind would re-subscribe
+            # the user post-flush.
+            had_pending_add = False
+            remaining = []
+            for p in self.subscription_queue:
+                if (
+                    p.get("actionType") == PaytmWebSocket.ADD_ACTION
+                    and p.get("scripId") == stored_pref["scripId"]
+                    and p.get("exchangeType") == stored_pref["exchangeType"]
+                    and p.get("modeType") == stored_pref["modeType"]
+                ):
+                    had_pending_add = True
+                    continue
+                remaining.append(p)
+            self.subscription_queue = remaining
+
+        # If the ADD was cancelled in-place, nothing was ever on the wire.
+        if had_pending_add:
+            self.logger.info(
+                f"Cancelled pending subscribe for {symbol}.{exchange} before flush"
+            )
+            return self._create_success_response(
+                f"Unsubscribed from {symbol}.{exchange}",
+                symbol=symbol,
+                exchange=exchange,
+                mode=mode,
+            )
+
+        # Otherwise the ADD already went out; send the REMOVE.
+        preference = stored_pref.copy()
+        preference["actionType"] = PaytmWebSocket.REMOVE_ACTION
         if self.connected and self.ws_client:
             try:
                 self.ws_client.unsubscribe([preference])
@@ -323,8 +555,17 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("Connected to Paytm WebSocket")
         self.connected = True
 
-        # Resubscribe to existing subscriptions if reconnecting
+        # Resubscribe to existing subscriptions if reconnecting. self.subscriptions
+        # is the authoritative source of truth — we replay everything from it in
+        # one shot. Any items still sitting in subscription_queue would otherwise
+        # cause a duplicate ADD on the wire 500ms later, so we drain the queue
+        # and cancel the pending batch timer here.
         with self.lock:
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+
             if self.subscriptions:
                 preferences = [sub["preference"] for sub in self.subscriptions.values()]
                 try:
@@ -338,13 +579,17 @@ class PaytmWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.error(f"Paytm WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
-        """Callback when connection is closed"""
+        """
+        Callback when connection is closed.
+
+        Reconnect is NOT spawned here. The single _connect_with_retry
+        loop (already alive on its own thread) will return from
+        ws_client.connect() now that the socket has closed, then back off
+        and reconnect on its own. Spawning another thread here would
+        race against that loop and orphan WebSocketApp sockets.
+        """
         self.logger.info("Paytm WebSocket connection closed")
         self.connected = False
-
-        # Attempt to reconnect if we're still running
-        if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""
