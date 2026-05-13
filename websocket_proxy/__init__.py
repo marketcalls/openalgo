@@ -57,6 +57,9 @@ from broker.ibulls.streaming.ibulls_adapter import IbullsWebSocketAdapter
 # Import the iifl_adapter
 from broker.iifl.streaming.iifl_adapter import IiflWebSocketAdapter
 
+# Import the iiflcapital_adapter
+from broker.iiflcapital.streaming.iiflcapital_adapter import IiflcapitalWebSocketAdapter
+
 # Import the indmoney_adapter
 from broker.indmoney.streaming.indmoney_adapter import IndmoneyWebSocketAdapter
 
@@ -112,6 +115,7 @@ register_adapter("compositedge", CompositedgeWebSocketAdapter)
 register_adapter("fivepaisa", FivepaisaWebSocketAdapter)
 register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
 register_adapter("iifl", IiflWebSocketAdapter)
+register_adapter("iiflcapital", IiflcapitalWebSocketAdapter)
 register_adapter("wisdom", WisdomWebSocketAdapter)
 register_adapter("upstox", UpstoxWebSocketAdapter)
 register_adapter("kotak", KotakWebSocketAdapter)
@@ -160,6 +164,7 @@ __all__ = [
     "FivepaisaWebSocketAdapter",
     "FivepaisaXTSWebSocketAdapter",
     "IiflWebSocketAdapter",
+    "IiflcapitalWebSocketAdapter",
     "JainamWebSocketAdapter",
     "TrustlineWebSocketAdapter",
     "WisdomWebSocketAdapter",

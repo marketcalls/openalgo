@@ -1,271 +1,404 @@
-import os
+"""
+IIFL Capital WebSocket adapter — connects OpenAlgo's WebSocket proxy to the
+IIFL Capital market-data feed over MQTT v3.1.1 (TLS port 8883).
+
+Replaces the earlier REST-polling stub. The on-wire protocol is implemented
+in-tree (`iiflcapital_mqtt.py`, `iiflcapital_websocket.py`) — no external SDK
+dependency on `bridgePy` or `paho-mqtt`.
+
+Shape mirrors the Zerodha adapter (broker/zerodha/streaming/zerodha_adapter.py)
+so it plugs into the same ConnectionPool / BaseBrokerWebSocketAdapter
+plumbing without special-casing.
+"""
+
+from __future__ import annotations
+
 import threading
 import time
 from typing import Any
 
-from broker.iiflcapital.api.data import BrokerData
+from database.token_db import get_brexchange, get_token
+from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+
+from .iiflcapital_mapping import (
+    is_index_exchange,
+    normalize_segment,
+    supports_open_interest,
+)
+from .iiflcapital_websocket import (
+    MODE_FULL,
+    MODE_LTP,
+    MODE_QUOTE,
+    IiflcapitalWebSocket,
+)
+
+logger = get_logger(__name__)
 
 
 class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """
-    IIFL Capital WebSocket adapter.
+    OpenAlgo broker adapter for IIFL Capital's MQTT market-data feed.
 
-    The broker currently exposes reliable REST market-data APIs, so this adapter
-    provides WebSocket compatibility by polling quote/depth endpoints and
-    publishing updates to the existing ZeroMQ pipeline.
+    Mode contract (mirrors Zerodha):
+        1 → LTP   (publish only `ltp` and `ltt`)
+        2 → Quote (OHLC + LTP + bid/ask totals)
+        3 → Depth (Quote + L5 depth)
+
+    The IIFL broker only emits one packet shape per stream (188-byte
+    MWBOCombined), so we subscribe once at the broker layer and slice the
+    decoded dict into three OpenAlgo-shaped payloads on the way out, exactly
+    like Zerodha's `full` → `ltp/quote/full` fan-out.
     """
 
-    MODE_LTP = 1
-    MODE_QUOTE = 2
-    MODE_DEPTH = 3
+    # OpenAlgo mode ints → internal IIFL feed mode strings.
+    _MODE_OA_TO_IIFL = {1: MODE_LTP, 2: MODE_QUOTE, 3: MODE_FULL}
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
+        self.logger = get_logger("iiflcapital_websocket")
         self.broker_name = "iiflcapital"
-        self.user_id = None
-        self.auth_token = None
-        self.data_handler = None
+
+        self.user_id: str | None = None
+        self.auth_token: str | None = None
+        self.ws_client: IiflcapitalWebSocket | None = None
+
+        self.running = False
         self.connected = False
+        self.lock = threading.Lock()
 
-        self.poll_interval = float(os.getenv("IIFLCAPITAL_POLL_INTERVAL", "0.8"))
-        self._stop_event = threading.Event()
-        self._poll_thread = None
-        self._sub_lock = threading.Lock()
-        self.subscriptions = {}
+        # Subscription tracking, keyed by f"{exchange}:{symbol}":
+        # {
+        #   "exchange": str,           # OpenAlgo exchange (e.g. NSE_INDEX)
+        #   "symbol": str,
+        #   "segment": str,            # IIFL brexchange (NSEEQ, NSEFO, …)
+        #   "token": str,
+        #   "mode": int,               # OpenAlgo mode int (1/2/3)
+        #   "is_index": bool,
+        # }
+        self.subscribed_symbols: dict[str, dict] = {}
 
-    def initialize(self, broker_name, user_id, auth_data=None, force=False):
+        # Reverse lookup: f"{segment}/{token}" → (symbol, exchange) — used to
+        # rebuild the OpenAlgo topic when a tick comes back from the broker.
+        self._key_to_symbol: dict[str, tuple[str, str]] = {}
+
+    # ----------------------------------------------------------------- lifecycle
+    def initialize(
+        self,
+        broker_name: str,
+        user_id: str,
+        auth_data: dict[str, str] | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Pull the user's IIFL session token and wire up the feed client."""
+        if broker_name and broker_name.lower() != self.broker_name:
+            return {"status": "error", "message": f"Invalid broker name: {broker_name}"}
+
         self.user_id = user_id
-        self.broker_name = broker_name or self.broker_name
 
+        # auth_data wins if supplied; otherwise pull from the DB. `force`
+        # bypasses the cache so a stale daily-rolled token is not reused.
         auth_token = None
         if auth_data:
             auth_token = auth_data.get("auth_token")
-
         if force or not auth_token:
             auth_token = self.get_auth_token_for_user(user_id, bypass_cache=force)
 
         if not auth_token:
-            return self._create_error_response(
-                "AUTHENTICATION_ERROR", f"No authentication token found for user {user_id}"
-            )
+            return {
+                "status": "error",
+                "code": "AUTHENTICATION_ERROR",
+                "message": f"No authentication token found for user {user_id}",
+            }
 
         self.auth_token = auth_token
-        self.data_handler = BrokerData(auth_token=auth_token, user_id=user_id)
-        self._stop_event.clear()
-        return self._create_success_response("IIFL Capital adapter initialized")
 
-    def connect(self):
-        if not self.data_handler:
-            return self._create_error_response(
-                "NOT_INITIALIZED", "Adapter not initialized. Call initialize() first."
+        # If initialize() is called a second time (e.g. issue #765 force re-init
+        # after a token refresh) we must stop the previous feed client first.
+        # Just dropping the reference is not enough: its reader/keepalive
+        # threads hold a back-reference to the IiflMqttClient via `self`,
+        # which would keep the old TLS socket and threads alive indefinitely.
+        if self.ws_client is not None:
+            try:
+                self.ws_client.stop()
+            except Exception as e:
+                self.logger.debug(f"Error stopping previous IIFL feed client: {e}")
+            self.ws_client = None
+
+        try:
+            self.ws_client = IiflcapitalWebSocket(
+                user_session=auth_token,
+                on_ticks=self._handle_ticks,
             )
+            self.ws_client.on_connect = self._on_connect
+            self.ws_client.on_disconnect = self._on_disconnect
+            self.ws_client.on_error = self._on_error
+        except Exception as e:
+            self.logger.exception(f"Failed to create IIFL feed client: {e}")
+            return {"status": "error", "message": str(e)}
 
-        if self.connected:
-            return self._create_success_response("Already connected")
+        self.logger.info(f"IIFL Capital adapter initialized for user {user_id}")
+        return {"status": "success", "message": "Adapter initialized successfully"}
 
-        self.connected = True
-        self._stop_event.clear()
+    def connect(self) -> dict[str, Any]:
+        if not self.ws_client:
+            return {"status": "error", "message": "Adapter not initialized — call initialize() first"}
 
-        if not self._poll_thread or not self._poll_thread.is_alive():
-            self._poll_thread = threading.Thread(target=self._poll_market_data, daemon=True)
-            self._poll_thread.start()
+        with self.lock:
+            if self.running and self.connected:
+                return {"status": "success", "message": "Already connected"}
 
-        return self._create_success_response("Connected")
+            started = self.ws_client.start()
 
-    def subscribe(self, symbol, exchange, mode=2, depth_level=5):
-        if mode not in (self.MODE_LTP, self.MODE_QUOTE, self.MODE_DEPTH):
-            return self._create_error_response(
-                "INVALID_MODE",
-                f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)",
+            if started and self.ws_client.wait_for_connection(timeout=15.0):
+                # Only flip running/connected once we know the broker
+                # session is live. Leaving running=True on failure would
+                # let subscribe() — which only checks self.running — push
+                # work into a dead client and return success to the caller.
+                self.running = True
+                self.connected = True
+                return {"status": "success", "message": "Connected"}
+
+            # Connection failed: make sure no half-started state survives,
+            # so the next subscribe() correctly rejects with "not connected".
+            self.running = False
+            self.connected = False
+            # Best-effort teardown of any threads start() may have spawned
+            # (reader/keepalive run only on accepted CONNACK, but reconnect
+            # workers can be running after a transient timeout).
+            try:
+                self.ws_client.stop()
+            except Exception as e:
+                self.logger.debug(f"Error stopping ws_client after failed connect: {e}")
+
+            if self.ws_client._fatal_error:  # noqa: SLF001 — surface auth failure quickly
+                return {
+                    "status": "error",
+                    "message": f"IIFL auth failed: {self.ws_client._fatal_error_message}",  # noqa: SLF001
+                }
+
+            return {"status": "error", "message": "Connection timeout"}
+
+    def disconnect(self) -> dict[str, Any]:
+        try:
+            with self.lock:
+                if self.ws_client is not None:
+                    try:
+                        self.ws_client.stop()
+                    except Exception as e:
+                        self.logger.debug(f"Error stopping IIFL feed client: {e}")
+                    self.ws_client = None
+
+                self.running = False
+                self.connected = False
+                self.subscribed_symbols.clear()
+                self._key_to_symbol.clear()
+
+            self.cleanup_zmq()
+            return {"status": "success", "message": "Disconnected"}
+        except Exception as e:
+            self.logger.exception(f"Error during disconnect: {e}")
+            try:
+                self.cleanup_zmq()
+            except Exception:
+                pass
+            return {"status": "error", "message": str(e)}
+
+    # ----------------------------------------------------------------- subscribe
+    def subscribe(
+        self,
+        symbol: str,
+        exchange: str,
+        mode: int = 2,
+        depth_level: int = 5,
+    ) -> dict[str, Any]:
+        """
+        Subscribe a (symbol, exchange) at the requested mode.
+
+        IIFL emits L5 depth natively; depth_level=20 is not supported and is
+        clamped to 5 (we still echo `actual_depth: 5` in the response).
+        """
+        if mode not in self._MODE_OA_TO_IIFL:
+            return {
+                "status": "error",
+                "code": "INVALID_MODE",
+                "message": f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)",
+            }
+
+        if not self.ws_client or not self.running:
+            return {"status": "error", "message": "WebSocket not connected. Call connect() first."}
+
+        # Resolve the broker-side segment and token via the master contract DB.
+        token = get_token(symbol, exchange)
+        brexchange = get_brexchange(symbol, exchange)
+        if not token or not brexchange:
+            return {
+                "status": "error",
+                "message": f"Token / brexchange not found for {exchange}:{symbol}",
+            }
+
+        token = str(token).strip()
+        segment = brexchange.strip()  # store uppercase; lower-casing happens in the feed client
+
+        is_index = is_index_exchange(exchange)
+        feed_mode = self._MODE_OA_TO_IIFL[mode]
+        # OI is only meaningful for derivatives — see iiflcapital_mapping.
+        include_oi = mode != 1 and supports_open_interest(exchange) and not is_index
+
+        key = f"{exchange}:{symbol}"
+        topic_suffix = f"{normalize_segment(segment)}/{token}"
+
+        with self.lock:
+            self.subscribed_symbols[key] = {
+                "exchange": exchange,
+                "symbol": symbol,
+                "segment": segment,
+                "token": token,
+                "mode": mode,
+                "is_index": is_index,
+            }
+            self._key_to_symbol[topic_suffix] = (symbol, exchange)
+
+        try:
+            self.ws_client.subscribe_instruments(
+                instruments=[(segment, token)],
+                mode=feed_mode,
+                is_index=is_index,
+                include_oi=include_oi,
             )
+        except Exception as e:
+            self.logger.exception(f"IIFL subscribe failed for {exchange}:{symbol}: {e}")
+            return {"status": "error", "message": str(e)}
 
-        if mode == self.MODE_DEPTH and depth_level not in (5, 20):
-            return self._create_error_response(
-                "INVALID_DEPTH", f"Invalid depth level {depth_level}. Must be 5 or 20"
-            )
+        self.logger.info(f"Subscribed to IIFL {exchange}:{symbol} (segment={segment} token=[REDACTED] mode={mode})")
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "exchange": exchange,
+            "mode": mode,
+            "actual_depth": 5,
+            "message": f"Subscribed to {symbol}",
+        }
 
-        with self._sub_lock:
-            key = f"{exchange}:{symbol}"
-            subscription = self.subscriptions.get(
-                key,
-                {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "modes": set(),
-                    "depth_level": 5,
-                },
-            )
-            subscription["modes"].add(mode)
-            subscription["depth_level"] = depth_level if mode == self.MODE_DEPTH else 5
-            self.subscriptions[key] = subscription
+    def unsubscribe(
+        self,
+        symbol: str,
+        exchange: str,
+        mode: int | None = None,
+        depth_level: int | None = None,
+    ) -> dict[str, Any]:
+        key = f"{exchange}:{symbol}"
+        with self.lock:
+            sub = self.subscribed_symbols.pop(key, None)
+        if sub is None:
+            return {"status": "error", "message": f"Not subscribed to {symbol}"}
 
-        return self._create_success_response(
-            f"Subscribed to {symbol} on {exchange}",
-            symbol=symbol,
-            exchange=exchange,
-            mode=mode,
-            actual_depth=depth_level if mode == self.MODE_DEPTH else 5,
-        )
+        topic_suffix = f"{normalize_segment(sub['segment'])}/{sub['token']}"
+        with self.lock:
+            self._key_to_symbol.pop(topic_suffix, None)
 
-    def unsubscribe(self, symbol, exchange, mode=2):
-        with self._sub_lock:
-            key = f"{exchange}:{symbol}"
-            if key not in self.subscriptions:
-                return self._create_success_response(
-                    f"No active subscription for {symbol} on {exchange}",
-                    symbol=symbol,
-                    exchange=exchange,
-                    mode=mode,
-                )
+        if self.ws_client:
+            try:
+                self.ws_client.unsubscribe_instruments([(sub["segment"], sub["token"])])
+            except Exception as e:
+                self.logger.exception(f"IIFL unsubscribe failed for {exchange}:{symbol}: {e}")
+                return {"status": "error", "message": str(e)}
 
-            subscription = self.subscriptions[key]
-            subscription["modes"].discard(mode)
-            if not subscription["modes"]:
-                del self.subscriptions[key]
-            else:
-                self.subscriptions[key] = subscription
+        return {"status": "success", "message": f"Unsubscribed from {symbol}"}
 
-        return self._create_success_response(
-            f"Unsubscribed from {symbol} on {exchange}",
-            symbol=symbol,
-            exchange=exchange,
-            mode=mode,
-        )
+    # ----------------------------------------------------------------- ticks
+    def _handle_ticks(self, ticks: list[dict]) -> None:
+        """
+        Receive decoded ticks from the IIFL feed client and fan them out to
+        the OpenAlgo ZeroMQ bus, slicing the single broker packet into LTP /
+        Quote / Depth topics as needed.
+        """
+        if not ticks:
+            return
 
-    def unsubscribe_all(self):
-        with self._sub_lock:
-            self.subscriptions.clear()
-        return self._create_success_response("Unsubscribed from all symbols")
+        for tick in ticks:
+            try:
+                segment = tick.get("segment", "")
+                token = tick.get("token", "")
+                suffix = f"{segment}/{token}"
 
-    def disconnect(self):
-        self.connected = False
-        self._stop_event.set()
+                with self.lock:
+                    symbol_info = self._key_to_symbol.get(suffix)
+                    sub_info = None
+                    if symbol_info:
+                        key = f"{symbol_info[1]}:{symbol_info[0]}"
+                        sub_info = self.subscribed_symbols.get(key)
 
-        if self._poll_thread and self._poll_thread.is_alive():
-            self._poll_thread.join(timeout=2)
-
-        self.cleanup_zmq()
-        return self._create_success_response("Disconnected")
-
-    def _poll_market_data(self):
-        while not self._stop_event.is_set():
-            if not self.connected or not self.data_handler:
-                self._stop_event.wait(self.poll_interval)
-                continue
-
-            with self._sub_lock:
-                subscriptions_snapshot = [
-                    {
-                        "symbol": item["symbol"],
-                        "exchange": item["exchange"],
-                        "modes": set(item["modes"]),
-                    }
-                    for item in self.subscriptions.values()
-                ]
-
-            for sub in subscriptions_snapshot:
-                symbol = sub["symbol"]
-                exchange = sub["exchange"]
-                modes = sub["modes"]
-
-                quote_data = None
-                depth_data = None
-
-                try:
-                    if self.MODE_LTP in modes or self.MODE_QUOTE in modes:
-                        quote_data = self.data_handler.get_quotes(symbol, exchange)
-
-                    if self.MODE_DEPTH in modes:
-                        depth_data = self.data_handler.get_depth(symbol, exchange)
-                except Exception as exc:
-                    self.logger.debug(f"IIFL Capital poll failed for {exchange}:{symbol}: {exc}")
+                if not symbol_info or not sub_info:
+                    self.logger.debug(f"No active subscription for IIFL tick {suffix}")
                     continue
 
-                if self.MODE_LTP in modes and quote_data:
-                    self._publish(symbol, exchange, self.MODE_LTP, self._as_ltp_payload(quote_data))
+                symbol, exchange = symbol_info
+                sub_mode = sub_info["mode"]
 
-                if self.MODE_QUOTE in modes and quote_data:
-                    self._publish(
-                        symbol,
-                        exchange,
-                        self.MODE_QUOTE,
-                        self._as_quote_payload(quote_data),
-                    )
+                # The feed client always returns the full decoded packet; we
+                # produce per-mode payloads from the same source dict.
+                base = {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "ltp": tick.get("ltp", 0),
+                    "ltt": tick.get("ltt", 0),
+                    "timestamp": tick.get("timestamp", int(time.time() * 1000)),
+                }
 
-                if self.MODE_DEPTH in modes and depth_data:
-                    self._publish(
-                        symbol,
-                        exchange,
-                        self.MODE_DEPTH,
-                        self._as_depth_payload(depth_data),
-                    )
+                if sub_mode == 1:
+                    payload = {**base, "mode": "ltp"}
+                    self._publish(symbol, exchange, "LTP", payload)
+                    continue
 
-            self._stop_event.wait(self.poll_interval)
+                # Quote / Depth share the OHLC + bid/ask + volume block.
+                payload = {
+                    **base,
+                    "open": tick.get("open", 0),
+                    "high": tick.get("high", 0),
+                    "low": tick.get("low", 0),
+                    "close": tick.get("close", 0),
+                    "volume": tick.get("volume", 0),
+                    "last_quantity": tick.get("last_traded_quantity", 0),
+                    "average_price": tick.get("average_price", 0),
+                    "total_buy_quantity": tick.get("total_buy_quantity", 0),
+                    "total_sell_quantity": tick.get("total_sell_quantity", 0),
+                    "bid": tick.get("best_bid_price", 0),
+                    "ask": tick.get("best_ask_price", 0),
+                    "bid_quantity": tick.get("best_bid_quantity", 0),
+                    "ask_quantity": tick.get("best_ask_quantity", 0),
+                }
 
-    def _publish(self, symbol: str, exchange: str, mode: int, data: dict[str, Any]):
-        mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}.get(mode, "QUOTE")
+                # Open interest is only carried on the tick when the feed
+                # client merged it in (derivatives, non-LTP modes). Surfaced
+                # as both `oi` and `open_interest` for client compatibility.
+                if "open_interest" in tick:
+                    payload["oi"] = tick["open_interest"]
+                    payload["open_interest"] = tick["open_interest"]
+
+                if sub_mode == 2:
+                    payload["mode"] = "quote"
+                    self._publish(symbol, exchange, "QUOTE", payload)
+                else:  # mode 3 — depth
+                    payload["mode"] = "full"
+                    payload["depth"] = tick.get("depth", {"buy": [], "sell": []})
+                    self._publish(symbol, exchange, "DEPTH", payload)
+
+            except Exception as e:
+                self.logger.exception(f"Error processing IIFL tick: {e}")
+
+    def _publish(self, symbol: str, exchange: str, mode_str: str, data: dict) -> None:
         topic = f"{exchange}_{symbol}_{mode_str}"
         self.publish_market_data(topic, data)
 
-    def _as_ltp_payload(self, quote: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "ltp": quote.get("ltp", 0),
-            "volume": quote.get("volume", 0),
-            "timestamp": int(time.time()),
-        }
+    # ----------------------------------------------------------------- callbacks
+    def _on_connect(self) -> None:
+        self.connected = True
+        self.logger.info("IIFL Capital MQTT connection established")
 
-    def _as_quote_payload(self, quote: dict[str, Any]) -> dict[str, Any]:
-        prev_close = quote.get("prev_close", 0) or 0
-        ltp = quote.get("ltp", 0) or 0
-        change = float(ltp) - float(prev_close) if prev_close else 0
-        change_pct = (change / float(prev_close) * 100) if prev_close else 0
-        return {
-            "open": quote.get("open", 0),
-            "high": quote.get("high", 0),
-            "low": quote.get("low", 0),
-            "close": prev_close,
-            "ltp": ltp,
-            "volume": quote.get("volume", 0),
-            "bid": quote.get("bid", 0),
-            "ask": quote.get("ask", 0),
-            "oi": quote.get("oi", 0),
-            "change": change,
-            "change_percent": change_pct,
-            "timestamp": int(time.time()),
-        }
+    def _on_disconnect(self) -> None:
+        self.connected = False
+        self.logger.warning("IIFL Capital MQTT connection dropped")
 
-    def _as_depth_payload(self, depth: dict[str, Any]) -> dict[str, Any]:
-        buy = depth.get("buy") or depth.get("bids") or []
-        sell = depth.get("sell") or depth.get("asks") or []
-
-        # Convert bids/asks to market-data-service compatible buy/sell levels.
-        buy_levels = [
-            {
-                "price": level.get("price", 0),
-                "quantity": level.get("quantity", 0),
-                "orders": level.get("orders", 0),
-            }
-            for level in buy[:20]
-            if isinstance(level, dict)
-        ]
-        sell_levels = [
-            {
-                "price": level.get("price", 0),
-                "quantity": level.get("quantity", 0),
-                "orders": level.get("orders", 0),
-            }
-            for level in sell[:20]
-            if isinstance(level, dict)
-        ]
-
-        return {
-            "ltp": depth.get("ltp", 0),
-            "open": depth.get("open", 0),
-            "high": depth.get("high", 0),
-            "low": depth.get("low", 0),
-            "close": depth.get("prev_close", depth.get("close", 0)),
-            "volume": depth.get("volume", 0),
-            "depth": {"buy": buy_levels, "sell": sell_levels},
-            "timestamp": int(time.time()),
-        }
+    def _on_error(self, error: Exception) -> None:
+        self.logger.error(f"IIFL Capital MQTT error: {error}")
