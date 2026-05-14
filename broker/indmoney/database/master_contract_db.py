@@ -79,8 +79,10 @@ def delete_symtoken_table():
     db_session.commit()
 
 
-def copy_from_dataframe(df):
+def copy_from_dataframe(df, broker="indmoney"):
     logger.info("Performing Bulk Insert")
+    from database.master_contract_status_db import update_status
+
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
 
@@ -89,6 +91,7 @@ def copy_from_dataframe(df):
 
     # Filter out data_dict entries with tokens that already exist
     filtered_data_dict = [row for row in data_dict if row["token"] not in existing_tokens]
+    total_to_insert = len(filtered_data_dict)
 
     # Insert in smaller chunks to minimize database lock time
     chunk_size = 500  # Reduced chunk size for shorter lock duration
@@ -97,11 +100,11 @@ def copy_from_dataframe(df):
     try:
         if filtered_data_dict:  # Proceed only if there's anything to insert
             logger.info(
-                f"Starting bulk insert of {len(filtered_data_dict)} records in chunks of {chunk_size}"
+                f"Starting bulk insert of {total_to_insert} records in chunks of {chunk_size}"
             )
 
             # Process data in chunks
-            for i in range(0, len(filtered_data_dict), chunk_size):
+            for i in range(0, total_to_insert, chunk_size):
                 chunk = filtered_data_dict[i : i + chunk_size]
 
                 # Use a separate transaction for each chunk with retry logic
@@ -111,6 +114,21 @@ def copy_from_dataframe(df):
                     db_session.commit()  # Commit each chunk immediately
 
                     total_inserted += len(chunk)
+
+                    # Update status message with progress every 5 chunks
+                    if (i // chunk_size + 1) % 5 == 0 or total_inserted == total_to_insert:
+                        import_pct = int((total_inserted / total_to_insert) * 100)
+                        stages = {"download": 100, "process": 100, "import": import_pct}
+                        
+                        # Overall progress: importing is 60% to 100% of the total task
+                        overall_progress = 60 + int(import_pct * 0.4)
+                        
+                        progress_msg = f"Importing: {total_inserted:,} / {total_to_insert:,} symbols"
+                        update_status(broker, "downloading", progress_msg, progress=overall_progress, stages=stages)
+                        socketio.emit(
+                            "master_contract_download",
+                            {"status": "downloading", "message": progress_msg, "progress": overall_progress, "stages": stages},
+                        )
 
                     # Log progress every 20 chunks (10,000 records)
                     if (i // chunk_size + 1) % 20 == 0:
@@ -149,16 +167,14 @@ def copy_from_dataframe(df):
 
 def download_csv_indmoney_data(output_path):
     logger.info("Downloading Master Contract CSV Files from Indmoney")
+    from database.master_contract_status_db import update_status
 
     # Get the access token for Indmoney broker from the database
-    # Since Indmoney might have multiple users, we need to get the first valid one
     try:
         from database.auth_db import Auth, db_session
-
         auth_obj = Auth.query.filter_by(broker="indmoney", is_revoked=False).first()
         if auth_obj:
             from database.auth_db import decrypt_token
-
             auth_token = decrypt_token(auth_obj.auth)
         else:
             auth_token = None
@@ -172,22 +188,34 @@ def download_csv_indmoney_data(output_path):
 
     # Indmoney API endpoints for different segments
     segments = ["equity", "fno", "index"]
-
     headers = {"Authorization": auth_token}
 
     # Download CSV files for each segment
-    for segment in segments:
+    total_segments = len(segments)
+    for i, segment in enumerate(segments):
         url = f"https://api.indstocks.com/market/instruments?source={segment}"
+        
+        # Update status for download progress
+        progress_pct = int(((i + 1) / total_segments) * 100)
+        stages = {"download": progress_pct, "process": 0, "import": 0}
+        progress_msg = f"Downloading: {segment.upper()} instruments ({i+1}/{total_segments})"
+        
+        # Overall progress: download is first 30% of the total task
+        overall_progress = int(progress_pct * 0.3)
+        
+        update_status("indmoney", "downloading", progress_msg, progress=overall_progress, stages=stages)
+        socketio.emit(
+            "master_contract_download",
+            {"status": "downloading", "message": progress_msg, "progress": overall_progress, "stages": stages},
+        )
 
         try:
             # Send GET request with authorization header
-            response = requests.get(url, headers=headers, timeout=30)
+            response = requests.get(url, headers=headers, timeout=60)
 
             # Check if the request was successful
             if response.status_code == 200:
-                # Construct the full output path for the file
                 file_path = f"{output_path}/{segment}.csv"
-                # Write the content to the file
                 with open(file_path, "wb") as file:
                     file.write(response.content)
                 logger.info(f"Successfully downloaded {segment} instruments")
@@ -203,11 +231,11 @@ def reformat_symbol(row, file_segment=None):
     """
     Reformat symbols according to OpenAlgo standards based on Indmoney data structure
     """
-    instrument_name = row["INSTRUMENT_NAME"]
-    option_type = row.get("OPTION_TYPE", "")
-    symbol_name = row.get("SYMBOL_NAME", "")
-    trading_symbol = row.get("TRADING_SYMBOL", "")
-    expiry_date = row.get("EXPIRY_DATE", "")
+    instrument_name = str(row.get("INSTRUMENT_NAME", ""))
+    option_type = str(row.get("OPTION_TYPE", "")) if pd.notna(row.get("OPTION_TYPE")) else ""
+    symbol_name = str(row.get("SYMBOL_NAME", "")) if pd.notna(row.get("SYMBOL_NAME")) else ""
+    trading_symbol = str(row.get("TRADING_SYMBOL", "")) if pd.notna(row.get("TRADING_SYMBOL")) else ""
+    expiry_date = str(row.get("EXPIRY_DATE", "")) if pd.notna(row.get("EXPIRY_DATE")) else ""
     strike_price = row.get("STRIKE_PRICE", 0)
 
     # Format expiry date for OpenAlgo format (DDMMMYY)
@@ -269,10 +297,10 @@ def assign_values(row, file_segment=None):
     """
     Assign exchange and instrument type values based on Indmoney data structure
     """
-    exch = row["EXCH"]
-    segment = row["SEGMENT"]
-    instrument_name = row["INSTRUMENT_NAME"]
-    option_type = row.get("OPTION_TYPE", "")
+    exch = str(row.get("EXCH", ""))
+    segment = str(row.get("SEGMENT", ""))
+    instrument_name = str(row.get("INSTRUMENT_NAME", ""))
+    option_type = str(row.get("OPTION_TYPE", "")) if pd.notna(row.get("OPTION_TYPE")) else ""
 
     # If instrument name starts with 'FUT', set option type to 'FUT'
     if instrument_name.startswith("FUT"):
@@ -321,17 +349,33 @@ def process_indmoney_csv(path):
     Based on the official Indmoney API documentation CSV structure.
     """
     logger.info("Processing Indmoney Instrument Master CSV Data")
+    from database.master_contract_status_db import update_status
 
     # List to hold all dataframes
     all_dfs = []
+    segments = ["equity", "fno", "index"]
 
     # Process each segment CSV file
-    for segment in ["equity", "fno", "index"]:
+    for segment in segments:
         file_path = f"{path}/{segment}.csv"
 
         if not os.path.exists(file_path):
             logger.warning(f"File {file_path} not found, skipping...")
             continue
+
+        # Update status for processing phase
+        progress_pct = int(((segments.index(segment) + 1) / len(segments)) * 100)
+        stages = {"download": 100, "process": progress_pct, "import": 0}
+        progress_msg = f"Formatting: {segment.upper()} instruments..."
+        
+        # Overall progress: processing is 30% to 60% of the total task
+        overall_progress = 30 + int(progress_pct * 0.3)
+        
+        update_status("indmoney", "downloading", progress_msg, progress=overall_progress, stages=stages)
+        socketio.emit(
+            "master_contract_download",
+            {"status": "downloading", "message": progress_msg, "progress": overall_progress, "stages": stages},
+        )
 
         df = pd.read_csv(file_path, low_memory=False)
         df.columns = df.columns.str.strip()
@@ -378,16 +422,16 @@ def process_indmoney_csv(path):
 
         # Map Indmoney columns to our database schema
         df["token"] = df["SECURITY_ID"].astype(str)
-        df["name"] = df["SYMBOL_NAME"].fillna(df["TRADING_SYMBOL"])
+        df["name"] = df["SYMBOL_NAME"].fillna(df["TRADING_SYMBOL"]).fillna("")
         df["expiry"] = df["EXPIRY_DATE"].str.upper()
         df["strike"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce").fillna(0.0)
         df["lotsize"] = pd.to_numeric(df["LOT_UNITS"], errors="coerce").fillna(1).astype(int)
         df["tick_size"] = pd.to_numeric(df["TICK_SIZE"], errors="coerce").fillna(0.05)
         # Set brsymbol - use SEGMENT for index records, TRADING_SYMBOL for others
         if segment == "index":
-            df["brsymbol"] = df["SEGMENT"]
+            df["brsymbol"] = df["SEGMENT"].fillna("")
         else:
-            df["brsymbol"] = df["TRADING_SYMBOL"]
+            df["brsymbol"] = df["TRADING_SYMBOL"].fillna("")
 
         # Apply exchange and instrument type mapping
         df[["exchange", "brexchange", "instrumenttype"]] = df.apply(
@@ -477,7 +521,7 @@ def master_contract_download():
         token_df = process_indmoney_csv(output_path)
 
         if not token_df.empty:
-            copy_from_dataframe(token_df)
+            copy_from_dataframe(token_df, broker="indmoney")
             delete_indmoney_temp_data(output_path)
             return socketio.emit(
                 "master_contract_download",
