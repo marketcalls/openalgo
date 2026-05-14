@@ -383,7 +383,15 @@ class IiflMqttClient:
         chunks: list[bytes] = []
         remaining = n
         while remaining > 0:
-            chunk = sock.recv(min(remaining, self._RECV_BUF))
+            try:
+                chunk = sock.recv(min(remaining, self._RECV_BUF))
+            except (InterruptedError, OSError) as e:
+                # Socket closed from another thread (typically our own
+                # disconnect) or recv interrupted. On Windows this surfaces
+                # as WSACancelBlockingCall (WinError 10004); on POSIX as
+                # EBADF/ECONNRESET. Treat as clean close so the reader loop
+                # exits via its MqttError handler instead of crashing.
+                raise MqttError(f"Socket recv interrupted: {e}") from e
             if not chunk:
                 return b""
             chunks.append(chunk)
