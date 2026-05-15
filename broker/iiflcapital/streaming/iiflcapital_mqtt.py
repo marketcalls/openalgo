@@ -16,9 +16,8 @@ No QoS 1/2 inflight tracking, no retained messages, no will message, no
 session resumption — the IIFL broker only publishes QoS 0 to subscribers and
 expects clean_session=True clients.
 
-The transport is a single TLS socket (TLSv1.2, cert verification disabled —
-the IIFL broker presents a self-signed cert in production, matching bridgePy
-behaviour). A background reader thread parses frames off the wire and
+The transport is a single TLS socket (TLSv1.2 minimum) verified against the
+system trust store. A background reader thread parses frames off the wire and
 dispatches to user callbacks; a second thread sends PINGREQ inside the
 keepalive window so the broker does not drop us.
 """
@@ -167,9 +166,8 @@ class IiflMqttClient:
 
         raw = socket.create_connection((self.host, self.port), timeout=timeout)
         try:
-            ctx = ssl.SSLContext(self.tls_version)
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             self._sock = ctx.wrap_socket(raw, server_hostname=self.host)
         except Exception:
             raw.close()

@@ -75,7 +75,7 @@ def transform_data(data: dict, token: str) -> dict:
         "instrumentId": str(token),
         "exchange": map_exchange(data.get("exchange", "")),
         "transactionType": (data.get("action") or "").upper(),
-        "quantity": str(int(float(data.get("quantity", 0)))),
+        "quantity": str(data.get("quantity", "0")),
         "orderComplexity": data.get("order_complexity", "REGULAR"),
         "product": map_product_type(data.get("product", "MIS")),
         "orderType": map_order_type(data.get("pricetype", "MARKET")),
@@ -89,9 +89,9 @@ def transform_data(data: dict, token: str) -> dict:
     if transformed["orderType"] in ("SL", "SLM"):
         transformed["slTriggerPrice"] = _to_float(data.get("trigger_price", 0.0))
 
-    disclosed_qty = int(float(data.get("disclosed_quantity", 0) or 0))
-    if disclosed_qty > 0:
-        transformed["disclosedQuantity"] = str(disclosed_qty)
+    disclosed = data.get("disclosed_quantity")
+    if disclosed not in (None, "", 0, "0"):
+        transformed["disclosedQuantity"] = str(disclosed)
 
     if data.get("strategy"):
         transformed["orderTag"] = str(data["strategy"])[:50]
@@ -103,9 +103,8 @@ def transform_modify_order_data(data: dict) -> dict:
     """Transform OpenAlgo modify request to IIFL Capital format."""
     transformed = {}
 
-    quantity = data.get("quantity")
-    if quantity is not None:
-        transformed["quantity"] = str(int(float(data.get("quantity", 0))))
+    if data.get("quantity") is not None:
+        transformed["quantity"] = str(data.get("quantity"))
 
     pricetype = data.get("pricetype")
     if pricetype:
@@ -121,10 +120,8 @@ def transform_modify_order_data(data: dict) -> dict:
     if "validity" in data:
         transformed["validity"] = map_validity(data.get("validity", "DAY"))
 
-    disclosed_qty = data.get("disclosed_quantity")
-    if disclosed_qty is not None:
-        disclosed_qty = int(float(disclosed_qty or 0))
-        if disclosed_qty > 0:
-            transformed["disclosedQuantity"] = str(disclosed_qty)
+    disclosed = data.get("disclosed_quantity")
+    if disclosed not in (None, "", 0, "0"):
+        transformed["disclosedQuantity"] = str(disclosed)
 
     return transformed

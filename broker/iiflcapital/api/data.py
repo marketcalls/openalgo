@@ -12,6 +12,12 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# IIFL exposes OI on a separate single-mode endpoint, so an option chain
+# pull does N HTTP roundtrips. The shared httpx client allows up to 100
+# concurrent connections; cap fanout at 32 so a 60-leg chain finishes in
+# ~2 batches (~400 ms) instead of the previous 8-worker loop (~1.6 s).
+_OI_MAX_WORKERS = 32
+
 
 def _try_json(value: Any) -> Any:
     if not isinstance(value, str):
@@ -504,13 +510,13 @@ class BrokerData:
         """
         Concurrently fetch OI for many instruments. Keyed by 'exchange:instrumentId'.
         IIFL doesn't support batch OI, so option chains require one HTTP call per
-        leg — capped at 8 in-flight to stay under typical broker rate limits.
+        leg — fanout capped at _OI_MAX_WORKERS.
         """
         if not instruments:
             return {}
 
         oi_map: dict[str, int] = {}
-        with ThreadPoolExecutor(max_workers=min(8, len(instruments))) as pool:
+        with ThreadPoolExecutor(max_workers=min(_OI_MAX_WORKERS, len(instruments))) as pool:
             futures = {
                 pool.submit(self._fetch_openinterest, inst): (
                     f"{str(inst['exchange']).upper()}:{inst['instrumentId']}"
