@@ -58,6 +58,31 @@ class MasterContractStatus(Base):
 Base.metadata.create_all(bind=engine)
 
 
+def ensure_schema_up_to_date():
+    """Ensure the master_contract_status table has all necessary columns"""
+    try:
+        with engine.connect() as conn:
+            # Check for missing columns using PRAGMA table_info
+            result = conn.execute(text("PRAGMA table_info(master_contract_status)"))
+            columns = [row[1] for row in result]
+
+            if "progress" not in columns:
+                logger.info("Adding 'progress' column to master_contract_status table")
+                conn.execute(text("ALTER TABLE master_contract_status ADD COLUMN progress INTEGER DEFAULT 0"))
+                conn.commit()
+
+            if "stages" not in columns:
+                logger.info("Adding 'stages' column to master_contract_status table")
+                conn.execute(text("ALTER TABLE master_contract_status ADD COLUMN stages TEXT"))
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Error ensuring schema is up to date: {e}")
+
+
+# Run schema update on module import
+ensure_schema_up_to_date()
+
+
 def init_broker_status(broker):
     """Initialize status for a broker when they login"""
     session = SessionLocal()
