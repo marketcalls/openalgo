@@ -46,6 +46,8 @@ class MasterContractStatus(Base):
     last_updated = Column(DateTime, default=datetime.now)
     total_symbols = Column(String, default="0")
     is_ready = Column(Boolean, default=False)
+    progress = Column(Integer, default=0)         # Progress percentage (0-100)
+    stages = Column(Text, nullable=True)          # JSON: {"download": 50, "process": 0, "import": 0}
 
     # Smart download tracking columns
     last_download_time = Column(DateTime, nullable=True)  # When download completed successfully
@@ -117,7 +119,7 @@ def init_broker_status(broker):
         session.close()
 
 
-def update_status(broker, status, message, total_symbols=None):
+def update_status(broker, status, message, total_symbols=None, progress=None, stages=None):
     """Update the download status for a broker"""
     session = SessionLocal()
     try:
@@ -128,9 +130,21 @@ def update_status(broker, status, message, total_symbols=None):
             broker_status.message = message
             broker_status.last_updated = datetime.now()
             broker_status.is_ready = status == "success"
+            
+            if progress is not None:
+                broker_status.progress = progress
+                
+            if stages is not None:
+                broker_status.stages = json.dumps(stages)
 
             if total_symbols is not None:
                 broker_status.total_symbols = str(total_symbols)
+            
+            # If status is success, set progress to 100
+            if status == "success":
+                broker_status.progress = 100
+            elif status == "pending":
+                broker_status.progress = 0
         else:
             # Create new status if it doesn't exist
             broker_status = MasterContractStatus(
@@ -144,7 +158,7 @@ def update_status(broker, status, message, total_symbols=None):
             session.add(broker_status)
 
         session.commit()
-        logger.info(f"Updated master contract status for {broker}: {status}")
+        logger.info(f"Updated master contract status for {broker}: {status} ({broker_status.progress}%)")
 
     except Exception as e:
         logger.exception(f"Error updating status for {broker}: {str(e)}")
@@ -199,6 +213,8 @@ def get_status(broker):
                 "download_date": status.download_date.isoformat() if status.download_date else None,
                 "exchange_stats": exchange_stats,
                 "download_duration_seconds": status.download_duration_seconds,
+                "progress": status.progress or 0,
+                "stages": json.loads(status.stages) if status.stages else {},
             }
         else:
             return {
