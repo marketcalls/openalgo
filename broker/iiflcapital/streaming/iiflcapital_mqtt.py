@@ -119,7 +119,6 @@ class IiflMqttClient:
         username: str,
         password: str,
         keepalive: int = 20,
-        tls_version: int = ssl.PROTOCOL_TLSv1_2,
     ) -> None:
         self.host = host
         self.port = port
@@ -127,7 +126,6 @@ class IiflMqttClient:
         self.username = username
         self.password = password
         self.keepalive = max(5, int(keepalive))
-        self.tls_version = tls_version
 
         self.logger = get_logger("iifl_mqtt")
         self._sock: ssl.SSLSocket | None = None

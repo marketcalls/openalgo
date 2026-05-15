@@ -8,22 +8,49 @@ from database.token_db import get_symbol
 # Fields that indicate a dict is an actual order/trade/position/holding row,
 # not a status/metadata wrapper. Used to avoid fabricating phantom UI rows
 # when IIFL returns an empty book wrapped as `{"result": {...wrapper...}}`.
+# Covers the canonical field names plus the variants the per-section
+# transforms accept as fallbacks (orderId, formattedInstrumentName,
+# tradedPrice, etc.) so a record with any of those still passes.
 _ROW_FIELDS = (
-    "instrumentId",
-    "tradingSymbol",
+    # Order / trade identifiers
     "brokerOrderId",
     "exchangeOrderId",
-    "netQuantity",
-    "filledQuantity",
-    "transactionType",
+    "orderId",
+    # Instrument identifiers
+    "instrumentId",
+    "token",
+    "exchangeInstrumentID",
+    "tradingSymbol",
+    "symbol",
+    "formattedInstrumentName",
     "nseTradingSymbol",
     "bseTradingSymbol",
+    # Quantity-bearing fields (any of these implies a real record)
+    "netQuantity",
+    "filledQuantity",
+    "pendingQuantity",
+    "cancelledQuantity",
+    "dpQuantity",
+    "totalQuantity",
+    # Action / price fields specific to real records
+    "transactionType",
+    "tradedPrice",
+    "averageTradedPrice",
 )
 
 
 def _looks_like_row(item) -> bool:
     """True if a dict carries at least one identifying field of a real row."""
-    return isinstance(item, dict) and any(item.get(field) for field in _ROW_FIELDS)
+    if not isinstance(item, dict):
+        return False
+    for field in _ROW_FIELDS:
+        value = item.get(field)
+        # `value not in (None, "")` rather than truthy so legitimate `0` /
+        # `"0"` quantity / netQuantity values on closed positions still
+        # qualify the row.
+        if value not in (None, ""):
+            return True
+    return False
 
 
 def _extract_rows(payload):
@@ -278,9 +305,14 @@ def transform_positions_data(positions_data):
         ltp = _to_float(_first_present(row, "ltp", "lastPrice", "previousDayClose"))
 
         # Spec exposes `realizedPnl` only. Compute MTM unrealized from netQuantity
-        # and netAveragePrice so OpenAlgo's `pnl` field reflects total P&L.
+        # and netAveragePrice so OpenAlgo's `pnl` field reflects total P&L —
+        # but only when LTP is genuinely populated. A missing LTP defaulting
+        # to 0 would otherwise fabricate a (-average_price * quantity) loss.
         realized_pnl = _to_float(row.get("realizedPnl"))
-        unrealized_pnl = (ltp - average_price) * quantity if quantity else 0.0
+        if quantity and ltp > 0:
+            unrealized_pnl = (ltp - average_price) * quantity
+        else:
+            unrealized_pnl = 0.0
         pnl = realized_pnl + unrealized_pnl
 
         transformed.append(

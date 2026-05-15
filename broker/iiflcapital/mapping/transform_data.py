@@ -89,9 +89,12 @@ def transform_data(data: dict, token: str) -> dict:
     if transformed["orderType"] in ("SL", "SLM"):
         transformed["slTriggerPrice"] = _to_float(data.get("trigger_price", 0.0))
 
-    disclosed = data.get("disclosed_quantity")
-    if disclosed not in (None, "", 0, "0"):
-        transformed["disclosedQuantity"] = str(disclosed)
+    # Coerce to int via float so zero-equivalent strings ("0", "0.0", " ")
+    # don't slip through and surface as a meaningless `disclosedQuantity: 0`
+    # field to the broker.
+    disclosed_qty = int(_to_float(data.get("disclosed_quantity"), 0.0) or 0)
+    if disclosed_qty > 0:
+        transformed["disclosedQuantity"] = str(disclosed_qty)
 
     if data.get("strategy"):
         transformed["orderTag"] = str(data["strategy"])[:50]
@@ -120,8 +123,11 @@ def transform_modify_order_data(data: dict) -> dict:
     if "validity" in data:
         transformed["validity"] = map_validity(data.get("validity", "DAY"))
 
-    disclosed = data.get("disclosed_quantity")
-    if disclosed not in (None, "", 0, "0"):
-        transformed["disclosedQuantity"] = str(disclosed)
+    # Coerce to int via float so zero-equivalent strings ("0", "0.0", " ")
+    # don't slip through and surface as a meaningless `disclosedQuantity: 0`
+    # field to the broker.
+    disclosed_qty = int(_to_float(data.get("disclosed_quantity"), 0.0) or 0)
+    if disclosed_qty > 0:
+        transformed["disclosedQuantity"] = str(disclosed_qty)
 
     return transformed
