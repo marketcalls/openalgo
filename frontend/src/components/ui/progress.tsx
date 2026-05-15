@@ -5,9 +5,10 @@ import { cn } from '@/lib/utils'
 interface ProgressProps extends React.ComponentProps<'div'> {
   value?: number
   max?: number
+  indicatorClassName?: string
 }
 
-function Progress({ className, value = 0, max = 100, ...props }: ProgressProps) {
+function Progress({ className, value = 0, max = 100, indicatorClassName, ...props }: ProgressProps) {
   const percentage = Math.min(Math.max((value / max) * 100, 0), 100)
 
   return (
@@ -23,10 +24,8 @@ function Progress({ className, value = 0, max = 100, ...props }: ProgressProps) 
       <div
         data-slot="progress-indicator"
         className={cn(
-          'bg-primary h-full transition-all duration-300 ease-in-out',
-          percentage >= 80 && 'bg-green-500',
-          percentage >= 50 && percentage < 80 && 'bg-yellow-500',
-          percentage > 0 && percentage < 50 && 'bg-red-500'
+          'h-full transition-all duration-300 ease-in-out',
+          indicatorClassName || 'bg-primary'
         )}
         style={{ width: `${percentage}%` }}
       />
