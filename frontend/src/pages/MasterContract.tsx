@@ -417,7 +417,7 @@ export default function MasterContract() {
               <span className="text-sm">{formatDateTime(status?.last_updated || null)}</span>
             </div>
 
-            {status?.message && (
+            {status?.message && status?.status !== 'downloading' && (
               <div className="pt-2 border-t">
                 <p className="text-sm text-muted-foreground">{status.message}</p>
               </div>
