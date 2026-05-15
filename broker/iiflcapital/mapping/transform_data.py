@@ -69,6 +69,17 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _to_int_or_zero(value: Any) -> int:
+    """Coerce arbitrary input to an int, returning 0 on any failure.
+    Catches NaN/inf (which `int()` raises on) along with the usual
+    type/value errors so a malformed numeric field never aborts order
+    transformation. Caller is expected to apply its own `> 0` guard."""
+    try:
+        return int(_to_float(value, 0.0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def transform_data(data: dict, token: str) -> dict:
     """Transform OpenAlgo order request to IIFL Capital format."""
     transformed = {
@@ -91,8 +102,9 @@ def transform_data(data: dict, token: str) -> dict:
 
     # Coerce to int via float so zero-equivalent strings ("0", "0.0", " ")
     # don't slip through and surface as a meaningless `disclosedQuantity: 0`
-    # field to the broker.
-    disclosed_qty = int(_to_float(data.get("disclosed_quantity"), 0.0) or 0)
+    # field to the broker. NaN / inf / bad input fall back to 0 cleanly
+    # instead of raising and aborting the whole order.
+    disclosed_qty = _to_int_or_zero(data.get("disclosed_quantity"))
     if disclosed_qty > 0:
         transformed["disclosedQuantity"] = str(disclosed_qty)
 
@@ -125,8 +137,9 @@ def transform_modify_order_data(data: dict) -> dict:
 
     # Coerce to int via float so zero-equivalent strings ("0", "0.0", " ")
     # don't slip through and surface as a meaningless `disclosedQuantity: 0`
-    # field to the broker.
-    disclosed_qty = int(_to_float(data.get("disclosed_quantity"), 0.0) or 0)
+    # field to the broker. NaN / inf / bad input fall back to 0 cleanly
+    # instead of raising and aborting the whole order.
+    disclosed_qty = _to_int_or_zero(data.get("disclosed_quantity"))
     if disclosed_qty > 0:
         transformed["disclosedQuantity"] = str(disclosed_qty)
 
