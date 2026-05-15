@@ -5,27 +5,56 @@ from broker.iiflcapital.mapping.transform_data import (
 from database.token_db import get_symbol
 
 
+# Fields that indicate a dict is an actual order/trade/position/holding row,
+# not a status/metadata wrapper. Used to avoid fabricating phantom UI rows
+# when IIFL returns an empty book wrapped as `{"result": {...wrapper...}}`.
+_ROW_FIELDS = (
+    "instrumentId",
+    "tradingSymbol",
+    "brokerOrderId",
+    "exchangeOrderId",
+    "netQuantity",
+    "filledQuantity",
+    "transactionType",
+    "nseTradingSymbol",
+    "bseTradingSymbol",
+)
+
+
+def _looks_like_row(item) -> bool:
+    """True if a dict carries at least one identifying field of a real row."""
+    return isinstance(item, dict) and any(item.get(field) for field in _ROW_FIELDS)
+
+
 def _extract_rows(payload):
     if isinstance(payload, list):
-        return payload
+        # Some IIFL endpoints emit a single status-wrapper element when the
+        # book is empty (e.g. `[{"status": "ok"}]`); strip those so the
+        # downstream transforms don't render them as phantom rows.
+        return [item for item in payload if _looks_like_row(item)]
 
     if not isinstance(payload, dict):
         return []
 
     result = payload.get("result")
     if isinstance(result, list):
-        return result
+        return [item for item in result if _looks_like_row(item)]
     if isinstance(result, dict):
         for key in ("orders", "trades", "positions", "holdings", "data", "positionList"):
             value = result.get(key)
             if isinstance(value, list):
-                return value
-        return [result]
+                return [item for item in value if _looks_like_row(item)]
+        # Only treat a result-dict as a single row when it actually looks
+        # like one. Empty/metadata-only `result` wrappers were previously
+        # rendered as phantom blank rows in the orderbook UI.
+        if _looks_like_row(result):
+            return [result]
+        return []
 
     for key in ("data", "orders", "trades", "positions", "holdings"):
         value = payload.get(key)
         if isinstance(value, list):
-            return value
+            return [item for item in value if _looks_like_row(item)]
 
     return []
 
