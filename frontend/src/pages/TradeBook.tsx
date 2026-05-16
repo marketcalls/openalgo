@@ -29,6 +29,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { onModeChange } from '@/stores/themeStore'
 import type { Trade } from '@/types/trading'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface FilterState {
   action: string[]
@@ -76,7 +77,7 @@ function formatTime(timestamp: string): string {
 
   const timeValue = parseTimestamp(timestamp)
   if (timeValue === 0) {
-     // Last resort: extract HH:MM:SS if embedded in the string
+    // Last resort: extract HH:MM:SS if embedded in the string
     const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
     return timeMatch ? timeMatch[1] : timestamp
   }
@@ -293,91 +294,114 @@ export default function TradeBook() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant={hasActiveFilters ? 'default' : 'outline'}
-                size="sm"
-                className="relative"
-                aria-label="Open trade filters"
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Filters
-                {hasActiveFilters && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
-                )}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>Trade Filters</DialogTitle>
-                <DialogDescription>Filter trades by action, exchange, or product</DialogDescription>
-              </DialogHeader>
+            <TooltipProvider>
+              <Tooltip>
+                <DialogTrigger asChild>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={hasActiveFilters ? 'default' : 'outline'}
+                      size="sm"
+                      className="relative"
+                      aria-label="Open trade filters"
+                    >
+                      <Settings2 className="h-4 w-4 mr-2" />
+                      Filters
+                      {hasActiveFilters && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                </DialogTrigger>
+                <TooltipContent>Filter trades</TooltipContent>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Trade Filters</DialogTitle>
+                    <DialogDescription>Filter trades by action, exchange, or product</DialogDescription>
+                  </DialogHeader>
 
-              <div className="space-y-6 py-4">
-                {/* Action */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Action
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="action" value="BUY" label="Buy" />
-                    <FilterChip type="action" value="SELL" label="Sell" />
+                  <div className="space-y-6 py-4">
+                    {/* Action */}
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Action
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        <FilterChip type="action" value="BUY" label="Buy" />
+                        <FilterChip type="action" value="SELL" label="Sell" />
+                      </div>
+                    </div>
+
+                    {/* Exchange */}
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Exchange
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        <FilterChip type="exchange" value="NSE" label="NSE" />
+                        <FilterChip type="exchange" value="BSE" label="BSE" />
+                        <FilterChip type="exchange" value="NFO" label="NFO" />
+                        <FilterChip type="exchange" value="BFO" label="BFO" />
+                        <FilterChip type="exchange" value="MCX" label="MCX" />
+                        <FilterChip type="exchange" value="CDS" label="CDS" />
+                      </div>
+                    </div>
+
+                    {/* Product */}
+                    {!isCrypto && (
+                      <div className="space-y-3">
+                        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          Product
+                        </Label>
+                        <div className="flex flex-wrap gap-2">
+                          <FilterChip type="product" value="CNC" label="CNC" />
+                          <FilterChip type="product" value="MIS" label="MIS" />
+                          <FilterChip type="product" value="NRML" label="NRML" />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
 
-                {/* Exchange */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Exchange
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="exchange" value="NSE" label="NSE" />
-                    <FilterChip type="exchange" value="BSE" label="BSE" />
-                    <FilterChip type="exchange" value="NFO" label="NFO" />
-                    <FilterChip type="exchange" value="BFO" label="BFO" />
-                    <FilterChip type="exchange" value="MCX" label="MCX" />
-                    <FilterChip type="exchange" value="CDS" label="CDS" />
-                  </div>
-                </div>
-
-                {/* Product */}
-                {!isCrypto && (
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Product
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="product" value="CNC" label="CNC" />
-                    <FilterChip type="product" value="MIS" label="MIS" />
-                    <FilterChip type="product" value="NRML" label="NRML" />
-                  </div>
-                </div>
-                )}
-              </div>
-
-              <DialogFooter>
-                <Button variant="ghost" onClick={clearFilters}>
-                  Clear All
-                </Button>
-                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
-              </DialogFooter>
-            </DialogContent>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={clearFilters}>
+                      Clear All
+                    </Button>
+                    <Button onClick={() => setSettingsOpen(false)}>Done</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Tooltip>
+            </TooltipProvider>
           </Dialog>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchTrades(true)}
-            disabled={isRefreshing}
-            aria-label="Refresh tradebook"
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export tradebook to CSV">
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchTrades(true)}
+                  disabled={isRefreshing}
+                  aria-label="Refresh tradebook"
+                >
+                  <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
+                  Refresh
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh trade data</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export tradebook to CSV">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export tradebook to CSV</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
         </div>
       </div>
 
@@ -479,7 +503,7 @@ export default function TradeBook() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead 
+                    <TableHead
                       onClick={() => requestSort('symbol')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
                     >
@@ -492,7 +516,7 @@ export default function TradeBook() {
                     </TableHead>
                     <TableHead>Exchange</TableHead>
                     {!isCrypto && <TableHead>Product</TableHead>}
-                    <TableHead 
+                    <TableHead
                       onClick={() => requestSort('action')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
                     >
@@ -507,7 +531,7 @@ export default function TradeBook() {
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Trade Value</TableHead>
                     <TableHead>Order ID</TableHead>
-                    <TableHead 
+                    <TableHead
                       onClick={() => requestSort('timestamp')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
                     >
@@ -528,9 +552,9 @@ export default function TradeBook() {
                         <Badge variant="outline">{trade.exchange}</Badge>
                       </TableCell>
                       {!isCrypto && (
-                      <TableCell>
-                        <Badge variant="secondary">{trade.product}</Badge>
-                      </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{trade.product}</Badge>
+                        </TableCell>
                       )}
                       <TableCell>
                         <Badge
