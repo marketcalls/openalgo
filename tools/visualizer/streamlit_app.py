@@ -33,13 +33,25 @@ def _parse_args() -> AppOptions:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_index(results_dir_str: str) -> list[dict[str, Any]]:
+def _cached_index(results_dir_str: str, _index_mtime_ns: int) -> list[dict[str, Any]]:
     return read_index(Path(results_dir_str))
 
 
 @st.cache_data(show_spinner=False)
-def _cached_run_payload(results_dir_str: str, run_id: str) -> dict[str, Any] | None:
+def _cached_run_payload(
+    results_dir_str: str,
+    run_id: str,
+    _normalized_mtime_ns: int,
+    _detailed_mtime_ns: int,
+) -> dict[str, Any] | None:
     return load_run_payload(Path(results_dir_str), run_id)
+
+
+def _safe_mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
 
 
 def _as_datetime(value: str) -> datetime | None:
@@ -541,7 +553,8 @@ def main() -> None:
     st.title("Lean Backtest Visualizer")
     st.caption(f"Results: {results_dir}")
 
-    index_entries = _cached_index(str(results_dir))
+    index_mtime_ns = _safe_mtime_ns(results_dir / "index.json")
+    index_entries = _cached_index(str(results_dir), index_mtime_ns)
     if not index_entries:
         st.warning("No archived runs found in results/index.json.")
         return
@@ -574,7 +587,15 @@ def main() -> None:
 
     selected_run_id = st.sidebar.selectbox("Run", options=run_ids, index=default_index)
 
-    payload = _cached_run_payload(str(results_dir), selected_run_id)
+    run_dir = results_dir / "runs" / selected_run_id
+    normalized_mtime_ns = _safe_mtime_ns(run_dir / "normalized.json")
+    detailed_mtime_ns = _safe_mtime_ns(run_dir / "raw-detailed.json")
+    payload = _cached_run_payload(
+        str(results_dir),
+        selected_run_id,
+        normalized_mtime_ns,
+        detailed_mtime_ns,
+    )
     if not payload:
         st.error(f"Run not found: {selected_run_id}")
         return
