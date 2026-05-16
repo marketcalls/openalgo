@@ -16,9 +16,8 @@ No QoS 1/2 inflight tracking, no retained messages, no will message, no
 session resumption — the IIFL broker only publishes QoS 0 to subscribers and
 expects clean_session=True clients.
 
-The transport is a single TLS socket (TLSv1.2, cert verification disabled —
-the IIFL broker presents a self-signed cert in production, matching bridgePy
-behaviour). A background reader thread parses frames off the wire and
+The transport is a single TLS socket (TLSv1.2 minimum) verified against the
+system trust store. A background reader thread parses frames off the wire and
 dispatches to user callbacks; a second thread sends PINGREQ inside the
 keepalive window so the broker does not drop us.
 """
@@ -120,7 +119,6 @@ class IiflMqttClient:
         username: str,
         password: str,
         keepalive: int = 20,
-        tls_version: int = ssl.PROTOCOL_TLSv1_2,
     ) -> None:
         self.host = host
         self.port = port
@@ -128,7 +126,6 @@ class IiflMqttClient:
         self.username = username
         self.password = password
         self.keepalive = max(5, int(keepalive))
-        self.tls_version = tls_version
 
         self.logger = get_logger("iifl_mqtt")
         self._sock: ssl.SSLSocket | None = None
@@ -167,9 +164,8 @@ class IiflMqttClient:
 
         raw = socket.create_connection((self.host, self.port), timeout=timeout)
         try:
-            ctx = ssl.SSLContext(self.tls_version)
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             self._sock = ctx.wrap_socket(raw, server_hostname=self.host)
         except Exception:
             raw.close()
@@ -383,7 +379,15 @@ class IiflMqttClient:
         chunks: list[bytes] = []
         remaining = n
         while remaining > 0:
-            chunk = sock.recv(min(remaining, self._RECV_BUF))
+            try:
+                chunk = sock.recv(min(remaining, self._RECV_BUF))
+            except (InterruptedError, OSError) as e:
+                # Socket closed from another thread (typically our own
+                # disconnect) or recv interrupted. On Windows this surfaces
+                # as WSACancelBlockingCall (WinError 10004); on POSIX as
+                # EBADF/ECONNRESET. Treat as clean close so the reader loop
+                # exits via its MqttError handler instead of crashing.
+                raise MqttError(f"Socket recv interrupted: {e}") from e
             if not chunk:
                 return b""
             chunks.append(chunk)

@@ -69,13 +69,24 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _to_int_or_zero(value: Any) -> int:
+    """Coerce arbitrary input to an int, returning 0 on any failure.
+    Catches NaN/inf (which `int()` raises on) along with the usual
+    type/value errors so a malformed numeric field never aborts order
+    transformation. Caller is expected to apply its own `> 0` guard."""
+    try:
+        return int(_to_float(value, 0.0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def transform_data(data: dict, token: str) -> dict:
     """Transform OpenAlgo order request to IIFL Capital format."""
     transformed = {
         "instrumentId": str(token),
         "exchange": map_exchange(data.get("exchange", "")),
         "transactionType": (data.get("action") or "").upper(),
-        "quantity": str(int(float(data.get("quantity", 0)))),
+        "quantity": str(data.get("quantity", "0")),
         "orderComplexity": data.get("order_complexity", "REGULAR"),
         "product": map_product_type(data.get("product", "MIS")),
         "orderType": map_order_type(data.get("pricetype", "MARKET")),
@@ -89,7 +100,11 @@ def transform_data(data: dict, token: str) -> dict:
     if transformed["orderType"] in ("SL", "SLM"):
         transformed["slTriggerPrice"] = _to_float(data.get("trigger_price", 0.0))
 
-    disclosed_qty = int(float(data.get("disclosed_quantity", 0) or 0))
+    # Coerce to int via float so zero-equivalent strings ("0", "0.0", " ")
+    # don't slip through and surface as a meaningless `disclosedQuantity: 0`
+    # field to the broker. NaN / inf / bad input fall back to 0 cleanly
+    # instead of raising and aborting the whole order.
+    disclosed_qty = _to_int_or_zero(data.get("disclosed_quantity"))
     if disclosed_qty > 0:
         transformed["disclosedQuantity"] = str(disclosed_qty)
 
@@ -103,9 +118,8 @@ def transform_modify_order_data(data: dict) -> dict:
     """Transform OpenAlgo modify request to IIFL Capital format."""
     transformed = {}
 
-    quantity = data.get("quantity")
-    if quantity is not None:
-        transformed["quantity"] = str(int(float(data.get("quantity", 0))))
+    if data.get("quantity") is not None:
+        transformed["quantity"] = str(data.get("quantity"))
 
     pricetype = data.get("pricetype")
     if pricetype:
@@ -121,10 +135,12 @@ def transform_modify_order_data(data: dict) -> dict:
     if "validity" in data:
         transformed["validity"] = map_validity(data.get("validity", "DAY"))
 
-    disclosed_qty = data.get("disclosed_quantity")
-    if disclosed_qty is not None:
-        disclosed_qty = int(float(disclosed_qty or 0))
-        if disclosed_qty > 0:
-            transformed["disclosedQuantity"] = str(disclosed_qty)
+    # Coerce to int via float so zero-equivalent strings ("0", "0.0", " ")
+    # don't slip through and surface as a meaningless `disclosedQuantity: 0`
+    # field to the broker. NaN / inf / bad input fall back to 0 cleanly
+    # instead of raising and aborting the whole order.
+    disclosed_qty = _to_int_or_zero(data.get("disclosed_quantity"))
+    if disclosed_qty > 0:
+        transformed["disclosedQuantity"] = str(disclosed_qty)
 
     return transformed
