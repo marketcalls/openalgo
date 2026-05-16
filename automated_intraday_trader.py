@@ -6,8 +6,9 @@ Backend  : OpenAlgo REST API → Dhan broker
 
 Risk model:
   - 1 trade deploys Rs. 1 Lakh of capital
-  - Max loss per trade = 1% of Rs. 1 Lakh = Rs. 1,000
-  - Quantity = min(1000 / risk_pts_per_share, 1,00,000 / entry_price)
+  - Quantity = floor(capital_per_trade / entry_price)
+  - SL = first 15-min candle low (BUY) / high (SELL)
+  - If SL distance > 2% of entry, SL tightened to 60% into the first candle from its high (BUY) / low (SELL)
 """
 
 import logging
@@ -50,19 +51,18 @@ logger = logging.getLogger(__name__)
 class Config:
     # OpenAlgo connection
     openalgo_url: str = os.getenv("OPENALGO_URL", "http://127.0.0.1:5000")
-    api_key: str = os.getenv("OPENALGO_API_KEY", "ebb5694faae8023439faf2d4b84fd46872d9cc04df67034549c39b0b7de630d3")
+    api_key: str = os.getenv("OPENALGO_API_KEY", "e3fffb919d48184f855278f3601f0ec15ae09100bf447d7808b70391b3166576")
 
     # Paper trading — no real orders sent, uses live market data for signals
     paper_trade: bool = os.getenv("PAPER_TRADE", "true").lower() != "false"
 
     # Capital
     # total_capital is used only for daily drawdown calculation.
-    # Each trade independently deploys capital_per_trade with risk_per_trade_rs max loss.
     total_capital: float = float(os.getenv("TRADING_CAPITAL", "600000"))  # Rs. 6 Lakh (6 × 1L)
     capital_per_trade: float = 100000   # Rs. 1 Lakh deployed per trade
-    risk_per_trade_rs: float = 1000     # Rs. 1,000 max loss per trade (1% of 1L)
 
-    max_trades: int = 6
+    max_trades: int = 10
+    rvol_threshold: float = 1.5          # yesterday's volume / 20-day avg must exceed this
     max_consecutive_losses: int = 3
     max_daily_drawdown_pct: float = 0.03    # 3% of total_capital
 
@@ -77,11 +77,7 @@ class Config:
     no_new_trade_after: str = "14:20"
     square_off_time: str = "15:10"
 
-    # Supertrend parameters
-    st_period: int = 7
-    st_multiplier: float = 3.0
-
-    # Trailing SL (activates after partial booking or 1:1 for single-share trades)
+    # Trailing SL (activates after partial booking at the 0.6R target)
     trailing_trigger_pct: float = 0.25      # trigger every 25% of risk
     trailing_step_pct: float = 0.25         # step SL by 25% of risk
 
@@ -132,7 +128,7 @@ EQUITY_UNIVERSE: List[str] = [
     "NTPC",       "POWERGRID",  "LT",            "ADANIPORTS", "ADANIENT",
     "ULTRACEMCO", "GRASIM",     "SHREECEM",      "AMBUJACEM",  "DALBHARAT",
     "ACC",        "JKCEMENT",   "RAMCOCEM",      "ABB",        "SIEMENS",
-    "CGPOWER",    "BHEL",       "HAL",           "BEL",        "GMRINFRA",
+    "CGPOWER",    "BHEL",       "HAL",           "BEL",        "GMRAIRPORT",
     "RVNL",       "IRFC",       "BHARTIARTL",
     # ── Chemicals ────────────────────────────────────────────────────────────────
     "UPL",        "PIDILITIND", "TATACHEM",      "SRF",        "NAVINFLUOR",
@@ -149,9 +145,9 @@ EQUITY_UNIVERSE: List[str] = [
     # ── PSE & Government ─────────────────────────────────────────────────────────
     "IRCTC",      "PFC",        "REC",           "LICI",
     # ── Media & Entertainment ────────────────────────────────────────────────────
-    "PVRINOX",    "SUNTVNETWORK",
+    "PVRINOX",    "SUNTV",
     # ── Diversified / New-Age ────────────────────────────────────────────────────
-    "INDIGO",     "INDIANHOTEL","NYKAA",         "POLICYBZR",  "PAYTM",
+    "INDIGO",     "INDHOTEL",   "NYKAA",         "POLICYBZR",  "PAYTM",
 ]
 
 
@@ -295,63 +291,11 @@ class OpenAlgoClient:
         return resp.get("data", []) if resp.get("status") == "success" else []
 
 
-# ─── Technical Indicators (pure-pandas, no extra deps) ───────────────────────────
+# ─── Technical Indicators ────────────────────────────────────────────────────────
 class TA:
     @staticmethod
     def ema(s: pd.Series, n: int) -> pd.Series:
         return cast(pd.Series, s.ewm(span=n, adjust=False).mean())
-
-    @staticmethod
-    def rsi(s: pd.Series, n: int = 14) -> pd.Series:
-        d = s.diff()
-        gain = cast(pd.Series, d.clip(lower=0).ewm(com=n - 1, adjust=False).mean())
-        loss = cast(pd.Series, (-d.clip(upper=0)).ewm(com=n - 1, adjust=False).mean())
-        return cast(pd.Series, 100 - 100 / (1 + gain / loss))
-
-    @staticmethod
-    def macd_hist(s: pd.Series, fast=12, slow=26, sig=9) -> pd.Series:
-        m = s.ewm(span=fast, adjust=False).mean() - s.ewm(span=slow, adjust=False).mean()
-        return m - m.ewm(span=sig, adjust=False).mean()
-
-    @staticmethod
-    def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
-        h, l, pc = df["high"], df["low"], df["close"].shift()
-        tr = cast(pd.Series, pd.concat([(h - l), (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1))
-        return cast(pd.Series, tr.ewm(com=n - 1, adjust=False).mean())
-
-    @staticmethod
-    def stoch_k(df: pd.DataFrame, k_period: int = 14) -> pd.Series:
-        """Fast Stochastic %K (raw, unsmoothed). Returns 50 when price range is zero."""
-        lo  = df["low"].rolling(k_period).min()
-        hi  = df["high"].rolling(k_period).max()
-        rng = hi - lo
-        return cast(pd.Series, (df["close"] - lo).div(rng).mul(100).where(rng != 0, 50.0))
-
-    @staticmethod
-    def supertrend(df: pd.DataFrame, n: int = 7, m: float = 3.0) -> pd.Series:
-        mid = (df["high"] + df["low"]) / 2
-        atr = TA.atr(df, n)
-        upper = mid + m * atr
-        lower = mid - m * atr
-        st = pd.Series(index=df.index, dtype=float)
-        dir_ = pd.Series(1, index=df.index, dtype=int)
-
-        for i in range(1, len(df)):
-            if df["close"].iat[i - 1] <= upper.iat[i - 1]:
-                upper.iat[i] = min(upper.iat[i], upper.iat[i - 1])
-            if df["close"].iat[i - 1] >= lower.iat[i - 1]:
-                lower.iat[i] = max(lower.iat[i], lower.iat[i - 1])
-
-            if df["close"].iat[i] > upper.iat[i]:
-                dir_.iat[i] = 1
-            elif df["close"].iat[i] < lower.iat[i]:
-                dir_.iat[i] = -1
-            else:
-                dir_.iat[i] = dir_.iat[i - 1]
-
-            st.iat[i] = lower.iat[i] if dir_.iat[i] == 1 else upper.iat[i]
-
-        return st
 
 
 # ─── Scanned Stock ────────────────────────────────────────────────────────────────
@@ -365,6 +309,9 @@ class ScannedStock:
     fc_low: float = 0.0
     fc_range: float = 0.0
     candle_captured: bool = False
+    breakout_confirmed: bool = False    # True once a 5m bar closed beyond the ORB level
+    vwap: float = 0.0                   # VWAP updated each 5m cycle; used for pullback entries
+    prev_close: float = 0.0             # yesterday's close — used for gap filter
 
     @property
     def symbol(self) -> str:           # symbol == base for equity (no expiry suffix)
@@ -381,9 +328,7 @@ class Trade:
     qty: int
     remaining: int
     direction: str = "BUY"             # "BUY" or "SELL"
-    partial_done: bool = False
     trail_sl: float = 0.0
-    peak_profit_pts: float = 0.0
     realized_pnl: float = 0.0
     closed: bool = False
 
@@ -427,20 +372,11 @@ class RiskManager:
         self._halt_reason = ""
         return False
 
-    def calc_qty(self, entry: float, sl: float) -> int:
-        """
-        Qty = min(
-            floor(risk_per_trade_rs / risk_pts),   ← risk limit: max Rs.1,000 loss
-            floor(capital_per_trade  / entry)       ← capital limit: max Rs.1L deployed
-        )
-        Minimum 1 share.
-        """
-        risk_pts = abs(entry - sl)
-        if risk_pts <= 0:
+    def calc_qty(self, entry: float) -> int:
+        """Qty = floor(capital_per_trade / entry). Minimum 1 share."""
+        if entry <= 0:
             return 0
-        risk_qty    = int(self.config.risk_per_trade_rs / risk_pts)
-        capital_qty = int(self.config.capital_per_trade / entry)
-        return max(1, min(risk_qty, capital_qty))
+        return max(1, int(self.config.capital_per_trade / entry))
 
     def record(self, pnl: float):
         self.daily_pnl += pnl
@@ -476,20 +412,38 @@ class TradeManager:
         entry = ltp
         is_long = stock.direction == "BUY"
 
+        if stock.fc_range <= 0:
+            logger.warning(f"Skip {stock.base}: zero first-candle range")
+            return False
+
         if is_long:
-            sl = stock.fc_low               # classic ORB: SL below first candle low
+            sl = stock.fc_low
+            # If fc_low is more than 2% below entry, tighten SL to 60% into the candle from its high
+            if (entry - sl) / entry > 0.02:
+                sl = stock.fc_high - 0.60 * stock.fc_range
+                logger.info(
+                    f"Tight SL {stock.base}: fc_low too far (>2%) → "
+                    f"SL=fc_high-60%range={sl:.2f}"
+                )
             if sl >= entry:
                 logger.warning(f"Skip {stock.base}: SL {sl:.2f} >= entry {entry:.2f}")
                 return False
-            target = entry + (entry - sl)   # 1:1 risk-reward target
+            target = entry + 2 * (entry - sl)   # 1:2 R:R
         else:
-            sl = stock.fc_high              # classic ORB: SL above first candle high
+            sl = stock.fc_high
+            # If fc_high is more than 2% above entry, tighten SL to 60% into the candle from its low
+            if (sl - entry) / entry > 0.02:
+                sl = stock.fc_low + 0.60 * stock.fc_range
+                logger.info(
+                    f"Tight SL {stock.base}: fc_high too far (>2%) → "
+                    f"SL=fc_low+60%range={sl:.2f}"
+                )
             if sl <= entry:
                 logger.warning(f"Skip {stock.base}: SL {sl:.2f} <= entry {entry:.2f}")
                 return False
-            target = entry - (sl - entry)   # 1:1 risk-reward target
+            target = entry - 2 * (sl - entry)   # 1:2 R:R
 
-        qty = self.risk.calc_qty(entry, sl)
+        qty = self.risk.calc_qty(entry)
         if qty <= 0:
             logger.warning(f"Skip {stock.base}: zero quantity")
             return False
@@ -536,7 +490,6 @@ class TradeManager:
 
     def _tick(self, trade: Trade, ltp: float):
         is_long = trade.direction == "BUY"
-        close_action = "SELL" if is_long else "BUY"
 
         # ── SL check ──────────────────────────────────────────────────────────
         sl_hit = (ltp <= trade.trail_sl) if is_long else (ltp >= trade.trail_sl)
@@ -546,52 +499,28 @@ class TradeManager:
 
         profit_pts = (ltp - trade.entry) if is_long else (trade.entry - ltp)
 
-        # ── Partial booking at 1:1 ────────────────────────────────────────────
+        # ── Full exit at 1:2 target ───────────────────────────────────────────
         target_hit = (ltp >= trade.target) if is_long else (ltp <= trade.target)
-        if not trade.partial_done and target_hit:
-            half = trade.qty // 2           # equity: shares, no lot rounding
-            if half > 0:
-                self.api.place_order(trade.symbol, close_action, half)
-                trade.remaining -= half
-                pnl_so_far = half * profit_pts
-                trade.realized_pnl += pnl_so_far
-                logger.info(
-                    f"Partial {close_action} {trade.base} | qty={half} @ {ltp:.2f} "
-                    f"partial PnL=Rs.{pnl_so_far:,.2f}"
-                )
-            # Activate trailing SL even for qty=1 (cannot split, but trail still runs)
-            trade.partial_done = True
-            trade.trail_sl = trade.entry
-            logger.info(f"Breakeven SL {trade.base} -> {trade.trail_sl:.2f}")
+        if target_hit:
+            self._close(trade, ltp, "TARGET_1:2")
+            return
 
-        # ── Trail SL for remaining quantity ───────────────────────────────────
-        if trade.partial_done and trade.remaining > 0:
-            # Measure excess profit ABOVE the 1:1 target so that at exactly
-            # 1:1 (where partial booking fires) excess=0, steps=0, new_sl=entry.
-            # Without this, steps=4 and new_sl jumps to the target price,
-            # causing an immediate close on the same tick as partial booking.
-            excess = profit_pts - trade.risk_pts
-            if excess > trade.peak_profit_pts:
-                trade.peak_profit_pts = excess
-
+        # ── Trail SL: step 25% of risk for every 25% profit advance ──────────
+        if profit_pts > 0:
             trig  = trade.risk_pts * self.config.trailing_trigger_pct
             step  = trade.risk_pts * self.config.trailing_step_pct
-            steps = int(trade.peak_profit_pts / trig) if trig > 0 else 0
+            steps = int(profit_pts / trig) if trig > 0 else 0
 
             if is_long:
                 new_sl = trade.entry + steps * step
                 if new_sl > trade.trail_sl:
                     trade.trail_sl = new_sl
-                    logger.info(f"Trail SL {trade.base} -> {new_sl:.2f}")
-                if ltp <= trade.trail_sl:
-                    self._close(trade, ltp, "TRAIL_SL")
+                    logger.info(f"Trail SL {trade.base} → {new_sl:.2f}")
             else:
                 new_sl = trade.entry - steps * step
                 if new_sl < trade.trail_sl:
                     trade.trail_sl = new_sl
-                    logger.info(f"Trail SL {trade.base} -> {new_sl:.2f}")
-                if ltp >= trade.trail_sl:
-                    self._close(trade, ltp, "TRAIL_SL")
+                    logger.info(f"Trail SL {trade.base} → {new_sl:.2f}")
 
     def _close(self, trade: Trade, ltp: float, reason: str):
         if trade.closed:
@@ -704,8 +633,8 @@ class Scanner:
         return (oi_up and price_up) if direction == "BUY" else (oi_up and price_down)
 
     def scan(self) -> List[ScannedStock]:
-        # Use yesterday as end date — today's incomplete daily candle during the
-        # 9:15–9:30 scan window corrupts EMA20, RSI, Supertrend, and MACD values.
+        # Use yesterday as end date — today's incomplete candle during the scan
+        # window would corrupt EMA20 and RVOL calculations.
         hist_end   = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
         hist_start = (date.today() - timedelta(days=51)).strftime("%Y-%m-%d")
         qualified: List[ScannedStock] = []
@@ -745,53 +674,39 @@ class Scanner:
         return selected
 
     def _evaluate(self, base: str, df: pd.DataFrame) -> Optional[ScannedStock]:
+        """
+        Two-filter pre-market screen:
+          1. EMA20 trend  — daily close above/below the 20-day EMA sets direction.
+          2. RVOL spike   — yesterday's volume must exceed the 20-day avg by rvol_threshold.
+        Stocks are ranked by RVOL so the highest-volume movers get slots first.
+        """
         close = cast(pd.Series, df["close"])
         vol   = cast(pd.Series, df["volume"])
 
         ema20 = TA.ema(close, 20)
-        st    = TA.supertrend(df, self.config.st_period, self.config.st_multiplier)
-        if pd.isna(st.iloc[-1]):
+        if pd.isna(ema20.iloc[-1]):
             return None
 
-        vol_sma10 = cast(pd.Series, vol.rolling(10).mean())
-        if vol.iloc[-1] <= vol_sma10.iloc[-1] * 2:
+        vol_avg20 = vol.rolling(20).mean()
+        if pd.isna(vol_avg20.iloc[-1]) or vol_avg20.iloc[-1] == 0:
             return None
 
-        rsi_val  = TA.rsi(close, 14).iloc[-1]
-        hist_val = TA.macd_hist(close).iloc[-1]
-        rel_vol  = vol.iloc[-1] / vol_sma10.iloc[-1]
+        rvol = vol.iloc[-1] / vol_avg20.iloc[-1]
+        if rvol < self.config.rvol_threshold:
+            return None
 
-        stk      = TA.stoch_k(df, 14)
-        stk_prev = stk.iloc[-2]
-        stk_curr = stk.iloc[-1]
+        c = close.iloc[-1]
+        e = ema20.iloc[-1]
 
-        c   = close.iloc[-1]
-        s   = st.iloc[-1]
-        e   = ema20.iloc[-1]
-        c20 = close.iloc[-20]
-
-        # ── LONG setup (ChartInk: Fast Stoch crossed above 90) ────────────────
-        # RSI upper bound is 80 (not 70) — when stoch crosses 90 the stock is
-        # in strong momentum and RSI is often in the 70-80 range, not below 70.
-        if c > e and c > s and 55 <= rsi_val <= 80 and hist_val > 0 and stk_prev < 90 <= stk_curr:
+        if c > e:
             direction = "BUY"
-            price_str = (c - c20) / c20 * 100
-            trend_str = (c - s) / c * 100
-            rsi_norm  = (rsi_val - 55) / 25
-
-        # ── SHORT setup (ChartInk: Fast Stoch crossed below 10) ──────────────
-        # Mirror of BUY: stoch crosses below 10 (oversold breakdown), RSI 20-45.
-        elif c < e and c < s and 20 <= rsi_val <= 45 and hist_val < 0 and stk_curr <= 10 < stk_prev:
+        elif c < e:
             direction = "SELL"
-            price_str = (c20 - c) / c20 * 100
-            trend_str = (s - c) / c * 100
-            rsi_norm  = (45 - rsi_val) / 25
-
         else:
             return None
 
-        score = (rel_vol / 5) * 0.35 + (price_str / 20) * 0.25 + (trend_str / 5) * 0.25 + rsi_norm * 0.15
-        return ScannedStock(base=base, score=score, direction=direction)
+        return ScannedStock(base=base, score=rvol, direction=direction,
+                            prev_close=float(close.iloc[-1]))
 
     def capture_first_candle(self, stock: ScannedStock) -> bool:
         today = date.today().strftime("%Y-%m-%d")
@@ -805,15 +720,29 @@ class Scanner:
             return False
 
         row = morning.iloc[0]
+
+        # Gap filter: skip if today's open is more than 2% away from yesterday's close.
+        # Gap stocks have erratic ORB behaviour — the range is distorted by the gap itself.
+        if stock.prev_close > 0:
+            gap_pct = abs(row["open"] - stock.prev_close) / stock.prev_close * 100
+            if gap_pct > 2.0:
+                logger.info(
+                    f"Skip {stock.base}: gap {gap_pct:.1f}% > 2% "
+                    f"(open={row['open']:.2f} prev_close={stock.prev_close:.2f})"
+                )
+                return False
+
         stock.fc_open  = row["open"]
         stock.fc_high  = row["high"]
         stock.fc_low   = row["low"]
         stock.fc_range = row["high"] - row["low"]
+        stock.vwap     = (row["high"] + row["low"] + row["close"]) / 3  # seed VWAP from first candle
         stock.candle_captured = True
         logger.info(
             f"First candle {stock.base} [{stock.direction}]: "
             f"O={row['open']:.2f} H={row['high']:.2f} "
-            f"L={row['low']:.2f} C={row['close']:.2f} range={stock.fc_range:.2f}"
+            f"L={row['low']:.2f} C={row['close']:.2f} range={stock.fc_range:.2f} "
+            f"seed_VWAP={stock.vwap:.2f}"
         )
         return True
 
@@ -859,7 +788,21 @@ class AutomatedTrader:
             self._candles_done = True
             logger.info("Late-start recovery complete — entering monitoring loop")
 
-    def _check_breakouts(self):
+    def _check_entries(self):
+        """
+        Two-phase entry logic — runs every 5-minute bar close.
+
+        Phase 1 (breakout confirmation):
+            Wait for a 5m bar to CLOSE above fc_high (BUY) or below fc_low (SELL).
+            This confirms the ORB is valid before looking for a pullback.
+
+        Phase 2 (pullback-continuation entry):
+            After breakout is confirmed, wait for price to retreat toward VWAP.
+            Enter when:
+              BUY  — LTP is above VWAP but within 1% of fc_high (retest / pullback zone)
+              SELL — LTP is below VWAP but within 1% of fc_low  (retest / pullback zone)
+            VWAP is recomputed from all closed 5m bars on the same fetch.
+        """
         today  = date.today().strftime("%Y-%m-%d")
         now_ts = datetime.now()
         cutoff = now_ts - timedelta(minutes=5)
@@ -870,8 +813,6 @@ class AutomatedTrader:
             if not self.trade_mgr.can_enter(stock.symbol):
                 continue
 
-            # Skip fetch if the last 5m bar we acted on hasn't rolled yet.
-            # A new bar closes every 5 minutes, so re-fetching sooner is wasteful.
             last = self._last_5m_bar.get(stock.symbol)
             if last is not None and now_ts < last + timedelta(minutes=5):
                 continue
@@ -888,25 +829,91 @@ class AutomatedTrader:
             bar_ts = latest.name
             if hasattr(bar_ts, "to_pydatetime"):
                 bar_ts = bar_ts.to_pydatetime().replace(tzinfo=None)
-            self._last_5m_bar[stock.symbol] = bar_ts  # cache so we skip until next bar
+            self._last_5m_bar[stock.symbol] = bar_ts
 
             is_long = stock.direction == "BUY"
-            triggered = (
-                (is_long     and latest["close"] > stock.fc_high) or
-                (not is_long and latest["close"] < stock.fc_low)
-            )
 
-            if triggered:
-                label     = "BREAKOUT" if is_long else "BREAKDOWN"
-                ref       = stock.fc_high if is_long else stock.fc_low
-                ref_label = "high" if is_long else "low"
-                logger.info(
-                    f"{label} {stock.base}: 5m close {latest['close']:.2f} "
-                    f"vs 15m {ref_label} {ref:.2f}"
+            # Update VWAP from all closed 5m bars (typical price × volume, cumulative)
+            typical    = (closed["high"] + closed["low"] + closed["close"]) / 3
+            total_vol  = closed["volume"].sum()
+            if total_vol > 0:
+                stock.vwap = float((typical * closed["volume"]).sum() / total_vol)
+
+            # ── Phase 1: ORB breakout confirmation ───────────────────────────────
+            if not stock.breakout_confirmed:
+                ref   = stock.fc_high if is_long else stock.fc_low
+                close = latest["close"]
+
+                broke = (
+                    (is_long     and close > stock.fc_high) or
+                    (not is_long and close < stock.fc_low)
                 )
-                ltp = self.api.quote(stock.symbol, self.config.exchange)
-                if ltp:
-                    self.trade_mgr.enter(stock, ltp)
+
+                if broke:
+                    # Measure how far beyond the ORB level the 5m bar closed.
+                    beyond_pct = (
+                        (close - stock.fc_high) / stock.fc_high  # BUY: positive = above high
+                        if is_long else
+                        (stock.fc_low - close)  / stock.fc_low   # SELL: positive = below low
+                    )
+
+                    if beyond_pct <= 0.002:
+                        # Tight breakout (≤ 0.20%): enter immediately — the move is too small
+                        # to expect a meaningful pullback, so we buy/sell close to the ORB level.
+                        ltp = self.api.quote(stock.symbol, self.config.exchange)
+                        if ltp is not None:
+                            label = "high" if is_long else "low"
+                            logger.info(
+                                f"Quick entry {stock.base} [{stock.direction}]: "
+                                f"5m close {close:.2f} just {beyond_pct*100:.2f}% above "
+                                f"fc_{label}={ref:.2f}"
+                            )
+                            self.trade_mgr.enter(stock, ltp)
+                    else:
+                        # Strong breakout (> 0.20%): confirm and wait for the pullback retest.
+                        stock.breakout_confirmed = True
+                        label = "BREAKOUT" if is_long else "BREAKDOWN"
+                        logger.info(
+                            f"ORB {label} {stock.base}: 5m close {close:.2f} "
+                            f"vs {'high' if is_long else 'low'} {ref:.2f} "
+                            f"({beyond_pct*100:.2f}%) | VWAP={stock.vwap:.2f}"
+                        )
+
+                continue   # never enter on the breakout bar via Phase 2 — handled above
+
+            # ── Phase 2: pullback to VWAP — enter as continuation ────────────────
+            if stock.vwap <= 0:
+                continue
+            ltp = self.api.quote(stock.symbol, self.config.exchange)
+            if ltp is None:
+                continue
+
+            if is_long:
+                # Retest zone: price pulled back to within ±1% of fc_high AND is above VWAP.
+                # "Within 1% of fc_high" ensures it's a genuine retest of the breakout level,
+                # not just any price above VWAP (which could be far from the ORB level).
+                in_zone = (
+                    stock.fc_high * 0.99 <= ltp <= stock.fc_high * 1.01
+                    and ltp >= stock.vwap
+                )
+            else:
+                # Retest zone: price bounced back to within ±1% of fc_low AND is below VWAP.
+                # Without the fc_low cap, a partially-recovered breakdown (price back above
+                # fc_low toward VWAP) would incorrectly trigger a short entry.
+                in_zone = (
+                    stock.fc_low * 0.99 <= ltp <= stock.fc_low * 1.01
+                    and ltp <= stock.vwap
+                )
+
+            if in_zone:
+                ref_price = stock.fc_high if is_long else stock.fc_low
+                logger.info(
+                    f"Pullback entry {stock.base} [{stock.direction}]: "
+                    f"LTP={ltp:.2f} VWAP={stock.vwap:.2f} "
+                    f"{'fc_high' if is_long else 'fc_low'}={ref_price:.2f} "
+                    f"target=+{0.60 * stock.fc_range:.2f}pts"
+                )
+                self.trade_mgr.enter(stock, ltp)
 
     def _ping(self) -> bool:
         try:
@@ -921,7 +928,6 @@ class AutomatedTrader:
         logger.info(f"  Exchange      : NSE (Cash Equity)")
         logger.info(f"  Total capital : Rs.{self.config.total_capital:,.0f}")
         logger.info(f"  Per trade     : Rs.{self.config.capital_per_trade:,.0f} deployed")
-        logger.info(f"  Max loss/trade: Rs.{self.config.risk_per_trade_rs:,.0f}")
         logger.info(f"  Max trades    : {self.config.max_trades}")
         logger.info("=" * 60)
 
@@ -959,13 +965,13 @@ class AutomatedTrader:
                             f"Candle capture complete — {n}/{len(self.selected)} ready"
                         )
 
-                # ── 9:35–14:20  Breakout / Breakdown entries ──────────────────
+                # ── 9:35–14:20  Pullback-continuation entries ─────────────────
                 if (
                     self._candles_done
                     and self._between(self.config.entry_start, self.config.no_new_trade_after)
                     and not self.risk.halted
                 ):
-                    self._check_breakouts()
+                    self._check_entries()
 
                 # ── Always monitor open trades ────────────────────────────────
                 if self._candles_done and self.trade_mgr.active:
@@ -999,7 +1005,6 @@ if __name__ == "__main__":
     print(f"\n  Mode          : {mode}")
     print(f"  Exchange      : NSE Cash Equity")
     print(f"  Capital/trade : Rs.{cfg.capital_per_trade:,.0f}")
-    print(f"  Max loss/trade: Rs.{cfg.risk_per_trade_rs:,.0f}")
     if cfg.paper_trade:
         print("  Paper mode ON — no real orders will be sent.")
         print("  Set PAPER_TRADE=false to go live.\n")
