@@ -30,7 +30,7 @@ import requests
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # load .env so OPENALGO_API_KEY and PAPER_TRADE are picked up
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
 except ImportError:
     pass  # python-dotenv not installed — rely on shell environment
 
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Config:
     openalgo_url: str  = os.getenv("OPENALGO_URL", "http://127.0.0.1:5000")
-    api_key: str       = os.getenv("OPENALGO_API_KEY", "")
+    api_key: str       = os.getenv("OPENALGO_API_KEY", "e3fffb919d48184f855278f3601f0ec15ae09100bf447d7808b70391b3166576")
 
     paper_trade: bool  = os.getenv("PAPER_TRADE", "true").lower() != "false"
 
@@ -109,7 +109,6 @@ SECTOR_INDICES: Dict[str, Dict[str, str]] = {
     "NIFTY OIL GAS":           {"symbol": "NIFTY OIL AND GAS",  "exchange": "NSE_INDEX"},
     "NIFTY FIN SVC":           {"symbol": "FINNIFTY",           "exchange": "NSE_INDEX"},
     "NIFTY CONSUMER DURABLES": {"symbol": "NIFTY CONSR DURBL",  "exchange": "NSE_INDEX"},
-    "NIFTY CHEMICALS":         {"symbol": "NIFTY CHEMICALS",    "exchange": "NSE_INDEX"},
 }
 
 # Stock → sector name (STOCK_SECTOR)
@@ -173,20 +172,17 @@ STOCK_SECTOR: Dict[str, str] = {
     "NUVOCO":     "NIFTY INFRA", "INDIACEM":   "NIFTY INFRA", "JKLAKSHMI":  "NIFTY INFRA",
     "PRSMJOHNSN": "NIFTY INFRA", "ORIENTCEM":  "NIFTY INFRA", "STARCEMENT": "NIFTY INFRA",
     "ABB":        "NIFTY INFRA", "SIEMENS":    "NIFTY INFRA", "CGPOWER":    "NIFTY INFRA",
-    "BHEL":       "NIFTY INFRA", "GMRINFRA":   "NIFTY INFRA", "BHARTIARTL": "NIFTY INFRA",
+    "BHEL":       "NIFTY INFRA", "GMRAIRPORT": "NIFTY INFRA", "BHARTIARTL": "NIFTY INFRA",
     # Fin Services (12)
     "BAJFINANCE": "NIFTY FIN SVC","SBILIFE":   "NIFTY FIN SVC","BAJAJFINSV": "NIFTY FIN SVC",
     "HDFCLIFE":   "NIFTY FIN SVC","ICICIPRULI":"NIFTY FIN SVC","SBICARD":    "NIFTY FIN SVC",
     "CHOLAFIN":   "NIFTY FIN SVC","M&MFIN":    "NIFTY FIN SVC","LICHSGFIN":  "NIFTY FIN SVC",
     "MFSL":       "NIFTY FIN SVC","ABCAPITAL":  "NIFTY FIN SVC","PNBHOUSING": "NIFTY FIN SVC",
-    # Chemicals (20)
-    "HSCL":       "NIFTY CHEMICALS","UPL":     "NIFTY CHEMICALS","PIDILITIND":"NIFTY CHEMICALS",
-    "TATACHEM":   "NIFTY CHEMICALS","SOLARINDS":"NIFTY CHEMICALS","SRF":      "NIFTY CHEMICALS",
-    "COROMANDEL": "NIFTY CHEMICALS","NAVINFLUOR":"NIFTY CHEMICALS","DEEPAKNTR":"NIFTY CHEMICALS",
-    "PIIND":      "NIFTY CHEMICALS","AARTIIND": "NIFTY CHEMICALS","DEEPAKFERT":"NIFTY CHEMICALS",
-    "ATUL":       "NIFTY CHEMICALS","FLUOROCHEM":"NIFTY CHEMICALS","LINDEINDIA":"NIFTY CHEMICALS",
-    "SWANCORP":   "NIFTY CHEMICALS","PCBL":     "NIFTY CHEMICALS","CHAMBLFERT":"NIFTY CHEMICALS",
-    "SUMICHEM":   "NIFTY CHEMICALS","BAYERCROP":"NIFTY CHEMICALS",
+    # Chemicals — unmapped (no valid NSE_INDEX sector in Dhan; direction from daily indicators)
+    # HSCL, UPL, PIDILITIND, TATACHEM, SOLARINDS, SRF, COROMANDEL, NAVINFLUOR, DEEPAKNTR,
+    # PIIND, AARTIIND, DEEPAKFERT, ATUL, FLUOROCHEM, LINDEINDIA, SWANCORP, PCBL,
+    # CHAMBLFERT, SUMICHEM, BAYERCROP are intentionally left out of STOCK_SECTOR so they
+    # receive "BOTH" direction from daily indicators when require_sector_filter=False.
     # Consumer Durables (14)
     "DIXON":      "NIFTY CONSUMER DURABLES","TITAN":     "NIFTY CONSUMER DURABLES",
     "KALYANKJIL": "NIFTY CONSUMER DURABLES","AMBER":     "NIFTY CONSUMER DURABLES",
@@ -208,7 +204,7 @@ STOCK_SECTOR: Dict[str, str] = {
     "APOLLOHOSP": "NIFTY HEALTHCARE","MAXHEALTH": "NIFTY HEALTHCARE",
     "FORTIS":     "NIFTY HEALTHCARE","SYNGENE":   "NIFTY HEALTHCARE",
     # Media (3)
-    "PVRINOX":    "NIFTY MEDIA", "SUNTVNETWORK":"NIFTY MEDIA", "ZEEL":       "NIFTY MEDIA",
+    "PVRINOX":    "NIFTY MEDIA", "SUNTV":      "NIFTY MEDIA", "ZEEL":       "NIFTY MEDIA",
 }
 
 
@@ -225,7 +221,14 @@ class OpenAlgoClient:
         for attempt in range(retries):
             try:
                 r = self.session.post(url, json=payload, timeout=10)
-                r.raise_for_status()
+                if not r.ok:
+                    try:
+                        body = r.json()
+                    except Exception:
+                        body = {}
+                    msg = body.get("message", r.text[:200])
+                    logger.error(f"API error {endpoint}: HTTP {r.status_code} — {msg}")
+                    return {**body, "status": "error"}
                 return r.json()
             except requests.Timeout:
                 logger.warning(f"Timeout {endpoint} (attempt {attempt+1})")
@@ -714,6 +717,20 @@ class Scanner:
                 if base and base not in _INDEX_FUTURES:
                     bases.add(base)
 
+        # Cross-validate: keep only symbols confirmed in NSE equity master contract.
+        # Eliminates newly listed stocks, renamed/suspended equities, and symbols
+        # whose F&O base string doesn't match the NSE cash-equity symbol exactly.
+        nse_instruments = self.api.instruments(exchange="NSE")
+        if nse_instruments:
+            nse_symbols = {inst.get("symbol", "") for inst in nse_instruments}
+            before = len(bases)
+            bases = {b for b in bases if b in nse_symbols}
+            dropped = before - len(bases)
+            if dropped:
+                logger.info(f"Pre-filter: removed {dropped} F&O bases absent from NSE equity master")
+        else:
+            logger.warning("NSE master contract unavailable — skipping equity cross-validation")
+
         result = sorted(bases) if bases else sorted(STOCK_SECTOR.keys())
         logger.info(f"Universe: {len(result)} F&O equity stocks")
         return result
@@ -726,6 +743,9 @@ class Scanner:
         universe = self.fetch_universe()
         logger.info(f"Scanning {len(universe)} stocks with sector filter...")
 
+        consecutive_failures = 0
+        _ABORT_THRESHOLD = 10  # systemic auth/network failure if this many in a row
+
         for base in universe:
             allowed = self.sa.allowed_direction(base)
             if allowed is None:
@@ -734,13 +754,28 @@ class Scanner:
             try:
                 df = self.api.history(base, "D", hist_start, hist_end, exchange="NSE")
                 if df is None or len(df) < 30:
+                    consecutive_failures += 1
+                    if consecutive_failures >= _ABORT_THRESHOLD:
+                        logger.error(
+                            f"Aborting scan — {consecutive_failures} consecutive history failures "
+                            "(auth error or broker outage)"
+                        )
+                        break
                     continue
+                consecutive_failures = 0
                 stock = self._evaluate(base, df, allowed)
                 if stock:
                     qualified.append(stock)
                     logger.info(f"✓ {base} {stock.direction} [{stock.sector}] score={stock.score:.3f}")
             except Exception as e:
                 logger.warning(f"Error scanning {base}: {e}")
+                consecutive_failures += 1
+                if consecutive_failures >= _ABORT_THRESHOLD:
+                    logger.error(
+                        f"Aborting scan — {consecutive_failures} consecutive errors "
+                        "(auth error or broker outage)"
+                    )
+                    break
 
         qualified.sort(key=lambda s: s.score, reverse=True)
         selected = qualified[: self.config.max_trades]
@@ -774,6 +809,7 @@ class Scanner:
         c20      = close.iloc[-20]
 
         direction: Optional[str] = None
+        price_str = trend_str = rsi_norm = 0.0
 
         if c > e and c > s and 55 <= rsi_val <= 70 and hist_val > 0:
             if allowed in ("BUY", "BOTH"):
@@ -797,11 +833,16 @@ class Scanner:
         return ScannedStock(base=base, score=score, direction=direction, sector=sector)
 
     def capture_first_candle(self, stock: ScannedStock) -> bool:
-        today     = date.today().strftime("%Y-%m-%d")
-        yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = date.today().strftime("%Y-%m-%d")
 
-        # Gap filter — fetch previous close
-        df_prev = self.api.history(stock.base, "D", yesterday, yesterday, exchange="NSE")
+        # Gap filter — fetch previous close using a 5-day window so Monday
+        # doesn't land on Sunday (no trading data) and silently skip the filter.
+        df_prev = self.api.history(
+            stock.base, "D",
+            (date.today() - timedelta(days=5)).strftime("%Y-%m-%d"),
+            (date.today() - timedelta(days=1)).strftime("%Y-%m-%d"),
+            exchange="NSE",
+        )
         if df_prev is not None and not df_prev.empty:
             stock.prev_close = float(df_prev["close"].iloc[-1])
 
