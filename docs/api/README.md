@@ -119,6 +119,17 @@ Real-time market data streaming.
 | [Quote](./websocket-streaming/quote.md) | Subscribe to quote updates |
 | [Depth](./websocket-streaming/depth.md) | Subscribe to market depth |
 
+### WhatsApp Services
+Send trade alerts via WhatsApp. **Send-only** public surface — pairing,
+start/stop, config, users, broadcast, stats, and preferences are all
+admin-only and live behind the session-authed `/whatsapp` web UI. A
+leaked API key cannot create, mutate, or enumerate the device session.
+
+| Endpoint | Description |
+|----------|-------------|
+| [Overview](./whatsapp-services/README.md) | Architecture, security model, command reference |
+| [Notify](./whatsapp-services/notify.md) | Send text / image / document to self, one user, or up to 5 recipients |
+
 ## Order Constants
 
 ### Exchange Codes

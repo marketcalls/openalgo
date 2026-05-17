@@ -1,0 +1,44 @@
+meta {
+  name: WhatsApp Notify
+  type: http
+  seq: 55
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/whatsapp/notify
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "apikey": "",
+    "self": true,
+    "message": "Test alert from OpenAlgo API"
+  }
+}
+
+docs {
+  Send a WhatsApp message. Specify exactly one recipient form:
+
+    "self": true                   send to the paired device's own number
+    "username": "<openalgo_user>"  resolve via the linked-users table
+    "phone": "919876543210"        single number, E.164 digits
+    "phones": ["a", "b", ...]      small broadcast (max 5 recipients)
+
+  Combine freely with payload fields:
+
+    "message":       plain text body (max 4096 chars)
+    "image_path":    server-local image path (must lie under WHATSAPP_ATTACHMENT_ROOTS)
+    "document_path": server-local document path (same allowlist applies)
+    "caption":       caption for image / follow-up text for document
+    "filename":      override document display name on the recipient device
+
+  Default behaviour is fire-and-forget. Set "wait_for_delivery": true to
+  block until wars returns and receive a per-recipient delivery report
+  ({"sent": [...], "failed": [{...}], "skipped": int}).
+
+  Pairing, unpair, start/stop, config, broadcast, stats, and user
+  management are NOT exposed via this REST namespace — they are admin-only
+  on the session-authed /whatsapp web UI.
+}
