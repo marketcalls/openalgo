@@ -106,11 +106,30 @@ _PHONE_MIN_DIGITS = 7
 _PHONE_MAX_DIGITS = 15
 
 
-def normalize_phone(raw: str) -> str:
+def normalize_phone(raw) -> str:
     """Strip non-digits and validate E.164 length. Returns "" if the input
     can't plausibly be a phone number. wars accepts 919xxx or '+91 98xxx'
-    equally; we canonicalize to bare digits."""
-    digits = _PHONE_RE.sub("", raw or "")
+    equally; we canonicalize to bare digits.
+
+    Accepts ``str`` or ``int`` — some JSON clients send a 12-digit phone as
+    a bare number literal which Python's json parser hands us as an
+    ``int``. We coerce defensively so the regex below never sees a non-str.
+
+    Floats are **rejected** outright. ``str(919346668666.0)`` would produce
+    ``"919346668666.0"``, and after stripping non-digits we'd silently send
+    to ``9193466686660`` (a 13-digit number that is not the operator's
+    actual contact). Better to fail the call than send to the wrong number.
+    JSON has no integer/float distinction so any phone number above 2^53
+    can also arrive as a float from a non-Python client; refusing is the
+    correct response in both cases.
+    """
+    if raw is None or isinstance(raw, bool):
+        # bool is a subclass of int, but `True`/`False` is never a phone.
+        return ""
+    if isinstance(raw, float):
+        return ""
+    text = raw if isinstance(raw, str) else str(raw)
+    digits = _PHONE_RE.sub("", text)
     if not (_PHONE_MIN_DIGITS <= len(digits) <= _PHONE_MAX_DIGITS):
         return ""
     return digits
