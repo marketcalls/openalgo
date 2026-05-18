@@ -34,7 +34,11 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
-    chunkSizeWarningLimit: 600,
+    // plotly.js/lib/core is ~1MB on its own and is intentionally deduped
+    // into a shared vendor chunk between 2D and 3D pages — see plotly-2d.ts
+    // / plotly-3d.ts. Bumping the limit to accommodate that known vendor
+    // chunk while still flagging any new app-code chunk that drifts above 1MB.
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         manualChunks: (id) => {
