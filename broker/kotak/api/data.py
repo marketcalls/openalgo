@@ -48,19 +48,32 @@ class BrokerData:
         }
         return exchange_map.get(exchange)
 
-    def _get_index_symbol(self, symbol):
-        """Map OpenAlgo index symbols to Kotak Neo API format"""
+    def _get_index_symbol_candidates(self, symbol):
+        """Return candidate Neo API neoSymbol names for an OpenAlgo index symbol.
+
+        Kotak Neo's /quotes/neosymbol endpoint expects an exact name match. The
+        canonical name differs per index and is not always derivable from the
+        master contract (which often stores just the short ticker). We try
+        descriptive variants in priority order and stop at the first hit.
+        """
         index_map = {
-            "NIFTY": "Nifty 50",
-            "NIFTY50": "Nifty 50",
-            "BANKNIFTY": "Nifty Bank",
-            "SENSEX": "SENSEX",
-            "BANKEX": "BANKEX",
-            "FINNIFTY": "Nifty Fin Service",
-            "MIDCPNIFTY": "NIFTY MIDCAP 100",
+            "NIFTY": ["Nifty 50"],
+            "NIFTY50": ["Nifty 50"],
+            "BANKNIFTY": ["Nifty Bank"],
+            "FINNIFTY": ["Nifty Fin Service"],
+            "MIDCPNIFTY": [
+                "Nifty Mid Select",
+                "Nifty Midcap Sel",
+                "Nifty Midcap Select",
+                "NIFTY MID SELECT",
+            ],
+            "NIFTYNXT50": ["Nifty Next 50"],
+            "INDIAVIX": ["India VIX"],
+            "SENSEX": ["SENSEX"],
+            "BANKEX": ["BANKEX"],
         }
-        # Return mapped symbol or original symbol if not found
-        return index_map.get(symbol.upper(), symbol)
+        key = symbol.upper()
+        return index_map.get(key, [symbol])
 
     def _make_quotes_request(self, query, filter_name="all"):
         """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
@@ -87,6 +100,20 @@ class BrokerData:
                 logger.debug(
                     f"QUOTES API - Raw response: {response.text[:200]}..."
                 )  # Log first 200 chars
+
+                # Kotak Neo returns 200 with {"stat":"Not_Ok","emsg":...,"stCode":1009}
+                # when the instrument/code is invalid. Surface that as an error.
+                if isinstance(response_data, dict) and response_data.get("stat") == "Not_Ok":
+                    self.last_quote_error = {
+                        "stat": "Not_Ok",
+                        "emsg": response_data.get("emsg"),
+                        "stCode": response_data.get("stCode"),
+                        "url": url,
+                    }
+                    logger.warning(
+                        f"QUOTES API - Neo error: {response_data.get('emsg')} (stCode={response_data.get('stCode')})"
+                    )
+                    return None
 
                 # Log the complete structure for debugging (only for depth requests)
                 if (
@@ -115,6 +142,22 @@ class BrokerData:
         self.last_quote_error = last_error
         return None
 
+    def _query_index_with_candidates(self, kotak_exchange, candidates, filter_name="all"):
+        """Try each candidate index name until one returns data.
+
+        Kotak Neo's neoSymbol endpoint requires exact case-sensitive names that
+        aren't always present in the scrip master, so we probe known variants.
+        Returns (response, query_used) or (None, last_query_tried).
+        """
+        last_query = None
+        for cand in candidates:
+            query = f"{kotak_exchange}|{cand}"
+            last_query = query
+            response = self._make_quotes_request(query, filter_name)
+            if response and isinstance(response, list) and len(response) > 0:
+                return response, query
+        return None, last_query
+
     def get_quotes(self, symbol, exchange):
         """Get live quotes using Neo API v2 quotes endpoint with pSymbol-based queries"""
         try:
@@ -124,9 +167,19 @@ class BrokerData:
             if "INDEX" in exchange.upper():
                 # For indices, map to correct Neo API format and use static exchange mapping
                 kotak_exchange = self._get_kotak_exchange(exchange)
-                neo_symbol = self._get_index_symbol(symbol)
-                query = f"{kotak_exchange}|{neo_symbol}"
-                logger.info(f"QUOTES API - Index query: {symbol} → {neo_symbol} → {query}")
+                candidates = self._get_index_symbol_candidates(symbol)
+                logger.info(
+                    f"QUOTES API - Index candidates for {symbol}: {candidates}"
+                )
+                response, query = self._query_index_with_candidates(
+                    kotak_exchange, candidates, "all"
+                )
+                if response is None:
+                    logger.error(
+                        f"QUOTES API - All index candidates failed for {symbol}; last query: {query}"
+                    )
+                    return None
+                logger.info(f"QUOTES API - Index resolved via: {query}")
             else:
                 # For regular stocks/F&O, get both pSymbol and brexchange from database
                 # In Kotak DB: token = pSymbol, brexchange = nse_cm/nse_fo/bse_cm etc.
@@ -149,8 +202,8 @@ class BrokerData:
                 query = f"{kotak_exchange}|{psymbol}"
                 logger.info(f"QUOTES API - Query: {query}")
 
-            # Make API request
-            response = self._make_quotes_request(query, "all")
+                # Make API request (index branch already fetched response above)
+                response = self._make_quotes_request(query, "all")
 
             if response and isinstance(response, list) and len(response) > 0:
                 quote_data = response[0]
@@ -224,9 +277,19 @@ class BrokerData:
             if "INDEX" in exchange.upper():
                 # For indices, map to correct Neo API format and use static exchange mapping
                 kotak_exchange = self._get_kotak_exchange(exchange)
-                neo_symbol = self._get_index_symbol(symbol)
-                query = f"{kotak_exchange}|{neo_symbol}"
-                logger.debug(f"DEPTH API - Index query: {symbol} → {neo_symbol} → {query}")
+                candidates = self._get_index_symbol_candidates(symbol)
+                logger.debug(
+                    f"DEPTH API - Index candidates for {symbol}: {candidates}"
+                )
+                response, query = self._query_index_with_candidates(
+                    kotak_exchange, candidates, "depth"
+                )
+                if response is None:
+                    logger.warning(
+                        f"DEPTH API - All index candidates failed for {symbol}; last query: {query}"
+                    )
+                    return self._get_default_depth()
+                logger.debug(f"DEPTH API - Index resolved via: {query}")
             else:
                 # For regular stocks/F&O, get both pSymbol and brexchange from database
                 # In Kotak DB: token = pSymbol, brexchange = nse_cm/nse_fo/bse_cm etc.
@@ -249,8 +312,8 @@ class BrokerData:
                 query = f"{kotak_exchange}|{psymbol}"
                 logger.debug(f"DEPTH API - Query: {query}")
 
-            # Make API request with depth filter
-            response = self._make_quotes_request(query, "depth")
+                # Make API request with depth filter (index branch already fetched response)
+                response = self._make_quotes_request(query, "depth")
 
             if response and isinstance(response, list) and len(response) > 0:
                 target_quote = response[0]
@@ -386,7 +449,10 @@ class BrokerData:
                 # Check if this is an index
                 if "INDEX" in exchange.upper():
                     kotak_exchange = self._get_kotak_exchange(exchange)
-                    neo_symbol = self._get_index_symbol(symbol)
+                    # Batch path uses the first candidate; single-symbol path
+                    # (get_quotes/get_depth) iterates all candidates.
+                    candidates = self._get_index_symbol_candidates(symbol)
+                    neo_symbol = candidates[0]
                     query = f"{kotak_exchange}|{neo_symbol}"
                 else:
                     # For regular stocks/F&O, get pSymbol and brexchange
