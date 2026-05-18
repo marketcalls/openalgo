@@ -1,7 +1,6 @@
 import { ArrowLeft, Clock, FileCode, Info, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -10,6 +9,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS, STRATEGY_EXCHANGES } from '@/types/python-strategy'
+import { showToast } from '@/utils/toast'
 
 const EXAMPLE_STRATEGY = `"""
 Example OpenAlgo Strategy
@@ -90,9 +90,7 @@ export default function NewPythonStrategy() {
   }
 
   const handleDayToggle = (day: string) => {
-    setSelectedDays((prev) =>
-      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
-    )
+    setSelectedDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]))
   }
 
   const validateForm = () => {
@@ -351,13 +349,21 @@ export default function NewPythonStrategy() {
                       }`}
                       onClick={() => handleDayToggle(day.value)}
                     >
-                      <div className={`h-4 w-4 rounded border flex items-center justify-center ${
-                        selectedDays.includes(day.value)
-                          ? 'bg-primary-foreground border-primary-foreground'
-                          : 'border-current'
-                      }`}>
+                      <div
+                        className={`h-4 w-4 rounded border flex items-center justify-center ${
+                          selectedDays.includes(day.value)
+                            ? 'bg-primary-foreground border-primary-foreground'
+                            : 'border-current'
+                        }`}
+                      >
                         {selectedDays.includes(day.value) && (
-                          <svg className="h-3 w-3 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                          <svg
+                            className="h-3 w-3 text-primary"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                          >
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         )}
@@ -368,7 +374,8 @@ export default function NewPythonStrategy() {
                 </div>
                 {errors.days && <p className="text-sm text-red-500">{errors.days}</p>}
                 <p className="text-xs text-muted-foreground">
-                  Select the days when this strategy should run. Weekends can be enabled for special trading sessions.
+                  Select the days when this strategy should run. Weekends can be enabled for special
+                  trading sessions.
                 </p>
               </div>
             </div>

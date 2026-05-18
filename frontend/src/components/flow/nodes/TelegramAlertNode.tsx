@@ -3,9 +3,9 @@
  * Send notification via Telegram
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Send } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { TelegramAlertNodeData } from '@/types/flow'
 
@@ -29,11 +29,7 @@ export const TelegramAlertNode = memo(({ data, selected }: TelegramAlertNodeProp
         selected && 'selected'
       )}
     >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="flex h-5 w-5 items-center justify-center rounded bg-[#0088cc]/20 text-[#0088cc]">
@@ -47,16 +43,10 @@ export const TelegramAlertNode = memo(({ data, selected }: TelegramAlertNodeProp
           </div>
         </div>
         <div className="rounded bg-muted/50 px-1.5 py-1">
-          <span className="text-[9px] text-muted-foreground line-clamp-2">
-            {truncatedMessage}
-          </span>
+          <span className="text-[9px] text-muted-foreground line-clamp-2">{truncatedMessage}</span>
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

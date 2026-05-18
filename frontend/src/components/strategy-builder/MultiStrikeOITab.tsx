@@ -1,20 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ColorType,
   CrosshairMode,
-  LineSeries,
   createChart,
   type IChartApi,
   type ISeriesApi,
+  LineSeries,
   type UTCTimestamp,
 } from 'lightweight-charts'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  strategyChartApi,
   type MultiStrikeOIData,
   type MultiStrikeOILeg,
+  strategyChartApi,
 } from '@/api/strategy-chart'
-import type { StrategyLeg } from '@/lib/strategyMath'
-import { useThemeStore } from '@/stores/themeStore'
+import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,
@@ -22,7 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
+import type { StrategyLeg } from '@/lib/strategyMath'
+import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 const CHART_HEIGHT = 480
@@ -52,7 +52,20 @@ function formatIST(unixSeconds: number): { date: string; time: string } {
   const d = new Date(unixSeconds * 1000)
   const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
   const dd = ist.getUTCDate().toString().padStart(2, '0')
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ]
   const mo = months[ist.getUTCMonth()]
   const hh24 = ist.getUTCHours()
   const hh = hh24.toString().padStart(2, '0')
@@ -108,7 +121,15 @@ export default function MultiStrikeOITab({
   const isAnalyzer = appMode === 'analyzer'
 
   const [isLoading, setIsLoading] = useState(false)
-  const [intervals, setIntervals] = useState<string[]>(['1m', '3m', '5m', '10m', '15m', '30m', '1h'])
+  const [intervals, setIntervals] = useState<string[]>([
+    '1m',
+    '3m',
+    '5m',
+    '10m',
+    '15m',
+    '30m',
+    '1h',
+  ])
   const [selectedInterval, setSelectedInterval] = useState('5m')
   const [selectedDays, setSelectedDays] = useState('3')
   const [chartData, setChartData] = useState<MultiStrikeOIData | null>(null)
@@ -228,7 +249,7 @@ export default function MultiStrikeOITab({
           const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
           const hh = ist.getUTCHours().toString().padStart(2, '0')
           const mm = ist.getUTCMinutes().toString().padStart(2, '0')
-          if (parseInt(selectedDays) > 1) {
+          if (parseInt(selectedDays, 10) > 1) {
             const dd = ist.getUTCDate().toString().padStart(2, '0')
             const mo = (ist.getUTCMonth() + 1).toString().padStart(2, '0')
             return `${dd}/${mo} ${hh}:${mm}`
@@ -280,7 +301,7 @@ export default function MultiStrikeOITab({
       title: 'Underlying',
       lastValueVisible: true,
       priceLineVisible: true,
-      visible: !hiddenSeries['__underlying__'],
+      visible: !hiddenSeries.__underlying__,
     })
     chartRef.current = chart
     underlyingSeriesRef.current = underlyingSeries
@@ -310,7 +331,7 @@ export default function MultiStrikeOITab({
       const rows: string[] = []
       // Underlying
       const uPt = data.underlying_series.find((p) => p.time === time)
-      if (uPt && !hiddenSeries['__underlying__']) {
+      if (uPt && !hiddenSeries.__underlying__) {
         rows.push(
           `<div style="display:flex;justify-content:space-between;gap:16px">
             <span style="color:${c.underlying};font-weight:600">${data.underlying}</span>
@@ -455,7 +476,7 @@ export default function MultiStrikeOITab({
 
   // Toggle visibility without refetching
   useEffect(() => {
-    underlyingSeriesRef.current?.applyOptions({ visible: !hiddenSeries['__underlying__'] })
+    underlyingSeriesRef.current?.applyOptions({ visible: !hiddenSeries.__underlying__ })
     for (const [sym, series] of legSeriesRef.current.entries()) {
       series.applyOptions({ visible: !hiddenSeries[sym] })
     }
@@ -533,7 +554,7 @@ export default function MultiStrikeOITab({
         exchange,
         legs: payloadLegs,
         interval: selectedInterval,
-        days: parseInt(selectedDays),
+        days: parseInt(selectedDays, 10),
       })
       if (res.status === 'success' && res.data) {
         chartDataRef.current = res.data
@@ -549,7 +570,15 @@ export default function MultiStrikeOITab({
       setIsLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [underlying, exchange, identity, selectedInterval, selectedDays, optionExchange, applyDataToChart])
+  }, [
+    underlying,
+    exchange,
+    identity,
+    selectedInterval,
+    selectedDays,
+    optionExchange,
+    applyDataToChart,
+  ])
 
   useEffect(() => {
     const handle = setTimeout(() => {
@@ -671,7 +700,7 @@ export default function MultiStrikeOITab({
           type="button"
           onClick={() => toggle('__underlying__')}
           className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors ${
-            !hiddenSeries['__underlying__'] ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
+            !hiddenSeries.__underlying__ ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
           }`}
         >
           <span

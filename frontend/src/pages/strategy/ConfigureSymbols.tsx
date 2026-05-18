@@ -1,7 +1,6 @@
 import { ArrowLeft, FileText, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -45,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import type { Strategy, StrategySymbolMapping, SymbolSearchResult } from '@/types/strategy'
 import { EXCHANGES, getProductTypes } from '@/types/strategy'
+import { showToast } from '@/utils/toast'
 
 export default function ConfigureSymbols() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -188,7 +188,10 @@ export default function ConfigureSymbols() {
 
       if (response.status === 'success') {
         const { added = 0, failed = 0 } = response.data || {}
-        showToast.success(`Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`, 'strategy')
+        showToast.success(
+          `Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`,
+          'strategy'
+        )
         setCsvData('')
         fetchStrategy()
       } else {

@@ -1,7 +1,16 @@
-import { ArrowLeft, Clock, Copy, Download, FileText, HardDrive, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  Clock,
+  Copy,
+  Download,
+  FileText,
+  HardDrive,
+  RefreshCw,
+  ScrollText,
+  Trash2,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,6 +29,7 @@ import { LogViewer } from '@/components/ui/log-viewer'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { LogContent, LogFile, PythonStrategy } from '@/types/python-strategy'
+import { showToast } from '@/utils/toast'
 
 export default function PythonStrategyLogs() {
   const { strategyId } = useParams<{ strategyId: string }>()

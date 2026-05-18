@@ -1,7 +1,6 @@
 import { ArrowLeft, Info, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { chartinkApi } from '@/api/chartink'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -15,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { showToast } from '@/utils/toast'
 
 export default function NewChartinkStrategy() {
   const navigate = useNavigate()

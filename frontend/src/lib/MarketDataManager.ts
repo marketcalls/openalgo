@@ -49,18 +49,22 @@ export interface SymbolData {
 
 export type SubscriptionMode = 'LTP' | 'Quote' | 'Depth'
 
-export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'authenticating' | 'authenticated' | 'paused'
+export type ConnectionState =
+  | 'disconnected'
+  | 'connecting'
+  | 'connected'
+  | 'authenticating'
+  | 'authenticated'
+  | 'paused'
 
-export interface StateListener {
-  (state: {
-    connectionState: ConnectionState
-    isConnected: boolean
-    isAuthenticated: boolean
-    isPaused: boolean
-    isFallbackMode: boolean
-    error: string | null
-  }): void
-}
+export type StateListener = (state: {
+  connectionState: ConnectionState
+  isConnected: boolean
+  isAuthenticated: boolean
+  isPaused: boolean
+  isFallbackMode: boolean
+  error: string | null
+}) => void
 
 export type DataCallback = (data: SymbolData) => void
 
@@ -272,7 +276,10 @@ export class MarketDataManager {
   getState() {
     return {
       connectionState: this.connectionState,
-      isConnected: this.connectionState === 'connected' || this.connectionState === 'authenticating' || this.connectionState === 'authenticated',
+      isConnected:
+        this.connectionState === 'connected' ||
+        this.connectionState === 'authenticating' ||
+        this.connectionState === 'authenticated',
       isAuthenticated: this.connectionState === 'authenticated',
       isPaused: this.connectionState === 'paused',
       isFallbackMode: this.fallbackMode,
@@ -435,7 +442,7 @@ export class MarketDataManager {
           this.reconnectAttempts < this.maxReconnectAttempts
         ) {
           this.reconnectAttempts++
-          const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000) // Exponential backoff, max 30s
+          const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 30000) // Exponential backoff, max 30s
           this.reconnectTimeout = setTimeout(() => this.connect(), delay)
         } else if (
           this.reconnectAttempts >= this.maxReconnectAttempts ||
@@ -610,7 +617,10 @@ export class MarketDataManager {
     }
   }
 
-  private sendSubscribe(symbols: Array<{ symbol: string; exchange: string }>, mode: SubscriptionMode): void {
+  private sendSubscribe(
+    symbols: Array<{ symbol: string; exchange: string }>,
+    mode: SubscriptionMode
+  ): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
 
     this.socket.send(
@@ -715,8 +725,7 @@ export class MarketDataManager {
       if (data.status === 'success' && data.api_key) {
         this.apiKey = data.api_key
       }
-    } catch (err) {
-    }
+    } catch (err) {}
   }
 
   /**
@@ -724,7 +733,6 @@ export class MarketDataManager {
    */
   private startFallbackPolling(): void {
     if (this.fallbackPollingInterval) return
-
 
     // Fetch immediately
     this.fetchMarketDataViaRest()
@@ -777,7 +785,7 @@ export class MarketDataManager {
         }),
       })
 
-      const data = await response.json() as MultiQuotesApiResponse
+      const data = (await response.json()) as MultiQuotesApiResponse
 
       if (data.status === 'success' && data.results) {
         // Process each result and update cache + notify subscribers
@@ -818,8 +826,7 @@ export class MarketDataManager {
           })
         }
       }
-    } catch (err) {
-    }
+    } catch (err) {}
   }
 
   /**

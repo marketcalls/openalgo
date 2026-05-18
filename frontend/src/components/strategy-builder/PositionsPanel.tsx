@@ -48,14 +48,14 @@ function formatCurrency(v: number): string {
   // computePayoff. Surface that clearly instead of a generic dash.
   if (v === Infinity) return 'Unlimited'
   if (v === -Infinity) return 'Unlimited'
-  if (!isFinite(v)) return '—'
+  if (!Number.isFinite(v)) return '—'
   const abs = Math.abs(v)
   const sign = v < 0 ? '-' : v > 0 ? '+' : ''
   return `${sign}₹${abs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 }
 
 function formatPct(v: number): string {
-  if (!isFinite(v)) return '—'
+  if (!Number.isFinite(v)) return '—'
   return `${v.toFixed(2)}%`
 }
 
@@ -130,7 +130,7 @@ export function PositionsPanel({
   // Risk / Reward — meaningful only when both ends are finite and on opposite
   // sides of zero. Unlimited strategies have no defined ratio.
   const riskReward =
-    isFinite(maxProfit) && isFinite(maxLoss) && maxProfit > 0 && maxLoss < 0
+    Number.isFinite(maxProfit) && Number.isFinite(maxLoss) && maxProfit > 0 && maxLoss < 0
       ? `1 : ${(Math.abs(maxProfit) / Math.abs(maxLoss)).toFixed(2)}`
       : 'NA'
 
@@ -443,7 +443,6 @@ export function PositionsPanel({
             ))}
           </div>
         )}
-
       </div>
     </div>
   )

@@ -1,8 +1,8 @@
 import { Gauge, Loader2, RefreshCw, Save } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { webClient } from '@/api/client'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -91,8 +91,8 @@ export default function Leverage() {
             <div>
               <CardTitle>Leverage Configuration</CardTitle>
               <CardDescription>
-                Set leverage for crypto futures. This leverage is applied before every order
-                via the Delta Exchange leverage API.
+                Set leverage for crypto futures. This leverage is applied before every order via the
+                Delta Exchange leverage API.
               </CardDescription>
             </div>
           </div>
@@ -102,7 +102,11 @@ export default function Leverage() {
             <div className="space-y-2">
               <Label htmlFor="leverage">Default Leverage</Label>
               <div className="flex gap-2">
-                <Select value={selectedLeverage} onValueChange={setSelectedLeverage} disabled={fetchError}>
+                <Select
+                  value={selectedLeverage}
+                  onValueChange={setSelectedLeverage}
+                  disabled={fetchError}
+                >
                   <SelectTrigger className="w-[250px]" id="leverage">
                     <SelectValue />
                   </SelectTrigger>
@@ -115,29 +119,29 @@ export default function Leverage() {
                   </SelectContent>
                 </Select>
                 {fetchError ? (
-                <Button size="sm" variant="destructive" onClick={fetchCurrent}>
-                  <RefreshCw className="h-4 w-4 mr-1" />
-                  Retry
-                </Button>
+                  <Button size="sm" variant="destructive" onClick={fetchCurrent}>
+                    <RefreshCw className="h-4 w-4 mr-1" />
+                    Retry
+                  </Button>
                 ) : (
-                <Button
-                  size="sm"
-                  variant={isModified ? 'default' : 'secondary'}
-                  onClick={handleSave}
-                  disabled={isSaving}
-                >
-                  {isSaving ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                  ) : (
-                    <Save className="h-4 w-4 mr-1" />
-                  )}
-                  Set
-                </Button>
+                  <Button
+                    size="sm"
+                    variant={isModified ? 'default' : 'secondary'}
+                    onClick={handleSave}
+                    disabled={isSaving}
+                  >
+                    {isSaving ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                    ) : (
+                      <Save className="h-4 w-4 mr-1" />
+                    )}
+                    Set
+                  </Button>
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                Default uses the leverage already set on your Delta Exchange account. Other
-                values will set leverage before every order.
+                Default uses the leverage already set on your Delta Exchange account. Other values
+                will set leverage before every order.
               </p>
             </div>
           </div>

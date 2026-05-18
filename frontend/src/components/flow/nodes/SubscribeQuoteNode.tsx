@@ -1,6 +1,6 @@
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { RadioTower } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { SubscribeQuoteNodeData } from '@/types/flow'
 

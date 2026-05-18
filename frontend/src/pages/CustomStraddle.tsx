@@ -1,24 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronsUpDown } from 'lucide-react'
 import {
   BaselineSeries,
   ColorType,
   CrosshairMode,
-  LineSeries,
   createChart,
   type IChartApi,
   type ISeriesApi,
+  LineSeries,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { useThemeStore } from '@/stores/themeStore'
-import { oiProfileApi } from '@/api/oi-profile'
+import { Check, ChevronsUpDown } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  customStraddleApi,
   type CustomStraddleData,
+  customStraddleApi,
   type PnLDataPoint,
   type TradeEntry,
 } from '@/api/custom-straddle'
+import { oiProfileApi } from '@/api/oi-profile'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Command,
@@ -28,6 +27,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
@@ -36,20 +36,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
 const LOT_SIZE_DEFAULTS: Record<string, number> = {
-  NIFTY: 65, BANKNIFTY: 30, FINNIFTY: 60, MIDCPNIFTY: 120, NIFTYNXT50: 25,
-  SENSEX: 10, BANKEX: 15,
+  NIFTY: 65,
+  BANKNIFTY: 30,
+  FINNIFTY: 60,
+  MIDCPNIFTY: 120,
+  NIFTYNXT50: 25,
+  SENSEX: 10,
+  BANKEX: 15,
 }
 
 const ADJUSTMENT_DEFAULTS: Record<string, number> = {
-  NIFTY: 50, BANKNIFTY: 100, FINNIFTY: 50, MIDCPNIFTY: 25, NIFTYNXT50: 50,
-  SENSEX: 100, BANKEX: 100,
+  NIFTY: 50,
+  BANKNIFTY: 100,
+  FINNIFTY: 50,
+  MIDCPNIFTY: 25,
+  NIFTYNXT50: 50,
+  SENSEX: 100,
+  BANKEX: 100,
 }
 
 const CHART_HEIGHT = 480
@@ -65,7 +75,20 @@ function formatIST(unixSeconds: number): { date: string; time: string } {
   const d = new Date(unixSeconds * 1000)
   const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
   const dd = ist.getUTCDate().toString().padStart(2, '0')
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ]
   const mo = months[ist.getUTCMonth()]
   const hh = ist.getUTCHours().toString().padStart(2, '0')
   const mm = ist.getUTCMinutes().toString().padStart(2, '0')
@@ -75,7 +98,10 @@ function formatIST(unixSeconds: number): { date: string; time: string } {
 
 function formatINR(value: number): string {
   const abs = Math.abs(value)
-  const formatted = abs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const formatted = abs.toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
   return value < 0 ? `-${formatted}` : formatted
 }
 
@@ -92,12 +118,24 @@ export default function CustomStraddle() {
   // Control state
   const [isLoading, setIsLoading] = useState(false)
   const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
-  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
+  const [underlyings, setUnderlyings] = useState<string[]>(
+    defaultUnderlyings[defaultFnoExchange] || []
+  )
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(
+    defaultUnderlyings[defaultFnoExchange]?.[0] || ''
+  )
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
-  const [intervals, setIntervals] = useState<string[]>(['1m', '3m', '5m', '10m', '15m', '30m', '1h'])
+  const [intervals, setIntervals] = useState<string[]>([
+    '1m',
+    '3m',
+    '5m',
+    '10m',
+    '15m',
+    '30m',
+    '1h',
+  ])
   const [selectedInterval, setSelectedInterval] = useState('1m')
   const [selectedDays, setSelectedDays] = useState('1')
 
@@ -134,37 +172,67 @@ export default function CustomStraddle() {
   const colors = useMemo(() => {
     if (isAnalyzer) {
       return {
-        text: '#d4bfff', grid: 'rgba(139, 92, 246, 0.1)',
-        border: 'rgba(139, 92, 246, 0.2)', crosshair: 'rgba(139, 92, 246, 0.5)',
-        crosshairLabel: '#4c1d95', spot: '#e2e8f0',
-        profitLine: '#4ade80', profitFill1: 'rgba(74, 222, 128, 0.28)', profitFill2: 'rgba(74, 222, 128, 0.05)',
-        lossLine: '#f87171', lossFill1: 'rgba(248, 113, 113, 0.05)', lossFill2: 'rgba(248, 113, 113, 0.28)',
-        watermark: 'rgba(139, 92, 246, 0.12)', synthetic: '#60a5fa',
-        tooltipBg: 'rgba(30, 15, 60, 0.92)', tooltipBorder: 'rgba(139, 92, 246, 0.3)',
-        tooltipText: '#d4bfff', tooltipMuted: '#a78bfa',
+        text: '#d4bfff',
+        grid: 'rgba(139, 92, 246, 0.1)',
+        border: 'rgba(139, 92, 246, 0.2)',
+        crosshair: 'rgba(139, 92, 246, 0.5)',
+        crosshairLabel: '#4c1d95',
+        spot: '#e2e8f0',
+        profitLine: '#4ade80',
+        profitFill1: 'rgba(74, 222, 128, 0.28)',
+        profitFill2: 'rgba(74, 222, 128, 0.05)',
+        lossLine: '#f87171',
+        lossFill1: 'rgba(248, 113, 113, 0.05)',
+        lossFill2: 'rgba(248, 113, 113, 0.28)',
+        watermark: 'rgba(139, 92, 246, 0.12)',
+        synthetic: '#60a5fa',
+        tooltipBg: 'rgba(30, 15, 60, 0.92)',
+        tooltipBorder: 'rgba(139, 92, 246, 0.3)',
+        tooltipText: '#d4bfff',
+        tooltipMuted: '#a78bfa',
       }
     }
     if (isDarkMode) {
       return {
-        text: '#a6adbb', grid: 'rgba(166, 173, 187, 0.1)',
-        border: 'rgba(166, 173, 187, 0.2)', crosshair: 'rgba(166, 173, 187, 0.5)',
-        crosshairLabel: '#1f2937', spot: '#e2e8f0',
-        profitLine: '#4ade80', profitFill1: 'rgba(74, 222, 128, 0.28)', profitFill2: 'rgba(74, 222, 128, 0.05)',
-        lossLine: '#f87171', lossFill1: 'rgba(248, 113, 113, 0.05)', lossFill2: 'rgba(248, 113, 113, 0.28)',
-        watermark: 'rgba(166, 173, 187, 0.12)', synthetic: '#60a5fa',
-        tooltipBg: 'rgba(17, 24, 39, 0.92)', tooltipBorder: 'rgba(166, 173, 187, 0.2)',
-        tooltipText: '#e2e8f0', tooltipMuted: '#9ca3af',
+        text: '#a6adbb',
+        grid: 'rgba(166, 173, 187, 0.1)',
+        border: 'rgba(166, 173, 187, 0.2)',
+        crosshair: 'rgba(166, 173, 187, 0.5)',
+        crosshairLabel: '#1f2937',
+        spot: '#e2e8f0',
+        profitLine: '#4ade80',
+        profitFill1: 'rgba(74, 222, 128, 0.28)',
+        profitFill2: 'rgba(74, 222, 128, 0.05)',
+        lossLine: '#f87171',
+        lossFill1: 'rgba(248, 113, 113, 0.05)',
+        lossFill2: 'rgba(248, 113, 113, 0.28)',
+        watermark: 'rgba(166, 173, 187, 0.12)',
+        synthetic: '#60a5fa',
+        tooltipBg: 'rgba(17, 24, 39, 0.92)',
+        tooltipBorder: 'rgba(166, 173, 187, 0.2)',
+        tooltipText: '#e2e8f0',
+        tooltipMuted: '#9ca3af',
       }
     }
     return {
-      text: '#333', grid: 'rgba(0, 0, 0, 0.1)',
-      border: 'rgba(0, 0, 0, 0.2)', crosshair: 'rgba(0, 0, 0, 0.3)',
-      crosshairLabel: '#2563eb', spot: '#1e293b',
-      profitLine: '#16a34a', profitFill1: 'rgba(22, 163, 106, 0.28)', profitFill2: 'rgba(22, 163, 106, 0.05)',
-      lossLine: '#dc2626', lossFill1: 'rgba(220, 38, 38, 0.05)', lossFill2: 'rgba(220, 38, 38, 0.28)',
-      watermark: 'rgba(0, 0, 0, 0.06)', synthetic: '#2563eb',
-      tooltipBg: 'rgba(255, 255, 255, 0.95)', tooltipBorder: 'rgba(0, 0, 0, 0.15)',
-      tooltipText: '#1e293b', tooltipMuted: '#6b7280',
+      text: '#333',
+      grid: 'rgba(0, 0, 0, 0.1)',
+      border: 'rgba(0, 0, 0, 0.2)',
+      crosshair: 'rgba(0, 0, 0, 0.3)',
+      crosshairLabel: '#2563eb',
+      spot: '#1e293b',
+      profitLine: '#16a34a',
+      profitFill1: 'rgba(22, 163, 106, 0.28)',
+      profitFill2: 'rgba(22, 163, 106, 0.05)',
+      lossLine: '#dc2626',
+      lossFill1: 'rgba(220, 38, 38, 0.05)',
+      lossFill2: 'rgba(220, 38, 38, 0.28)',
+      watermark: 'rgba(0, 0, 0, 0.06)',
+      synthetic: '#2563eb',
+      tooltipBg: 'rgba(255, 255, 255, 0.95)',
+      tooltipBorder: 'rgba(0, 0, 0, 0.15)',
+      tooltipText: '#1e293b',
+      tooltipMuted: '#6b7280',
     }
   }, [isDarkMode, isAnalyzer])
 
@@ -218,13 +286,24 @@ export default function CustomStraddle() {
     const chart = createChart(container, {
       width: container.offsetWidth,
       height: CHART_HEIGHT,
-      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: colors.text },
+      layout: {
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: colors.text,
+      },
       grid: {
         vertLines: { color: colors.grid, style: 1, visible: true },
         horzLines: { color: colors.grid, style: 1, visible: true },
       },
-      leftPriceScale: { visible: true, borderColor: colors.border, scaleMargins: { top: 0.05, bottom: 0.05 } },
-      rightPriceScale: { visible: true, borderColor: colors.border, scaleMargins: { top: 0.1, bottom: 0.1 } },
+      leftPriceScale: {
+        visible: true,
+        borderColor: colors.border,
+        scaleMargins: { top: 0.05, bottom: 0.05 },
+      },
+      rightPriceScale: {
+        visible: true,
+        borderColor: colors.border,
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
       timeScale: {
         borderColor: colors.border,
         timeVisible: true,
@@ -234,7 +313,7 @@ export default function CustomStraddle() {
           const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
           const hh = ist.getUTCHours().toString().padStart(2, '0')
           const mm = ist.getUTCMinutes().toString().padStart(2, '0')
-          if (parseInt(selectedDays) > 1) {
+          if (parseInt(selectedDays, 10) > 1) {
             const dd = ist.getUTCDate().toString().padStart(2, '0')
             const mo = (ist.getUTCMonth() + 1).toString().padStart(2, '0')
             return `${dd}/${mo} ${hh}:${mm}`
@@ -245,7 +324,12 @@ export default function CustomStraddle() {
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: { width: 1, color: colors.crosshair, style: 2, labelVisible: false },
-        horzLine: { width: 1, color: colors.crosshair, style: 2, labelBackgroundColor: colors.crosshairLabel },
+        horzLine: {
+          width: 1,
+          color: colors.crosshair,
+          style: 2,
+          labelBackgroundColor: colors.crosshairLabel,
+        },
       },
     })
 
@@ -319,14 +403,23 @@ export default function CustomStraddle() {
     chart.subscribeCrosshairMove((param) => {
       const tt = tooltipRef.current
       if (!tt || !container) return
-      if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0 ||
-          param.point.x > container.offsetWidth || param.point.y > container.offsetHeight) {
+      if (
+        !param.time ||
+        !param.point ||
+        param.point.x < 0 ||
+        param.point.y < 0 ||
+        param.point.x > container.offsetWidth ||
+        param.point.y > container.offsetHeight
+      ) {
         tt.style.display = 'none'
         return
       }
       const time = param.time as number
       const point = seriesDataMapRef.current.get(time)
-      if (!point) { tt.style.display = 'none'; return }
+      if (!point) {
+        tt.style.display = 'none'
+        return
+      }
 
       const c = colorsRef.current
       const { date, time: timeStr } = formatIST(time)
@@ -395,7 +488,9 @@ export default function CustomStraddle() {
       }
     }
     window.addEventListener('resize', handleResize)
-    return () => { window.removeEventListener('resize', handleResize) }
+    return () => {
+      window.removeEventListener('resize', handleResize)
+    }
   }, [colors, selectedDays, showPnL, showSpot, showSynthetic, applyDataToChart])
 
   // Chart lifecycle
@@ -403,13 +498,22 @@ export default function CustomStraddle() {
     const cleanup = initChart()
     return () => {
       cleanup?.()
-      if (chartRef.current) { chartRef.current.remove(); chartRef.current = null }
+      if (chartRef.current) {
+        chartRef.current.remove()
+        chartRef.current = null
+      }
     }
   }, [initChart])
 
-  useEffect(() => { pnlSeriesRef.current?.applyOptions({ visible: showPnL }) }, [showPnL])
-  useEffect(() => { spotSeriesRef.current?.applyOptions({ visible: showSpot }) }, [showSpot])
-  useEffect(() => { syntheticSeriesRef.current?.applyOptions({ visible: showSynthetic }) }, [showSynthetic])
+  useEffect(() => {
+    pnlSeriesRef.current?.applyOptions({ visible: showPnL })
+  }, [showPnL])
+  useEffect(() => {
+    spotSeriesRef.current?.applyOptions({ visible: showSpot })
+  }, [showSpot])
+  useEffect(() => {
+    syntheticSeriesRef.current?.applyOptions({ visible: showSynthetic })
+  }, [showSynthetic])
 
   // ── Data fetching ────────────────────────────────────────────
 
@@ -418,13 +522,19 @@ export default function CustomStraddle() {
       try {
         const res = await customStraddleApi.getIntervals()
         if (res.status === 'success' && res.data) {
-          const all = [...(res.data.seconds || []), ...(res.data.minutes || []), ...(res.data.hours || [])]
+          const all = [
+            ...(res.data.seconds || []),
+            ...(res.data.minutes || []),
+            ...(res.data.hours || []),
+          ]
           setIntervals(all.length > 0 ? all : ['1m', '3m', '5m', '10m', '15m', '30m', '1h'])
           if (all.length > 0 && !all.includes(selectedInterval)) {
             setSelectedInterval(all.includes('1m') ? '1m' : all[0])
           }
         }
-      } catch { setIntervals(['1m', '3m', '5m', '10m', '15m', '30m', '1h']) }
+      } catch {
+        setIntervals(['1m', '3m', '5m', '10m', '15m', '30m', '1h'])
+      }
     }
     fetchIntervals()
   }, [])
@@ -446,12 +556,17 @@ export default function CustomStraddle() {
         if (cancelled) return
         if (response.status === 'success' && response.underlyings.length > 0) {
           setUnderlyings(response.underlyings)
-          if (!response.underlyings.includes(defaults[0])) setSelectedUnderlying(response.underlyings[0])
+          if (!response.underlyings.includes(defaults[0]))
+            setSelectedUnderlying(response.underlyings[0])
         }
-      } catch { /* keep defaults */ }
+      } catch {
+        /* keep defaults */
+      }
     }
     fetchUnderlyings()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [selectedExchange])
 
   // Fetch lot size from DB and set adjustment defaults when underlying changes
@@ -474,7 +589,9 @@ export default function CustomStraddle() {
       }
     }
     fetchLotSize()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [selectedUnderlying, selectedExchange])
 
   // Fetch expiries when underlying changes
@@ -502,7 +619,9 @@ export default function CustomStraddle() {
       }
     }
     fetchExpiries()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [selectedUnderlying])
 
   // ── Load simulation data ─────────────────────────────────────
@@ -516,7 +635,7 @@ export default function CustomStraddle() {
         exchange: selectedExchange,
         expiry_date: convertExpiryForAPI(selectedExpiry),
         interval: selectedInterval,
-        days: parseInt(selectedDays),
+        days: parseInt(selectedDays, 10),
         adjustment_points: adjustmentPoints,
         lot_size: lotSize,
         lots: numLots,
@@ -535,8 +654,17 @@ export default function CustomStraddle() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedExpiry, selectedInterval, selectedDays, selectedUnderlying, selectedExchange,
-      adjustmentPoints, lotSize, numLots, applyDataToChart])
+  }, [
+    selectedExpiry,
+    selectedInterval,
+    selectedDays,
+    selectedUnderlying,
+    selectedExchange,
+    adjustmentPoints,
+    lotSize,
+    numLots,
+    applyDataToChart,
+  ])
 
   // ── Display helpers ──────────────────────────────────────────
 
@@ -559,17 +687,26 @@ export default function CustomStraddle() {
           {/* Row 1: Market controls */}
           <div className="flex flex-wrap items-center gap-3 mb-3">
             <Select value={selectedExchange} onValueChange={setSelectedExchange}>
-              <SelectTrigger className="w-[100px]"><SelectValue placeholder="Exchange" /></SelectTrigger>
+              <SelectTrigger className="w-[100px]">
+                <SelectValue placeholder="Exchange" />
+              </SelectTrigger>
               <SelectContent>
                 {fnoExchanges.map((ex) => (
-                  <SelectItem key={ex.value} value={ex.value}>{ex.label}</SelectItem>
+                  <SelectItem key={ex.value} value={ex.value}>
+                    {ex.label}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
             <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
               <PopoverTrigger asChild>
-                <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-[140px] justify-between">
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={underlyingOpen}
+                  className="w-[140px] justify-between"
+                >
                   {selectedUnderlying || 'Underlying'}
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
@@ -581,8 +718,17 @@ export default function CustomStraddle() {
                     <CommandEmpty>No underlying found</CommandEmpty>
                     <CommandGroup>
                       {underlyings.map((u) => (
-                        <CommandItem key={u} value={u} onSelect={() => { setSelectedUnderlying(u); setUnderlyingOpen(false) }}>
-                          <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                        <CommandItem
+                          key={u}
+                          value={u}
+                          onSelect={() => {
+                            setSelectedUnderlying(u)
+                            setUnderlyingOpen(false)
+                          }}
+                        >
+                          <Check
+                            className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`}
+                          />
                           {u}
                         </CommandItem>
                       ))}
@@ -593,28 +739,40 @@ export default function CustomStraddle() {
             </Popover>
 
             <Select value={selectedExpiry} onValueChange={setSelectedExpiry}>
-              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Expiry" /></SelectTrigger>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue placeholder="Expiry" />
+              </SelectTrigger>
               <SelectContent>
                 {expiries.map((exp) => (
-                  <SelectItem key={exp} value={exp}>{exp}</SelectItem>
+                  <SelectItem key={exp} value={exp}>
+                    {exp}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
             <Select value={selectedInterval} onValueChange={setSelectedInterval}>
-              <SelectTrigger className="w-[100px]"><SelectValue placeholder="Interval" /></SelectTrigger>
+              <SelectTrigger className="w-[100px]">
+                <SelectValue placeholder="Interval" />
+              </SelectTrigger>
               <SelectContent>
                 {intervals.map((intv) => (
-                  <SelectItem key={intv} value={intv}>{intv}</SelectItem>
+                  <SelectItem key={intv} value={intv}>
+                    {intv}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
             <Select value={selectedDays} onValueChange={setSelectedDays}>
-              <SelectTrigger className="w-[100px]"><SelectValue placeholder="Days" /></SelectTrigger>
+              <SelectTrigger className="w-[100px]">
+                <SelectValue placeholder="Days" />
+              </SelectTrigger>
               <SelectContent>
                 {['1', '3', '5', '7', '10'].map((d) => (
-                  <SelectItem key={d} value={d}>{d} {d === '1' ? 'Day' : 'Days'}</SelectItem>
+                  <SelectItem key={d} value={d}>
+                    {d} {d === '1' ? 'Day' : 'Days'}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -627,7 +785,7 @@ export default function CustomStraddle() {
               <Input
                 type="number"
                 value={lotSize}
-                onChange={(e) => setLotSize(Math.max(1, parseInt(e.target.value) || 1))}
+                onChange={(e) => setLotSize(Math.max(1, parseInt(e.target.value, 10) || 1))}
                 className="w-[80px] h-9"
                 min={1}
               />
@@ -637,7 +795,7 @@ export default function CustomStraddle() {
               <Input
                 type="number"
                 value={numLots}
-                onChange={(e) => setNumLots(Math.max(1, parseInt(e.target.value) || 1))}
+                onChange={(e) => setNumLots(Math.max(1, parseInt(e.target.value, 10) || 1))}
                 className="w-[70px] h-9"
                 min={1}
               />
@@ -647,7 +805,9 @@ export default function CustomStraddle() {
               <Input
                 type="number"
                 value={adjustmentPoints}
-                onChange={(e) => setAdjustmentPoints(Math.max(1, parseInt(e.target.value) || 1))}
+                onChange={(e) =>
+                  setAdjustmentPoints(Math.max(1, parseInt(e.target.value, 10) || 1))
+                }
                 className="w-[80px] h-9"
                 min={1}
               />
@@ -665,7 +825,9 @@ export default function CustomStraddle() {
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1 mb-4 text-sm">
               <div>
                 <span className="text-muted-foreground">P&L </span>
-                <span className={`font-semibold ${summary.total_pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                <span
+                  className={`font-semibold ${summary.total_pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}
+                >
                   {formatINR(summary.total_pnl)}
                 </span>
               </div>
@@ -716,7 +878,10 @@ export default function CustomStraddle() {
               onClick={() => setShowPnL((v) => !v)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${showPnL ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'}`}
             >
-              <span className="inline-block h-0.5 w-5 rounded" style={{ backgroundColor: colors.profitLine }} />
+              <span
+                className="inline-block h-0.5 w-5 rounded"
+                style={{ backgroundColor: colors.profitLine }}
+              />
               P&L
             </button>
             <button
@@ -724,7 +889,10 @@ export default function CustomStraddle() {
               onClick={() => setShowSpot((v) => !v)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${showSpot ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'}`}
             >
-              <span className="inline-block h-0.5 w-5 rounded" style={{ backgroundColor: colors.spot }} />
+              <span
+                className="inline-block h-0.5 w-5 rounded"
+                style={{ backgroundColor: colors.spot }}
+              />
               Spot
             </button>
             <button
@@ -732,7 +900,10 @@ export default function CustomStraddle() {
               onClick={() => setShowSynthetic((v) => !v)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${showSynthetic ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'}`}
             >
-              <span className="inline-block h-0.5 w-5 rounded border-dashed border-t-2" style={{ borderColor: colors.synthetic, backgroundColor: 'transparent' }} />
+              <span
+                className="inline-block h-0.5 w-5 rounded border-dashed border-t-2"
+                style={{ borderColor: colors.synthetic, backgroundColor: 'transparent' }}
+              />
               Synthetic Fut
             </button>
           </div>
@@ -743,7 +914,9 @@ export default function CustomStraddle() {
       {chartData?.trades && chartData.trades.length > 0 && (
         <Card className="mt-4">
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg font-semibold">Trade Log ({chartData.trades.length} trades)</CardTitle>
+            <CardTitle className="text-lg font-semibold">
+              Trade Log ({chartData.trades.length} trades)
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
@@ -777,22 +950,27 @@ export default function CustomStraddle() {
 
 function TradeRow({ trade }: { trade: TradeEntry }) {
   const { date, time } = formatIST(trade.time)
-  const typeColor = trade.type === 'ENTRY'
-    ? 'text-blue-500'
-    : trade.type === 'ADJUSTMENT'
-      ? 'text-amber-500'
-      : 'text-purple-500'
+  const typeColor =
+    trade.type === 'ENTRY'
+      ? 'text-blue-500'
+      : trade.type === 'ADJUSTMENT'
+        ? 'text-amber-500'
+        : 'text-purple-500'
 
   const pnlColor = trade.leg_pnl > 0 ? 'text-green-500' : trade.leg_pnl < 0 ? 'text-red-500' : ''
-  const cumColor = trade.cumulative_pnl > 0 ? 'text-green-500' : trade.cumulative_pnl < 0 ? 'text-red-500' : ''
+  const cumColor =
+    trade.cumulative_pnl > 0 ? 'text-green-500' : trade.cumulative_pnl < 0 ? 'text-red-500' : ''
 
-  const strikeDisplay = trade.type === 'ADJUSTMENT' && trade.old_strike
-    ? `${trade.old_strike} -> ${trade.strike}`
-    : `${trade.strike}`
+  const strikeDisplay =
+    trade.type === 'ADJUSTMENT' && trade.old_strike
+      ? `${trade.old_strike} -> ${trade.strike}`
+      : `${trade.strike}`
 
   return (
     <tr className="border-b border-border/30 hover:bg-muted/30">
-      <td className="py-2 pr-4 whitespace-nowrap text-muted-foreground">{date} {time}</td>
+      <td className="py-2 pr-4 whitespace-nowrap text-muted-foreground">
+        {date} {time}
+      </td>
       <td className={`py-2 pr-4 font-medium ${typeColor}`}>{trade.type}</td>
       <td className="py-2 pr-4 text-right font-mono">{strikeDisplay}</td>
       <td className="py-2 pr-4 text-right font-mono">{trade.ce_price.toFixed(2)}</td>
@@ -802,9 +980,7 @@ function TradeRow({ trade }: { trade: TradeEntry }) {
       <td className={`py-2 pr-4 text-right font-mono ${pnlColor}`}>
         {trade.type === 'ENTRY' ? '-' : formatINR(trade.leg_pnl)}
       </td>
-      <td className={`py-2 text-right font-mono ${cumColor}`}>
-        {formatINR(trade.cumulative_pnl)}
-      </td>
+      <td className={`py-2 text-right font-mono ${cumColor}`}>{formatINR(trade.cumulative_pnl)}</td>
     </tr>
   )
 }

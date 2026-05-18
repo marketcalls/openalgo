@@ -12,7 +12,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -27,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
@@ -154,7 +154,10 @@ export default function ApiKey() {
 
       if (data.mode) {
         setOrderMode(data.mode)
-        showToast.success(`Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`, 'system')
+        showToast.success(
+          `Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`,
+          'system'
+        )
       } else {
         showToast.error(data.error || 'Failed to update order mode', 'system')
       }

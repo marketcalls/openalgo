@@ -3,9 +3,9 @@
  * Check price conditions for branching logic
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { TrendingUp } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { PriceConditionNodeData } from '@/types/flow'
 
@@ -34,12 +34,7 @@ const fieldLabels: Record<string, string> = {
 
 export const PriceConditionNode = memo(({ data, selected }: PriceConditionNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node node-condition min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
+    <div className={cn('workflow-node node-condition min-w-[120px]', selected && 'selected')}>
       <Handle
         type="target"
         position={Position.Top}
@@ -52,9 +47,7 @@ export const PriceConditionNode = memo(({ data, selected }: PriceConditionNodePr
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Price</div>
-            <div className="text-[9px] text-muted-foreground">
-              Condition
-            </div>
+            <div className="text-[9px] text-muted-foreground">Condition</div>
           </div>
         </div>
         <div className="space-y-1">
@@ -65,7 +58,8 @@ export const PriceConditionNode = memo(({ data, selected }: PriceConditionNodePr
           <div className="flex items-center justify-between rounded bg-muted/50 px-1.5 py-1">
             <span className="text-[10px] text-muted-foreground">Check</span>
             <span className="text-[10px] font-medium">
-              {fieldLabels[data.field] || 'LTP'} {operatorLabels[data.operator] || '>'} {data.value || 0}
+              {fieldLabels[data.field] || 'LTP'} {operatorLabels[data.operator] || '>'}{' '}
+              {data.value || 0}
             </span>
           </div>
         </div>

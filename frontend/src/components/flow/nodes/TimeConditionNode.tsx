@@ -3,9 +3,9 @@
  * Check if current time matches/passes a specific time (Entry/Exit condition)
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Clock } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { TimeConditionNodeData } from '@/types/flow'
 
@@ -26,17 +26,8 @@ export const TimeConditionNode = memo(({ data, selected }: TimeConditionNodeProp
   const operatorLabel = operatorLabels[data.operator] || '='
 
   return (
-    <div
-      className={cn(
-        'workflow-node node-condition min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node node-condition min-w-[120px]', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded">
@@ -45,7 +36,11 @@ export const TimeConditionNode = memo(({ data, selected }: TimeConditionNodeProp
           <div>
             <div className="text-xs font-medium leading-tight">Time</div>
             <div className="text-[9px] text-muted-foreground">
-              {data.conditionType === 'entry' ? 'Entry' : data.conditionType === 'exit' ? 'Exit' : 'Condition'}
+              {data.conditionType === 'entry'
+                ? 'Entry'
+                : data.conditionType === 'exit'
+                  ? 'Exit'
+                  : 'Condition'}
             </div>
           </div>
         </div>

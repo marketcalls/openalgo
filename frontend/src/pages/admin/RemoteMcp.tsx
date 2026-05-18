@@ -274,11 +274,7 @@ export default function RemoteMcp() {
     }
   }
 
-  const settingsDirty = !!(
-    settings &&
-    pendingSettings &&
-    !settingsEqual(settings, pendingSettings)
-  )
+  const settingsDirty = !!(settings && pendingSettings && !settingsEqual(settings, pendingSettings))
 
   const reloadAudit = async () => {
     try {
@@ -443,8 +439,8 @@ export default function RemoteMcp() {
                 placeholder="https://yourdomain.com"
               />
               <p className="text-xs text-muted-foreground">
-                Same as your OpenAlgo dashboard URL. Required when MCP is enabled. Used as the
-                JWT issuer / audience claim — tokens are scoped to this exact origin.
+                Same as your OpenAlgo dashboard URL. Required when MCP is enabled. Used as the JWT
+                issuer / audience claim — tokens are scoped to this exact origin.
               </p>
             </div>
 
@@ -567,238 +563,237 @@ export default function RemoteMcp() {
       {/* The dashboard sections below only make sense when MCP is running */}
       {!mcpEnabled ? null : (
         <>
-      {/* Summary */}
-      <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-xs uppercase text-muted-foreground">Pending</div>
-            <div className="text-3xl font-bold text-amber-600">{summary.pending}</div>
-            <div className="text-xs text-muted-foreground">awaiting approval</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-xs uppercase text-muted-foreground">Approved</div>
-            <div className="text-3xl font-bold text-emerald-600">{summary.approved}</div>
-            <div className="text-xs text-muted-foreground">active clients</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-xs uppercase text-muted-foreground">Revoked</div>
-            <div className="text-3xl font-bold text-muted-foreground">{summary.revoked}</div>
-            <div className="text-xs text-muted-foreground">disabled</div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Pending */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Pending approvals</CardTitle>
-          <CardDescription>
-            New DCR-registered clients land here. Approve only ones you recognize.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {pending.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No clients awaiting approval.</p>
-          ) : (
-            pending.map((c) => (
-              <ClientCard
-                key={c.client_id}
-                client={c}
-                busy={busyClient === c.client_id}
-                onApprove={() => handleApprove(c.client_id)}
-                onRevoke={() => setRevokeTarget(c)}
-              />
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Approved */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Approved clients</CardTitle>
-          <CardDescription>
-            Currently authorized to complete OAuth flows and call MCP tools.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {approved.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No approved clients yet.</p>
-          ) : (
-            approved.map((c) => (
-              <ClientCard
-                key={c.client_id}
-                client={c}
-                busy={busyClient === c.client_id}
-                onApprove={() => handleApprove(c.client_id)}
-                onRevoke={() => setRevokeTarget(c)}
-              />
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Revoked (collapsed by default — show count, expand on demand) */}
-      {revoked.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Revoked clients ({revoked.length})</CardTitle>
-            <CardDescription>Historical record. These cannot complete OAuth.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {revoked.map((c) => (
-              <ClientCard
-                key={c.client_id}
-                client={c}
-                busy={false}
-                onApprove={() => {}}
-                onRevoke={() => {}}
-              />
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {/* Audit log */}
-      <Card>
-        <CardHeader>
-          <CardTitle>MCP tool call audit</CardTitle>
-          <CardDescription>
-            Tail of <code>log/mcp.jsonl</code>. Every tool call by any client is recorded with
-            timestamp, jti, scope, and outcome — params themselves are stored as a SHA-256 hash.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2 mb-4">
-            <Input
-              placeholder="Filter by tool name (substring)"
-              value={auditTool}
-              onChange={(e) => setAuditTool(e.target.value.slice(0, 100))}
-              className="max-w-xs"
-            />
-            <Select value={auditScope} onValueChange={setAuditScope}>
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SCOPE_FILTERS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={auditOutcome} onValueChange={setAuditOutcome}>
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {OUTCOME_FILTERS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="sm" onClick={reloadAudit}>
-              Apply
-            </Button>
+          {/* Summary */}
+          <div className="grid grid-cols-3 gap-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-xs uppercase text-muted-foreground">Pending</div>
+                <div className="text-3xl font-bold text-amber-600">{summary.pending}</div>
+                <div className="text-xs text-muted-foreground">awaiting approval</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-xs uppercase text-muted-foreground">Approved</div>
+                <div className="text-3xl font-bold text-emerald-600">{summary.approved}</div>
+                <div className="text-xs text-muted-foreground">active clients</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-xs uppercase text-muted-foreground">Revoked</div>
+                <div className="text-3xl font-bold text-muted-foreground">{summary.revoked}</div>
+                <div className="text-xs text-muted-foreground">disabled</div>
+              </CardContent>
+            </Card>
           </div>
 
-          <div className="text-xs text-muted-foreground mb-2">
-            Showing {audit.length} of {auditTotal} entries
-          </div>
+          {/* Pending */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Pending approvals</CardTitle>
+              <CardDescription>
+                New DCR-registered clients land here. Approve only ones you recognize.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {pending.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No clients awaiting approval.</p>
+              ) : (
+                pending.map((c) => (
+                  <ClientCard
+                    key={c.client_id}
+                    client={c}
+                    busy={busyClient === c.client_id}
+                    onApprove={() => handleApprove(c.client_id)}
+                    onRevoke={() => setRevokeTarget(c)}
+                  />
+                ))
+              )}
+            </CardContent>
+          </Card>
 
-          {audit.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No tool calls yet.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8" />
-                  <TableHead>Time</TableHead>
-                  <TableHead>Tool</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Outcome</TableHead>
-                  <TableHead>Latency</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {audit
-                  .slice()
-                  .reverse()
-                  .map((entry, idx) => {
-                    const isOpen = expandedAudit === idx
-                    return (
-                      <Fragment key={`${entry.ts}-${entry.jti}-${idx}`}>
-                        <TableRow
-                          key={`${entry.ts}-${entry.jti}-${idx}`}
-                          className="cursor-pointer hover:bg-muted/50"
-                          onClick={() => setExpandedAudit(isOpen ? null : idx)}
-                        >
-                          <TableCell>
-                            {isOpen ? (
-                              <ChevronDown className="h-4 w-4" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4" />
-                            )}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">{entry.ts}</TableCell>
-                          <TableCell className="font-mono text-xs">{entry.tool}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="text-xs">
-                              {entry.scope}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={entry.outcome === 'success' ? 'default' : 'destructive'}
-                              className="text-xs"
+          {/* Approved */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Approved clients</CardTitle>
+              <CardDescription>
+                Currently authorized to complete OAuth flows and call MCP tools.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {approved.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No approved clients yet.</p>
+              ) : (
+                approved.map((c) => (
+                  <ClientCard
+                    key={c.client_id}
+                    client={c}
+                    busy={busyClient === c.client_id}
+                    onApprove={() => handleApprove(c.client_id)}
+                    onRevoke={() => setRevokeTarget(c)}
+                  />
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Revoked (collapsed by default — show count, expand on demand) */}
+          {revoked.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Revoked clients ({revoked.length})</CardTitle>
+                <CardDescription>Historical record. These cannot complete OAuth.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {revoked.map((c) => (
+                  <ClientCard
+                    key={c.client_id}
+                    client={c}
+                    busy={false}
+                    onApprove={() => {}}
+                    onRevoke={() => {}}
+                  />
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {/* Audit log */}
+          <Card>
+            <CardHeader>
+              <CardTitle>MCP tool call audit</CardTitle>
+              <CardDescription>
+                Tail of <code>log/mcp.jsonl</code>. Every tool call by any client is recorded with
+                timestamp, jti, scope, and outcome — params themselves are stored as a SHA-256 hash.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <Input
+                  placeholder="Filter by tool name (substring)"
+                  value={auditTool}
+                  onChange={(e) => setAuditTool(e.target.value.slice(0, 100))}
+                  className="max-w-xs"
+                />
+                <Select value={auditScope} onValueChange={setAuditScope}>
+                  <SelectTrigger className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SCOPE_FILTERS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={auditOutcome} onValueChange={setAuditOutcome}>
+                  <SelectTrigger className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OUTCOME_FILTERS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" size="sm" onClick={reloadAudit}>
+                  Apply
+                </Button>
+              </div>
+
+              <div className="text-xs text-muted-foreground mb-2">
+                Showing {audit.length} of {auditTotal} entries
+              </div>
+
+              {audit.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No tool calls yet.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8" />
+                      <TableHead>Time</TableHead>
+                      <TableHead>Tool</TableHead>
+                      <TableHead>Scope</TableHead>
+                      <TableHead>Outcome</TableHead>
+                      <TableHead>Latency</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {audit
+                      .slice()
+                      .reverse()
+                      .map((entry, idx) => {
+                        const isOpen = expandedAudit === idx
+                        return (
+                          <Fragment key={`${entry.ts}-${entry.jti}-${idx}`}>
+                            <TableRow
+                              key={`${entry.ts}-${entry.jti}-${idx}`}
+                              className="cursor-pointer hover:bg-muted/50"
+                              onClick={() => setExpandedAudit(isOpen ? null : idx)}
                             >
-                              {entry.outcome}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-xs">
-                            {entry.duration_ms != null ? `${entry.duration_ms} ms` : '—'}
-                          </TableCell>
-                        </TableRow>
-                        {isOpen ? (
-                          <TableRow>
-                            <TableCell colSpan={6} className="bg-muted/30 text-xs">
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 py-2">
-                                <div>
-                                  <span className="text-muted-foreground">Client:</span>{' '}
-                                  <span className="font-mono">{entry.client_id ?? '—'}</span>
-                                </div>
-                                <div>
-                                  <span className="text-muted-foreground">JTI:</span>{' '}
-                                  <span className="font-mono">{entry.jti ?? '—'}</span>
-                                </div>
-                                <div>
-                                  <span className="text-muted-foreground">IP:</span>{' '}
-                                  <span className="font-mono">{entry.request_ip ?? '—'}</span>
-                                </div>
-                                <div className="md:col-span-3">
-                                  <span className="text-muted-foreground">Params hash:</span>{' '}
-                                  <span className="font-mono">{entry.params_hash ?? '—'}</span>
-                                </div>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ) : null}
-                      </Fragment>
-                    )
-                  })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
+                              <TableCell>
+                                {isOpen ? (
+                                  <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" />
+                                )}
+                              </TableCell>
+                              <TableCell className="font-mono text-xs">{entry.ts}</TableCell>
+                              <TableCell className="font-mono text-xs">{entry.tool}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="text-xs">
+                                  {entry.scope}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant={entry.outcome === 'success' ? 'default' : 'destructive'}
+                                  className="text-xs"
+                                >
+                                  {entry.outcome}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-xs">
+                                {entry.duration_ms != null ? `${entry.duration_ms} ms` : '—'}
+                              </TableCell>
+                            </TableRow>
+                            {isOpen ? (
+                              <TableRow>
+                                <TableCell colSpan={6} className="bg-muted/30 text-xs">
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 py-2">
+                                    <div>
+                                      <span className="text-muted-foreground">Client:</span>{' '}
+                                      <span className="font-mono">{entry.client_id ?? '—'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-muted-foreground">JTI:</span>{' '}
+                                      <span className="font-mono">{entry.jti ?? '—'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-muted-foreground">IP:</span>{' '}
+                                      <span className="font-mono">{entry.request_ip ?? '—'}</span>
+                                    </div>
+                                    <div className="md:col-span-3">
+                                      <span className="text-muted-foreground">Params hash:</span>{' '}
+                                      <span className="font-mono">{entry.params_hash ?? '—'}</span>
+                                    </div>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ) : null}
+                          </Fragment>
+                        )
+                      })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
 

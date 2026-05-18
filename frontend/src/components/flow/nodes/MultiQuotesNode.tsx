@@ -3,9 +3,9 @@
  * Fetch quotes for multiple symbols at once
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { BarChart3 } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 
 interface MultiQuotesNodeData {
@@ -20,20 +20,11 @@ interface MultiQuotesNodeProps {
 }
 
 export const MultiQuotesNode = memo(({ data, selected }: MultiQuotesNodeProps) => {
-  const symbolList = (data.symbols || '').split(',').filter(s => s.trim())
+  const symbolList = (data.symbols || '').split(',').filter((s) => s.trim())
 
   return (
-    <div
-      className={cn(
-        'workflow-node node-data min-w-[130px]',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node node-data min-w-[130px]', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded">
@@ -41,9 +32,7 @@ export const MultiQuotesNode = memo(({ data, selected }: MultiQuotesNodeProps) =
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Multi Quotes</div>
-            <div className="text-[9px] text-muted-foreground">
-              {data.exchange || 'NSE'}
-            </div>
+            <div className="text-[9px] text-muted-foreground">{data.exchange || 'NSE'}</div>
           </div>
         </div>
         <div className="space-y-1">
@@ -71,11 +60,7 @@ export const MultiQuotesNode = memo(({ data, selected }: MultiQuotesNodeProps) =
           )}
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

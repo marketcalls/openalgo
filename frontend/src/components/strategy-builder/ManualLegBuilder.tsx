@@ -64,8 +64,7 @@ export function ManualLegBuilder({
 
   useEffect(() => {
     if (atmStrike === null || !chain) return
-    const strikeInChain =
-      strike !== undefined && chain.some((s) => s.strike === strike)
+    const strikeInChain = strike !== undefined && chain.some((s) => s.strike === strike)
     if (!strikeInChain) setStrike(atmStrike)
   }, [atmStrike, chain, strike])
 
@@ -192,8 +191,7 @@ export function ManualLegBuilder({
                           'bg-amber-500/15 text-amber-700 dark:text-amber-400',
                         currentMoneyness.kind === 'ITM' &&
                           'bg-sky-500/15 text-sky-700 dark:text-sky-400',
-                        currentMoneyness.kind === 'OTM' &&
-                          'bg-muted text-muted-foreground'
+                        currentMoneyness.kind === 'OTM' && 'bg-muted text-muted-foreground'
                       )}
                     >
                       {currentMoneyness.label}

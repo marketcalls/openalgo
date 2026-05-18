@@ -1,6 +1,6 @@
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { WifiOff } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 
 interface UnsubscribeNodeData {
@@ -20,7 +20,7 @@ export const UnsubscribeNode = memo(({ data, selected }: UnsubscribeNodeProps) =
     ltp: 'LTP',
     quote: 'Quote',
     depth: 'Depth',
-    all: 'All Streams'
+    all: 'All Streams',
   }
 
   return (

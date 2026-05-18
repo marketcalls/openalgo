@@ -16,7 +16,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -42,6 +41,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { Strategy, StrategySymbolMapping } from '@/types/strategy'
+import { showToast } from '@/utils/toast'
 
 export default function ViewStrategy() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -54,7 +54,10 @@ export default function ViewStrategy() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [showCredentials, setShowCredentials] = useState(false)
-  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const [hostConfig, setHostConfig] = useState<{
+    host_server: string
+    is_localhost: boolean
+  } | null>(null)
 
   const fetchStrategy = async () => {
     if (!strategyId) return
@@ -82,7 +85,8 @@ export default function ViewStrategy() {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
-          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          is_localhost:
+            window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
         })
       }
     }
@@ -112,7 +116,10 @@ export default function ViewStrategy() {
       const response = await strategyApi.toggleStrategy(strategy.id)
       if (response.status === 'success') {
         setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active })
-        showToast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated', 'strategy')
+        showToast.success(
+          response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated',
+          'strategy'
+        )
       } else {
         showToast.error(response.message || 'Failed to toggle strategy', 'strategy')
       }

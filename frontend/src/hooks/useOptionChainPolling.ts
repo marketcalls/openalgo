@@ -34,7 +34,11 @@ export function useOptionChainPolling(
   exchange: string,
   expiryDate: string,
   strikeCount: number,
-  options: UseOptionChainPollingOptions = { enabled: true, refreshInterval: 30000, pauseWhenHidden: true }
+  options: UseOptionChainPollingOptions = {
+    enabled: true,
+    refreshInterval: 30000,
+    pauseWhenHidden: true,
+  }
 ) {
   const { enabled, refreshInterval = 30000, pauseWhenHidden = true } = options
   const { isVisible } = usePageVisibility()

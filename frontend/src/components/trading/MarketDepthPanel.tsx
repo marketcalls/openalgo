@@ -47,10 +47,12 @@ function DepthRow({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className={cn(
-        'relative z-10 flex-1 font-mono text-xs',
-        side === 'buy' ? 'text-emerald-400' : 'text-rose-400'
-      )}>
+      <span
+        className={cn(
+          'relative z-10 flex-1 font-mono text-xs',
+          side === 'buy' ? 'text-emerald-400' : 'text-rose-400'
+        )}
+      >
         {price.toFixed(2)}
       </span>
       <span className="relative z-10 font-mono text-xs text-muted-foreground">
@@ -70,8 +72,8 @@ export function MarketDepthPanel({
   const sellLevels = depth?.sell?.slice(0, maxLevels) ?? []
 
   // Calculate max quantity for gradient scaling
-  const maxBuyQty = Math.max(...buyLevels.map(l => l.quantity), 1)
-  const maxSellQty = Math.max(...sellLevels.map(l => l.quantity), 1)
+  const maxBuyQty = Math.max(...buyLevels.map((l) => l.quantity), 1)
+  const maxSellQty = Math.max(...sellLevels.map((l) => l.quantity), 1)
   const maxQty = Math.max(maxBuyQty, maxSellQty)
 
   const hasDepth = buyLevels.length > 0 || sellLevels.length > 0
@@ -82,9 +84,7 @@ export function MarketDepthPanel({
         <span className="text-sm text-muted-foreground">
           {isExpanded ? 'Hide' : 'Show'} Market Depth
         </span>
-        <span className="text-xs text-muted-foreground">
-          {isExpanded ? '[-]' : '[+]'}
-        </span>
+        <span className="text-xs text-muted-foreground">{isExpanded ? '[-]' : '[+]'}</span>
       </CollapsibleTrigger>
 
       <CollapsibleContent>
@@ -96,12 +96,8 @@ export function MarketDepthPanel({
           <div className="mt-2 border rounded-lg overflow-hidden">
             {/* Header */}
             <div className="grid grid-cols-2 bg-muted/30">
-              <div className="px-2 py-1.5 text-xs font-medium text-emerald-500 border-r">
-                Bids
-              </div>
-              <div className="px-2 py-1.5 text-xs font-medium text-rose-500">
-                Asks
-              </div>
+              <div className="px-2 py-1.5 text-xs font-medium text-emerald-500 border-r">Bids</div>
+              <div className="px-2 py-1.5 text-xs font-medium text-rose-500">Asks</div>
             </div>
 
             {/* Depth rows */}

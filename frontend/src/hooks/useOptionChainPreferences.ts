@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { BarDataSource, BarStyle, ColumnKey, OptionChainPreferences } from '@/types/option-chain'
-import {
-  COLUMN_DEFINITIONS,
-  DEFAULT_PREFERENCES,
-  LOCALSTORAGE_KEY,
+import type {
+  BarDataSource,
+  BarStyle,
+  ColumnKey,
+  OptionChainPreferences,
 } from '@/types/option-chain'
+import { COLUMN_DEFINITIONS, DEFAULT_PREFERENCES, LOCALSTORAGE_KEY } from '@/types/option-chain'
 
 interface UseOptionChainPreferencesReturn {
   preferences: OptionChainPreferences
@@ -39,10 +40,10 @@ function loadPreferences(): OptionChainPreferences {
     const parsed = JSON.parse(stored) as Partial<OptionChainPreferences>
 
     // Validate and merge with defaults
-    const validColumnKeys = new Set(COLUMN_DEFINITIONS.map(c => c.key))
+    const validColumnKeys = new Set(COLUMN_DEFINITIONS.map((c) => c.key))
 
     const visibleColumns = Array.isArray(parsed.visibleColumns)
-      ? parsed.visibleColumns.filter(key => validColumnKeys.has(key))
+      ? parsed.visibleColumns.filter((key) => validColumnKeys.has(key))
       : DEFAULT_PREFERENCES.visibleColumns
 
     // Ensure strike column is always visible (mandatory)
@@ -51,12 +52,12 @@ function loadPreferences(): OptionChainPreferences {
     }
 
     const columnOrder = Array.isArray(parsed.columnOrder)
-      ? parsed.columnOrder.filter(key => validColumnKeys.has(key))
+      ? parsed.columnOrder.filter((key) => validColumnKeys.has(key))
       : DEFAULT_PREFERENCES.columnOrder
 
     // Ensure all valid columns are in the order (add any missing ones)
     const orderSet = new Set(columnOrder)
-    DEFAULT_PREFERENCES.columnOrder.forEach(key => {
+    DEFAULT_PREFERENCES.columnOrder.forEach((key) => {
       if (!orderSet.has(key)) {
         columnOrder.push(key)
       }
@@ -65,18 +66,22 @@ function loadPreferences(): OptionChainPreferences {
     return {
       visibleColumns,
       columnOrder,
-      strikeCount: typeof parsed.strikeCount === 'number' && parsed.strikeCount > 0
-        ? parsed.strikeCount
-        : DEFAULT_PREFERENCES.strikeCount,
-      selectedUnderlying: typeof parsed.selectedUnderlying === 'string' && parsed.selectedUnderlying
-        ? parsed.selectedUnderlying
-        : DEFAULT_PREFERENCES.selectedUnderlying,
-      barDataSource: parsed.barDataSource === 'oi' || parsed.barDataSource === 'volume'
-        ? parsed.barDataSource
-        : DEFAULT_PREFERENCES.barDataSource,
-      barStyle: parsed.barStyle === 'gradient' || parsed.barStyle === 'solid'
-        ? parsed.barStyle
-        : DEFAULT_PREFERENCES.barStyle,
+      strikeCount:
+        typeof parsed.strikeCount === 'number' && parsed.strikeCount > 0
+          ? parsed.strikeCount
+          : DEFAULT_PREFERENCES.strikeCount,
+      selectedUnderlying:
+        typeof parsed.selectedUnderlying === 'string' && parsed.selectedUnderlying
+          ? parsed.selectedUnderlying
+          : DEFAULT_PREFERENCES.selectedUnderlying,
+      barDataSource:
+        parsed.barDataSource === 'oi' || parsed.barDataSource === 'volume'
+          ? parsed.barDataSource
+          : DEFAULT_PREFERENCES.barDataSource,
+      barStyle:
+        parsed.barStyle === 'gradient' || parsed.barStyle === 'solid'
+          ? parsed.barStyle
+          : DEFAULT_PREFERENCES.barStyle,
     }
   } catch {
     return DEFAULT_PREFERENCES
@@ -109,10 +114,10 @@ export function useOptionChainPreferences(): UseOptionChainPreferencesReturn {
       return
     }
 
-    setPreferences(prev => {
+    setPreferences((prev) => {
       const isVisible = prev.visibleColumns.includes(columnKey)
       const newVisibleColumns = isVisible
-        ? prev.visibleColumns.filter(key => key !== columnKey)
+        ? prev.visibleColumns.filter((key) => key !== columnKey)
         : [...prev.visibleColumns, columnKey]
 
       return {
@@ -123,35 +128,35 @@ export function useOptionChainPreferences(): UseOptionChainPreferencesReturn {
   }, [])
 
   const reorderColumns = useCallback((newOrder: ColumnKey[]) => {
-    setPreferences(prev => ({
+    setPreferences((prev) => ({
       ...prev,
       columnOrder: newOrder,
     }))
   }, [])
 
   const setStrikeCount = useCallback((count: number) => {
-    setPreferences(prev => ({
+    setPreferences((prev) => ({
       ...prev,
       strikeCount: count,
     }))
   }, [])
 
   const setSelectedUnderlying = useCallback((underlying: string) => {
-    setPreferences(prev => ({
+    setPreferences((prev) => ({
       ...prev,
       selectedUnderlying: underlying,
     }))
   }, [])
 
   const setBarDataSource = useCallback((source: BarDataSource) => {
-    setPreferences(prev => ({
+    setPreferences((prev) => ({
       ...prev,
       barDataSource: source,
     }))
   }, [])
 
   const setBarStyle = useCallback((style: BarStyle) => {
-    setPreferences(prev => ({
+    setPreferences((prev) => ({
       ...prev,
       barStyle: style,
     }))
@@ -161,13 +166,16 @@ export function useOptionChainPreferences(): UseOptionChainPreferencesReturn {
     setPreferences(DEFAULT_PREFERENCES)
   }, [])
 
-  const isColumnVisible = useCallback((columnKey: ColumnKey): boolean => {
-    return preferences.visibleColumns.includes(columnKey)
-  }, [preferences.visibleColumns])
+  const isColumnVisible = useCallback(
+    (columnKey: ColumnKey): boolean => {
+      return preferences.visibleColumns.includes(columnKey)
+    },
+    [preferences.visibleColumns]
+  )
 
   const getOrderedVisibleColumns = useCallback((): ColumnKey[] => {
     // Return columns in the specified order, filtered to only visible ones
-    return preferences.columnOrder.filter(key => preferences.visibleColumns.includes(key))
+    return preferences.columnOrder.filter((key) => preferences.visibleColumns.includes(key))
   }, [preferences.columnOrder, preferences.visibleColumns])
 
   return {

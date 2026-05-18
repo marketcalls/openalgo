@@ -1,21 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronsUpDown } from 'lucide-react'
 import {
   ColorType,
   CrosshairMode,
-  LineSeries,
   createChart,
   type IChartApi,
   type ISeriesApi,
+  LineSeries,
 } from 'lightweight-charts'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { useThemeStore } from '@/stores/themeStore'
+import { Check, ChevronsUpDown } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { oiProfileApi } from '@/api/oi-profile'
 import {
-  straddleChartApi,
   type StraddleChartData,
   type StraddleDataPoint,
+  straddleChartApi,
 } from '@/api/straddle-chart'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Command,
@@ -33,7 +32,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
@@ -53,7 +53,20 @@ function formatIST(unixSeconds: number): { date: string; time: string } {
   const d = new Date(unixSeconds * 1000)
   const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
   const dd = ist.getUTCDate().toString().padStart(2, '0')
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ]
   const mo = months[ist.getUTCMonth()]
   const hh = ist.getUTCHours().toString().padStart(2, '0')
   const mm = ist.getUTCMinutes().toString().padStart(2, '0')
@@ -74,9 +87,13 @@ export default function StraddleChart() {
   // Control state
   const [isLoading, setIsLoading] = useState(false)
   const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
-  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
+  const [underlyings, setUnderlyings] = useState<string[]>(
+    defaultUnderlyings[defaultFnoExchange] || []
+  )
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(
+    defaultUnderlyings[defaultFnoExchange]?.[0] || ''
+  )
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [intervals, setIntervals] = useState<string[]>([])
@@ -214,7 +231,7 @@ export default function StraddleChart() {
           const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
           const hh = ist.getUTCHours().toString().padStart(2, '0')
           const mm = ist.getUTCMinutes().toString().padStart(2, '0')
-          if (parseInt(selectedDays) > 1) {
+          if (parseInt(selectedDays, 10) > 1) {
             const dd = ist.getUTCDate().toString().padStart(2, '0')
             const mo = (ist.getUTCMonth() + 1).toString().padStart(2, '0')
             return `${dd}/${mo} ${hh}:${mm}`
@@ -571,7 +588,7 @@ export default function StraddleChart() {
         exchange: selectedExchange,
         expiry_date: convertExpiryForAPI(selectedExpiry),
         interval: selectedInterval,
-        days: parseInt(selectedDays),
+        days: parseInt(selectedDays, 10),
       })
       if (res.status === 'success' && res.data) {
         chartDataRef.current = res.data
@@ -585,7 +602,14 @@ export default function StraddleChart() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedExpiry, selectedInterval, selectedDays, selectedUnderlying, selectedExchange, applyDataToChart])
+  }, [
+    selectedExpiry,
+    selectedInterval,
+    selectedDays,
+    selectedUnderlying,
+    selectedExchange,
+    applyDataToChart,
+  ])
 
   useEffect(() => {
     loadData()
@@ -624,7 +648,12 @@ export default function StraddleChart() {
 
             <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
               <PopoverTrigger asChild>
-                <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-[140px] justify-between">
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={underlyingOpen}
+                  className="w-[140px] justify-between"
+                >
                   {selectedUnderlying || 'Underlying'}
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
@@ -644,7 +673,9 @@ export default function StraddleChart() {
                             setUnderlyingOpen(false)
                           }}
                         >
-                          <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                          <Check
+                            className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`}
+                          />
                           {u}
                         </CommandItem>
                       ))}
@@ -716,15 +747,11 @@ export default function StraddleChart() {
                 <span className="font-medium">{latestPoint.atm_strike}</span>
               </div>
               <div>
-                <span className="text-muted-foreground">
-                  {latestPoint.atm_strike} CE{' '}
-                </span>
+                <span className="text-muted-foreground">{latestPoint.atm_strike} CE </span>
                 <span className="font-medium">{latestPoint.ce_price.toFixed(2)}</span>
               </div>
               <div>
-                <span className="text-muted-foreground">
-                  {latestPoint.atm_strike} PE{' '}
-                </span>
+                <span className="text-muted-foreground">{latestPoint.atm_strike} PE </span>
                 <span className="font-medium">{latestPoint.pe_price.toFixed(2)}</span>
               </div>
             </div>
@@ -753,9 +780,7 @@ export default function StraddleChart() {
               type="button"
               onClick={() => setShowStraddle((v) => !v)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
-                showStraddle
-                  ? 'bg-muted font-medium'
-                  : 'opacity-50 hover:opacity-75'
+                showStraddle ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
               }`}
             >
               <span
@@ -768,9 +793,7 @@ export default function StraddleChart() {
               type="button"
               onClick={() => setShowSpot((v) => !v)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
-                showSpot
-                  ? 'bg-muted font-medium'
-                  : 'opacity-50 hover:opacity-75'
+                showSpot ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
               }`}
             >
               <span
@@ -783,9 +806,7 @@ export default function StraddleChart() {
               type="button"
               onClick={() => setShowSynthetic((v) => !v)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
-                showSynthetic
-                  ? 'bg-muted font-medium'
-                  : 'opacity-50 hover:opacity-75'
+                showSynthetic ? 'bg-muted font-medium' : 'opacity-50 hover:opacity-75'
               }`}
             >
               <span

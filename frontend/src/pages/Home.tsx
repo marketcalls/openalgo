@@ -1,7 +1,7 @@
 import {
   ArrowRight,
-  Bot,
   BookOpen,
+  Bot,
   ClipboardList,
   Download,
   HelpCircle,
@@ -288,20 +288,22 @@ export default function Home() {
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">
                   Connect your OpenAlgo account to Claude, Cursor, Windsurf, or ChatGPT. Place
-                  orders, check positions, and pull live prices by simply asking - no dashboards,
-                  no clicks.
+                  orders, check positions, and pull live prices by simply asking - no dashboards, no
+                  clicks.
                 </p>
                 <div className="flex flex-wrap gap-2 pt-2">
-                  {['25+ built-in actions', 'Claude / Cursor / Windsurf / ChatGPT', 'Runs on your computer'].map(
-                    (tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground"
-                      >
-                        {tag}
-                      </span>
-                    )
-                  )}
+                  {[
+                    '25+ built-in actions',
+                    'Claude / Cursor / Windsurf / ChatGPT',
+                    'Runs on your computer',
+                  ].map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+                    >
+                      {tag}
+                    </span>
+                  ))}
                 </div>
               </CardContent>
             </Card>

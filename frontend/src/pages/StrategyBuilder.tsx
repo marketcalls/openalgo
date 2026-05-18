@@ -1,32 +1,35 @@
-import { Activity, BarChart3, Briefcase, Layers, LineChart, Sparkles, TrendingUp } from 'lucide-react'
+import {
+  Activity,
+  BarChart3,
+  Briefcase,
+  Layers,
+  LineChart,
+  Sparkles,
+  TrendingUp,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient } from '@/api/client'
 import { oiProfileApi } from '@/api/oi-profile'
 import { optionChainApi } from '@/api/option-chain'
-import {
-  strategyPortfolioApi,
-  type PortfolioEntry,
-  type Watchlist,
-} from '@/api/strategy-portfolio'
+import { type PortfolioEntry, strategyPortfolioApi, type Watchlist } from '@/api/strategy-portfolio'
 import { EditLegDialog } from '@/components/strategy-builder/EditLegDialog'
 import { GreeksTab, type LegGreeks } from '@/components/strategy-builder/GreeksTab'
 import { type LegDraft, ManualLegBuilder } from '@/components/strategy-builder/ManualLegBuilder'
+import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
 import { PayoffChart } from '@/components/strategy-builder/PayoffChart'
 import { PnLTab } from '@/components/strategy-builder/PnLTab'
 import { PositionsPanel } from '@/components/strategy-builder/PositionsPanel'
 import { SaveStrategyDialog } from '@/components/strategy-builder/SaveStrategyDialog'
-import { ExecuteBasketDialog } from '@/components/trading/ExecuteBasketDialog'
 import { Simulators } from '@/components/strategy-builder/Simulators'
 import StrategyChartTab from '@/components/strategy-builder/StrategyChartTab'
-import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
-
 import { SymbolHeader } from '@/components/strategy-builder/SymbolHeader'
 import {
   type ResolvedTemplateLeg,
   TemplateDialog,
 } from '@/components/strategy-builder/TemplateDialog'
 import { TemplateGrid } from '@/components/strategy-builder/TemplateGrid'
+import { ExecuteBasketDialog } from '@/components/trading/ExecuteBasketDialog'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
@@ -456,7 +459,7 @@ export default function StrategyBuilder() {
       const d = sorted[i] - sorted[i - 1]
       if (d > 0 && d < minDiff) minDiff = d
     }
-    return isFinite(minDiff) ? minDiff : 50
+    return Number.isFinite(minDiff) ? minDiff : 50
   }, [chainData])
 
   // DTE of the header-selected expiry (for the metadata badge only).
@@ -480,9 +483,7 @@ export default function StrategyBuilder() {
   const clampedDaysElapsed = Math.min(daysElapsed, maxSimulatorDays)
 
   // Remaining "simulated" years to the near expiry — for σ bands / PoP.
-  const simulatedYearsToNearExpiry = daysToYears(
-    Math.max(nearestDays - clampedDaysElapsed, 0)
-  )
+  const simulatedYearsToNearExpiry = daysToYears(Math.max(nearestDays - clampedDaysElapsed, 0))
 
   // Shifted spot for the payoff calculations
   const simulatedSpot = spotPrice !== null ? spotPrice * (1 + spotShiftPct / 100) : 0
@@ -580,9 +581,7 @@ export default function StrategyBuilder() {
   // Debounced so rapid edits don't hammer the endpoint.
   useEffect(() => {
     if (!apiKey) return
-    const openLegs = legs.filter(
-      (l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0)
-    )
+    const openLegs = legs.filter((l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0))
     if (openLegs.length === 0) {
       setMarginRequired(null)
       return
@@ -716,10 +715,7 @@ export default function StrategyBuilder() {
   }, [apiKey, legs, selectedExchange])
 
   // F&O exchange for all leg symbols (used for WebSocket subscription).
-  const fnoExchange = useMemo(
-    () => optionExchangeFor(selectedExchange),
-    [selectedExchange]
-  )
+  const fnoExchange = useMemo(() => optionExchangeFor(selectedExchange), [selectedExchange])
 
   // Chain-derived fallback prices (used until the first WS tick arrives).
   // PnLTab itself handles real-time streaming internally to scope tick-
@@ -889,9 +885,7 @@ export default function StrategyBuilder() {
   }, [])
   const toggleLegSide = useCallback((id: string) => {
     setLegs((prev) =>
-      prev.map((l) =>
-        l.id === id ? { ...l, side: l.side === 'BUY' ? 'SELL' : 'BUY' } : l
-      )
+      prev.map((l) => (l.id === id ? { ...l, side: l.side === 'BUY' ? 'SELL' : 'BUY' } : l))
     )
   }, [])
   const removeLeg = useCallback((id: string) => {
@@ -907,11 +901,7 @@ export default function StrategyBuilder() {
       // Prefer the live chain's symbol whenever available so crypto / non-
       // standard option symbols stay correct across edits.
       let rebuiltSymbol: string
-      if (
-        updated.segment === 'OPTION' &&
-        updated.strike !== undefined &&
-        updated.optionType
-      ) {
+      if (updated.segment === 'OPTION' && updated.strike !== undefined && updated.optionType) {
         const row = chainData?.chain.find((s) => s.strike === updated.strike)
         const side = updated.optionType === 'CE' ? row?.ce : row?.pe
         rebuiltSymbol =
@@ -928,9 +918,7 @@ export default function StrategyBuilder() {
 
       setLegs((prev) =>
         prev.map((l) =>
-          l.id === updated.id
-            ? { ...updated, expiry: normalisedExpiry, symbol: rebuiltSymbol }
-            : l
+          l.id === updated.id ? { ...updated, expiry: normalisedExpiry, symbol: rebuiltSymbol } : l
         )
       )
       setEditLegId(null)
@@ -1038,9 +1026,6 @@ export default function StrategyBuilder() {
         setLoadedEntry(saved)
         setSaveDialogOpen(false)
         showToast.success(loadedEntry ? 'Strategy updated' : 'Strategy saved')
-      } catch (err) {
-        // Propagate to the dialog's inline error banner.
-        throw err
       } finally {
         setIsSaving(false)
       }
@@ -1137,8 +1122,8 @@ export default function StrategyBuilder() {
             <div className="space-y-1.5">
               <h3 className="text-base font-semibold">Your canvas awaits</h3>
               <p className="mx-auto max-w-md text-[13px] text-muted-foreground">
-                Pick a pre-built strategy above, or add a position manually. Payoff chart,
-                Greeks and live P&amp;L will materialize here.
+                Pick a pre-built strategy above, or add a position manually. Payoff chart, Greeks
+                and live P&amp;L will materialize here.
               </p>
             </div>
 

@@ -1,4 +1,4 @@
-import { Settings2, RotateCcw } from 'lucide-react'
+import { RotateCcw, Settings2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -22,8 +22,8 @@ export function ColumnConfigDropdown({
   onToggleColumn,
   onResetToDefaults,
 }: ColumnConfigDropdownProps) {
-  const ceColumns = COLUMN_DEFINITIONS.filter(col => col.side === 'ce')
-  const peColumns = COLUMN_DEFINITIONS.filter(col => col.side === 'pe')
+  const ceColumns = COLUMN_DEFINITIONS.filter((col) => col.side === 'ce')
+  const peColumns = COLUMN_DEFINITIONS.filter((col) => col.side === 'pe')
 
   const isColumnVisible = (key: ColumnKey) => visibleColumns.includes(key)
 
@@ -37,7 +37,7 @@ export function ColumnConfigDropdown({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuLabel>CALLS Columns</DropdownMenuLabel>
-        {ceColumns.map(col => (
+        {ceColumns.map((col) => (
           <DropdownMenuCheckboxItem
             key={col.key}
             checked={isColumnVisible(col.key)}
@@ -50,7 +50,7 @@ export function ColumnConfigDropdown({
         <DropdownMenuSeparator />
 
         <DropdownMenuLabel>PUTS Columns</DropdownMenuLabel>
-        {peColumns.map(col => (
+        {peColumns.map((col) => (
           <DropdownMenuCheckboxItem
             key={col.key}
             checked={isColumnVisible(col.key)}

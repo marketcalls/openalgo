@@ -1,9 +1,16 @@
-import { ArrowDown, ArrowUp, Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  Download,
+  Loader2,
+  RefreshCw,
+  Settings2,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
-import { showToast } from '@/utils/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -24,11 +31,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { onModeChange } from '@/stores/themeStore'
 import type { Trade } from '@/types/trading'
+import { showToast } from '@/utils/toast'
 
 interface FilterState {
   action: string[]
@@ -37,10 +46,10 @@ interface FilterState {
 }
 
 // Sort configuration types
-type SortKey = 'timestamp' | 'symbol' | 'action';
+type SortKey = 'timestamp' | 'symbol' | 'action'
 interface SortConfig {
-  key: SortKey;
-  direction: 'asc' | 'desc';
+  key: SortKey
+  direction: 'asc' | 'desc'
 }
 
 /**
@@ -76,7 +85,7 @@ function formatTime(timestamp: string): string {
 
   const timeValue = parseTimestamp(timestamp)
   if (timeValue === 0) {
-     // Last resort: extract HH:MM:SS if embedded in the string
+    // Last resort: extract HH:MM:SS if embedded in the string
     const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
     return timeMatch ? timeMatch[1] : timestamp
   }
@@ -342,16 +351,16 @@ export default function TradeBook() {
 
                 {/* Product */}
                 {!isCrypto && (
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Product
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="product" value="CNC" label="CNC" />
-                    <FilterChip type="product" value="MIS" label="MIS" />
-                    <FilterChip type="product" value="NRML" label="NRML" />
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Product
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <FilterChip type="product" value="CNC" label="CNC" />
+                      <FilterChip type="product" value="MIS" label="MIS" />
+                      <FilterChip type="product" value="NRML" label="NRML" />
+                    </div>
                   </div>
-                </div>
                 )}
               </div>
 
@@ -374,7 +383,12 @@ export default function TradeBook() {
             <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV} aria-label="Export tradebook to CSV">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportToCSV}
+            aria-label="Export tradebook to CSV"
+          >
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
@@ -403,15 +417,16 @@ export default function TradeBook() {
               {v}
             </Badge>
           ))}
-          {!isCrypto && filters.product.map((v) => (
-            <Badge
-              key={v}
-              variant="secondary"
-              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
-            >
-              {v}
-            </Badge>
-          ))}
+          {!isCrypto &&
+            filters.product.map((v) => (
+              <Badge
+                key={v}
+                variant="secondary"
+                className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+              >
+                {v}
+              </Badge>
+            ))}
           <Button
             variant="outline"
             size="sm"
@@ -479,43 +494,52 @@ export default function TradeBook() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead 
+                    <TableHead
                       onClick={() => requestSort('symbol')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
                     >
                       <div className="flex items-center gap-1">
                         Symbol
-                        {sortConfig.key === 'symbol' && (
-                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
+                        {sortConfig.key === 'symbol' &&
+                          (sortConfig.direction === 'asc' ? (
+                            <ArrowUp className="h-3 w-3" />
+                          ) : (
+                            <ArrowDown className="h-3 w-3" />
+                          ))}
                       </div>
                     </TableHead>
                     <TableHead>Exchange</TableHead>
                     {!isCrypto && <TableHead>Product</TableHead>}
-                    <TableHead 
+                    <TableHead
                       onClick={() => requestSort('action')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
                     >
                       <div className="flex items-center gap-1">
                         Action
-                        {sortConfig.key === 'action' && (
-                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
+                        {sortConfig.key === 'action' &&
+                          (sortConfig.direction === 'asc' ? (
+                            <ArrowUp className="h-3 w-3" />
+                          ) : (
+                            <ArrowDown className="h-3 w-3" />
+                          ))}
                       </div>
                     </TableHead>
                     <TableHead className="text-right">Qty</TableHead>
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Trade Value</TableHead>
                     <TableHead>Order ID</TableHead>
-                    <TableHead 
+                    <TableHead
                       onClick={() => requestSort('timestamp')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
                     >
                       <div className="flex items-center gap-1">
                         Time
-                        {sortConfig.key === 'timestamp' && (
-                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
+                        {sortConfig.key === 'timestamp' &&
+                          (sortConfig.direction === 'asc' ? (
+                            <ArrowUp className="h-3 w-3" />
+                          ) : (
+                            <ArrowDown className="h-3 w-3" />
+                          ))}
                       </div>
                     </TableHead>
                   </TableRow>
@@ -528,9 +552,9 @@ export default function TradeBook() {
                         <Badge variant="outline">{trade.exchange}</Badge>
                       </TableCell>
                       {!isCrypto && (
-                      <TableCell>
-                        <Badge variant="secondary">{trade.product}</Badge>
-                      </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{trade.product}</Badge>
+                        </TableCell>
                       )}
                       <TableCell>
                         <Badge

@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronsUpDown } from 'lucide-react'
 import {
   ColorType,
   CrosshairMode,
-  LineSeries,
   createChart,
   type IChartApi,
   type ISeriesApi,
+  LineSeries,
 } from 'lightweight-charts'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { useThemeStore } from '@/stores/themeStore'
-import { ivChartApi, type IVChartData } from '@/api/iv-chart'
+import { Check, ChevronsUpDown } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type IVChartData, ivChartApi } from '@/api/iv-chart'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Command,
@@ -28,8 +27,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
@@ -98,9 +98,13 @@ export default function IVChart() {
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<MetricKey>('iv')
   const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
-  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
+  const [underlyings, setUnderlyings] = useState<string[]>(
+    defaultUnderlyings[defaultFnoExchange] || []
+  )
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(
+    defaultUnderlyings[defaultFnoExchange]?.[0] || ''
+  )
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [intervals, setIntervals] = useState<string[]>([])
@@ -172,7 +176,7 @@ export default function IVChart() {
           const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
           const hh = ist.getUTCHours().toString().padStart(2, '0')
           const mm = ist.getUTCMinutes().toString().padStart(2, '0')
-          if (parseInt(selectedDays) > 1) {
+          if (parseInt(selectedDays, 10) > 1) {
             const dd = ist.getUTCDate().toString().padStart(2, '0')
             const mo = (ist.getUTCMonth() + 1).toString().padStart(2, '0')
             return `${dd}/${mo} ${hh}:${mm}`
@@ -397,7 +401,7 @@ export default function IVChart() {
         exchange: selectedExchange,
         expiry_date: convertExpiryForAPI(selectedExpiry),
         interval: selectedInterval,
-        days: parseInt(selectedDays),
+        days: parseInt(selectedDays, 10),
       })
       if (res.status === 'success' && res.data) {
         chartDataRef.current = res.data
@@ -411,7 +415,14 @@ export default function IVChart() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedExpiry, selectedInterval, selectedDays, selectedUnderlying, selectedExchange, updateAllCharts])
+  }, [
+    selectedExpiry,
+    selectedInterval,
+    selectedDays,
+    selectedUnderlying,
+    selectedExchange,
+    updateAllCharts,
+  ])
 
   useEffect(() => {
     loadData()
@@ -473,7 +484,12 @@ export default function IVChart() {
 
             <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
               <PopoverTrigger asChild>
-                <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-[140px] justify-between">
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={underlyingOpen}
+                  className="w-[140px] justify-between"
+                >
                   {selectedUnderlying || 'Underlying'}
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
@@ -493,7 +509,9 @@ export default function IVChart() {
                             setUnderlyingOpen(false)
                           }}
                         >
-                          <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                          <Check
+                            className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`}
+                          />
                           {u}
                         </CommandItem>
                       ))}

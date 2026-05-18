@@ -14,7 +14,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -32,6 +31,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 // Steps in the wizard
 type Step = 'otp' | 'secret-key' | 'ip' | 'login'
@@ -158,9 +158,7 @@ export default function SamcoAuth() {
 
       if (data.status === 'success') {
         setSecretKeySent(true)
-        setSuccessMessage(
-          data.message || 'Secret API key has been sent to your registered email'
-        )
+        setSuccessMessage(data.message || 'Secret API key has been sent to your registered email')
         setCurrentStep('secret-key')
         showToast.success('Secret key sent to your email')
       } else {
@@ -417,8 +415,8 @@ export default function SamcoAuth() {
                   <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
                     <p className="font-medium mb-1">One-time setup</p>
                     <p>
-                      Generate an OTP to create your permanent Secret API Key. This only needs to
-                      be done once.
+                      Generate an OTP to create your permanent Secret API Key. This only needs to be
+                      done once.
                     </p>
                   </div>
                 )}
@@ -561,7 +559,10 @@ export default function SamcoAuth() {
                       placeholder="e.g. 203.0.113.10"
                       value={primaryIp}
                       onChange={(e) => setPrimaryIp(e.target.value)}
-                      disabled={isLoading || (ipStatus !== null && !ipStatus.editable && ipStatus.primary_ip !== null)}
+                      disabled={
+                        isLoading ||
+                        (ipStatus !== null && !ipStatus.editable && ipStatus.primary_ip !== null)
+                      }
                       pattern="[0-9.]+"
                     />
                   </div>
@@ -576,14 +577,17 @@ export default function SamcoAuth() {
                       placeholder="e.g. 203.0.113.11"
                       value={secondaryIp}
                       onChange={(e) => setSecondaryIp(e.target.value)}
-                      disabled={isLoading || (ipStatus !== null && !ipStatus.editable && ipStatus.secondary_ip !== null)}
+                      disabled={
+                        isLoading ||
+                        (ipStatus !== null && !ipStatus.editable && ipStatus.secondary_ip !== null)
+                      }
                       pattern="[0-9.]+"
                     />
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    Only IPv4 addresses allowed. API access will be restricted to these IPs.
-                    Updates allowed once per calendar week.
+                    Only IPv4 addresses allowed. API access will be restricted to these IPs. Updates
+                    allowed once per calendar week.
                   </p>
                 </div>
 

@@ -1,7 +1,6 @@
 import { ArrowLeft, Info, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -16,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { PLATFORMS, TRADING_MODES } from '@/types/strategy'
+import { showToast } from '@/utils/toast'
 
 export default function NewStrategy() {
   const navigate = useNavigate()

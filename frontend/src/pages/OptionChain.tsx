@@ -1,12 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronsUpDown, RefreshCw, TrendingUp, Wifi, WifiOff } from 'lucide-react'
-import { useAuthStore } from '@/stores/authStore'
-import { useOptionChainLive } from '@/hooks/useOptionChainLive'
-import { useOptionChainPreferences } from '@/hooks/useOptionChainPreferences'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { oiProfileApi } from '@/api/oi-profile'
-import type { BarDataSource, BarStyle, ColumnKey, OptionStrike } from '@/types/option-chain'
-import { COLUMN_DEFINITIONS } from '@/types/option-chain'
-import { BarSettingsDropdown, ColumnConfigDropdown, ColumnReorderPanel } from '@/components/option-chain'
+import {
+  BarSettingsDropdown,
+  ColumnConfigDropdown,
+  ColumnReorderPanel,
+} from '@/components/option-chain'
 import { PlaceOrderDialog } from '@/components/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -35,9 +34,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { showToast } from '@/utils/toast'
+import { useOptionChainLive } from '@/hooks/useOptionChainLive'
+import { useOptionChainPreferences } from '@/hooks/useOptionChainPreferences'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import type { BarDataSource, BarStyle, ColumnKey, OptionStrike } from '@/types/option-chain'
+import { COLUMN_DEFINITIONS } from '@/types/option-chain'
+import { showToast } from '@/utils/toast'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
@@ -54,16 +58,16 @@ function formatInLakhs(num: number | undefined | null): string {
   if (num === undefined || num === null || num === 0) return '0'
   const lakhs = num / 100000
   if (lakhs >= 100) {
-    return lakhs.toFixed(0) + 'L'
+    return `${lakhs.toFixed(0)}L`
   } else if (lakhs >= 10) {
-    return lakhs.toFixed(1) + 'L'
+    return `${lakhs.toFixed(1)}L`
   } else if (lakhs >= 1) {
-    return lakhs.toFixed(2) + 'L'
+    return `${lakhs.toFixed(2)}L`
   } else {
     // Less than 1 lakh, show in thousands
     const thousands = num / 1000
     if (thousands >= 1) {
-      return thousands.toFixed(1) + 'K'
+      return `${thousands.toFixed(1)}K`
     }
     return num.toLocaleString()
   }
@@ -96,7 +100,12 @@ function calculatePCR(chain: OptionStrike[]): number {
   return totalPeOi / totalCeOi
 }
 
-function calculateTotals(chain: OptionStrike[]): { ceVolume: number; peVolume: number; ceOi: number; peOi: number } {
+function calculateTotals(chain: OptionStrike[]): {
+  ceVolume: number
+  peVolume: number
+  ceOi: number
+  peOi: number
+} {
   let ceVolume = 0
   let peVolume = 0
   let ceOi = 0
@@ -173,14 +182,24 @@ const OptionChainRow = React.memo(function OptionChainRow({
   const ceLtpChanged = previousStrike?.ce?.ltp !== undefined && previousStrike.ce.ltp !== ce?.ltp
   const peLtpChanged = previousStrike?.pe?.ltp !== undefined && previousStrike.pe.ltp !== pe?.ltp
 
-  const ceFlashClass = ceLtpChanged ? (ce && previousStrike?.ce && ce.ltp > previousStrike.ce.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
-  const peFlashClass = peLtpChanged ? (pe && previousStrike?.pe && pe.ltp > previousStrike.pe.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
+  const ceFlashClass = ceLtpChanged
+    ? ce && previousStrike?.ce && ce.ltp > previousStrike.ce.ltp
+      ? 'bg-green-500/30'
+      : 'bg-red-500/30'
+    : ''
+  const peFlashClass = peLtpChanged
+    ? pe && previousStrike?.pe && pe.ltp > previousStrike.pe.ltp
+      ? 'bg-green-500/30'
+      : 'bg-red-500/30'
+    : ''
 
   const ceSpread = ce && ce.bid > 0 && ce.ask > 0 ? ce.ask - ce.bid : 0
   const peSpread = pe && pe.bid > 0 && pe.ask > 0 ? pe.ask - pe.bid : 0
 
-  const ceSpreadClass = ceSpread <= 1 ? 'text-green-500' : ceSpread <= 2 ? 'text-yellow-500' : 'text-red-500'
-  const peSpreadClass = peSpread <= 1 ? 'text-green-500' : peSpread <= 2 ? 'text-yellow-500' : 'text-red-500'
+  const ceSpreadClass =
+    ceSpread <= 1 ? 'text-green-500' : ceSpread <= 2 ? 'text-yellow-500' : 'text-red-500'
+  const peSpreadClass =
+    peSpread <= 1 ? 'text-green-500' : peSpread <= 2 ? 'text-yellow-500' : 'text-red-500'
 
   // Bar values based on data source
   const ceBarValue = barDataSource === 'oi' ? ce?.oi : ce?.volume
@@ -189,12 +208,12 @@ const OptionChainRow = React.memo(function OptionChainRow({
   const peBarPercent = peBarValue ? Math.min((peBarValue / maxBarValue) * 100, 100) : 0
 
   // Bar styles
-  const ceBarClass = barStyle === 'gradient'
-    ? 'bg-gradient-to-r from-green-500/25 to-transparent'
-    : 'bg-green-500/20'
-  const peBarClass = barStyle === 'gradient'
-    ? 'bg-gradient-to-l from-red-500/25 to-transparent'
-    : 'bg-red-500/20'
+  const ceBarClass =
+    barStyle === 'gradient'
+      ? 'bg-gradient-to-r from-green-500/25 to-transparent'
+      : 'bg-green-500/20'
+  const peBarClass =
+    barStyle === 'gradient' ? 'bg-gradient-to-l from-red-500/25 to-transparent' : 'bg-red-500/20'
 
   // Use tabular-nums for consistent number widths to prevent layout shifts
   const numClass = 'font-mono tabular-nums text-xs'
@@ -210,7 +229,11 @@ const OptionChainRow = React.memo(function OptionChainRow({
       case 'ce_bid':
         return <span className={cn(numClass, 'text-red-500')}>{formatPrice(ce?.bid)}</span>
       case 'ce_ltp':
-        return <span className={cn(numClass, 'font-semibold', ceFlashClass)}>{formatPrice(ce?.ltp)}</span>
+        return (
+          <span className={cn(numClass, 'font-semibold', ceFlashClass)}>
+            {formatPrice(ce?.ltp)}
+          </span>
+        )
       case 'ce_ask':
         return <span className={cn(numClass, 'text-green-500')}>{formatPrice(ce?.ask)}</span>
       case 'ce_ask_qty':
@@ -233,7 +256,11 @@ const OptionChainRow = React.memo(function OptionChainRow({
       case 'pe_bid':
         return <span className={cn(numClass, 'text-red-500')}>{formatPrice(pe?.bid)}</span>
       case 'pe_ltp':
-        return <span className={cn(numClass, 'font-semibold', peFlashClass)}>{formatPrice(pe?.ltp)}</span>
+        return (
+          <span className={cn(numClass, 'font-semibold', peFlashClass)}>
+            {formatPrice(pe?.ltp)}
+          </span>
+        )
       case 'pe_ask':
         return <span className={cn(numClass, 'text-green-500')}>{formatPrice(pe?.ask)}</span>
       case 'pe_ask_qty':
@@ -248,7 +275,7 @@ const OptionChainRow = React.memo(function OptionChainRow({
   return (
     <TableRow
       className={cn(
-        'hover:bg-muted/50 relative group',
+        'hover:bg-muted/50 relative group'
         // No background for ATM and ITM, only OTM gets background
         // CE OTM = strikes above ATM
         // PE OTM = strikes below ATM (which is CE ITM)
@@ -267,16 +294,21 @@ const OptionChainRow = React.memo(function OptionChainRow({
         >
           {/* CE bar - spans the entire CE section */}
           <div
-            className={cn('absolute left-0 top-0 bottom-0 pointer-events-none z-0 transition-all duration-300', ceBarClass)}
+            className={cn(
+              'absolute left-0 top-0 bottom-0 pointer-events-none z-0 transition-all duration-300',
+              ceBarClass
+            )}
             style={{ width: `${ceBarPercent}%` }}
           />
           {/* CE Buy/Sell buttons - appear on hover (positioned near strike) */}
           {ce && (
-            <div className={cn(
-              'absolute right-1 top-1/2 -translate-y-1/2 z-20',
-              'flex gap-0.5',
-              'opacity-0 group-hover:opacity-100 transition-opacity'
-            )}>
+            <div
+              className={cn(
+                'absolute right-1 top-1/2 -translate-y-1/2 z-20',
+                'flex gap-0.5',
+                'opacity-0 group-hover:opacity-100 transition-opacity'
+              )}
+            >
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -310,8 +342,8 @@ const OptionChainRow = React.memo(function OptionChainRow({
             </div>
           )}
           <div className="relative z-10 flex">
-            {visibleCeColumns.map(key => {
-              const colDef = COLUMN_DEFINITIONS.find(c => c.key === key)
+            {visibleCeColumns.map((key) => {
+              const colDef = COLUMN_DEFINITIONS.find((c) => c.key === key)
               return (
                 <div
                   key={key}
@@ -351,16 +383,21 @@ const OptionChainRow = React.memo(function OptionChainRow({
         >
           {/* PE bar - spans the entire PE section from right */}
           <div
-            className={cn('absolute right-0 top-0 bottom-0 pointer-events-none z-0 transition-all duration-300', peBarClass)}
+            className={cn(
+              'absolute right-0 top-0 bottom-0 pointer-events-none z-0 transition-all duration-300',
+              peBarClass
+            )}
             style={{ width: `${peBarPercent}%` }}
           />
           {/* PE Buy/Sell buttons - appear on hover (positioned near strike) */}
           {pe && (
-            <div className={cn(
-              'absolute left-1 top-1/2 -translate-y-1/2 z-20',
-              'flex gap-0.5',
-              'opacity-0 group-hover:opacity-100 transition-opacity'
-            )}>
+            <div
+              className={cn(
+                'absolute left-1 top-1/2 -translate-y-1/2 z-20',
+                'flex gap-0.5',
+                'opacity-0 group-hover:opacity-100 transition-opacity'
+              )}
+            >
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -394,8 +431,8 @@ const OptionChainRow = React.memo(function OptionChainRow({
             </div>
           )}
           <div className="relative z-10 flex">
-            {visiblePeColumns.map(key => {
-              const colDef = COLUMN_DEFINITIONS.find(c => c.key === key)
+            {visiblePeColumns.map((key) => {
+              const colDef = COLUMN_DEFINITIONS.find((c) => c.key === key)
               return (
                 <div
                   key={key}
@@ -441,7 +478,9 @@ export default function OptionChain() {
   } = useOptionChainPreferences()
 
   const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
-  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
+  const [underlyings, setUnderlyings] = useState<string[]>(
+    defaultUnderlyings[defaultFnoExchange] || []
+  )
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [expiries, setExpiries] = useState<string[]>([])
@@ -468,7 +507,17 @@ export default function OptionChain() {
   // Send NFO/BFO directly — backend resolves correct exchange for index vs stock
   const exchange = selectedExchange
 
-  const { data, isConnected, isStreaming, isPaused, error, lastUpdate, refetch, isLoading, streamingSymbols } = useOptionChainLive(
+  const {
+    data,
+    isConnected,
+    isStreaming,
+    isPaused,
+    error,
+    lastUpdate,
+    refetch,
+    isLoading,
+    streamingSymbols,
+  } = useOptionChainLive(
     apiKey,
     selectedUnderlying,
     exchange,
@@ -594,20 +643,27 @@ export default function OptionChain() {
   }, [])
 
   const pcr = useMemo(() => (data?.chain ? calculatePCR(data.chain) : 0), [data?.chain])
-  const totals = useMemo(() => (data?.chain ? calculateTotals(data.chain) : { ceVolume: 0, peVolume: 0, ceOi: 0, peOi: 0 }), [data?.chain])
-  const maxBarValue = useMemo(() => (data?.chain ? getMaxValue(data.chain, barDataSource) : 1), [data?.chain, barDataSource])
+  const totals = useMemo(
+    () =>
+      data?.chain ? calculateTotals(data.chain) : { ceVolume: 0, peVolume: 0, ceOi: 0, peOi: 0 },
+    [data?.chain]
+  )
+  const maxBarValue = useMemo(
+    () => (data?.chain ? getMaxValue(data.chain, barDataSource) : 1),
+    [data?.chain, barDataSource]
+  )
 
   // Get ordered visible columns for each side
   const visibleCeColumns = useMemo(() => {
-    return columnOrder.filter(key => {
-      const col = COLUMN_DEFINITIONS.find(c => c.key === key)
+    return columnOrder.filter((key) => {
+      const col = COLUMN_DEFINITIONS.find((c) => c.key === key)
       return col?.side === 'ce' && visibleColumns.includes(key)
     })
   }, [columnOrder, visibleColumns])
 
   const visiblePeColumns = useMemo(() => {
-    return columnOrder.filter(key => {
-      const col = COLUMN_DEFINITIONS.find(c => c.key === key)
+    return columnOrder.filter((key) => {
+      const col = COLUMN_DEFINITIONS.find((c) => c.key === key)
       return col?.side === 'pe' && visibleColumns.includes(key)
     })
   }, [columnOrder, visibleColumns])
@@ -653,7 +709,12 @@ export default function OptionChain() {
           </Select>
           <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
             <PopoverTrigger asChild>
-              <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-36 justify-between">
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={underlyingOpen}
+                className="w-36 justify-between"
+              >
                 {selectedUnderlying || 'Select Underlying'}
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
@@ -673,7 +734,9 @@ export default function OptionChain() {
                           setUnderlyingOpen(false)
                         }}
                       >
-                        <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                        <Check
+                          className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`}
+                        />
                         {u}
                       </CommandItem>
                     ))}
@@ -682,7 +745,11 @@ export default function OptionChain() {
               </Command>
             </PopoverContent>
           </Popover>
-          <Select value={selectedExpiry} onValueChange={setSelectedExpiry} disabled={expiries.length === 0}>
+          <Select
+            value={selectedExpiry}
+            onValueChange={setSelectedExpiry}
+            disabled={expiries.length === 0}
+          >
             <SelectTrigger className="w-36">
               <SelectValue placeholder="Select Expiry" />
             </SelectTrigger>
@@ -735,7 +802,9 @@ export default function OptionChain() {
             <Card>
               <CardContent className="p-4">
                 <div className="text-sm text-muted-foreground">{selectedUnderlying} Spot</div>
-                <div className="text-2xl font-bold text-primary">{formatPrice(data.underlying_ltp)}</div>
+                <div className="text-2xl font-bold text-primary">
+                  {formatPrice(data.underlying_ltp)}
+                </div>
                 <div className="text-xs text-muted-foreground">
                   Prev Close: {formatPrice(data.underlying_prev_close)}
                 </div>
@@ -751,7 +820,9 @@ export default function OptionChain() {
             <Card>
               <CardContent className="p-4">
                 <div className="text-sm text-muted-foreground">PCR</div>
-                <div className={`text-2xl font-bold ${pcr > 1 ? 'text-green-500' : 'text-yellow-500'}`}>
+                <div
+                  className={`text-2xl font-bold ${pcr > 1 ? 'text-green-500' : 'text-yellow-500'}`}
+                >
                   {pcr.toFixed(2)}
                 </div>
                 <div className="text-xs text-muted-foreground">Put/Call Ratio</div>
@@ -761,14 +832,23 @@ export default function OptionChain() {
               <CardContent className="p-4">
                 <div className="text-sm text-muted-foreground">Total OI</div>
                 <div className="text-sm mt-1">
-                  <span className="text-green-500 font-mono tabular-nums">{formatInLakhs(totals.ceOi)}</span>
+                  <span className="text-green-500 font-mono tabular-nums">
+                    {formatInLakhs(totals.ceOi)}
+                  </span>
                   <span className="mx-2 text-muted-foreground">|</span>
-                  <span className="text-red-500 font-mono tabular-nums">{formatInLakhs(totals.peOi)}</span>
+                  <span className="text-red-500 font-mono tabular-nums">
+                    {formatInLakhs(totals.peOi)}
+                  </span>
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden mt-2">
                   <div
                     className="h-full bg-gradient-to-r from-green-500 to-primary transition-all duration-500"
-                    style={{ width: totals.ceOi + totals.peOi > 0 ? `${(totals.ceOi / (totals.ceOi + totals.peOi)) * 100}%` : '0%' }}
+                    style={{
+                      width:
+                        totals.ceOi + totals.peOi > 0
+                          ? `${(totals.ceOi / (totals.ceOi + totals.peOi)) * 100}%`
+                          : '0%',
+                    }}
                   />
                 </div>
                 <div className="flex justify-between text-xs text-muted-foreground mt-1">
@@ -802,8 +882,8 @@ export default function OptionChain() {
                       {visibleCeColumns.length > 0 && (
                         <TableHead className="p-0 border-r border-border">
                           <div className="flex">
-                            {visibleCeColumns.map(key => {
-                              const colDef = COLUMN_DEFINITIONS.find(c => c.key === key)
+                            {visibleCeColumns.map((key) => {
+                              const colDef = COLUMN_DEFINITIONS.find((c) => c.key === key)
                               return (
                                 <div
                                   key={key}
@@ -827,8 +907,8 @@ export default function OptionChain() {
                       {visiblePeColumns.length > 0 && (
                         <TableHead className="p-0 border-l border-border">
                           <div className="flex">
-                            {visiblePeColumns.map(key => {
-                              const colDef = COLUMN_DEFINITIONS.find(c => c.key === key)
+                            {visiblePeColumns.map((key) => {
+                              const colDef = COLUMN_DEFINITIONS.find((c) => c.key === key)
                               return (
                                 <div
                                   key={key}
@@ -877,8 +957,16 @@ export default function OptionChain() {
                 ) : (
                   <WifiOff className="h-4 w-4 text-muted-foreground" />
                 )}
-                <Badge variant={isStreaming ? 'default' : isConnected ? 'secondary' : 'destructive'}>
-                  {isPaused ? 'Paused' : isStreaming ? `Streaming ${streamingSymbols} symbols` : isConnected ? 'Polling' : 'Disconnected'}
+                <Badge
+                  variant={isStreaming ? 'default' : isConnected ? 'secondary' : 'destructive'}
+                >
+                  {isPaused
+                    ? 'Paused'
+                    : isStreaming
+                      ? `Streaming ${streamingSymbols} symbols`
+                      : isConnected
+                        ? 'Polling'
+                        : 'Disconnected'}
                 </Badge>
               </div>
               <div className="text-xs">

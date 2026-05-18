@@ -23,8 +23,6 @@ import {
   ZapOff,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -36,8 +34,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', { credentials: 'include' })
@@ -456,7 +456,9 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
     // Build subscription message
     const subscribeMessage: Record<string, unknown> = {
       action: 'subscribe',
-      symbols: [{ symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange }],
+      symbols: [
+        { symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange },
+      ],
       mode,
     }
 
@@ -487,7 +489,13 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
     const modeMap: Record<string, number> = { LTP: 1, Quote: 2, Depth: 3 }
     const unsubscribeMessage: Record<string, unknown> = {
       action: 'unsubscribe',
-      symbols: [{ symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange, mode: modeMap[mode] }],
+      symbols: [
+        {
+          symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol,
+          exchange,
+          mode: modeMap[mode],
+        },
+      ],
       mode,
     }
 
@@ -644,8 +652,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
           newMap.set(key, { symbol, exchange, data: {}, subscriptions: new Set() })
         })
         setActiveSymbols(newMap)
-      } catch (err) {
-      }
+      } catch (err) {}
     }
   }, [])
 
@@ -910,7 +917,8 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                 size="sm"
                 className="border-violet-500/30 text-violet-400 hover:bg-violet-500/10 disabled:opacity-30"
               >
-                <Layers className="w-3.5 h-3.5 mr-1.5" /> Depth {depthLevel > 5 ? depthLevel : ''} All
+                <Layers className="w-3.5 h-3.5 mr-1.5" /> Depth {depthLevel > 5 ? depthLevel : ''}{' '}
+                All
               </Button>
               <Button
                 onClick={unsubscribeAll}
@@ -978,7 +986,8 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                     <div className="flex gap-1">
                       {(['LTP', 'Quote', 'Depth'] as const).map((mode) => {
                         const isActive = symbolData.subscriptions.has(mode)
-                        const displayLabel = mode === 'Depth' && depthLevel > 5 ? `D${depthLevel}` : mode
+                        const displayLabel =
+                          mode === 'Depth' && depthLevel > 5 ? `D${depthLevel}` : mode
                         return (
                           <button
                             type="button"

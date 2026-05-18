@@ -3,9 +3,9 @@
  * Cancel a specific order by ID
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { XCircle } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { CancelOrderNodeData } from '@/types/flow'
 
@@ -16,17 +16,8 @@ interface CancelOrderNodeProps {
 
 export const CancelOrderNode = memo(({ data, selected }: CancelOrderNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node node-action min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node node-action min-w-[120px]', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded">
@@ -34,9 +25,7 @@ export const CancelOrderNode = memo(({ data, selected }: CancelOrderNodeProps) =
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Cancel Order</div>
-            <div className="text-[9px] text-muted-foreground">
-              By Order ID
-            </div>
+            <div className="text-[9px] text-muted-foreground">By Order ID</div>
           </div>
         </div>
         <div className="rounded bg-muted/50 px-1.5 py-1">
@@ -48,11 +37,7 @@ export const CancelOrderNode = memo(({ data, selected }: CancelOrderNodeProps) =
           </div>
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

@@ -3,9 +3,9 @@
  * Check status of a specific order
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { FileSearch } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { GetOrderStatusNodeData } from '@/types/flow'
 
@@ -16,17 +16,8 @@ interface GetOrderStatusNodeProps {
 
 export const GetOrderStatusNode = memo(({ data, selected }: GetOrderStatusNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node min-w-[120px] border-l-primary',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node min-w-[120px] border-l-primary', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="flex h-5 w-5 items-center justify-center rounded bg-primary/20 text-primary">
@@ -34,9 +25,7 @@ export const GetOrderStatusNode = memo(({ data, selected }: GetOrderStatusNodePr
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Order Status</div>
-            <div className="text-[9px] text-muted-foreground">
-              Check order
-            </div>
+            <div className="text-[9px] text-muted-foreground">Check order</div>
           </div>
         </div>
         <div className="space-y-1">
@@ -48,11 +37,7 @@ export const GetOrderStatusNode = memo(({ data, selected }: GetOrderStatusNodePr
           </div>
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

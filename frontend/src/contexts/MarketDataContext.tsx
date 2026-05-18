@@ -7,22 +7,15 @@
  * - Connection state management
  */
 
+import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
+import { usePageVisibility } from '@/hooks/usePageVisibility'
 import {
-  createContext,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react'
-import {
-  MarketDataManager,
   type ConnectionState,
-  type SubscriptionMode,
   type DataCallback,
+  MarketDataManager,
+  type SubscriptionMode,
   type SymbolData,
 } from '@/lib/MarketDataManager'
-import { usePageVisibility } from '@/hooks/usePageVisibility'
 
 export interface MarketDataContextValue {
   manager: MarketDataManager
@@ -63,7 +56,9 @@ export function MarketDataProvider({
 
   // Initialize state from manager's current state
   const initialState = managerRef.current.getState()
-  const [connectionState, setConnectionState] = useState<ConnectionState>(initialState.connectionState)
+  const [connectionState, setConnectionState] = useState<ConnectionState>(
+    initialState.connectionState
+  )
   const [isConnected, setIsConnected] = useState(initialState.isConnected)
   const [isAuthenticated, setIsAuthenticated] = useState(initialState.isAuthenticated)
   const [isPaused, setIsPaused] = useState(initialState.isPaused)
@@ -131,17 +126,12 @@ export function MarketDataProvider({
     error,
     subscribe: (symbol, exchange, mode, callback) =>
       managerRef.current.subscribe(symbol, exchange, mode, callback),
-    getCachedData: (symbol, exchange) =>
-      managerRef.current.getCachedData(symbol, exchange),
+    getCachedData: (symbol, exchange) => managerRef.current.getCachedData(symbol, exchange),
     connect: () => managerRef.current.connect(),
     disconnect: () => managerRef.current.disconnect(),
   }
 
-  return (
-    <MarketDataContext.Provider value={value}>
-      {children}
-    </MarketDataContext.Provider>
-  )
+  return <MarketDataContext.Provider value={value}>{children}</MarketDataContext.Provider>
 }
 
 /**

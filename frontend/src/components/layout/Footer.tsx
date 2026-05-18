@@ -21,8 +21,7 @@ export function Footer({ className }: FooterProps) {
         if (data.status === 'success') {
           setVersion(data.version)
         }
-      } catch (error) {
-      }
+      } catch (error) {}
     }
 
     fetchVersion()
@@ -58,7 +57,9 @@ export function Footer({ className }: FooterProps) {
               <span className="hidden md:inline">|</span>
               <Badge variant="outline" className="gap-1">
                 <Monitor className="h-3 w-3" />
-                <span>{activeSessionCount} {activeSessionCount === 1 ? 'session' : 'sessions'}</span>
+                <span>
+                  {activeSessionCount} {activeSessionCount === 1 ? 'session' : 'sessions'}
+                </span>
               </Badge>
             </>
           )}
