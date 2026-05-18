@@ -1556,6 +1556,7 @@ export default function Historify() {
               onClick={handleModeToggle}
               disabled={isTogglingMode}
               title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+              aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
             >
               {isTogglingMode ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1574,6 +1575,7 @@ export default function Historify() {
               onClick={toggleMode}
               disabled={appMode !== 'live'}
               title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
             >
               {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
@@ -1609,6 +1611,7 @@ export default function Historify() {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                  aria-label="Open profile menu"
                 >
                   <span className="text-sm font-medium">
                     {user?.username?.[0]?.toUpperCase() || 'O'}
@@ -1962,7 +1965,13 @@ export default function Historify() {
                               </TableCell>
                               <TableCell>
                                 <div className="flex gap-1">
-                                  <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    asChild
+                                    aria-label={`View ${item.symbol} chart`}
+                                  >
                                     <Link
                                       to={`/historify/charts/${item.symbol}?exchange=${item.exchange}&interval=${item.intervals[0]?.interval || 'D'}`}
                                     >
@@ -1980,6 +1989,7 @@ export default function Historify() {
                                       })
                                       setDeleteDialogOpen(true)
                                     }}
+                                    aria-label={`Delete ${item.symbol} from watchlist`}
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
@@ -2318,6 +2328,7 @@ export default function Historify() {
                                       className="h-7 w-7"
                                       asChild
                                       title="View chart"
+                                      aria-label="View chart"
                                     >
                                       <Link
                                         to={`/historify/charts/${item.symbol}?exchange=${item.exchange}&interval=D`}
@@ -2333,6 +2344,7 @@ export default function Historify() {
                                         removeFromWatchlist(item.symbol, item.exchange)
                                       }
                                       title="Remove from watchlist"
+                                      aria-label={`Remove ${item.symbol} from watchlist`}
                                     >
                                       <X className="h-4 w-4" />
                                     </Button>
@@ -2595,6 +2607,7 @@ export default function Historify() {
                                     className="h-8 w-8"
                                     onClick={() => handlePauseResumeSchedule(schedule)}
                                     title={schedule.is_paused ? 'Resume' : 'Pause'}
+                                    aria-label={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
                                   >
                                     {schedule.is_paused ? (
                                       <Play className="h-4 w-4" />
@@ -2611,6 +2624,7 @@ export default function Historify() {
                                   onClick={() => handleTriggerSchedule(schedule.id)}
                                   disabled={!schedule.is_enabled || schedule.status === 'running'}
                                   title="Run now"
+                                  aria-label="Run schedule now"
                                 >
                                   <Zap className="h-4 w-4" />
                                 </Button>
@@ -2621,6 +2635,7 @@ export default function Historify() {
                                   className="h-8 w-8"
                                   onClick={() => openScheduleDialog(schedule)}
                                   title="Edit"
+                                  aria-label="Edit schedule"
                                 >
                                   <Settings className="h-4 w-4" />
                                 </Button>
@@ -2638,6 +2653,7 @@ export default function Historify() {
                                     }
                                   }}
                                   title="View history"
+                                  aria-label={expandedSchedule === schedule.id ? 'Collapse schedule details' : 'Expand schedule details'}
                                 >
                                   {expandedSchedule === schedule.id ? (
                                     <X className="h-4 w-4" />
@@ -2652,6 +2668,7 @@ export default function Historify() {
                                   className="h-8 w-8 text-destructive hover:text-destructive"
                                   onClick={() => handleDeleteSchedule(schedule.id)}
                                   title="Delete"
+                                  aria-label="Delete schedule"
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>

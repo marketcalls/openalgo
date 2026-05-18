@@ -330,6 +330,7 @@ export default function ViewStrategy() {
                   variant="outline"
                   size="icon"
                   onClick={() => copyToClipboard(webhookUrl, 'url')}
+                  aria-label={copiedField === 'url' ? 'Webhook URL copied' : 'Copy webhook URL'}
                 >
                   {copiedField === 'url' ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -360,6 +361,7 @@ export default function ViewStrategy() {
                         variant="outline"
                         size="icon"
                         onClick={() => copyToClipboard(window.location.origin, 'host')}
+                        aria-label={copiedField === 'host' ? 'Host URL copied' : 'Copy host URL'}
                       >
                         {copiedField === 'host' ? (
                           <Check className="h-4 w-4 text-green-500" />
@@ -379,6 +381,7 @@ export default function ViewStrategy() {
                         variant="outline"
                         size="icon"
                         onClick={() => copyToClipboard(strategy.webhook_id, 'webhook_id')}
+                        aria-label={copiedField === 'webhook_id' ? 'Webhook ID copied' : 'Copy webhook ID'}
                       >
                         {copiedField === 'webhook_id' ? (
                           <Check className="h-4 w-4 text-green-500" />
@@ -491,6 +494,7 @@ export default function ViewStrategy() {
                         size="icon"
                         className="text-red-500 hover:text-red-600 hover:bg-red-50"
                         onClick={() => handleDeleteMapping(mapping.id)}
+                        aria-label="Delete symbol mapping"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

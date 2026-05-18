@@ -79,7 +79,7 @@ export default function FlowKeyboardShortcuts() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       <div className="mb-8 flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
+        <Button variant="ghost" size="icon" asChild aria-label="Back to flows list">
           <Link to="/flow">
             <ArrowLeft className="h-4 w-4" />
           </Link>

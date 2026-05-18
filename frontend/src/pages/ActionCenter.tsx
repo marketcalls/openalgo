@@ -566,6 +566,7 @@ export default function ActionCenterPage() {
                               variant="ghost"
                               className="h-8 w-8"
                               onClick={() => toggleExpanded(order.id)}
+                              aria-label={expandedOrders.has(order.id) ? 'Collapse order details' : 'Expand order details'}
                             >
                               {expandedOrders.has(order.id) ? (
                                 <ChevronUp className="h-4 w-4" />

@@ -290,6 +290,7 @@ export default function TelegramUsers() {
                               setMessageText('')
                             }}
                             title="Send message"
+                            aria-label="Send message"
                           >
                             <Send className="h-4 w-4" />
                           </Button>
@@ -299,6 +300,7 @@ export default function TelegramUsers() {
                             className="h-8 w-8 text-destructive hover:text-destructive"
                             onClick={() => setUnlinkUser(user)}
                             title="Unlink user"
+                            aria-label="Unlink user"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>

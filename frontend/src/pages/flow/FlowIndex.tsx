@@ -194,7 +194,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Workflow actions">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -362,6 +362,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     variant="outline"
                     size="icon"
                     onClick={() => copyToClipboard(webhookQuery.data.webhook_url, 'URL')}
+                    aria-label="Copy webhook URL"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -383,6 +384,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     onClick={() =>
                       copyToClipboard(webhookQuery.data.webhook_url_with_symbol, 'URL')
                     }
+                    aria-label="Copy webhook URL with symbol"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -408,6 +410,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                       size="icon"
                       className="absolute right-0 top-0 h-full"
                       onClick={() => setShowSecret(!showSecret)}
+                      aria-label={showSecret ? 'Hide webhook secret' : 'Show webhook secret'}
                     >
                       {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
@@ -416,6 +419,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     variant="outline"
                     size="icon"
                     onClick={() => copyToClipboard(webhookQuery.data.webhook_secret, 'Secret')}
+                    aria-label="Copy webhook secret"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -451,6 +455,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                             'URL with secret'
                           )
                         }
+                        aria-label="Copy webhook URL with secret"
                       >
                         <Copy className="h-4 w-4" />
                       </Button>
