@@ -2318,6 +2318,7 @@ export default function ProfilePage() {
                         size="icon"
                         variant="outline"
                         onClick={() => copyToClipboard(profileData.totp_secret!)}
+                        aria-label="Copy TOTP secret"
                       >
                         <Copy className="h-4 w-4" />
                       </Button>

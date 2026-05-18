@@ -248,10 +248,17 @@ export function ConfigPanel() {
             size="icon"
             className="h-7 w-7 text-destructive hover:text-destructive"
             onClick={handleDelete}
+            aria-label="Delete node"
           >
             <Trash2 className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleClose}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleClose}
+            aria-label="Close configuration panel"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -576,6 +583,7 @@ export function ConfigPanel() {
                               'URL'
                             )
                           }
+                          aria-label="Copy webhook URL"
                         >
                           <Copy className="h-3 w-3" />
                         </Button>
@@ -596,6 +604,7 @@ export function ConfigPanel() {
                             size="icon"
                             className="absolute right-0 top-0 h-8 w-8"
                             onClick={() => setShowSecret(!showSecret)}
+                            aria-label={showSecret ? 'Hide webhook secret' : 'Show webhook secret'}
                           >
                             {showSecret ? (
                               <EyeOff className="h-3 w-3" />
@@ -611,6 +620,7 @@ export function ConfigPanel() {
                           onClick={() =>
                             copyToClipboard(webhookQuery.data.webhook_secret, 'Secret')
                           }
+                          aria-label="Copy webhook secret"
                         >
                           <Copy className="h-3 w-3" />
                         </Button>

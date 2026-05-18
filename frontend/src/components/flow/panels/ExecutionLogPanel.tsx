@@ -91,7 +91,13 @@ export function ExecutionLogPanel({ logs, status, onClose }: ExecutionLogPanelPr
           >
             {getStatusText()}
           </span>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onClose}
+            aria-label="Close execution log"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>

@@ -612,6 +612,7 @@ export default function Playground() {
             size="icon"
             className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            aria-label={isSidebarOpen ? 'Close sidebar' : 'Open sidebar'}
           >
             <Menu className="h-4 w-4" />
           </Button>
@@ -668,6 +669,7 @@ export default function Playground() {
                 selectEndpoint(endpoints[firstCat][0])
               }
             }}
+            aria-label="New request tab"
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
@@ -718,6 +720,7 @@ export default function Playground() {
             onClick={handleModeToggle}
             disabled={isTogglingMode}
             title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+            aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
           >
             {isTogglingMode ? (
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -736,6 +739,7 @@ export default function Playground() {
             onClick={toggleMode}
             disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
             {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
@@ -754,6 +758,7 @@ export default function Playground() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                aria-label="Open profile menu"
               >
                 <span className="text-sm font-medium">
                   {user?.username?.[0]?.toUpperCase() || 'O'}
@@ -899,6 +904,7 @@ export default function Playground() {
                     size="icon"
                     className="h-5 w-5 text-muted-foreground hover:text-foreground"
                     onClick={() => setShowApiKey(!showApiKey)}
+                    aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
                   >
                     {showApiKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                   </Button>
@@ -907,6 +913,7 @@ export default function Playground() {
                     size="icon"
                     className="h-5 w-5 text-muted-foreground hover:text-foreground"
                     onClick={copyApiKey}
+                    aria-label="Copy API key"
                   >
                     <Copy className="h-3 w-3" />
                   </Button>
@@ -1082,6 +1089,7 @@ export default function Playground() {
                                 size="icon"
                                 className="h-6 w-6 text-muted-foreground hover:text-foreground"
                                 onClick={copyResponse}
+                                aria-label="Copy response"
                               >
                                 <Copy className="h-3 w-3" />
                               </Button>
