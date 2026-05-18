@@ -14,13 +14,7 @@ import { io, type Socket } from 'socket.io-client'
 import { whatsappApi } from '@/api/whatsapp'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import type {
@@ -221,8 +215,7 @@ export default function WhatsAppIndex() {
   }
 
   const cfg = bundle?.config
-  const pairing =
-    pairState?.status === 'starting' || pairState?.status === 'awaiting_scan'
+  const pairing = pairState?.status === 'starting' || pairState?.status === 'awaiting_scan'
   const isPaired = cfg?.is_paired
 
   return (
@@ -232,10 +225,10 @@ export default function WhatsAppIndex() {
           <MessageCircle className="h-6 w-6" /> WhatsApp Bot
         </h1>
         <p className="text-sm text-muted-foreground">
-          Pair your phone once. Receive order alerts and run slash-command queries
-          ({' '}<code className="font-mono">/orderbook</code>,{' '}
-          <code className="font-mono">/positions</code>,{' '}
-          <code className="font-mono">/quote</code>, ... ) from your own device.
+          Pair your phone once. Receive order alerts and run slash-command queries ({' '}
+          <code className="font-mono">/orderbook</code>,{' '}
+          <code className="font-mono">/positions</code>, <code className="font-mono">/quote</code>,
+          ... ) from your own device.
         </p>
       </header>
 
@@ -264,11 +257,7 @@ export default function WhatsAppIndex() {
             <div className="rounded border bg-muted/30 p-4">
               <div className="mb-3 flex items-center justify-between">
                 <div className="text-sm font-medium">Pair this device</div>
-                <Button
-                  size="sm"
-                  onClick={startPair}
-                  disabled={busy === 'pair' || pairing}
-                >
+                <Button size="sm" onClick={startPair} disabled={busy === 'pair' || pairing}>
                   {busy === 'pair' || pairing ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
@@ -285,19 +274,15 @@ export default function WhatsAppIndex() {
                     className="h-64 w-64 rounded border bg-white p-2"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Open WhatsApp → Linked devices → Link a device → scan.
-                    The QR refreshes automatically every ~30 seconds.
+                    Open WhatsApp → Linked devices → Link a device → scan. The QR refreshes
+                    automatically every ~30 seconds.
                   </p>
                 </div>
               )}
               {pairState?.status === 'awaiting_scan' && pairState.pair_code && (
                 <div className="mt-3 rounded border bg-background p-3 text-center">
-                  <div className="text-xs text-muted-foreground">
-                    Or use this pair code
-                  </div>
-                  <div className="font-mono text-lg tracking-widest">
-                    {pairState.pair_code}
-                  </div>
+                  <div className="text-xs text-muted-foreground">Or use this pair code</div>
+                  <div className="font-mono text-lg tracking-widest">{pairState.pair_code}</div>
                 </div>
               )}
               {pairState?.status === 'failed' && pairState.error && (
@@ -329,8 +314,8 @@ export default function WhatsAppIndex() {
               <Phone className="h-5 w-5" /> Send a one-off message
             </CardTitle>
             <CardDescription>
-              Send a WhatsApp message to any number, directly from this page.
-              The recipient does not need to be linked.
+              Send a WhatsApp message to any number, directly from this page. The recipient does not
+              need to be linked.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

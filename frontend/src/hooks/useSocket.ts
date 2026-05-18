@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { useAlertStore, type AlertCategories } from '@/stores/alertStore'
+import { type AlertCategories, useAlertStore } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useSessionStore } from '@/stores/sessionStore'
 
@@ -195,11 +195,7 @@ export function useSocket() {
     // Close position notification
     socket.on('close_position_event', (data: ClosePositionEventData) => {
       playAlertSound('orders')
-      showCategoryToast(
-        'success',
-        data.message || 'All Open Positions Squared Off',
-        'positions'
-      )
+      showCategoryToast('success', data.message || 'All Open Positions Squared Off', 'positions')
     })
 
     // Order placement notification

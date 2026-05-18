@@ -101,9 +101,7 @@ export default function FlowKeyboardShortcuts() {
                 <div
                   key={shortcut.description}
                   className={`flex items-center justify-between px-4 py-3 ${
-                    index !== section.shortcuts.length - 1
-                      ? 'border-b border-border'
-                      : ''
+                    index !== section.shortcuts.length - 1 ? 'border-b border-border' : ''
                   }`}
                 >
                   <span className="text-sm">{shortcut.description}</span>

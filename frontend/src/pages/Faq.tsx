@@ -280,7 +280,8 @@ export default function Faq() {
           <div className="text-center mb-12">
             <h1 className="text-4xl lg:text-5xl font-bold mb-4">Frequently Asked Questions</h1>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Find answers to common questions about OpenAlgo, its features, security, and licensing.
+              Find answers to common questions about OpenAlgo, its features, security, and
+              licensing.
             </p>
           </div>
 

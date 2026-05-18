@@ -1,7 +1,7 @@
 // components/flow/panels/ExecutionLogPanel.tsx
 // Displays real-time execution logs from workflow runs
 
-import { X, CheckCircle2, XCircle, AlertCircle, Clock, Terminal } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Clock, Terminal, X, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
@@ -80,13 +80,15 @@ export function ExecutionLogPanel({ logs, status, onClose }: ExecutionLogPanelPr
           <span className="font-medium">Execution Log</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className={cn(
-            "text-xs px-2 py-0.5 rounded-full",
-            status === 'running' && "bg-amber-500/10 text-amber-500",
-            status === 'success' && "bg-green-500/10 text-green-500",
-            status === 'error' && "bg-red-500/10 text-red-500",
-            status === 'idle' && "bg-muted text-muted-foreground"
-          )}>
+          <span
+            className={cn(
+              'text-xs px-2 py-0.5 rounded-full',
+              status === 'running' && 'bg-amber-500/10 text-amber-500',
+              status === 'success' && 'bg-green-500/10 text-green-500',
+              status === 'error' && 'bg-red-500/10 text-red-500',
+              status === 'idle' && 'bg-muted text-muted-foreground'
+            )}
+          >
             {getStatusText()}
           </span>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
@@ -109,27 +111,27 @@ export function ExecutionLogPanel({ logs, status, onClose }: ExecutionLogPanelPr
               <div
                 key={index}
                 className={cn(
-                  "rounded-lg border p-2.5 text-sm",
-                  log.level === 'error' && "border-red-500/30 bg-red-500/5",
-                  log.level === 'warning' && "border-amber-500/30 bg-amber-500/5",
-                  log.level === 'info' && "border-border bg-background"
+                  'rounded-lg border p-2.5 text-sm',
+                  log.level === 'error' && 'border-red-500/30 bg-red-500/5',
+                  log.level === 'warning' && 'border-amber-500/30 bg-amber-500/5',
+                  log.level === 'info' && 'border-border bg-background'
                 )}
               >
                 <div className="flex items-start gap-2">
-                  <div className="mt-0.5">
-                    {getLevelIcon(log.level)}
-                  </div>
+                  <div className="mt-0.5">{getLevelIcon(log.level)}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xs text-muted-foreground font-mono">
                         {formatTime(log.time)}
                       </span>
                     </div>
-                    <p className={cn(
-                      "text-sm break-words",
-                      log.level === 'error' && "text-red-500",
-                      log.level === 'warning' && "text-amber-500"
-                    )}>
+                    <p
+                      className={cn(
+                        'text-sm break-words',
+                        log.level === 'error' && 'text-red-500',
+                        log.level === 'warning' && 'text-amber-500'
+                      )}
+                    >
                       {log.message}
                     </p>
                   </div>
@@ -145,7 +147,7 @@ export function ExecutionLogPanel({ logs, status, onClose }: ExecutionLogPanelPr
         <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
           <div className="flex justify-between">
             <span>{logs.length} log entries</span>
-            <span>{logs.filter(l => l.level === 'error').length} errors</span>
+            <span>{logs.filter((l) => l.level === 'error').length} errors</span>
           </div>
         </div>
       )}

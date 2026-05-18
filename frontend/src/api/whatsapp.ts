@@ -2,7 +2,6 @@
 // (Public REST namespace /api/v1/whatsapp is send-only and used by external
 // scripts / SDKs, not by this frontend.)
 
-import { webClient } from './client'
 import type {
   WhatsAppBotStatus,
   WhatsAppBroadcastRequest,
@@ -13,6 +12,7 @@ import type {
   WhatsAppUpdateConfigRequest,
   WhatsAppUser,
 } from '@/types/whatsapp'
+import { webClient } from './client'
 
 interface ApiResponse<T = void> {
   status: string
@@ -28,9 +28,7 @@ export const whatsappApi = {
     return r.data.data!
   },
 
-  updateConfig: async (
-    payload: WhatsAppUpdateConfigRequest
-  ): Promise<ApiResponse> => {
+  updateConfig: async (payload: WhatsAppUpdateConfigRequest): Promise<ApiResponse> => {
     const r = await webClient.post<ApiResponse>('/whatsapp/config', payload)
     return r.data
   },
@@ -109,9 +107,7 @@ export const whatsappApi = {
   // ----- stats -----
 
   getStats: async (days = 7): Promise<WhatsAppCommandStats> => {
-    const r = await webClient.get<ApiResponse<WhatsAppCommandStats>>(
-      `/whatsapp/stats?days=${days}`
-    )
+    const r = await webClient.get<ApiResponse<WhatsAppCommandStats>>(`/whatsapp/stats?days=${days}`)
     return r.data.data!
   },
 }

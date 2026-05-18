@@ -1,21 +1,21 @@
 // pages/flow/FlowEditor.tsx
 // Flow visual workflow editor page
 
-import { useCallback, useRef, useEffect, useState } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { showToast } from '@/utils/toast'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ReactFlow,
-  ReactFlowProvider,
   Background,
   Controls,
-  MiniMap,
-  Panel,
-  useReactFlow,
-  type Node,
   type Edge,
+  MiniMap,
+  type Node,
+  Panel,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
 } from '@xyflow/react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { showToast } from '@/utils/toast'
 import '@xyflow/react/dist/style.css'
 import {
   ArrowLeft,
@@ -37,19 +37,26 @@ import {
 } from 'lucide-react'
 import { authApi } from '@/api/auth'
 import {
-  getWorkflow,
-  updateWorkflow,
   activateWorkflow,
   deactivateWorkflow,
   executeWorkflow,
   exportWorkflow,
   flowQueryKeys,
+  getWorkflow,
+  updateWorkflow,
 } from '@/api/flow'
-import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
-import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
+import { edgeTypes } from '@/components/flow/edges'
+// Import Flow components
+import { nodeTypes } from '@/components/flow/nodes'
+import {
+  ConfigPanel,
+  ExecutionLogPanel,
+  type LogEntry,
+  NodePalette,
+} from '@/components/flow/panels'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,16 +64,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { profileMenuItems } from '@/config/navigation'
+import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import { useThemeStore } from '@/stores/themeStore'
-import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
-
-// Import Flow components
-import { nodeTypes } from '@/components/flow/nodes'
-import { edgeTypes } from '@/components/flow/edges'
-import { NodePalette, ConfigPanel, ExecutionLogPanel, type LogEntry } from '@/components/flow/panels'
 
 let nodeId = 0
 const getNodeId = () => `node_${nodeId++}`
@@ -101,7 +105,9 @@ function FlowEditorContent() {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogPanel, setShowLogPanel] = useState(false)
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([])
-  const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle')
+  const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>(
+    'idle'
+  )
 
   // Theme and auth stores
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
@@ -152,7 +158,7 @@ function FlowEditorContent() {
         0,
         ...workflowNodes.map((n) => {
           const match = n.id.match(/node_(\d+)/)
-          return match ? parseInt(match[1]) : 0
+          return match ? parseInt(match[1], 10) : 0
         })
       )
       nodeId = maxId + 1
@@ -347,7 +353,7 @@ function FlowEditorContent() {
   }, [id])
 
   // Handle invalid ID - redirect to flow list
-  if (!id || id === 'undefined' || isNaN(Number(id))) {
+  if (!id || id === 'undefined' || Number.isNaN(Number(id))) {
     return (
       <div className="flex h-screen flex-col bg-background text-foreground">
         <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
@@ -519,9 +525,7 @@ function FlowEditorContent() {
             onChange={(e) => setName(e.target.value)}
             className="h-8 w-64 border-transparent bg-transparent px-2 font-medium hover:border-border focus:border-border"
           />
-          {isModified && (
-            <span className="text-xs text-muted-foreground">Unsaved</span>
-          )}
+          {isModified && <span className="text-xs text-muted-foreground">Unsaved</span>}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -633,11 +637,7 @@ function FlowEditorContent() {
           >
             <Background gap={16} size={1} />
             <Controls />
-            <MiniMap
-              nodeStrokeWidth={3}
-              pannable
-              zoomable
-            />
+            <MiniMap nodeStrokeWidth={3} pannable zoomable />
             <Panel position="bottom-center" className="mb-4">
               <div
                 className={cn(
@@ -645,7 +645,12 @@ function FlowEditorContent() {
                   isActive && 'border-green-500/30 bg-green-500/5'
                 )}
               >
-                <div className={cn('h-2 w-2 rounded-full', isActive ? 'bg-green-500' : 'bg-muted-foreground')} />
+                <div
+                  className={cn(
+                    'h-2 w-2 rounded-full',
+                    isActive ? 'bg-green-500' : 'bg-muted-foreground'
+                  )}
+                />
                 <span className="text-muted-foreground">
                   {isActive ? 'Workflow active' : 'Workflow inactive'}
                 </span>

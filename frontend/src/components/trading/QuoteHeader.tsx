@@ -53,7 +53,8 @@ export function QuoteHeader({
 }: QuoteHeaderProps) {
   // Calculate change from prevClose if not provided
   const displayChange = change ?? (ltp && prevClose ? ltp - prevClose : undefined)
-  const displayChangePercent = changePercent ?? (displayChange && prevClose ? (displayChange / prevClose) * 100 : undefined)
+  const displayChangePercent =
+    changePercent ?? (displayChange && prevClose ? (displayChange / prevClose) * 100 : undefined)
 
   const isPositive = displayChange !== undefined && displayChange >= 0
 
@@ -74,18 +75,17 @@ export function QuoteHeader({
           {exchange}
         </Badge>
         <div className="flex items-center gap-2">
-          <span className="text-xl font-bold">
-            {ltp !== undefined ? ltp.toFixed(2) : '-'}
-          </span>
+          <span className="text-xl font-bold">{ltp !== undefined ? ltp.toFixed(2) : '-'}</span>
           {displayChange !== undefined && (
-            <span className={cn(
-              'text-sm font-medium',
-              isPositive ? 'text-green-500' : 'text-red-500'
-            )}>
-              {isPositive ? '+' : ''}{displayChange.toFixed(2)}
+            <span
+              className={cn('text-sm font-medium', isPositive ? 'text-green-500' : 'text-red-500')}
+            >
+              {isPositive ? '+' : ''}
+              {displayChange.toFixed(2)}
               {displayChangePercent !== undefined && (
                 <span className="ml-1">
-                  ({isPositive ? '+' : ''}{displayChangePercent.toFixed(2)}%)
+                  ({isPositive ? '+' : ''}
+                  {displayChangePercent.toFixed(2)}%)
                 </span>
               )}
             </span>

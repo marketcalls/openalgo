@@ -3,14 +3,15 @@
 // Uses WebSocket for real-time data with REST API fallback (like Holdings/Positions)
 
 import { useCallback, useEffect, useState } from 'react'
+import { tradingApi } from '@/api/trading'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -20,21 +21,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useAuthStore } from '@/stores/authStore'
 import { useLiveQuote } from '@/hooks/useLiveQuote'
-import { tradingApi } from '@/api/trading'
-import { showToast } from '@/utils/toast'
 import { cn } from '@/lib/utils'
-import { QuoteHeader } from './QuoteHeader'
+import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 import { MarketDepthPanel } from './MarketDepthPanel'
+import { QuoteHeader } from './QuoteHeader'
 
 // Price types for order dialog
 // Backend API accepts: MARKET, LIMIT, SL (Stop Loss Limit), SL-M (Stop Loss Market)
 const PRICE_TYPES = [
   { value: 'MARKET', label: 'Market' },
   { value: 'LIMIT', label: 'Limit' },
-  { value: 'SL-M', label: 'SL-M' },      // Stop Loss Market (trigger only)
-  { value: 'SL', label: 'SL-L' },         // Stop Loss Limit (trigger + price)
+  { value: 'SL-M', label: 'SL-M' }, // Stop Loss Market (trigger only)
+  { value: 'SL', label: 'SL-L' }, // Stop Loss Limit (trigger + price)
 ] as const
 
 // Product types based on exchange
@@ -119,7 +119,11 @@ export function PlaceOrderDialog({
   const productTypes = isFnOExchange(exchange) ? FNO_PRODUCT_TYPES : EQUITY_PRODUCT_TYPES
 
   // Centralized live quote + depth with REST fallback (like useLivePrice for Holdings/Positions)
-  const { data: liveData, isLoading: isLoadingQuotes, isConnected } = useLiveQuote(symbol, exchange, {
+  const {
+    data: liveData,
+    isLoading: isLoadingQuotes,
+    isConnected,
+  } = useLiveQuote(symbol, exchange, {
     enabled: open && !!symbol && !!exchange,
     mode: 'Depth',
     useQuotesFallback: true,
@@ -137,9 +141,8 @@ export function PlaceOrderDialog({
       const defaultProduct = isFnO ? 'NRML' : 'CNC'
       // Validate product: CNC not valid for F&O, NRML not valid for equity
       const validProducts = isFnO ? ['NRML', 'MIS'] : ['CNC', 'MIS']
-      const productToUse = initialProduct && validProducts.includes(initialProduct)
-        ? initialProduct
-        : defaultProduct
+      const productToUse =
+        initialProduct && validProducts.includes(initialProduct) ? initialProduct : defaultProduct
       setFormProduct(productToUse)
       setFormPrice(0)
       setFormTriggerPrice(0)
@@ -186,7 +189,16 @@ export function PlaceOrderDialog({
     if (needsPrice && formPrice <= 0) return false
     if (needsTrigger && formTriggerPrice <= 0) return false
     return true
-  }, [symbol, exchange, apiKey, formQuantity, needsPrice, formPrice, needsTrigger, formTriggerPrice])
+  }, [
+    symbol,
+    exchange,
+    apiKey,
+    formQuantity,
+    needsPrice,
+    formPrice,
+    needsTrigger,
+    formTriggerPrice,
+  ])
 
   // Submit order
   const handleSubmit = async () => {
@@ -254,7 +266,7 @@ export function PlaceOrderDialog({
 
   // Quantity change handler
   const handleQuantityChange = (value: string) => {
-    const num = parseInt(value) || 0
+    const num = parseInt(value, 10) || 0
     if (quantityMode === 'lots') {
       // In lots mode, multiply by lot size
       setFormQuantity(num * lotSize)
@@ -282,9 +294,7 @@ export function PlaceOrderDialog({
             <span className={formAction === 'BUY' ? 'text-green-500' : 'text-red-500'}>
               {formAction}
             </span>
-            <span className="text-muted-foreground font-normal text-sm truncate">
-              {symbol}
-            </span>
+            <span className="text-muted-foreground font-normal text-sm truncate">{symbol}</span>
           </DialogTitle>
         </DialogHeader>
 
@@ -318,10 +328,7 @@ export function PlaceOrderDialog({
               <Button
                 type="button"
                 variant={formAction === 'BUY' ? 'default' : 'outline'}
-                className={cn(
-                  'flex-1',
-                  formAction === 'BUY' && 'bg-green-600 hover:bg-green-700'
-                )}
+                className={cn('flex-1', formAction === 'BUY' && 'bg-green-600 hover:bg-green-700')}
                 onClick={() => setFormAction('BUY')}
               >
                 BUY
@@ -329,10 +336,7 @@ export function PlaceOrderDialog({
               <Button
                 type="button"
                 variant={formAction === 'SELL' ? 'default' : 'outline'}
-                className={cn(
-                  'flex-1',
-                  formAction === 'SELL' && 'bg-red-600 hover:bg-red-700'
-                )}
+                className={cn('flex-1', formAction === 'SELL' && 'bg-red-600 hover:bg-red-700')}
                 onClick={() => setFormAction('SELL')}
               >
                 SELL
@@ -387,7 +391,10 @@ export function PlaceOrderDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label className="text-xs">Price Type</Label>
-              <Select value={formPriceType} onValueChange={(v) => setFormPriceType(v as typeof formPriceType)}>
+              <Select
+                value={formPriceType}
+                onValueChange={(v) => setFormPriceType(v as typeof formPriceType)}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -402,7 +409,10 @@ export function PlaceOrderDialog({
             </div>
             <div className="space-y-2">
               <Label className="text-xs">Product</Label>
-              <Select value={formProduct} onValueChange={(v) => setFormProduct(v as typeof formProduct)}>
+              <Select
+                value={formProduct}
+                onValueChange={(v) => setFormProduct(v as typeof formProduct)}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -464,7 +474,9 @@ export function PlaceOrderDialog({
                   variant="outline"
                   size="sm"
                   className="px-2"
-                  onClick={() => setFormTriggerPrice(adjustPrice(formTriggerPrice, tickSize, 'down'))}
+                  onClick={() =>
+                    setFormTriggerPrice(adjustPrice(formTriggerPrice, tickSize, 'down'))
+                  }
                 >
                   -
                 </Button>
@@ -499,7 +511,9 @@ export function PlaceOrderDialog({
             onClick={handleSubmit}
             disabled={!isValid() || isSubmitting}
             className={cn(
-              formAction === 'BUY' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'
+              formAction === 'BUY'
+                ? 'bg-green-600 hover:bg-green-700'
+                : 'bg-red-600 hover:bg-red-700'
             )}
           >
             {isSubmitting ? 'Placing...' : `Place ${formAction} Order`}

@@ -1,7 +1,6 @@
 import { ArrowLeft, Bell, BellOff, Search, Send, Trash2, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import {
   AlertDialog,
@@ -36,6 +35,7 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import type { CommandStats, TelegramUser } from '@/types/telegram'
+import { showToast } from '@/utils/toast'
 
 export default function TelegramUsers() {
   const [users, setUsers] = useState<TelegramUser[]>([])

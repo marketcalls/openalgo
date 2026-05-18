@@ -122,7 +122,7 @@ export default function GttTab() {
         const msg =
           axiosError.response?.data?.message ||
           (status === 501
-            ? "GTT orders are not supported for this broker yet"
+            ? 'GTT orders are not supported for this broker yet'
             : 'Failed to fetch GTT orders')
         setGtts([])
         setError(msg)
@@ -156,10 +156,7 @@ export default function GttTab() {
       }
     } catch (e) {
       const axiosError = e as { response?: { data?: { message?: string } } }
-      showToast.error(
-        axiosError.response?.data?.message || 'Failed to cancel GTT',
-        'orders'
-      )
+      showToast.error(axiosError.response?.data?.message || 'Failed to cancel GTT', 'orders')
     } finally {
       setCancellingId(null)
     }
@@ -169,7 +166,13 @@ export default function GttTab() {
     setModifyingGtt(gtt)
 
     const isOco = gtt.trigger_type === 'two-leg'
-    const firstLeg = gtt.legs[0] ?? { action: 'BUY', quantity: 0, price: 0, pricetype: 'LIMIT', product: 'CNC' }
+    const firstLeg = gtt.legs[0] ?? {
+      action: 'BUY',
+      quantity: 0,
+      price: 0,
+      pricetype: 'LIMIT',
+      product: 'CNC',
+    }
     // OCO leg ordering matches Kite's ascending trigger_values: [stoploss_leg, target_leg].
     const targetLeg = gtt.legs[1] ?? firstLeg
 
@@ -182,7 +185,9 @@ export default function GttTab() {
       price: Number(firstLeg.price) || 0,
       // OCO leg ordering matches Kite's ascending trigger_values: [stoploss_leg, target_leg].
       // SINGLE: only one of triggerprice_sl/triggerprice_tg is used (heuristic: index 0).
-      triggerprice_sl: isOco ? Number(gtt.trigger_prices[0] ?? 0) : Number(gtt.trigger_prices[0] ?? 0),
+      triggerprice_sl: isOco
+        ? Number(gtt.trigger_prices[0] ?? 0)
+        : Number(gtt.trigger_prices[0] ?? 0),
       stoploss: isOco ? Number(firstLeg.price) || 0 : 0,
       triggerprice_tg: isOco ? Number(gtt.trigger_prices[1] ?? 0) : 0,
       target: isOco ? Number(targetLeg.price) || 0 : 0,
@@ -208,7 +213,10 @@ export default function GttTab() {
         modifyForm.stoploss <= 0 ||
         modifyForm.target <= 0
       ) {
-        showToast.error('All four (triggerprice_sl, stoploss, triggerprice_tg, target) are required for OCO', 'orders')
+        showToast.error(
+          'All four (triggerprice_sl, stoploss, triggerprice_tg, target) are required for OCO',
+          'orders'
+        )
         return
       }
       if (modifyForm.triggerprice_sl >= modifyForm.triggerprice_tg) {
@@ -244,10 +252,7 @@ export default function GttTab() {
       }
     } catch (e) {
       const axiosError = e as { response?: { data?: { message?: string } } }
-      showToast.error(
-        axiosError.response?.data?.message || 'Failed to modify GTT',
-        'orders'
-      )
+      showToast.error(axiosError.response?.data?.message || 'Failed to modify GTT', 'orders')
     } finally {
       setIsSavingModify(false)
     }
@@ -311,21 +316,11 @@ export default function GttTab() {
     <div className="space-y-4">
       {/* Action row */}
       <div className="flex items-center justify-end gap-2 flex-wrap">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => fetchGtts(true)}
-          disabled={isRefreshing}
-        >
+        <Button variant="outline" size="sm" onClick={() => fetchGtts(true)} disabled={isRefreshing}>
           <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
           Refresh
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={exportToCSV}
-          disabled={gtts.length === 0}
-        >
+        <Button variant="outline" size="sm" onClick={exportToCSV} disabled={gtts.length === 0}>
           <Download className="h-4 w-4 mr-2" />
           Export
         </Button>
@@ -457,15 +452,13 @@ export default function GttTab() {
                                   <AlertDialogTitle>Cancel GTT?</AlertDialogTitle>
                                   <AlertDialogDescription>
                                     GTT <span className="font-mono">{g.trigger_id}</span> on{' '}
-                                    <span className="font-medium">{g.symbol}</span> will be
-                                    removed. This cannot be undone.
+                                    <span className="font-medium">{g.symbol}</span> will be removed.
+                                    This cannot be undone.
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
                                   <AlertDialogCancel>Keep</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    onClick={() => handleCancel(g.trigger_id)}
-                                  >
+                                  <AlertDialogAction onClick={() => handleCancel(g.trigger_id)}>
                                     Cancel GTT
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
@@ -641,7 +634,11 @@ export default function GttTab() {
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setModifyOpen(false)} disabled={isSavingModify}>
+            <Button
+              variant="outline"
+              onClick={() => setModifyOpen(false)}
+              disabled={isSavingModify}
+            >
               Cancel
             </Button>
             <Button onClick={saveModify} disabled={isSavingModify}>
