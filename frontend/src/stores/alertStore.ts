@@ -19,6 +19,7 @@ export interface AlertCategories {
   chartink: boolean // Chartink strategy operations (26 toasts)
   pythonStrategy: boolean // Python strategy operations (34 toasts)
   telegram: boolean // Telegram bot operations (19 toasts)
+  whatsapp: boolean // WhatsApp bot operations
   flow: boolean // Workflow management (15 toasts)
 
   // User-initiated operations (Tier 3 - Low Impact)
@@ -74,6 +75,7 @@ const DEFAULT_STATE = {
     chartink: true,
     pythonStrategy: true,
     telegram: true,
+    whatsapp: true,
     flow: true,
     // Tier 3
     admin: true,
