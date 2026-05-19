@@ -758,7 +758,12 @@ class WebSocketProxy:
                     should_retry = (
                         adapter.is_auth_error(error_msg) or
                         error_code in ("CONNECTION_FAILED", "CONNECTION_ERROR") or
-                        "failed to connect" in error_msg.lower()
+                        "failed to connect" in error_msg.lower() or
+                        # Stale pooled adapter: ws_client died (e.g. daily token
+                        # rotation) and ConnectionPool.initialize() early-returns
+                        # "Already initialized" so it never rebuilds. Treat as
+                        # retryable so the force=True re-init below recovers it.
+                        "not initialized" in error_msg.lower()
                     )
 
                     if should_retry:
