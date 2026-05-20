@@ -460,6 +460,13 @@ def two_factor_configure():
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_login():
+    # `?reauth=1` lets a logged-in user re-enter the broker OAuth flow without
+    # first having to /auth/logout. Recovery path for stale broker tokens that
+    # the platform does not auto-refresh — e.g. daily-expiring brokers like
+    # IIFL Capital, Zerodha, Upstox. See issue #1400.
+    if request.args.get("reauth", "").lower() in ("1", "true", "yes"):
+        session.pop("logged_in", None)
+
     if session.get("logged_in"):
         return redirect("/dashboard")
     if request.method == "GET":
