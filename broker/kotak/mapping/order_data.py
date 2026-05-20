@@ -17,22 +17,23 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-    # Check if 'data' is None
-    # if order_data has key 'data' and its value is None
+    # Handle None or non-dict input
+    if order_data is None or not isinstance(order_data, dict):
+        logger.info("No data available or invalid response format.")
+        return {}
 
-    if order_data["stat"] == "Not_Ok":
-        logger.info("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-        return order_data
+    # Check status using .get() to avoid KeyError
+    if order_data.get("stat") == "Not_Ok":
+        logger.info(f"Broker returned Not_Ok: {order_data.get('message', 'No message')}")
+        return {}
 
-    if order_data["data"] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        order_data = order_data["data"]
+    # Safely get 'data' key - handle both missing key and None value
+    data = order_data.get("data")
+    if data is None:
+        logger.info("No data available in response.")
+        return {}
+
+    order_data = data
 
     if order_data:
         for order in order_data:
@@ -157,24 +158,28 @@ def map_trade_data(trade_data):
     Processes and modifies a list of order dictionaries based on specific conditions.
 
     Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    - trade_data: A list of dictionaries, where each dictionary represents a trade.
 
     Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+    - The modified trade_data with updated 'tradingsymbol' and 'product' fields.
     """
-    if trade_data["stat"] == "Not_Ok":
-        logger.info("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
-        return trade_data
-        # Check if 'data' is None
-    if trade_data["data"] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        trade_data = trade_data["data"]
+    # Handle None or non-dict input
+    if trade_data is None or not isinstance(trade_data, dict):
+        logger.info("No trade data available or invalid response format.")
+        return {}
+
+    # Check status using .get() to avoid KeyError
+    if trade_data.get("stat") == "Not_Ok":
+        logger.info(f"Broker returned Not_Ok: {trade_data.get('message', 'No message')}")
+        return {}
+
+    # Safely get 'data' key - handle both missing key and None value
+    data = trade_data.get("data")
+    if data is None:
+        logger.info("No trade data available in response.")
+        return {}
+
+    trade_data = data
 
     if trade_data:
         for order in trade_data:

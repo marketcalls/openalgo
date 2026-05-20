@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shutil
+from datetime import datetime, timedelta
 
 import httpx
 import numpy as np
@@ -129,6 +130,53 @@ def download_csv_kotak_data(output_path):
 
     if not downloaded_files:
         raise Exception("No master contract files were downloaded successfully")
+
+    # Check if F&O files are stubs (< 5KB = holiday/empty CSVs with headers only)
+    nse_fo_path = f"{output_path}/NSE_FO.csv"
+    if os.path.exists(nse_fo_path) and os.path.getsize(nse_fo_path) < 5000:
+        logger.warning(
+            f"NSE_FO.csv is only {os.path.getsize(nse_fo_path)} bytes — "
+            f"likely holiday stub. Trying previous trading days..."
+        )
+        for days_back in range(1, 6):
+            prev_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+            logger.info(f"Trying scripmaster date: {prev_date}")
+
+            prev_urls = {
+                "CDE_FO": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{prev_date}/transformed/cde_fo.csv",
+                "MCX_FO": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{prev_date}/transformed/mcx_fo.csv",
+                "NSE_FO": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{prev_date}/transformed/nse_fo.csv",
+                "BSE_FO": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{prev_date}/transformed/bse_fo.csv",
+                "NSE_COM": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{prev_date}/transformed/nse_com.csv",
+                "BSE_CM": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{prev_date}/transformed-v1/bse_cm-v1.csv",
+                "NSE_CM": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{prev_date}/transformed-v1/nse_cm-v1.csv",
+            }
+
+            # Re-download all files with previous date
+            prev_downloaded = []
+            for key, url in prev_urls.items():
+                try:
+                    response = client.get(url, timeout=30)
+                    if response.status_code == 200:
+                        file_path = f"{output_path}/{key}.csv"
+                        with open(file_path, "wb") as file:
+                            file.write(response.content)
+                        prev_downloaded.append(file_path)
+                except Exception as e:
+                    logger.warning(f"Failed to download {key} for {prev_date}: {e}")
+
+            # Check if this date has real data
+            if os.path.exists(nse_fo_path) and os.path.getsize(nse_fo_path) >= 5000:
+                logger.info(
+                    f"Found valid scripmaster data from {prev_date} "
+                    f"({os.path.getsize(nse_fo_path)} bytes)"
+                )
+                downloaded_files = prev_downloaded
+                break
+            else:
+                logger.warning(f"{prev_date} also has stub data, trying earlier...")
+        else:
+            logger.error("No valid scripmaster data found in last 5 days")
 
     logger.info(f"Downloaded {len(downloaded_files)} files successfully")
     return downloaded_files
@@ -381,7 +429,6 @@ def get_kotak_master_filepaths():
 
     # Fallback: Use direct URLs from PowerShell test results
     logger.warning("API failed, using direct URLs from PowerShell test")
-    from datetime import datetime
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -557,10 +604,7 @@ def master_contract_download():
         if not downloaded_files:
             raise Exception("No CSV files were downloaded successfully")
 
-        # Clear existing data
-        delete_symtoken_table()
-
-        # Process each exchange if the file exists
+        # Process each exchange into dataframes BEFORE touching the database
         processors = [
             ("NSE_CM.csv", process_kotak_nse_csv, "NSE Cash"),
             ("NSE_FO.csv", process_kotak_nfo_csv, "NSE F&O"),
@@ -570,6 +614,7 @@ def master_contract_download():
             ("BSE_FO.csv", process_kotak_bfo_csv, "BSE F&O"),
         ]
 
+        parsed_frames = []
         total_records = 0
         for filename, processor_func, exchange_name in processors:
             file_path = f"{output_path}/{filename}"
@@ -578,7 +623,7 @@ def master_contract_download():
                     logger.info(f"Processing {exchange_name} data...")
                     token_df = processor_func(output_path)
                     if not token_df.empty:
-                        copy_from_dataframe(token_df)
+                        parsed_frames.append(token_df)
                         total_records += len(token_df)
                         logger.info(f"Processed {len(token_df)} records for {exchange_name}")
                     else:
@@ -588,24 +633,41 @@ def master_contract_download():
             else:
                 logger.warning(f"File not found: {filename}")
 
+        # Validate before wiping: require minimum records to protect
+        # against empty/corrupt downloads leaving the table blank
+        MIN_RECORDS = 1000
+        if total_records < MIN_RECORDS:
+            raise Exception(
+                f"Only {total_records} records parsed (minimum {MIN_RECORDS}). "
+                f"Keeping existing data to avoid empty master contract table."
+            )
+
+        # Safe to replace: delete old data and insert validated new data
+        delete_symtoken_table()
+
+        for token_df in parsed_frames:
+            copy_from_dataframe(token_df)
+
         # Clean up temporary files
         delete_kotak_temp_data(output_path)
 
         logger.info(f"Master contract download completed. Total records: {total_records}")
 
-        if total_records > 0:
-            return socketio.emit(
-                "master_contract_download",
-                {
-                    "status": "success",
-                    "message": f"Successfully Downloaded {total_records} records",
-                },
-            )
-        else:
-            raise Exception("No records were processed successfully")
+        return socketio.emit(
+            "master_contract_download",
+            {
+                "status": "success",
+                "message": f"Successfully Downloaded {total_records} records",
+            },
+        )
 
     except Exception as e:
         logger.error(f"Master contract download failed: {str(e)}")
+        # Clean up any downloaded files even on failure
+        try:
+            delete_kotak_temp_data(output_path)
+        except Exception:
+            pass
         return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
 
 
