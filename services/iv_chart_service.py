@@ -32,8 +32,7 @@ from services.quotes_service import get_quotes
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
-# py_vollib is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data()
-# to avoid loading scipy/numba/llvmlite at startup
+# opengreeks is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data().
 
 logger = get_logger(__name__)
 
@@ -156,13 +155,13 @@ def get_iv_chart_data(
         Tuple of (success, response_dict, status_code)
     """
     try:
-        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
+        from opengreeks.black76 import implied_volatility as black_iv  # noqa: F401
     except ImportError:
         return (
             False,
             {
                 "status": "error",
-                "message": "py_vollib library required for IV calculation. Install with: pip install py_vollib",
+                "message": "opengreeks library required for IV calculation. Install with: pip install opengreeks",
             },
             500,
         )
@@ -378,11 +377,13 @@ def _calculate_iv_series(df_option, df_underlying, strike, expiry_dt, flag, inte
     Returns:
         List of dicts with time (unix seconds), iv, option_price, underlying_price
     """
-    from py_vollib.black.greeks.analytical import delta as black_delta
-    from py_vollib.black.greeks.analytical import gamma as black_gamma
-    from py_vollib.black.greeks.analytical import theta as black_theta
-    from py_vollib.black.greeks.analytical import vega as black_vega
-    from py_vollib.black.implied_volatility import implied_volatility as black_iv
+    from opengreeks.black76 import (
+        delta as black_delta,
+        gamma as black_gamma,
+        implied_volatility as black_iv,
+        theta as black_theta,
+        vega as black_vega,
+    )
 
     iv_data = []
 

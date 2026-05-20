@@ -72,7 +72,7 @@ OpenAlgo uses a **Python Flask** backend with a **React 19** single-page applica
 - **websockets 15.0+** - WebSocket client and server
 - **pyzmq** - ZeroMQ for high-performance message queue
 - **APScheduler** - Background task scheduling
-- **scipy / py_vollib / numba** - Options analytics and Greeks
+- **opengreeks** - Black-76 / Black-Scholes pricing and Greeks (Rust core, NumPy-only deps)
 
 ### Security & Performance
 
