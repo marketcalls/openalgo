@@ -49,6 +49,12 @@ interface MasterContractStatus {
   exchange_stats: ExchangeStats | null
   download_duration_seconds: number | null
   smart_download?: SmartDownload
+  progress?: number
+  stages?: {
+    download?: number
+    process?: number
+    import?: number
+  }
 }
 
 interface CacheHealth {
@@ -326,10 +332,62 @@ export default function MasterContract() {
             </div>
 
             {status?.status === 'downloading' && (
-              <div className="space-y-2">
-                <Progress value={undefined} className="h-2" />
-                <p className="text-sm text-muted-foreground text-center">
-                  Downloading master contract data...
+              <div className="space-y-4 py-2">
+                {/* Overall Progress */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Overall Progress</span>
+                    <span>{status.progress || 0}%</span>
+                  </div>
+                  <Progress value={status.progress || 0} className="h-2" />
+                </div>
+
+                {/* Sub-stages */}
+                {status.stages && (
+                  <div className="grid gap-3 pt-2">
+                    {/* Download Stage */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <span>1. Download CSVs</span>
+                        <span>{status.stages.download || 0}%</span>
+                      </div>
+                      <Progress 
+                        value={status.stages.download || 0} 
+                        className="h-1 bg-blue-950" 
+                        indicatorClassName="bg-blue-500"
+                      />
+                    </div>
+
+                    {/* Process Stage */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <span>2. Format & Parse</span>
+                        <span>{status.stages.process || 0}%</span>
+                      </div>
+                      <Progress 
+                        value={status.stages.process || 0} 
+                        className="h-1 bg-purple-950" 
+                        indicatorClassName="bg-purple-500"
+                      />
+                    </div>
+
+                    {/* Import Stage */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <span>3. Database Import</span>
+                        <span>{status.stages.import || 0}%</span>
+                      </div>
+                      <Progress 
+                        value={status.stages.import || 0} 
+                        className="h-1 bg-emerald-950" 
+                        indicatorClassName="bg-emerald-500"
+                      />
+                    </div>
+                  </div>
+                )}
+                
+                <p className="text-xs text-muted-foreground text-center animate-pulse">
+                  {status.message || 'Processing master contract data...'}
                 </p>
               </div>
             )}
@@ -358,7 +416,7 @@ export default function MasterContract() {
               <span className="text-sm">{formatDateTime(status?.last_updated || null)}</span>
             </div>
 
-            {status?.message && (
+            {status?.message && status?.status !== 'downloading' && (
               <div className="pt-2 border-t">
                 <p className="text-sm text-muted-foreground">{status.message}</p>
               </div>
