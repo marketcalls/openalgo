@@ -3,9 +3,9 @@
  * Multi-leg options strategies (Iron Condor, Straddle, etc.)
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Layers } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { OptionsMultiOrderNodeData } from '@/types/flow'
 
@@ -50,17 +50,8 @@ export const OptionsMultiOrderNode = memo(({ data, selected }: OptionsMultiOrder
   const nodeData = data as unknown as Record<string, unknown>
 
   return (
-    <div
-      className={cn(
-        'workflow-node node-action min-w-[130px]',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node node-action min-w-[130px]', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded">
@@ -68,9 +59,7 @@ export const OptionsMultiOrderNode = memo(({ data, selected }: OptionsMultiOrder
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Multi-Leg</div>
-            <div className="text-[9px] text-muted-foreground">
-              {data.underlying || 'NIFTY'}
-            </div>
+            <div className="text-[9px] text-muted-foreground">{data.underlying || 'NIFTY'}</div>
           </div>
         </div>
         <div className="space-y-1">
@@ -91,21 +80,19 @@ export const OptionsMultiOrderNode = memo(({ data, selected }: OptionsMultiOrder
             </span>
           </div>
           <div className="flex items-center justify-between text-[9px] text-muted-foreground">
-            <span className={cn(
-              'font-medium',
-              (nodeData.action as string) === 'BUY' ? 'text-buy' : 'text-sell'
-            )}>
+            <span
+              className={cn(
+                'font-medium',
+                (nodeData.action as string) === 'BUY' ? 'text-buy' : 'text-sell'
+              )}
+            >
               {(nodeData.action as string) || 'SELL'}
             </span>
             <span>{data.product || 'MIS'}</span>
           </div>
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

@@ -1,7 +1,7 @@
 import {
   ArrowRight,
-  Bot,
   BookOpen,
+  Bot,
   ClipboardList,
   Download,
   HelpCircle,
@@ -202,7 +202,7 @@ export default function Home() {
               className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] mb-8 shadow-sm transition-colors hover:border-emerald-500/40 hover:bg-card"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60" />
-              <span className="text-amber-500">New in V2</span>
+              <span className="text-amber-700 dark:text-amber-500">New in V2</span>
               <span className="text-muted-foreground">- 12-Tool Options Analytics Suite</span>
               <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
             </Link>
@@ -237,7 +237,7 @@ export default function Home() {
 
         {/* Integrates With */}
         <section className="container mx-auto px-4 py-12 sm:py-16">
-          <p className="text-center text-xs sm:text-sm font-semibold uppercase tracking-[0.25em] text-amber-500 mb-6">
+          <p className="text-center text-xs sm:text-sm font-semibold uppercase tracking-[0.25em] text-amber-700 dark:text-amber-500 mb-6">
             Integrates With
           </p>
           <div className="flex flex-wrap justify-center gap-2 sm:gap-3 max-w-4xl mx-auto">
@@ -255,7 +255,7 @@ export default function Home() {
         {/* Trade & Research With Your AI */}
         <section className="container mx-auto px-4 py-16 sm:py-20">
           <div className="text-center max-w-3xl mx-auto mb-12">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-500 mb-6">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mb-6">
               <Sparkles className="h-3.5 w-3.5" />
               Made for AI
             </span>
@@ -288,20 +288,22 @@ export default function Home() {
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">
                   Connect your OpenAlgo account to Claude, Cursor, Windsurf, or ChatGPT. Place
-                  orders, check positions, and pull live prices by simply asking - no dashboards,
-                  no clicks.
+                  orders, check positions, and pull live prices by simply asking - no dashboards, no
+                  clicks.
                 </p>
                 <div className="flex flex-wrap gap-2 pt-2">
-                  {['25+ built-in actions', 'Claude / Cursor / Windsurf / ChatGPT', 'Runs on your computer'].map(
-                    (tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground"
-                      >
-                        {tag}
-                      </span>
-                    )
-                  )}
+                  {[
+                    '25+ built-in actions',
+                    'Claude / Cursor / Windsurf / ChatGPT',
+                    'Runs on your computer',
+                  ].map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-md bg-muted px-2.5 py-1 text-xs text-neutral-600 dark:text-neutral-400"
+                    >
+                      {tag}
+                    </span>
+                  ))}
                 </div>
               </CardContent>
             </Card>
@@ -333,7 +335,7 @@ export default function Home() {
                     (tag) => (
                       <span
                         key={tag}
-                        className="rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+                        className="rounded-md bg-muted px-2.5 py-1 text-xs text-neutral-600 dark:text-neutral-400"
                       >
                         {tag}
                       </span>

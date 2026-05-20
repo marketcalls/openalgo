@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { FileText, Send } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { JsonEditor } from '@/components/ui/json-editor'
 import {
@@ -10,9 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Send, FileText } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { cn } from '@/lib/utils'
 import type { MessageTemplate } from '@/types/websocket'
 
 // Extended template type with category
@@ -37,182 +37,182 @@ function getMessageTemplates(isCrypto: boolean): CategorizedTemplate[] {
       ]
 
   return [
-  // Authentication
-  {
-    key: 'authenticate',
-    label: 'Authenticate',
-    description: 'Authenticate with API key',
-    template: { action: 'authenticate', api_key: '{{API_KEY}}' },
-    category: 'auth',
-  },
-  // Subscriptions
-  {
-    key: 'subscribe_ltp',
-    label: 'Subscribe LTP',
-    description: 'Last Traded Price (Mode 1)',
-    template: {
-      action: 'subscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 1,
+    // Authentication
+    {
+      key: 'authenticate',
+      label: 'Authenticate',
+      description: 'Authenticate with API key',
+      template: { action: 'authenticate', api_key: '{{API_KEY}}' },
+      category: 'auth',
     },
-    category: 'subscribe',
-  },
-  {
-    key: 'subscribe_quote',
-    label: 'Subscribe Quote',
-    description: 'Full Quote data (Mode 2)',
-    template: {
-      action: 'subscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 2,
+    // Subscriptions
+    {
+      key: 'subscribe_ltp',
+      label: 'Subscribe LTP',
+      description: 'Last Traded Price (Mode 1)',
+      template: {
+        action: 'subscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 1,
+      },
+      category: 'subscribe',
     },
-    category: 'subscribe',
-  },
-  {
-    key: 'subscribe_multiple',
-    label: 'Subscribe Multiple',
-    description: 'Multiple symbols at once',
-    template: {
-      action: 'subscribe',
-      symbols: multiSymbols,
-      mode: 1,
+    {
+      key: 'subscribe_quote',
+      label: 'Subscribe Quote',
+      description: 'Full Quote data (Mode 2)',
+      template: {
+        action: 'subscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 2,
+      },
+      category: 'subscribe',
     },
-    category: 'subscribe',
-  },
-  // Depth Subscriptions (Mode 3)
-  {
-    key: 'subscribe_depth_5',
-    label: 'Depth 5 Levels',
-    description: 'Market Depth - 5 bid/ask levels',
-    template: {
-      action: 'subscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 3,
-      depth: 5,
+    {
+      key: 'subscribe_multiple',
+      label: 'Subscribe Multiple',
+      description: 'Multiple symbols at once',
+      template: {
+        action: 'subscribe',
+        symbols: multiSymbols,
+        mode: 1,
+      },
+      category: 'subscribe',
     },
-    category: 'depth',
-  },
-  {
-    key: 'subscribe_depth_20',
-    label: 'Depth 20 Levels',
-    description: 'Market Depth - 20 bid/ask levels',
-    template: {
-      action: 'subscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 3,
-      depth: 20,
+    // Depth Subscriptions (Mode 3)
+    {
+      key: 'subscribe_depth_5',
+      label: 'Depth 5 Levels',
+      description: 'Market Depth - 5 bid/ask levels',
+      template: {
+        action: 'subscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 3,
+        depth: 5,
+      },
+      category: 'depth',
     },
-    category: 'depth',
-  },
-  {
-    key: 'subscribe_depth_30',
-    label: 'Depth 30 Levels',
-    description: 'Market Depth - 30 levels (broker dependent)',
-    template: {
-      action: 'subscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 3,
-      depth: 30,
+    {
+      key: 'subscribe_depth_20',
+      label: 'Depth 20 Levels',
+      description: 'Market Depth - 20 bid/ask levels',
+      template: {
+        action: 'subscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 3,
+        depth: 20,
+      },
+      category: 'depth',
     },
-    category: 'depth',
-  },
-  {
-    key: 'subscribe_depth_50',
-    label: 'Depth 50 Levels',
-    description: 'Full Depth - 50 levels (broker dependent)',
-    template: {
-      action: 'subscribe',
-      symbol: `${sym}:50`,
-      exchange: exch,
-      mode: 3,
-      depth: 50,
+    {
+      key: 'subscribe_depth_30',
+      label: 'Depth 30 Levels',
+      description: 'Market Depth - 30 levels (broker dependent)',
+      template: {
+        action: 'subscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 3,
+        depth: 30,
+      },
+      category: 'depth',
     },
-    category: 'depth',
-  },
-  // Unsubscribe
-  {
-    key: 'unsubscribe_ltp',
-    label: 'Unsubscribe LTP',
-    description: 'Unsubscribe from LTP (Mode 1)',
-    template: {
-      action: 'unsubscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 1,
+    {
+      key: 'subscribe_depth_50',
+      label: 'Depth 50 Levels',
+      description: 'Full Depth - 50 levels (broker dependent)',
+      template: {
+        action: 'subscribe',
+        symbol: `${sym}:50`,
+        exchange: exch,
+        mode: 3,
+        depth: 50,
+      },
+      category: 'depth',
     },
-    category: 'unsubscribe',
-  },
-  {
-    key: 'unsubscribe_quote',
-    label: 'Unsubscribe Quote',
-    description: 'Unsubscribe from Quote (Mode 2)',
-    template: {
-      action: 'unsubscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 2,
+    // Unsubscribe
+    {
+      key: 'unsubscribe_ltp',
+      label: 'Unsubscribe LTP',
+      description: 'Unsubscribe from LTP (Mode 1)',
+      template: {
+        action: 'unsubscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 1,
+      },
+      category: 'unsubscribe',
     },
-    category: 'unsubscribe',
-  },
-  {
-    key: 'unsubscribe_depth',
-    label: 'Unsubscribe Depth',
-    description: 'Unsubscribe from Depth (Mode 3)',
-    template: {
-      action: 'unsubscribe',
-      symbol: sym,
-      exchange: exch,
-      mode: 3,
+    {
+      key: 'unsubscribe_quote',
+      label: 'Unsubscribe Quote',
+      description: 'Unsubscribe from Quote (Mode 2)',
+      template: {
+        action: 'unsubscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 2,
+      },
+      category: 'unsubscribe',
     },
-    category: 'unsubscribe',
-  },
-  {
-    key: 'unsubscribe_depth_50',
-    label: 'Unsubscribe Depth 50',
-    description: 'Unsubscribe from 50-level Depth (broker dependent)',
-    template: {
-      action: 'unsubscribe',
-      symbol: `${sym}:50`,
-      exchange: exch,
-      mode: 3,
-      depth: 50,
+    {
+      key: 'unsubscribe_depth',
+      label: 'Unsubscribe Depth',
+      description: 'Unsubscribe from Depth (Mode 3)',
+      template: {
+        action: 'unsubscribe',
+        symbol: sym,
+        exchange: exch,
+        mode: 3,
+      },
+      category: 'unsubscribe',
     },
-    category: 'unsubscribe',
-  },
-  {
-    key: 'unsubscribe_all',
-    label: 'Unsubscribe All',
-    description: 'Unsubscribe from all symbols',
-    template: { action: 'unsubscribe_all' },
-    category: 'unsubscribe',
-  },
-  // Broker Info
-  {
-    key: 'get_broker_info',
-    label: 'Get Broker Info',
-    description: 'Current broker information',
-    template: { action: 'get_broker_info' },
-    category: 'broker',
-  },
-  {
-    key: 'get_supported_brokers',
-    label: 'Get Supported Brokers',
-    description: 'List all supported brokers',
-    template: { action: 'get_supported_brokers' },
-    category: 'broker',
-  },
-  {
-    key: 'ping',
-    label: 'Ping',
-    description: 'Test connection latency',
-    template: { action: 'ping', timestamp: '{{TIMESTAMP}}' },
-    category: 'broker',
-  },
+    {
+      key: 'unsubscribe_depth_50',
+      label: 'Unsubscribe Depth 50',
+      description: 'Unsubscribe from 50-level Depth (broker dependent)',
+      template: {
+        action: 'unsubscribe',
+        symbol: `${sym}:50`,
+        exchange: exch,
+        mode: 3,
+        depth: 50,
+      },
+      category: 'unsubscribe',
+    },
+    {
+      key: 'unsubscribe_all',
+      label: 'Unsubscribe All',
+      description: 'Unsubscribe from all symbols',
+      template: { action: 'unsubscribe_all' },
+      category: 'unsubscribe',
+    },
+    // Broker Info
+    {
+      key: 'get_broker_info',
+      label: 'Get Broker Info',
+      description: 'Current broker information',
+      template: { action: 'get_broker_info' },
+      category: 'broker',
+    },
+    {
+      key: 'get_supported_brokers',
+      label: 'Get Supported Brokers',
+      description: 'List all supported brokers',
+      template: { action: 'get_supported_brokers' },
+      category: 'broker',
+    },
+    {
+      key: 'ping',
+      label: 'Ping',
+      description: 'Test connection latency',
+      template: { action: 'ping', timestamp: '{{TIMESTAMP}}' },
+      category: 'broker',
+    },
   ]
 }
 
@@ -259,7 +259,9 @@ export function MessageComposer({
   // Apply template
   const applyTemplate = useCallback(
     (templateKey: string) => {
-      const template = getMessageTemplates(isCrypto).find((t: CategorizedTemplate) => t.key === templateKey)
+      const template = getMessageTemplates(isCrypto).find(
+        (t: CategorizedTemplate) => t.key === templateKey
+      )
       if (!template) return
 
       let templateStr = JSON.stringify(template.template, null, 2)
@@ -368,9 +370,7 @@ export function MessageComposer({
 
       {/* Send button */}
       <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-card/30">
-        <span className="text-[10px] text-muted-foreground">
-          Ctrl+Enter to send
-        </span>
+        <span className="text-[10px] text-muted-foreground">Ctrl+Enter to send</span>
         <Button
           size="sm"
           className={cn(

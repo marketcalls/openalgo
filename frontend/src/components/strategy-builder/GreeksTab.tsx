@@ -50,7 +50,7 @@ function positionalGreeks(
 }
 
 function fmt(v: number | null, digits = 4): string {
-  if (v === null || !isFinite(v)) return '-'
+  if (v === null || !Number.isFinite(v)) return '-'
   return v.toFixed(digits)
 }
 
@@ -85,48 +85,48 @@ export function GreeksTab({ legs, greeksByLeg }: GreeksTabProps) {
           {legs
             .filter((leg) => leg.active)
             .map((leg) => {
-            const grk = greeksByLeg[leg.id]
-            const sign = leg.side === 'BUY' ? 1 : -1
-            const qty = leg.lots * leg.lotSize
-            const scale = inRupees ? sign * qty : sign
-            const descriptor =
-              leg.segment === 'OPTION' && leg.strike !== undefined && leg.optionType
-                ? `${leg.strike}${leg.optionType}`
-                : 'FUT'
-            return (
-              <TableRow key={leg.id}>
-                <TableCell className="text-xs font-medium">
-                  {sign > 0 ? '+' : '-'}
-                  {leg.lots}x {leg.expiry} {descriptor}
-                </TableCell>
-                <TableCell className="text-xs tabular-nums">{fmt(grk?.iv ?? null, 2)}</TableCell>
-                <TableCell className="text-xs tabular-nums">
-                  {fmt(
-                    grk?.delta !== undefined && grk?.delta !== null ? scale * grk.delta : null,
-                    digits
-                  )}
-                </TableCell>
-                <TableCell className="text-xs tabular-nums">
-                  {fmt(
-                    grk?.theta !== undefined && grk?.theta !== null ? scale * grk.theta : null,
-                    digits
-                  )}
-                </TableCell>
-                <TableCell className="text-xs tabular-nums">
-                  {fmt(
-                    grk?.gamma !== undefined && grk?.gamma !== null ? scale * grk.gamma : null,
-                    inRupees ? 2 : 6
-                  )}
-                </TableCell>
-                <TableCell className="text-xs tabular-nums">
-                  {fmt(
-                    grk?.vega !== undefined && grk?.vega !== null ? scale * grk.vega : null,
-                    digits
-                  )}
-                </TableCell>
-              </TableRow>
-            )
-          })}
+              const grk = greeksByLeg[leg.id]
+              const sign = leg.side === 'BUY' ? 1 : -1
+              const qty = leg.lots * leg.lotSize
+              const scale = inRupees ? sign * qty : sign
+              const descriptor =
+                leg.segment === 'OPTION' && leg.strike !== undefined && leg.optionType
+                  ? `${leg.strike}${leg.optionType}`
+                  : 'FUT'
+              return (
+                <TableRow key={leg.id}>
+                  <TableCell className="text-xs font-medium">
+                    {sign > 0 ? '+' : '-'}
+                    {leg.lots}x {leg.expiry} {descriptor}
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums">{fmt(grk?.iv ?? null, 2)}</TableCell>
+                  <TableCell className="text-xs tabular-nums">
+                    {fmt(
+                      grk?.delta !== undefined && grk?.delta !== null ? scale * grk.delta : null,
+                      digits
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums">
+                    {fmt(
+                      grk?.theta !== undefined && grk?.theta !== null ? scale * grk.theta : null,
+                      digits
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums">
+                    {fmt(
+                      grk?.gamma !== undefined && grk?.gamma !== null ? scale * grk.gamma : null,
+                      inRupees ? 2 : 6
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums">
+                    {fmt(
+                      grk?.vega !== undefined && grk?.vega !== null ? scale * grk.vega : null,
+                      digits
+                    )}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           {legs.length > 0 && (
             <TableRow className="bg-muted/40 font-semibold">
               <TableCell className="text-xs">Positional Greeks</TableCell>

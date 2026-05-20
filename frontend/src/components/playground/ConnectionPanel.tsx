@@ -1,7 +1,7 @@
+import { Clock, Globe, Plug, Unplug, Zap } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Clock, Globe, Plug, Unplug, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface ConnectionPanelProps {
@@ -43,7 +43,10 @@ export function ConnectionPanel({
 
     if (isAuthenticated) {
       return (
-        <Badge variant="outline" className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+        <Badge
+          variant="outline"
+          className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+        >
           <div className="h-2 w-2 rounded-full bg-emerald-400 mr-2" />
           Authenticated
         </Badge>
@@ -78,9 +81,7 @@ export function ConnectionPanel({
     <div className="bg-card/50 rounded-lg border border-border p-3 space-y-3">
       {/* Status and Controls */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {getStatusBadge()}
-        </div>
+        <div className="flex items-center gap-2">{getStatusBadge()}</div>
         <div className="flex items-center gap-2">
           {!isConnected && !isConnecting ? (
             <Button

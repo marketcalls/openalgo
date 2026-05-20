@@ -1,13 +1,13 @@
 import { ArrowLeft, Check, Eye, EyeOff, Key, Save, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { showToast } from '@/utils/toast'
 
 interface TelegramConfig {
   has_token: boolean
@@ -146,6 +146,7 @@ export default function TelegramConfig() {
                     size="icon"
                     className="absolute right-0 top-0 h-full px-3"
                     onClick={() => setShowToken(!showToken)}
+                    aria-label={showToken ? 'Hide bot token' : 'Show bot token'}
                   >
                     {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>

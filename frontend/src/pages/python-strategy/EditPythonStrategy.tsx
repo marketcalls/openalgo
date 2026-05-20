@@ -10,7 +10,6 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +24,7 @@ import {
 import { PythonEditor } from '@/components/ui/python-editor'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { PythonStrategy, PythonStrategyContent } from '@/types/python-strategy'
+import { showToast } from '@/utils/toast'
 
 export default function EditPythonStrategy() {
   const { strategyId } = useParams<{ strategyId: string }>()

@@ -42,7 +42,8 @@ def _fetch_limits(client, endpoint, auth_token):
         return {}
 
     logger.info(f"IIFL Capital limits API response status [{endpoint}]: {response.status_code}")
-    logger.info(f"IIFL Capital limits API raw response [{endpoint}]: {response.text}")
+    # Raw body may carry account IDs / token echoes — debug only.
+    logger.debug(f"IIFL Capital limits API raw response [{endpoint}]: {response.text}")
 
     if response.status_code != 200:
         return {}

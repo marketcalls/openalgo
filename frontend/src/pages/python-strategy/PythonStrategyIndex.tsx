@@ -16,7 +16,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -41,6 +40,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { MasterContractStatus, PythonStrategy } from '@/types/python-strategy'
 import { SCHEDULE_DAYS, STATUS_COLORS, STATUS_LABELS } from '@/types/python-strategy'
+import { showToast } from '@/utils/toast'
 
 export default function PythonStrategyIndex() {
   const navigate = useNavigate()
@@ -92,8 +92,7 @@ export default function PythonStrategyIndex() {
       }
     }
 
-    eventSource.onerror = () => {
-    }
+    eventSource.onerror = () => {}
 
     return () => {
       clearInterval(timer)
@@ -397,7 +396,7 @@ export default function PythonStrategyIndex() {
                     </Tooltip>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
+                        <Button variant="ghost" size="icon" aria-label="Strategy actions menu">
                           <MoreVertical className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
@@ -441,7 +440,11 @@ export default function PythonStrategyIndex() {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {formatScheduleDays(strategy.schedule_days?.length ? strategy.schedule_days : ['mon', 'tue', 'wed', 'thu', 'fri'])}
+                    {formatScheduleDays(
+                      strategy.schedule_days?.length
+                        ? strategy.schedule_days
+                        : ['mon', 'tue', 'wed', 'thu', 'fri']
+                    )}
                   </p>
                 </div>
 
@@ -492,7 +495,9 @@ export default function PythonStrategyIndex() {
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        {strategy.status === 'running' ? 'Stop running strategy' : 'Cancel scheduled auto-start'}
+                        {strategy.status === 'running'
+                          ? 'Stop running strategy'
+                          : 'Cancel scheduled auto-start'}
                       </TooltipContent>
                     </Tooltip>
                   ) : (

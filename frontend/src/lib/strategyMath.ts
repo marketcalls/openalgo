@@ -29,7 +29,7 @@ export function strikeMoneyness(
   optionType: OptionType | undefined
 ): { label: string; kind: 'ATM' | 'ITM' | 'OTM'; steps: number } | null {
   if (strike === undefined || atmStrike === null || !optionType) return null
-  if (!isFinite(strikeStep) || strikeStep <= 0) return null
+  if (!Number.isFinite(strikeStep) || strikeStep <= 0) return null
   const rawSteps = (strike - atmStrike) / strikeStep
   const steps = Math.round(rawSteps)
   if (steps === 0) return { label: 'ATM', kind: 'ATM', steps: 0 }

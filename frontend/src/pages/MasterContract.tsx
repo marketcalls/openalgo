@@ -10,13 +10,13 @@ import {
   Server,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
@@ -124,7 +124,9 @@ export default function MasterContract() {
   const [isLoading, setIsLoading] = useState(true)
   const [isDownloading, setIsDownloading] = useState(false)
   const [isReloadingCache, setIsReloadingCache] = useState(false)
-  const [pollingInterval, setPollingInterval] = useState<ReturnType<typeof setInterval> | null>(null)
+  const [pollingInterval, setPollingInterval] = useState<ReturnType<typeof setInterval> | null>(
+    null
+  )
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -159,8 +161,7 @@ export default function MasterContract() {
         const data = await response.json()
         setCacheHealth(data)
       }
-    } catch (error) {
-    }
+    } catch (error) {}
   }, [])
 
   useEffect(() => {
@@ -262,9 +263,7 @@ export default function MasterContract() {
             <Database className="h-8 w-8" />
             Master Contract
           </h1>
-          <p className="text-muted-foreground mt-1">
-            Manage master contract data and symbol cache
-          </p>
+          <p className="text-muted-foreground mt-1">Manage master contract data and symbol cache</p>
         </div>
         <div className="flex gap-3">
           <Button
@@ -311,16 +310,16 @@ export default function MasterContract() {
               <Server className="h-5 w-5" />
               Download Status
             </CardTitle>
-            <CardDescription>
-              Current master contract download status
-            </CardDescription>
+            <CardDescription>Current master contract download status</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Status</span>
               <div className="flex items-center gap-2">
                 {getStatusIcon(status?.status || 'unknown')}
-                <span className={`font-medium capitalize ${getStatusColor(status?.status || 'unknown')}`}>
+                <span
+                  className={`font-medium capitalize ${getStatusColor(status?.status || 'unknown')}`}
+                >
                   {status?.status || 'Unknown'}
                 </span>
               </div>
@@ -374,23 +373,17 @@ export default function MasterContract() {
               <Clock className="h-5 w-5" />
               Download History
             </CardTitle>
-            <CardDescription>
-              Last successful download information
-            </CardDescription>
+            <CardDescription>Last successful download information</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Last Download</span>
-              <span className="text-sm">
-                {formatDateTime(status?.last_download_time || null)}
-              </span>
+              <span className="text-sm">{formatDateTime(status?.last_download_time || null)}</span>
             </div>
 
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Download Date</span>
-              <span className="text-sm">
-                {status?.download_date || 'N/A'}
-              </span>
+              <span className="text-sm">{status?.download_date || 'N/A'}</span>
             </div>
 
             <div className="flex items-center justify-between">
@@ -408,7 +401,8 @@ export default function MasterContract() {
               <p className="text-sm text-muted-foreground">
                 Downloads after{' '}
                 <span className="font-medium">
-                  {status?.smart_download?.cutoff_time || '08:00'} {status?.smart_download?.cutoff_timezone || 'IST'}
+                  {status?.smart_download?.cutoff_time || '08:00'}{' '}
+                  {status?.smart_download?.cutoff_timezone || 'IST'}
                 </span>{' '}
                 are cached for the day. Login after cutoff reuses cached data.
               </p>
@@ -423,9 +417,7 @@ export default function MasterContract() {
               <FileStack className="h-5 w-5" />
               Exchange Statistics
             </CardTitle>
-            <CardDescription>
-              Symbol count per exchange
-            </CardDescription>
+            <CardDescription>Symbol count per exchange</CardDescription>
           </CardHeader>
           <CardContent>
             {status?.exchange_stats && Object.keys(status.exchange_stats).length > 0 ? (
@@ -438,9 +430,7 @@ export default function MasterContract() {
                       className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
                     >
                       <span className="font-medium">{exchange}</span>
-                      <Badge variant="secondary">
-                        {count.toLocaleString()}
-                      </Badge>
+                      <Badge variant="secondary">{count.toLocaleString()}</Badge>
                     </div>
                   ))}
               </div>
@@ -459,21 +449,14 @@ export default function MasterContract() {
               <Server className="h-5 w-5" />
               Cache Health
             </CardTitle>
-            <CardDescription>
-              In-memory symbol cache status
-            </CardDescription>
+            <CardDescription>In-memory symbol cache status</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Health Score</span>
               <div className="flex items-center gap-2">
-                <Progress
-                  value={cacheHealth?.health_score || 0}
-                  className="w-24 h-2"
-                />
-                <span className="font-mono text-sm">
-                  {cacheHealth?.health_score || 0}%
-                </span>
+                <Progress value={cacheHealth?.health_score || 0} className="w-24 h-2" />
+                <span className="font-mono text-sm">{cacheHealth?.health_score || 0}%</span>
               </div>
             </div>
 
@@ -515,9 +498,7 @@ export default function MasterContract() {
 
             {cacheHealth?.recommendations && cacheHealth.recommendations.length > 0 && (
               <div className="pt-2 border-t">
-                <p className="text-sm text-muted-foreground">
-                  {cacheHealth.recommendations[0]}
-                </p>
+                <p className="text-sm text-muted-foreground">{cacheHealth.recommendations[0]}</p>
               </div>
             )}
 

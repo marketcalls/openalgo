@@ -1414,6 +1414,110 @@ print(response)
 }
 ```
 
+### WhatsApp Alert Example
+
+Prerequisites: open `/whatsapp` in the OpenAlgo web UI, click **Pair**, scan the QR with your phone. Pairing is admin-only on purpose — the REST API exposes only the send endpoint so a leaked API key cannot re-pair the device. Once paired, the bot auto-reconnects on every server boot from the encrypted session blob stored in `openalgo.db`.
+
+One unified call handles every common case — text, image, document, self-send, single recipient, or small broadcast (max 5).
+
+#### Send to yourself (simplest case)
+
+```python
+response = client.whatsapp("NIFTY crossed 26000!")
+print(response)
+```
+
+**WhatsApp Alert Response (`wait_for_delivery=True`, the default):**
+
+```json
+{
+  "status": "success",
+  "message": "Delivered to 1, failed 0",
+  "data": {
+    "sent":    ["<self>"],
+    "failed":  [],
+    "skipped": 0
+  }
+}
+```
+
+#### Send to a single phone number
+
+```python
+response = client.whatsapp(
+    "Order placed: BUY RELIANCE x 10 @ MARKET",
+    to="919876543210",
+)
+```
+
+#### Small broadcast (up to 5 recipients)
+
+```python
+response = client.whatsapp(
+    "Server maintenance starting in 10 minutes",
+    to=["919876543210", "919812345678", "919900112233"],
+)
+```
+
+#### Send an image with caption
+
+The path is read from the OpenAlgo server's filesystem. It must lie under `WHATSAPP_ATTACHMENT_ROOTS` (defaults to `<openalgo>/db/attachments/`).
+
+```python
+response = client.whatsapp(
+    to="919876543210",
+    image="/srv/charts/nifty_eod.png",
+    caption="NIFTY end-of-day chart",
+)
+```
+
+#### Send a document (PDF, CSV, ...)
+
+```python
+response = client.whatsapp(
+    "Daily P&L report attached.",
+    to="919876543210",
+    document="/srv/reports/2026-05-17.pdf",
+    filename="DailyPnL.pdf",
+)
+```
+
+#### Fire-and-forget (skip the delivery report)
+
+```python
+response = client.whatsapp(
+    "Stop-loss hit on BANKNIFTY!",
+    wait_for_delivery=False,
+)
+```
+
+#### Send to a linked OpenAlgo user (legacy multi-recipient path)
+
+```python
+response = client.whatsapp(
+    "Position update: BANKNIFTY 48000 CE now at +21% P&L.",
+    username="alice",
+)
+```
+
+#### Receiving messages (bot commands)
+
+Type slash-commands from your own phone in the **"Message yourself"** chat — the OpenAlgo linked device sees those as `is_from_me=True` and responds in the same chat. Random contacts who message your number cannot drive the bot.
+
+```
+/help                   List all commands
+/status                 Bot connection + paired status
+/orderbook              Today's orders
+/tradebook              Today's trades
+/positions              Open positions
+/holdings               Holdings
+/funds                  Available cash / margin
+/pnl                    Net P&L
+/quote RELIANCE NSE     Last traded price
+/closeall               Square off all positions
+/mode                   Live or analyze mode
+```
+
 ### Funds Example
 
 ```python

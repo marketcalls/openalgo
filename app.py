@@ -78,6 +78,7 @@ from blueprints.system_permissions import (
 )
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
+from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
 from blueprints.tv_json import tv_json_bp
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from cors import cors  # Import the CORS instance
@@ -99,6 +100,9 @@ from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
 from database.master_contract_status_db import reset_all_stuck_statuses
+from database.whatsapp_db import (
+    get_bot_config as get_whatsapp_bot_config,  # noqa: F401  (triggers module-level init_db)
+)
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from restx_api import api, api_v1_bp
@@ -256,6 +260,7 @@ def create_app():
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
+    app.register_blueprint(whatsapp_bp)  # Register WhatsApp blueprint
     app.register_blueprint(security_bp)  # Register Security blueprint
     app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
     app.register_blueprint(playground_bp)  # Register API playground blueprint
@@ -655,6 +660,35 @@ def setup_environment(app):
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
 
+            # Auto-reconnect the WhatsApp bot if a paired session is persisted.
+            # Without this, every server restart would leave is_ready()=False
+            # and every /notify call would 409 "pair first" — even though the
+            # encrypted session blob is sitting in openalgo.db ready to use.
+            # We do this on a background thread so a slow WhatsApp handshake
+            # never delays the Flask boot.
+            def _autostart_whatsapp_bot():
+                try:
+                    from database.whatsapp_db import get_bot_config
+                    from services.whatsapp_bot_service import whatsapp_bot_service
+
+                    if not get_bot_config().get("is_paired"):
+                        logger.debug("WhatsApp: no paired session, skipping auto-start")
+                        return
+                    ok, msg = whatsapp_bot_service.start_bot()
+                    if ok:
+                        logger.info("WhatsApp bot auto-started from persisted session")
+                    else:
+                        logger.warning("WhatsApp bot auto-start failed: %s", msg)
+                except Exception:
+                    logger.exception("WhatsApp bot auto-start crashed")
+
+            import threading as _threading
+            _threading.Thread(
+                target=_autostart_whatsapp_bot,
+                daemon=True,
+                name="WhatsAppAutoStart",
+            ).start()
+
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
                 from database.settings_db import get_analyze_mode
@@ -837,7 +871,12 @@ if is_docker:
         "Running in Docker/standalone mode - WebSocket server started separately by start.sh"
     )
 else:
-    logger.debug("Running in local/integrated mode - Starting WebSocket proxy in Flask")
+    # Under gunicorn+eventlet, start_websocket_proxy() spawns a child *process*
+    # (not a thread) so the WS asyncio loop never shares an eventlet hub with
+    # gunicorn — closes the greenlet.error cross-thread crash class entirely
+    # (including GitHub issue #1421). Under the dev server (no eventlet) it
+    # still uses a real OS thread, as before.
+    logger.debug("Starting WebSocket proxy")
     start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed

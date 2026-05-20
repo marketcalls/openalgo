@@ -20,8 +20,7 @@ const DIRECTION_FILTERS: Array<{
     value: 'BULLISH',
     label: 'Bullish',
     dotClass: 'bg-emerald-500',
-    activeClass:
-      'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+    activeClass: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
   },
   {
     value: 'BEARISH',
@@ -37,13 +36,7 @@ const DIRECTION_FILTERS: Array<{
   },
 ]
 
-function MiniPayoffIcon({
-  path,
-  direction,
-}: {
-  path: string
-  direction: Direction
-}) {
+function MiniPayoffIcon({ path, direction }: { path: string; direction: Direction }) {
   const strokeColor =
     direction === 'BULLISH'
       ? 'stroke-emerald-500'
@@ -138,9 +131,7 @@ export function TemplateGrid({ direction, onDirectionChange, onPick }: TemplateG
             <span
               className={cn(
                 'rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums',
-                direction === f.value
-                  ? 'bg-background/60'
-                  : 'bg-muted text-muted-foreground/80'
+                direction === f.value ? 'bg-background/60' : 'bg-muted text-muted-foreground/80'
               )}
             >
               {counts[f.value]}

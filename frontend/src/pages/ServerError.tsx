@@ -1,10 +1,10 @@
 import { AlertTriangle, BookOpen, Download, HelpCircle, Home, LogOut } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { showToast } from '@/utils/toast'
 
 export default function ServerError() {
   const [isLoggingOut, setIsLoggingOut] = useState(false)

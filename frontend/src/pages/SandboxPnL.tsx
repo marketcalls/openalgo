@@ -77,8 +77,6 @@ interface SandboxData {
   trades: Trade[]
 }
 
-
-
 function getPnLColor(value: number): string {
   if (value > 0) return 'text-green-500'
   if (value < 0) return 'text-red-500'
