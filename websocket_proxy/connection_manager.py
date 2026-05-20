@@ -483,8 +483,9 @@ class ConnectionPool:
 
         Tears down the existing adapter (which was constructed with a stale
         token), clears cached auth state, re-initializes the pool — which
-        re-reads the token from ``auth_db`` — and reconnects. Used to recover
-        from new-trading-day stale tokens without a container restart.
+        re-reads the token from ``auth_db`` — and reconnects. Existing
+        subscriptions are snapshotted before the rebuild and re-issued on the
+        new adapter so callers don't silently lose their feeds.
 
         Does not recurse into ``self.connect()``; it calls the adapter's
         ``connect()`` directly on the freshly rebuilt adapter. Returns ``True``
@@ -494,6 +495,13 @@ class ConnectionPool:
             f"Auth error on {self.broker_name} (user={self.user_id}): {error_msg}. "
             f"Refreshing token and rebuilding pool."
         )
+
+        # Snapshot subscriptions before initialize(force=True) clears them.
+        # depth_level is not tracked in subscription_map, so mode=3 restores
+        # use the default depth.
+        with self.lock:
+            prior_subs = list(self.subscription_map.keys())
+
         self._clear_auth_cache_for_user()
         reinit = self.initialize(force=True)
         if not reinit.get("success"):
@@ -512,6 +520,30 @@ class ConnectionPool:
             self.logger.error(f"Reconnect after auth refresh failed: {err}")
             return False
         self.connected = True
+
+        if prior_subs:
+            self.logger.info(
+                f"Restoring {len(prior_subs)} subscription(s) after auth refresh"
+            )
+            restored = 0
+            for symbol, exchange, mode in prior_subs:
+                try:
+                    sub_result = self._subscribe_inner(symbol, exchange, mode)
+                    if sub_result.get("status") == "success":
+                        restored += 1
+                    else:
+                        self.logger.warning(
+                            f"Failed to restore {symbol}.{exchange} mode={mode}: "
+                            f"{sub_result.get('message')}"
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Error restoring {symbol}.{exchange} mode={mode}: {e}"
+                    )
+            self.logger.info(
+                f"Restored {restored}/{len(prior_subs)} subscriptions after auth refresh"
+            )
+
         self.logger.info(
             f"Auth recovery succeeded for {self.broker_name} (user={self.user_id})"
         )
