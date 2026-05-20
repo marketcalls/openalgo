@@ -1627,6 +1627,7 @@ dependencies = [
     { name = "nest-asyncio" },
     { name = "numpy" },
     { name = "openalgo" },
+    { name = "opengreeks" },
     { name = "ordered-set" },
     { name = "orjson" },
     { name = "packaging" },
@@ -1642,8 +1643,6 @@ dependencies = [
     { name = "psutil" },
     { name = "ptyprocess" },
     { name = "pure-eval" },
-    { name = "py-lets-be-rational" },
-    { name = "py-vollib" },
     { name = "pyarrow" },
     { name = "pycparser" },
     { name = "pydantic" },
@@ -1789,6 +1788,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numpy", specifier = "==2.4.4" },
     { name = "openalgo", specifier = "==1.0.50" },
+    { name = "opengreeks", specifier = ">=0.1.0" },
     { name = "ordered-set", specifier = "==4.1.0" },
     { name = "orjson", specifier = "==3.11.8" },
     { name = "packaging", specifier = "==24.1" },
@@ -1804,8 +1804,6 @@ requires-dist = [
     { name = "psutil", specifier = "==7.2.2" },
     { name = "ptyprocess", specifier = "==0.7.0" },
     { name = "pure-eval", specifier = "==0.2.3" },
-    { name = "py-lets-be-rational", specifier = "==1.0.1" },
-    { name = "py-vollib", specifier = "==1.0.1" },
     { name = "pyarrow", specifier = "==23.0.1" },
     { name = "pycparser", specifier = "==2.22" },
     { name = "pydantic", specifier = "==2.12.5" },
@@ -1870,6 +1868,22 @@ dev = [
     { name = "pip-audit", specifier = ">=2.10.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ruff", specifier = ">=0.14.14" },
+]
+
+[[package]]
+name = "opengreeks"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/8d/a132bacb880b6d36b442ca7c2255e9c640c1653affb357880879be58a039/opengreeks-0.1.0.tar.gz", hash = "sha256:9b3fb1d66344e5ee2818062f3ae48ba3479fb4ccd28e33332197de24ef586bdb", size = 29335, upload-time = "2026-05-20T16:25:32.102Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/dd/933168c426aebb55fd29637c81e2e275bd4c276092c3c282bff60fe173b5/opengreeks-0.1.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d61c9d8549e8888acc8f1d9014e0322a00166b66f8ce60ca0a558e0de8135de6", size = 239599, upload-time = "2026-05-20T16:25:23.49Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/d3/6b4be23a1ce62fefa789a501ed34c05ffdd7e1ff23a43881808d734d2505/opengreeks-0.1.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:d6df4a367dc006825eb710af59edeeed6cd1fb5db55192a6fbd977b4ab1bdeaf", size = 230266, upload-time = "2026-05-20T16:25:25.515Z" },
+    { url = "https://files.pythonhosted.org/packages/87/3b/4a74f2ad960d4cd5bbccb4509a730aa7737756b971fe98256a79f709c3e0/opengreeks-0.1.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d5b5a0a85e8df2805930f4a50f4884ee3c7602f21d5f11b06ffc2fd48608cc6", size = 242778, upload-time = "2026-05-20T16:25:27.013Z" },
+    { url = "https://files.pythonhosted.org/packages/73/99/890a39043f020edc2540483c345b4375c5415456fcada3dda2140f7a92f0/opengreeks-0.1.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c19655f534141a7992000f558eebd48503645be6521d179c17b763162ccae78a", size = 252470, upload-time = "2026-05-20T16:25:28.976Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/13/6fc5a45975533a9d6dea9968bbc25ff071a6a4f0b10b3693151177203a82/opengreeks-0.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:9645ecd4a493d5982b33ffd2382b22a48f4ce4b837cf102487a57478223acab2", size = 184047, upload-time = "2026-05-20T16:25:30.36Z" },
 ]
 
 [[package]]
@@ -2261,15 +2275,6 @@ wheels = [
 ]
 
 [[package]]
-name = "py-lets-be-rational"
-version = "1.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/58/bf/b292f35a4a2f0c02f4926442bd04d24c2a509749fb5e8e52190ac7ae3731/py_lets_be_rational-1.0.1.tar.gz", hash = "sha256:0e0788a4109e102a666f26d67276c0d3c2feb8a059e788354a90e565f2db0ed2", size = 18363, upload-time = "2017-04-13T16:16:59.68Z" }
-
-[[package]]
 name = "py-serializable"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2280,19 +2285,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/73/21/d250cfca8ff30c2e5
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9b/bf/7595e817906a29453ba4d99394e781b6fabe55d21f3c15d240f85dd06bb1/py_serializable-2.1.0-py3-none-any.whl", hash = "sha256:b56d5d686b5a03ba4f4db5e769dc32336e142fc3bd4d68a8c25579ebb0a67304", size = 23045, upload-time = "2025-07-21T09:56:46.848Z" },
 ]
-
-[[package]]
-name = "py-vollib"
-version = "1.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "py-lets-be-rational" },
-    { name = "scipy" },
-    { name = "simplejson" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/3c/26bd8cbaab3bd004a44157675fa8fe135f95fd4c62898c60c1670c339ba7/py_vollib-1.0.1.tar.gz", hash = "sha256:36e752eee16dcf52994c42aaf5372f0ab9cfd0d2aedc5462c4c1b6123c9ecf20", size = 19197, upload-time = "2017-04-10T10:20:25.181Z" }
 
 [[package]]
 name = "pyarrow"
