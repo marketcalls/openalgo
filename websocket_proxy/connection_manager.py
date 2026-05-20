@@ -54,6 +54,35 @@ def get_max_websocket_connections() -> int:
     return int(os.getenv("MAX_WEBSOCKET_CONNECTIONS", DEFAULT_MAX_WEBSOCKET_CONNECTIONS))
 
 
+# Keywords used to recognize auth-related failures returned by broker adapters.
+# Matches 401/403 plus the common token-expiry phrasings emitted by broker REST
+# APIs and WS clients. Used by ConnectionPool to decide whether a connect or
+# subscribe failure is recoverable via a forced re-init that reads a fresh
+# token from auth_db. See issue #1419.
+_AUTH_ERROR_INDICATORS = (
+    "401",
+    "403",
+    "unauthorized",
+    "forbidden",
+    "authentication failed",
+    "auth failed",
+    "invalid token",
+    "token expired",
+    "access token has expired",
+    "access denied",
+    "invalid credentials",
+    "session expired",
+)
+
+
+def _is_auth_error(error_message: str) -> bool:
+    """True if ``error_message`` looks like an auth failure (401/403/expired)."""
+    if not error_message:
+        return False
+    msg = str(error_message).lower()
+    return any(indicator in msg for indicator in _AUTH_ERROR_INDICATORS)
+
+
 class SharedZmqPublisher:
     """
     Shared ZeroMQ publisher that can be used by multiple adapter instances.
@@ -425,6 +454,69 @@ class ConnectionPool:
                 self.logger.exception(f"Failed to initialize connection pool: {e}")
                 return {"success": False, "error": str(e)}
 
+    def _clear_auth_cache_for_user(self) -> None:
+        """Drop cached auth tokens for this pool's user.
+
+        The next ``initialize(force=True)`` then re-reads from ``auth_db`` and
+        constructs adapters with the fresh token. Called when an auth error is
+        detected on connect/subscribe (issue #1419).
+        """
+        try:
+            from database.auth_db import auth_cache, feed_token_cache
+
+            cleared = []
+            if f"auth-{self.user_id}" in auth_cache:
+                del auth_cache[f"auth-{self.user_id}"]
+                cleared.append("auth_cache")
+            if f"feed-{self.user_id}" in feed_token_cache:
+                del feed_token_cache[f"feed-{self.user_id}"]
+                cleared.append("feed_token_cache")
+            if cleared:
+                self.logger.info(
+                    f"Cleared auth caches for user {self.user_id}: {', '.join(cleared)}"
+                )
+        except Exception as e:
+            self.logger.warning(f"Error clearing auth cache for user {self.user_id}: {e}")
+
+    def _attempt_auth_recovery(self, error_msg: str) -> bool:
+        """Rebuild the pool with a fresh token after an auth failure.
+
+        Tears down the existing adapter (which was constructed with a stale
+        token), clears cached auth state, re-initializes the pool — which
+        re-reads the token from ``auth_db`` — and reconnects. Used to recover
+        from new-trading-day stale tokens without a container restart.
+
+        Does not recurse into ``self.connect()``; it calls the adapter's
+        ``connect()`` directly on the freshly rebuilt adapter. Returns ``True``
+        when the post-refresh reconnect succeeds.
+        """
+        self.logger.warning(
+            f"Auth error on {self.broker_name} (user={self.user_id}): {error_msg}. "
+            f"Refreshing token and rebuilding pool."
+        )
+        self._clear_auth_cache_for_user()
+        reinit = self.initialize(force=True)
+        if not reinit.get("success"):
+            self.logger.error(
+                f"Pool re-initialization after auth error failed: {reinit.get('error')}"
+            )
+            return False
+        if not self.adapters:
+            return False
+        result = self.adapters[0].connect()
+        is_error = (result and result.get("success") is False) or (
+            result and result.get("status") == "error"
+        )
+        if is_error:
+            err = result.get("message", result.get("error", "Connection failed"))
+            self.logger.error(f"Reconnect after auth refresh failed: {err}")
+            return False
+        self.connected = True
+        self.logger.info(
+            f"Auth recovery succeeded for {self.broker_name} (user={self.user_id})"
+        )
+        return True
+
     def connect(self) -> dict:
         """
         Connect the first adapter in the pool.
@@ -451,8 +543,19 @@ class ConnectionPool:
                         (result and result.get("status") == "error")
                     )
                     if is_error:
-                        # Convert to consistent format and return error
                         error_msg = result.get("message", result.get("error", "Connection failed"))
+                        # Issue #1419: try recovery once if this looks like a stale
+                        # auth token (new trading day, etc.) before surfacing the
+                        # error. _attempt_auth_recovery() does not call back into
+                        # self.connect(), so no recursion; _recovering guards against
+                        # repeat attempts on the same call.
+                        if _is_auth_error(error_msg) and not getattr(self, "_recovering", False):
+                            self._recovering = True
+                            try:
+                                if self._attempt_auth_recovery(error_msg):
+                                    return {"success": True, "message": "Connected after auth refresh"}
+                            finally:
+                                self._recovering = False
                         self.logger.error(f"Adapter connection failed: {error_msg}")
                         return {"success": False, "error": error_msg}
                     self.connected = True
@@ -461,8 +564,18 @@ class ConnectionPool:
                     return {"success": False, "error": "No adapters available"}
 
             except Exception as e:
+                err_str = str(e)
+                # Some adapters raise instead of returning an error dict; apply the
+                # same recovery path if the exception message looks auth-related.
+                if _is_auth_error(err_str) and not getattr(self, "_recovering", False):
+                    self._recovering = True
+                    try:
+                        if self._attempt_auth_recovery(err_str):
+                            return {"success": True, "message": "Connected after auth refresh"}
+                    finally:
+                        self._recovering = False
                 self.logger.exception(f"Failed to connect: {e}")
-                return {"success": False, "error": str(e)}
+                return {"success": False, "error": err_str}
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> dict:
         """
@@ -473,6 +586,10 @@ class ConnectionPool:
         requested mode is sent to the broker. All requested modes are tracked
         in subscription_map so unsubscribe can downgrade correctly.
 
+        Issue #1419: if the underlying subscribe fails with what looks like a
+        stale auth token, the pool tears itself down, re-reads the token from
+        ``auth_db``, and retries once.
+
         Args:
             symbol: Trading symbol
             exchange: Exchange code
@@ -481,6 +598,31 @@ class ConnectionPool:
 
         Returns:
             Subscription result dict
+        """
+        result = self._subscribe_inner(symbol, exchange, mode, depth_level)
+
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "error"
+            and _is_auth_error(result.get("message", ""))
+            and not getattr(self, "_recovering", False)
+        ):
+            self._recovering = True
+            try:
+                if self._attempt_auth_recovery(result.get("message", "")):
+                    result = self._subscribe_inner(symbol, exchange, mode, depth_level)
+            finally:
+                self._recovering = False
+
+        return result
+
+    def _subscribe_inner(
+        self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
+    ) -> dict:
+        """Core subscribe logic without the auth-recovery wrapper.
+
+        ``subscribe()`` wraps this so it can retry once after a forced pool
+        refresh when an auth error is detected.
         """
         sub_key = (symbol, exchange, mode)
 
