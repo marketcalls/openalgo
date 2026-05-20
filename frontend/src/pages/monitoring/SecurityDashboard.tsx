@@ -1,7 +1,7 @@
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   ArrowUpDown,
   Ban,
@@ -15,7 +15,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import {
   AlertDialog,
@@ -50,6 +49,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { showToast } from '@/utils/toast'
 
 interface SecuritySettings {
   auto_ban_enabled: boolean
@@ -196,8 +196,7 @@ export default function SecurityDashboard() {
   }
 
   const SortIcon = ({ column, sort }: { column: string; sort: { key: string; dir: SortDir } }) => {
-    if (sort.key !== column)
-      return <ArrowUpDown className="h-3 w-3 ml-1 inline opacity-40" />
+    if (sort.key !== column) return <ArrowUpDown className="h-3 w-3 ml-1 inline opacity-40" />
     return sort.dir === 'asc' ? (
       <ArrowUp className="h-3 w-3 ml-1 inline" />
     ) : (
@@ -231,9 +230,7 @@ export default function SecurityDashboard() {
     sorted.sort((a, b) => {
       let cmp = 0
       if (key === 'ip_address' || key === 'ban_reason' || key === 'created_by') {
-        cmp = (a[key as keyof BannedIP] as string).localeCompare(
-          b[key as keyof BannedIP] as string
-        )
+        cmp = (a[key as keyof BannedIP] as string).localeCompare(b[key as keyof BannedIP] as string)
       } else if (key === 'ban_count') {
         cmp = a.ban_count - b.ban_count
       } else if (key === 'banned_at') {
@@ -327,8 +324,7 @@ export default function SecurityDashboard() {
     try {
       const response = await webClient.get<SecurityStats>('/security/stats')
       setStats(response.data)
-    } catch (error) {
-    }
+    } catch (error) {}
   }
 
   const fetchLoginActivity = async () => {
@@ -338,8 +334,7 @@ export default function SecurityDashboard() {
         attempts: LoginAttemptEntry[]
       }>('/security/api/login-activity')
       setLoginAttempts(Array.isArray(response.data.attempts) ? response.data.attempts : [])
-    } catch (error) {
-    }
+    } catch (error) {}
   }
 
   const fetchActiveSessions = async () => {
@@ -351,8 +346,7 @@ export default function SecurityDashboard() {
       }>('/security/api/active-sessions')
       setActiveSessions(Array.isArray(response.data.sessions) ? response.data.sessions : [])
       setCurrentSessionId(response.data.current_session_id || null)
-    } catch (error) {
-    }
+    } catch (error) {}
   }
 
   const handleClearLoginHistory = async () => {
@@ -623,616 +617,623 @@ export default function SecurityDashboard() {
         </TabsList>
 
         <TabsContent value="threats" className="space-y-6">
-      {/* Security Settings Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Security Threshold Settings</CardTitle>
-          <CardDescription>Configure auto-ban thresholds and durations</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between mb-6 p-4 rounded-lg border bg-muted/30">
-            <div className="space-y-1">
-              <Label className="text-base font-semibold">Auto-Ban</Label>
-              <p className="text-sm text-muted-foreground">
-                {formSettings.auto_ban_enabled
-                  ? 'IPs exceeding thresholds will be automatically banned'
-                  : 'Automatic banning is disabled — use manual ban only'}
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <span
-                className={`text-sm font-medium ${!formSettings.auto_ban_enabled ? 'text-foreground' : 'text-muted-foreground'}`}
-              >
-                Off
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={formSettings.auto_ban_enabled}
-                onClick={() =>
-                  setFormSettings({
-                    ...formSettings,
-                    auto_ban_enabled: !formSettings.auto_ban_enabled,
-                  })
-                }
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-                  formSettings.auto_ban_enabled ? 'bg-destructive' : 'bg-input'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out ${
-                    formSettings.auto_ban_enabled ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-              <span
-                className={`text-sm font-medium ${formSettings.auto_ban_enabled ? 'text-destructive' : 'text-muted-foreground'}`}
-              >
-                On
-              </span>
-            </div>
-          </div>
-          <div
-            className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 ${!formSettings.auto_ban_enabled ? 'opacity-50 pointer-events-none' : ''}`}
-          >
-            <div className="space-y-2">
-              <Label>
-                404 Error Threshold <span className="text-muted-foreground text-xs">(per day)</span>
-              </Label>
-              <Input
-                type="number"
-                value={formSettings['404_threshold']}
-                onChange={(e) =>
-                  setFormSettings({
-                    ...formSettings,
-                    '404_threshold': parseInt(e.target.value, 10) || 20,
-                  })
-                }
-                min={1}
-                max={1000}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>
-                404 Ban Duration <span className="text-muted-foreground text-xs">(hours)</span>
-              </Label>
-              <Select
-                value={String(formSettings['404_ban_duration'])}
-                onValueChange={(val) =>
-                  setFormSettings({
-                    ...formSettings,
-                    '404_ban_duration': parseInt(val, 10),
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="24">24 Hours</SelectItem>
-                  <SelectItem value="48">48 Hours</SelectItem>
-                  <SelectItem value="72">72 Hours</SelectItem>
-                  <SelectItem value="168">1 Week</SelectItem>
-                  <SelectItem value="720">30 Days</SelectItem>
-                  <SelectItem value="8760">1 Year</SelectItem>
-                  <SelectItem value="0">Permanent</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>
-                Invalid API Threshold{' '}
-                <span className="text-muted-foreground text-xs">(per day)</span>
-              </Label>
-              <Input
-                type="number"
-                value={formSettings.api_threshold}
-                onChange={(e) =>
-                  setFormSettings({
-                    ...formSettings,
-                    api_threshold: parseInt(e.target.value, 10) || 10,
-                  })
-                }
-                min={1}
-                max={100}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>
-                API Ban Duration <span className="text-muted-foreground text-xs">(hours)</span>
-              </Label>
-              <Select
-                value={String(formSettings.api_ban_duration)}
-                onValueChange={(val) =>
-                  setFormSettings({
-                    ...formSettings,
-                    api_ban_duration: parseInt(val, 10),
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="24">24 Hours</SelectItem>
-                  <SelectItem value="48">48 Hours</SelectItem>
-                  <SelectItem value="72">72 Hours</SelectItem>
-                  <SelectItem value="168">1 Week</SelectItem>
-                  <SelectItem value="720">30 Days</SelectItem>
-                  <SelectItem value="8760">1 Year</SelectItem>
-                  <SelectItem value="0">Permanent</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>
-                Repeat Offender Limit{' '}
-                <span className="text-muted-foreground text-xs">(before permanent)</span>
-              </Label>
-              <Input
-                type="number"
-                value={formSettings.repeat_offender_limit}
-                onChange={(e) =>
-                  setFormSettings({
-                    ...formSettings,
-                    repeat_offender_limit: parseInt(e.target.value, 10) || 3,
-                  })
-                }
-                min={1}
-                max={10}
-              />
-            </div>
-          </div>
-          <div className="mt-4 flex items-center justify-between">
-            <Button onClick={handleSaveSettings} disabled={isSavingSettings}>
-              <Save className="h-4 w-4 mr-2" />
-              {isSavingSettings ? 'Saving...' : 'Save Settings'}
-            </Button>
-          </div>
-          <div className="mt-4 text-xs text-muted-foreground space-y-1">
-            <p>
-              <strong>404 Threshold:</strong> Number of 404 errors per day before auto-ban
-            </p>
-            <p>
-              <strong>API Threshold:</strong> Number of invalid API attempts per day before auto-ban
-            </p>
-            <p>
-              <strong>Repeat Limit:</strong> Number of bans before permanent ban
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-destructive">{stats.total_bans}</p>
-            <p className="text-sm text-muted-foreground">Total Bans</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-yellow-500">{stats.permanent_bans}</p>
-            <p className="text-sm text-muted-foreground">Permanent Bans</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-blue-500">{stats.suspicious_ips}</p>
-            <p className="text-sm text-muted-foreground">Suspicious IPs</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-purple-500">{stats.near_threshold}</p>
-            <p className="text-sm text-muted-foreground">Near Threshold</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Manual Ban Form */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Ban className="h-5 w-5" />
-            Manual IP Ban
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Input
-              placeholder="IP Address"
-              value={banIP}
-              onChange={(e) => setBanIP(e.target.value)}
-            />
-            <Input
-              placeholder="Reason"
-              value={banReason}
-              onChange={(e) => setBanReason(e.target.value)}
-            />
-            <Select value={banDuration} onValueChange={setBanDuration}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="24">24 Hours</SelectItem>
-                <SelectItem value="48">48 Hours</SelectItem>
-                <SelectItem value="168">1 Week</SelectItem>
-                <SelectItem value="permanent">Permanent</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="destructive" onClick={handleBanIP} disabled={isBanning}>
-              {isBanning ? 'Banning...' : 'Ban IP'}
-            </Button>
-          </div>
-
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-background px-2 text-muted-foreground">OR</span>
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-lg font-semibold mb-2">Ban by Host/Domain</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Input
-                placeholder="Host/Domain (e.g., example.com)"
-                value={banHost}
-                onChange={(e) => setBanHost(e.target.value)}
-              />
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="host-permanent"
-                  checked={hostPermanent}
-                  onCheckedChange={(checked) => setHostPermanent(checked === true)}
-                />
-                <label
-                  htmlFor="host-permanent"
-                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                >
-                  Permanent Ban
-                </label>
+          {/* Security Settings Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Security Threshold Settings</CardTitle>
+              <CardDescription>Configure auto-ban thresholds and durations</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between mb-6 p-4 rounded-lg border bg-muted/30">
+                <div className="space-y-1">
+                  <Label className="text-base font-semibold">Auto-Ban</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {formSettings.auto_ban_enabled
+                      ? 'IPs exceeding thresholds will be automatically banned'
+                      : 'Automatic banning is disabled — use manual ban only'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`text-sm font-medium ${!formSettings.auto_ban_enabled ? 'text-foreground' : 'text-muted-foreground'}`}
+                  >
+                    Off
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={formSettings.auto_ban_enabled}
+                    onClick={() =>
+                      setFormSettings({
+                        ...formSettings,
+                        auto_ban_enabled: !formSettings.auto_ban_enabled,
+                      })
+                    }
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                      formSettings.auto_ban_enabled ? 'bg-destructive' : 'bg-input'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow-lg ring-0 transition duration-200 ease-in-out ${
+                        formSettings.auto_ban_enabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                  <span
+                    className={`text-sm font-medium ${formSettings.auto_ban_enabled ? 'text-destructive' : 'text-muted-foreground'}`}
+                  >
+                    On
+                  </span>
+                </div>
               </div>
-              <Button variant="destructive" onClick={handleBanHost} disabled={isBanningHost}>
-                {isBanningHost ? 'Banning...' : 'Ban Host'}
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Banned IPs Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Banned IPs</CardTitle>
-          <CardDescription>{bannedIPs.length} IPs currently banned</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="border rounded-md">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(bannedSort, setBannedSort, 'ip_address')}
-                  >
-                    IP Address
-                    <SortIcon column="ip_address" sort={bannedSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(bannedSort, setBannedSort, 'ban_reason')}
-                  >
-                    Reason
-                    <SortIcon column="ban_reason" sort={bannedSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(bannedSort, setBannedSort, 'banned_at')}
-                  >
-                    Banned At
-                    <SortIcon column="banned_at" sort={bannedSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(bannedSort, setBannedSort, 'expires_at')}
-                  >
-                    Expires At
-                    <SortIcon column="expires_at" sort={bannedSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(bannedSort, setBannedSort, 'ban_count')}
-                  >
-                    Ban Count
-                    <SortIcon column="ban_count" sort={bannedSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(bannedSort, setBannedSort, 'created_by')}
-                  >
-                    Created By
-                    <SortIcon column="created_by" sort={bannedSort} />
-                  </TableHead>
-                  <TableHead className="w-[80px]">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedBannedIPs.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                      No banned IPs
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  sortedBannedIPs.map((ban) => (
-                    <TableRow key={ban.ip_address}>
-                      <TableCell className="font-mono">{ban.ip_address}</TableCell>
-                      <TableCell>{ban.ban_reason}</TableCell>
-                      <TableCell>{ban.banned_at}</TableCell>
-                      <TableCell>
-                        {ban.is_permanent ? (
-                          <Badge variant="destructive">Permanent</Badge>
-                        ) : (
-                          ban.expires_at
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={ban.ban_count >= 3 ? 'destructive' : 'secondary'}>
-                          {ban.ban_count}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{ban.created_by}</TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-green-600 hover:text-green-600"
-                          onClick={() => setUnbanIP(ban.ip_address)}
-                        >
-                          Unban
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Invalid API Key Attempts Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5" />
-            Invalid API Key Attempts
-          </CardTitle>
-          <CardDescription>{apiAbuseIPs.length} IPs with invalid API attempts</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="border rounded-md">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(apiSort, setApiSort, 'ip_address')}
-                  >
-                    IP Address
-                    <SortIcon column="ip_address" sort={apiSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(apiSort, setApiSort, 'attempt_count')}
-                  >
-                    Attempts
-                    <SortIcon column="attempt_count" sort={apiSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(apiSort, setApiSort, 'first_attempt_at')}
-                  >
-                    First Attempt
-                    <SortIcon column="first_attempt_at" sort={apiSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(apiSort, setApiSort, 'last_attempt_at')}
-                  >
-                    Last Attempt
-                    <SortIcon column="last_attempt_at" sort={apiSort} />
-                  </TableHead>
-                  <TableHead>API Keys Tried</TableHead>
-                  <TableHead className="w-[80px]">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedAPIAbuseIPs.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                      No invalid API key attempts detected
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  sortedAPIAbuseIPs.map((tracker) => (
-                    <TableRow
-                      key={tracker.ip_address}
-                      className={tracker.attempt_count >= 8 ? 'bg-destructive/10' : ''}
-                    >
-                      <TableCell className="font-mono">{tracker.ip_address}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={getBadgeVariant(tracker.attempt_count, settings.api_threshold)}
-                        >
-                          {tracker.attempt_count}/{settings.api_threshold}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{tracker.first_attempt_at}</TableCell>
-                      <TableCell>{tracker.last_attempt_at}</TableCell>
-                      <TableCell>
-                        <Collapsible
-                          open={expandedKeys.has(tracker.ip_address)}
-                          onOpenChange={() => toggleKeysExpanded(tracker.ip_address)}
-                        >
-                          <CollapsibleTrigger className="text-sm cursor-pointer hover:underline flex items-center gap-1">
-                            {expandedKeys.has(tracker.ip_address) ? (
-                              <EyeOff className="h-3 w-3" />
-                            ) : (
-                              <Eye className="h-3 w-3" />
-                            )}
-                            View Keys (Hashed)
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <div className="text-xs font-mono mt-2 max-h-32 overflow-y-auto p-2 bg-muted rounded">
-                              {tracker.api_keys_tried}
-                            </div>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => handleQuickBan(tracker.ip_address)}
-                        >
-                          Ban
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Suspicious IPs Table (404 Tracker) */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5" />
-            Suspicious IPs (404 Tracker)
-          </CardTitle>
-          <CardDescription>{suspiciousIPs.length} IPs with 404 errors tracked</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="border rounded-md">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(suspiciousSort, setSuspiciousSort, 'ip_address')}
-                  >
-                    IP Address
-                    <SortIcon column="ip_address" sort={suspiciousSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => toggleSort(suspiciousSort, setSuspiciousSort, 'error_count')}
-                  >
-                    404 Count
-                    <SortIcon column="error_count" sort={suspiciousSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() =>
-                      toggleSort(suspiciousSort, setSuspiciousSort, 'first_error_at')
+              <div
+                className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 ${!formSettings.auto_ban_enabled ? 'opacity-50 pointer-events-none' : ''}`}
+              >
+                <div className="space-y-2">
+                  <Label>
+                    404 Error Threshold{' '}
+                    <span className="text-muted-foreground text-xs">(per day)</span>
+                  </Label>
+                  <Input
+                    type="number"
+                    value={formSettings['404_threshold']}
+                    onChange={(e) =>
+                      setFormSettings({
+                        ...formSettings,
+                        '404_threshold': parseInt(e.target.value, 10) || 20,
+                      })
+                    }
+                    min={1}
+                    max={1000}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>
+                    404 Ban Duration <span className="text-muted-foreground text-xs">(hours)</span>
+                  </Label>
+                  <Select
+                    value={String(formSettings['404_ban_duration'])}
+                    onValueChange={(val) =>
+                      setFormSettings({
+                        ...formSettings,
+                        '404_ban_duration': parseInt(val, 10),
+                      })
                     }
                   >
-                    First Error
-                    <SortIcon column="first_error_at" sort={suspiciousSort} />
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() =>
-                      toggleSort(suspiciousSort, setSuspiciousSort, 'last_error_at')
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="24">24 Hours</SelectItem>
+                      <SelectItem value="48">48 Hours</SelectItem>
+                      <SelectItem value="72">72 Hours</SelectItem>
+                      <SelectItem value="168">1 Week</SelectItem>
+                      <SelectItem value="720">30 Days</SelectItem>
+                      <SelectItem value="8760">1 Year</SelectItem>
+                      <SelectItem value="0">Permanent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>
+                    Invalid API Threshold{' '}
+                    <span className="text-muted-foreground text-xs">(per day)</span>
+                  </Label>
+                  <Input
+                    type="number"
+                    value={formSettings.api_threshold}
+                    onChange={(e) =>
+                      setFormSettings({
+                        ...formSettings,
+                        api_threshold: parseInt(e.target.value, 10) || 10,
+                      })
+                    }
+                    min={1}
+                    max={100}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>
+                    API Ban Duration <span className="text-muted-foreground text-xs">(hours)</span>
+                  </Label>
+                  <Select
+                    value={String(formSettings.api_ban_duration)}
+                    onValueChange={(val) =>
+                      setFormSettings({
+                        ...formSettings,
+                        api_ban_duration: parseInt(val, 10),
+                      })
                     }
                   >
-                    Last Error
-                    <SortIcon column="last_error_at" sort={suspiciousSort} />
-                  </TableHead>
-                  <TableHead>Sample Paths</TableHead>
-                  <TableHead className="w-[120px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedSuspiciousIPs.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                      No suspicious IPs detected
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  sortedSuspiciousIPs.map((tracker) => (
-                    <TableRow
-                      key={tracker.ip_address}
-                      className={tracker.error_count >= 15 ? 'bg-destructive/10' : ''}
-                    >
-                      <TableCell className="font-mono">{tracker.ip_address}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={getBadgeVariant(tracker.error_count, settings['404_threshold'])}
-                        >
-                          {tracker.error_count}/{settings['404_threshold']}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{tracker.first_error_at}</TableCell>
-                      <TableCell>{tracker.last_error_at}</TableCell>
-                      <TableCell>
-                        <Collapsible
-                          open={expandedPaths.has(tracker.ip_address)}
-                          onOpenChange={() => togglePathsExpanded(tracker.ip_address)}
-                        >
-                          <CollapsibleTrigger className="text-sm cursor-pointer hover:underline flex items-center gap-1">
-                            {expandedPaths.has(tracker.ip_address) ? (
-                              <EyeOff className="h-3 w-3" />
-                            ) : (
-                              <Eye className="h-3 w-3" />
-                            )}
-                            View Paths
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <div className="text-xs font-mono mt-2 max-h-32 overflow-y-auto p-2 bg-muted rounded">
-                              {tracker.paths_attempted}
-                            </div>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => handleQuickBan(tracker.ip_address)}
-                          >
-                            Ban
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setClearIP(tracker.ip_address)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="24">24 Hours</SelectItem>
+                      <SelectItem value="48">48 Hours</SelectItem>
+                      <SelectItem value="72">72 Hours</SelectItem>
+                      <SelectItem value="168">1 Week</SelectItem>
+                      <SelectItem value="720">30 Days</SelectItem>
+                      <SelectItem value="8760">1 Year</SelectItem>
+                      <SelectItem value="0">Permanent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>
+                    Repeat Offender Limit{' '}
+                    <span className="text-muted-foreground text-xs">(before permanent)</span>
+                  </Label>
+                  <Input
+                    type="number"
+                    value={formSettings.repeat_offender_limit}
+                    onChange={(e) =>
+                      setFormSettings({
+                        ...formSettings,
+                        repeat_offender_limit: parseInt(e.target.value, 10) || 3,
+                      })
+                    }
+                    min={1}
+                    max={10}
+                  />
+                </div>
+              </div>
+              <div className="mt-4 flex items-center justify-between">
+                <Button onClick={handleSaveSettings} disabled={isSavingSettings}>
+                  <Save className="h-4 w-4 mr-2" />
+                  {isSavingSettings ? 'Saving...' : 'Save Settings'}
+                </Button>
+              </div>
+              <div className="mt-4 text-xs text-muted-foreground space-y-1">
+                <p>
+                  <strong>404 Threshold:</strong> Number of 404 errors per day before auto-ban
+                </p>
+                <p>
+                  <strong>API Threshold:</strong> Number of invalid API attempts per day before
+                  auto-ban
+                </p>
+                <p>
+                  <strong>Repeat Limit:</strong> Number of bans before permanent ban
+                </p>
+              </div>
+            </CardContent>
+          </Card>
 
+          {/* Stats Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card>
+              <CardContent className="p-4 text-center">
+                <p className="text-2xl font-bold text-destructive">{stats.total_bans}</p>
+                <p className="text-sm text-muted-foreground">Total Bans</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4 text-center">
+                <p className="text-2xl font-bold text-yellow-500">{stats.permanent_bans}</p>
+                <p className="text-sm text-muted-foreground">Permanent Bans</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4 text-center">
+                <p className="text-2xl font-bold text-blue-500">{stats.suspicious_ips}</p>
+                <p className="text-sm text-muted-foreground">Suspicious IPs</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4 text-center">
+                <p className="text-2xl font-bold text-purple-500">{stats.near_threshold}</p>
+                <p className="text-sm text-muted-foreground">Near Threshold</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Manual Ban Form */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Ban className="h-5 w-5" />
+                Manual IP Ban
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Input
+                  placeholder="IP Address"
+                  value={banIP}
+                  onChange={(e) => setBanIP(e.target.value)}
+                />
+                <Input
+                  placeholder="Reason"
+                  value={banReason}
+                  onChange={(e) => setBanReason(e.target.value)}
+                />
+                <Select value={banDuration} onValueChange={setBanDuration}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="24">24 Hours</SelectItem>
+                    <SelectItem value="48">48 Hours</SelectItem>
+                    <SelectItem value="168">1 Week</SelectItem>
+                    <SelectItem value="permanent">Permanent</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="destructive" onClick={handleBanIP} disabled={isBanning}>
+                  {isBanning ? 'Banning...' : 'Ban IP'}
+                </Button>
+              </div>
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-2 text-muted-foreground">OR</span>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Ban by Host/Domain</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <Input
+                    placeholder="Host/Domain (e.g., example.com)"
+                    value={banHost}
+                    onChange={(e) => setBanHost(e.target.value)}
+                  />
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="host-permanent"
+                      checked={hostPermanent}
+                      onCheckedChange={(checked) => setHostPermanent(checked === true)}
+                    />
+                    <label
+                      htmlFor="host-permanent"
+                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                    >
+                      Permanent Ban
+                    </label>
+                  </div>
+                  <Button variant="destructive" onClick={handleBanHost} disabled={isBanningHost}>
+                    {isBanningHost ? 'Banning...' : 'Ban Host'}
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Banned IPs Table */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Banned IPs</CardTitle>
+              <CardDescription>{bannedIPs.length} IPs currently banned</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="border rounded-md">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(bannedSort, setBannedSort, 'ip_address')}
+                      >
+                        IP Address
+                        <SortIcon column="ip_address" sort={bannedSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(bannedSort, setBannedSort, 'ban_reason')}
+                      >
+                        Reason
+                        <SortIcon column="ban_reason" sort={bannedSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(bannedSort, setBannedSort, 'banned_at')}
+                      >
+                        Banned At
+                        <SortIcon column="banned_at" sort={bannedSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(bannedSort, setBannedSort, 'expires_at')}
+                      >
+                        Expires At
+                        <SortIcon column="expires_at" sort={bannedSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(bannedSort, setBannedSort, 'ban_count')}
+                      >
+                        Ban Count
+                        <SortIcon column="ban_count" sort={bannedSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(bannedSort, setBannedSort, 'created_by')}
+                      >
+                        Created By
+                        <SortIcon column="created_by" sort={bannedSort} />
+                      </TableHead>
+                      <TableHead className="w-[80px]">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedBannedIPs.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                          No banned IPs
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      sortedBannedIPs.map((ban) => (
+                        <TableRow key={ban.ip_address}>
+                          <TableCell className="font-mono">{ban.ip_address}</TableCell>
+                          <TableCell>{ban.ban_reason}</TableCell>
+                          <TableCell>{ban.banned_at}</TableCell>
+                          <TableCell>
+                            {ban.is_permanent ? (
+                              <Badge variant="destructive">Permanent</Badge>
+                            ) : (
+                              ban.expires_at
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={ban.ban_count >= 3 ? 'destructive' : 'secondary'}>
+                              {ban.ban_count}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{ban.created_by}</TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-green-600 hover:text-green-600"
+                              onClick={() => setUnbanIP(ban.ip_address)}
+                            >
+                              Unban
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Invalid API Key Attempts Table */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5" />
+                Invalid API Key Attempts
+              </CardTitle>
+              <CardDescription>{apiAbuseIPs.length} IPs with invalid API attempts</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="border rounded-md">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(apiSort, setApiSort, 'ip_address')}
+                      >
+                        IP Address
+                        <SortIcon column="ip_address" sort={apiSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(apiSort, setApiSort, 'attempt_count')}
+                      >
+                        Attempts
+                        <SortIcon column="attempt_count" sort={apiSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(apiSort, setApiSort, 'first_attempt_at')}
+                      >
+                        First Attempt
+                        <SortIcon column="first_attempt_at" sort={apiSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(apiSort, setApiSort, 'last_attempt_at')}
+                      >
+                        Last Attempt
+                        <SortIcon column="last_attempt_at" sort={apiSort} />
+                      </TableHead>
+                      <TableHead>API Keys Tried</TableHead>
+                      <TableHead className="w-[80px]">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedAPIAbuseIPs.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                          No invalid API key attempts detected
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      sortedAPIAbuseIPs.map((tracker) => (
+                        <TableRow
+                          key={tracker.ip_address}
+                          className={tracker.attempt_count >= 8 ? 'bg-destructive/10' : ''}
+                        >
+                          <TableCell className="font-mono">{tracker.ip_address}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={getBadgeVariant(
+                                tracker.attempt_count,
+                                settings.api_threshold
+                              )}
+                            >
+                              {tracker.attempt_count}/{settings.api_threshold}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{tracker.first_attempt_at}</TableCell>
+                          <TableCell>{tracker.last_attempt_at}</TableCell>
+                          <TableCell>
+                            <Collapsible
+                              open={expandedKeys.has(tracker.ip_address)}
+                              onOpenChange={() => toggleKeysExpanded(tracker.ip_address)}
+                            >
+                              <CollapsibleTrigger className="text-sm cursor-pointer hover:underline flex items-center gap-1">
+                                {expandedKeys.has(tracker.ip_address) ? (
+                                  <EyeOff className="h-3 w-3" />
+                                ) : (
+                                  <Eye className="h-3 w-3" />
+                                )}
+                                View Keys (Hashed)
+                              </CollapsibleTrigger>
+                              <CollapsibleContent>
+                                <div className="text-xs font-mono mt-2 max-h-32 overflow-y-auto p-2 bg-muted rounded">
+                                  {tracker.api_keys_tried}
+                                </div>
+                              </CollapsibleContent>
+                            </Collapsible>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => handleQuickBan(tracker.ip_address)}
+                            >
+                              Ban
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Suspicious IPs Table (404 Tracker) */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5" />
+                Suspicious IPs (404 Tracker)
+              </CardTitle>
+              <CardDescription>{suspiciousIPs.length} IPs with 404 errors tracked</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="border rounded-md">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(suspiciousSort, setSuspiciousSort, 'ip_address')}
+                      >
+                        IP Address
+                        <SortIcon column="ip_address" sort={suspiciousSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() => toggleSort(suspiciousSort, setSuspiciousSort, 'error_count')}
+                      >
+                        404 Count
+                        <SortIcon column="error_count" sort={suspiciousSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() =>
+                          toggleSort(suspiciousSort, setSuspiciousSort, 'first_error_at')
+                        }
+                      >
+                        First Error
+                        <SortIcon column="first_error_at" sort={suspiciousSort} />
+                      </TableHead>
+                      <TableHead
+                        className="cursor-pointer select-none"
+                        onClick={() =>
+                          toggleSort(suspiciousSort, setSuspiciousSort, 'last_error_at')
+                        }
+                      >
+                        Last Error
+                        <SortIcon column="last_error_at" sort={suspiciousSort} />
+                      </TableHead>
+                      <TableHead>Sample Paths</TableHead>
+                      <TableHead className="w-[120px]">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedSuspiciousIPs.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                          No suspicious IPs detected
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      sortedSuspiciousIPs.map((tracker) => (
+                        <TableRow
+                          key={tracker.ip_address}
+                          className={tracker.error_count >= 15 ? 'bg-destructive/10' : ''}
+                        >
+                          <TableCell className="font-mono">{tracker.ip_address}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={getBadgeVariant(
+                                tracker.error_count,
+                                settings['404_threshold']
+                              )}
+                            >
+                              {tracker.error_count}/{settings['404_threshold']}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{tracker.first_error_at}</TableCell>
+                          <TableCell>{tracker.last_error_at}</TableCell>
+                          <TableCell>
+                            <Collapsible
+                              open={expandedPaths.has(tracker.ip_address)}
+                              onOpenChange={() => togglePathsExpanded(tracker.ip_address)}
+                            >
+                              <CollapsibleTrigger className="text-sm cursor-pointer hover:underline flex items-center gap-1">
+                                {expandedPaths.has(tracker.ip_address) ? (
+                                  <EyeOff className="h-3 w-3" />
+                                ) : (
+                                  <Eye className="h-3 w-3" />
+                                )}
+                                View Paths
+                              </CollapsibleTrigger>
+                              <CollapsibleContent>
+                                <div className="text-xs font-mono mt-2 max-h-32 overflow-y-auto p-2 bg-muted rounded">
+                                  {tracker.paths_attempted}
+                                </div>
+                              </CollapsibleContent>
+                            </Collapsible>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleQuickBan(tracker.ip_address)}
+                              >
+                                Ban
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setClearIP(tracker.ip_address)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Login Activity Tab */}
@@ -1245,9 +1246,7 @@ export default function SecurityDashboard() {
                     <LogIn className="h-5 w-5" />
                     Login Activity
                   </CardTitle>
-                  <CardDescription>
-                    {loginAttempts.length} login attempts recorded
-                  </CardDescription>
+                  <CardDescription>{loginAttempts.length} login attempts recorded</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
                   <Select value={loginFilter} onValueChange={(v) => setLoginFilter(v)}>
@@ -1306,7 +1305,9 @@ export default function SecurityDashboard() {
                         <TableRow key={idx}>
                           <TableCell className="text-xs whitespace-nowrap">
                             {attempt.timestamp
-                              ? new Date(attempt.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                              ? new Date(attempt.timestamp).toLocaleString('en-IN', {
+                                  timeZone: 'Asia/Kolkata',
+                                })
                               : '-'}
                           </TableCell>
                           <TableCell>
@@ -1326,9 +1327,14 @@ export default function SecurityDashboard() {
                             <Badge variant="outline">{attempt.login_type || '-'}</Badge>
                           </TableCell>
                           <TableCell className="font-mono text-sm">{attempt.username}</TableCell>
-                          <TableCell className="font-mono text-sm">{attempt.ip_address || '-'}</TableCell>
+                          <TableCell className="font-mono text-sm">
+                            {attempt.ip_address || '-'}
+                          </TableCell>
                           <TableCell>{attempt.broker || '-'}</TableCell>
-                          <TableCell className="text-xs max-w-[200px] truncate" title={attempt.device_info || ''}>
+                          <TableCell
+                            className="text-xs max-w-[200px] truncate"
+                            title={attempt.device_info || ''}
+                          >
                             {attempt.device_info
                               ? attempt.device_info.replace(/^Mozilla\/5\.0\s*/, '').slice(0, 60)
                               : '-'}
@@ -1357,7 +1363,8 @@ export default function SecurityDashboard() {
                     Active Sessions
                   </CardTitle>
                   <CardDescription>
-                    {activeSessions.length} device{activeSessions.length !== 1 ? 's' : ''} currently logged in
+                    {activeSessions.length} device{activeSessions.length !== 1 ? 's' : ''} currently
+                    logged in
                   </CardDescription>
                 </div>
                 <Button variant="outline" size="sm" onClick={fetchActiveSessions}>
@@ -1390,19 +1397,26 @@ export default function SecurityDashboard() {
                         <TableRow key={s.session_id}>
                           <TableCell className="text-xs whitespace-nowrap">
                             {s.login_time
-                              ? new Date(s.login_time).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                              ? new Date(s.login_time).toLocaleString('en-IN', {
+                                  timeZone: 'Asia/Kolkata',
+                                })
                               : '-'}
                           </TableCell>
                           <TableCell className="font-mono text-sm">{s.ip_address || '-'}</TableCell>
                           <TableCell>{s.broker || '-'}</TableCell>
-                          <TableCell className="text-xs max-w-[250px] truncate" title={s.device_info || ''}>
+                          <TableCell
+                            className="text-xs max-w-[250px] truncate"
+                            title={s.device_info || ''}
+                          >
                             {s.device_info
                               ? s.device_info.replace(/^Mozilla\/5\.0\s*/, '').slice(0, 80)
                               : '-'}
                           </TableCell>
                           <TableCell className="text-xs whitespace-nowrap">
                             {s.last_seen
-                              ? new Date(s.last_seen).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+                              ? new Date(s.last_seen).toLocaleString('en-IN', {
+                                  timeZone: 'Asia/Kolkata',
+                                })
                               : '-'}
                           </TableCell>
                           <TableCell>
@@ -1421,7 +1435,6 @@ export default function SecurityDashboard() {
             </CardContent>
           </Card>
         </TabsContent>
-
       </Tabs>
 
       {/* Unban Confirmation Dialog */}

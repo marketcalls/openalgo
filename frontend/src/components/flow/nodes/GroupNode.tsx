@@ -3,9 +3,9 @@
  * Container for grouping related nodes together
  */
 
-import { memo } from 'react'
-import { Handle, Position, NodeResizer } from '@xyflow/react'
+import { Handle, NodeResizer, Position } from '@xyflow/react'
 import { Layers } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 
 interface GroupNodeData {
@@ -45,20 +45,12 @@ export const GroupNode = memo(({ data, selected }: GroupNodeProps) => {
         lineClassName="!border-primary"
         handleClassName="!h-2 !w-2 !rounded-full !border-2 !border-primary !bg-background"
       />
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="absolute -top-3 left-3 flex items-center gap-1.5 rounded bg-background px-2 py-0.5">
         <Layers className="h-3 w-3 text-muted-foreground" />
         <span className="text-xs font-medium">{data.label || 'Group'}</span>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

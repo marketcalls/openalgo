@@ -1,7 +1,6 @@
 import { ArrowLeft, FileText, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { chartinkApi } from '@/api/chartink'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -46,6 +45,7 @@ import { Textarea } from '@/components/ui/textarea'
 import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink'
 import { CHARTINK_EXCHANGES, CHARTINK_PRODUCTS } from '@/types/chartink'
 import type { SymbolSearchResult } from '@/types/strategy'
+import { showToast } from '@/utils/toast'
 
 export default function ConfigureChartinkSymbols() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -197,7 +197,10 @@ export default function ConfigureChartinkSymbols() {
 
       if (response.status === 'success') {
         const { added = 0, failed = 0 } = response.data || {}
-        showToast.success(`Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`, 'chartink')
+        showToast.success(
+          `Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`,
+          'chartink'
+        )
         setCsvData('')
         fetchStrategy()
       } else {
@@ -504,6 +507,7 @@ export default function ConfigureChartinkSymbols() {
                           setMappingToDelete(mapping.id)
                           setDeleteDialogOpen(true)
                         }}
+                        aria-label="Delete symbol mapping"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

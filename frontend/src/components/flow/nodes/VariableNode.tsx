@@ -4,9 +4,9 @@
  * Supports: set, get, add, subtract, multiply, divide, parse JSON
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Variable } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { VariableNodeData } from '@/types/flow'
 
@@ -44,22 +44,14 @@ const operationDescriptions: Record<string, string> = {
 }
 
 export const VariableNode = memo(({ data, selected }: VariableNodeProps) => {
-  const displayValue = typeof data.value === 'object'
-    ? `${JSON.stringify(data.value).slice(0, 20)}...`
-    : String(data.value || '').slice(0, 20)
+  const displayValue =
+    typeof data.value === 'object'
+      ? `${JSON.stringify(data.value).slice(0, 20)}...`
+      : String(data.value || '').slice(0, 20)
 
   return (
-    <div
-      className={cn(
-        'workflow-node node-utility min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node node-utility min-w-[120px]', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded">
@@ -83,20 +75,14 @@ export const VariableNode = memo(({ data, selected }: VariableNodeProps) => {
             <span className="text-[10px] text-muted-foreground">
               {operationLabels[data.operation] || '='}
             </span>
-            <span className="mono-data text-[10px] font-medium">
-              {displayValue || '-'}
-            </span>
+            <span className="mono-data text-[10px] font-medium">{displayValue || '-'}</span>
           </div>
         </div>
         <div className="mt-1.5 text-center text-[8px] text-muted-foreground">
           Use: {`{{${data.variableName || 'var'}}}`}
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

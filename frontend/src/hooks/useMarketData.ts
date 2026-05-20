@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMarketDataContextOptional } from '@/contexts/MarketDataContext'
-import { MarketDataManager, type SymbolData, type SubscriptionMode } from '@/lib/MarketDataManager'
+import { MarketDataManager, type SubscriptionMode, type SymbolData } from '@/lib/MarketDataManager'
 
 // Re-export types for backward compatibility
 export type { DepthLevel, MarketData, SymbolData } from '@/lib/MarketDataManager'
@@ -43,9 +43,7 @@ export function useMarketData({
   const context = useMarketDataContextOptional()
 
   // Use context manager if available, otherwise get singleton directly (for standalone use)
-  const managerRef = useRef<MarketDataManager>(
-    context?.manager ?? MarketDataManager.getInstance()
-  )
+  const managerRef = useRef<MarketDataManager>(context?.manager ?? MarketDataManager.getInstance())
 
   const [marketData, setMarketData] = useState<Map<string, SymbolData>>(new Map())
   const [connectionState, setConnectionState] = useState({
@@ -61,7 +59,11 @@ export function useMarketData({
 
   // Stable symbol key for dependency tracking
   const symbolsKey = useMemo(
-    () => symbols.map((s) => `${s.exchange}:${s.symbol}`).sort().join(','),
+    () =>
+      symbols
+        .map((s) => `${s.exchange}:${s.symbol}`)
+        .sort()
+        .join(','),
     [symbols]
   )
 
@@ -82,7 +84,9 @@ export function useMarketData({
         isFallbackMode: state.isFallbackMode,
         error: state.error,
       })
-      setIsConnecting(state.connectionState === 'connecting' || state.connectionState === 'authenticating')
+      setIsConnecting(
+        state.connectionState === 'connecting' || state.connectionState === 'authenticating'
+      )
     })
 
     return unsubscribe

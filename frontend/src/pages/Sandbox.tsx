@@ -1,7 +1,6 @@
 import { BarChart3, RotateCcw, Save, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
@@ -68,7 +68,9 @@ function formatConfigLabel(key: string): string {
     .split('_')
     .map((word) => {
       const upper = word.toUpperCase()
-      if (['NSE', 'BSE', 'CDS', 'BCD', 'MCX', 'NCDEX', 'NCO', 'MIS', 'CNC', 'NRML'].includes(upper)) {
+      if (
+        ['NSE', 'BSE', 'CDS', 'BCD', 'MCX', 'NCDEX', 'NCO', 'MIS', 'CNC', 'NRML'].includes(upper)
+      ) {
         return upper
       }
       return word.charAt(0).toUpperCase() + word.slice(1)

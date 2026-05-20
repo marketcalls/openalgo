@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import ctypes
 import json
+import os
 import struct
 import threading
 import time
@@ -107,6 +108,10 @@ def _decode_jwt_username(token: str) -> str:
     Extract `preferred_username` from a JWT (matches bridgePy's
     __get_user_name). The JWT payload (middle segment) is URL-safe base64
     without padding, so we pad it before decoding.
+
+    Raises ValueError on malformed/expired tokens — the previous "tester"
+    fallback silently masqueraded as a hardcoded username and masked
+    misconfiguration.
     """
     try:
         payload_segment = token.split(".")[1]
@@ -114,9 +119,13 @@ def _decode_jwt_username(token: str) -> str:
         padded = payload_segment + ("=" * padding_needed)
         decoded = base64.urlsafe_b64decode(padded)
         claims = json.loads(decoded)
-        return str(claims.get("preferred_username", "tester"))
-    except Exception:
-        return "tester"
+    except Exception as exc:
+        raise ValueError(f"Invalid IIFL user_session JWT: {type(exc).__name__}") from exc
+
+    username = claims.get("preferred_username")
+    if not username:
+        raise ValueError("IIFL JWT missing 'preferred_username' claim")
+    return str(username)
 
 
 def _decode_market_feed(payload: bytes) -> dict | None:
@@ -243,7 +252,14 @@ class IiflcapitalWebSocket:
         self.on_ticks = on_ticks
         self.logger = get_logger("iiflcapital_websocket")
 
-        self.client_id = "openalgo" + datetime.now().strftime("%d%m%y%H%M%S%f")
+        # Microsecond timestamp + 4 bytes entropy avoids client_id collisions
+        # when two reconnects fire on the same host within the same microsecond
+        # (broker drops the older session with CONNACK rc=2 on collision).
+        self.client_id = (
+            "openalgo"
+            + datetime.now().strftime("%d%m%y%H%M%S%f")
+            + os.urandom(4).hex()
+        )
         self.username = _decode_jwt_username(user_session)
         self.password = f"OPENID~~{user_session}~"  # bridgePy format
 

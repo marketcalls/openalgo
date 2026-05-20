@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
 import { Minus, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { apiClient } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,9 +18,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { cn } from '@/lib/utils'
-import { buildFutureSymbol, buildOptionSymbol, strikeMoneyness } from '@/lib/strategyMath'
 import type { StrategyLeg } from '@/lib/strategyMath'
+import { buildFutureSymbol, buildOptionSymbol, strikeMoneyness } from '@/lib/strategyMath'
+import { cn } from '@/lib/utils'
 import type { OptionStrike } from '@/types/option-chain'
 
 export interface EditLegDialogProps {
@@ -83,9 +83,7 @@ export function EditLegDialog({
     setOptionType(leg.optionType ?? 'CE')
     setLots(leg.lots)
     setEntryPrice(leg.price.toString())
-    setExitPrice(
-      leg.exitPrice !== undefined && leg.exitPrice > 0 ? leg.exitPrice.toString() : ''
-    )
+    setExitPrice(leg.exitPrice !== undefined && leg.exitPrice > 0 ? leg.exitPrice.toString() : '')
   }, [leg])
 
   const isClosed = exitPrice.trim() !== '' && Number(exitPrice) > 0
@@ -142,11 +140,7 @@ export function EditLegDialog({
       const res = await apiClient.post<{
         status: string
         data?: { ltp?: number }
-      }>(
-        '/quotes',
-        { apikey: apiKey, symbol, exchange },
-        { validateStatus: () => true }
-      )
+      }>('/quotes', { apikey: apiKey, symbol, exchange }, { validateStatus: () => true })
       if (res.data.status === 'success' && res.data.data?.ltp) {
         setEntryPrice(String(res.data.data.ltp))
       }
@@ -188,8 +182,8 @@ export function EditLegDialog({
         <DialogHeader>
           <DialogTitle>Edit Position</DialogTitle>
           <DialogDescription>
-            Update expiry, strike, side, quantity, entry price, or mark the leg closed with an
-            exit price.
+            Update expiry, strike, side, quantity, entry price, or mark the leg closed with an exit
+            price.
           </DialogDescription>
         </DialogHeader>
 
@@ -251,10 +245,8 @@ export function EditLegDialog({
                       <span
                         className={cn(
                           'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wider',
-                          m.kind === 'ATM' &&
-                            'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-                          m.kind === 'ITM' &&
-                            'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+                          m.kind === 'ATM' && 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+                          m.kind === 'ITM' && 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
                           m.kind === 'OTM' && 'bg-muted text-muted-foreground'
                         )}
                       >

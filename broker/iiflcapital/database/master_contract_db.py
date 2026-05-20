@@ -1,6 +1,7 @@
 # database/master_contract_db.py
 
 import os
+import time
 
 import pandas as pd
 from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
@@ -13,6 +14,16 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# IIFL contract files are static CSV blobs served from a CDN-fronted
+# endpoint. Larger files (NSEFO, BSEFO) routinely take 10–20s to land and
+# occasionally surface as 502/503/connection reset under load. Retry each
+# segment a few times with backoff before giving up — without this, a single
+# transient failure silently leaves the symtoken table missing a whole
+# segment.
+_DOWNLOAD_ATTEMPTS = 4
+_DOWNLOAD_BACKOFF_SECONDS = 2.0
+_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
@@ -164,23 +175,68 @@ def copy_from_dataframe(df):
 # ---------------------------------------------------------------------------
 # Download helpers
 # ---------------------------------------------------------------------------
-def download_csv_iiflcapital_data(output_path):
-    """Download all IIFL Capital master contract CSV files to output_path."""
-    logger.info("Downloading IIFL Capital Master Contract CSV Files")
-    client = get_httpx_client()
+def _download_segment(client, segment, url, file_path):
+    """Download one segment CSV with retries + exponential backoff.
 
-    for segment, url in SEGMENT_URLS.items():
+    Raises on final failure so the caller can surface a partial-download
+    error instead of silently writing an incomplete symtoken table.
+    """
+    last_error = None
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
         try:
-            response = client.get(url, timeout=30)
+            response = client.get(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS)
             response.raise_for_status()
 
-            file_path = f"{output_path}/{segment}.csv"
+            # Sanity check — empty body means the CDN handed us a stub.
+            if not response.content:
+                raise ValueError("Empty response body")
+
             with open(file_path, "wb") as f:
                 f.write(response.content)
 
-            logger.info(f"Successfully downloaded {segment} master contract")
+            logger.info(
+                f"Successfully downloaded {segment} master contract "
+                f"({len(response.content):,} bytes, attempt {attempt})"
+            )
+            return
         except Exception as e:
-            logger.warning(f"Failed to download {segment} from {url}. Error: {e}")
+            last_error = e
+            if attempt < _DOWNLOAD_ATTEMPTS:
+                delay = _DOWNLOAD_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                logger.warning(
+                    f"Download {segment} failed (attempt {attempt}/{_DOWNLOAD_ATTEMPTS}): "
+                    f"{e}. Retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    f"Download {segment} failed after {_DOWNLOAD_ATTEMPTS} attempts: {e}"
+                )
+
+    raise RuntimeError(f"Failed to download {segment} from {url}: {last_error}")
+
+
+def download_csv_iiflcapital_data(output_path):
+    """Download all IIFL Capital master contract CSV files to output_path.
+
+    Returns the list of segments that failed even after retries. An empty
+    list means every segment downloaded cleanly. The caller is expected to
+    abort the contract refresh if any segment failed, since partial data
+    leaves the user with missing instruments.
+    """
+    logger.info("Downloading IIFL Capital Master Contract CSV Files")
+    client = get_httpx_client()
+
+    failed_segments = []
+    for segment, url in SEGMENT_URLS.items():
+        file_path = f"{output_path}/{segment}.csv"
+        try:
+            _download_segment(client, segment, url, file_path)
+        except Exception as e:
+            logger.error(f"Giving up on {segment}: {e}")
+            failed_segments.append(segment)
+
+    return failed_segments
 
 
 def delete_iiflcapital_temp_data(output_path):
@@ -435,9 +491,24 @@ def process_iiflcapital_indices_csv(path):
 def master_contract_download():
     logger.info("Downloading IIFL Capital Master Contract")
 
-    output_path = "tmp"
+    # Use an absolute path under the repo root rather than a CWD-relative "tmp"
+    # so master-contract downloads land in a predictable location regardless
+    # of how the process was launched.
+    output_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tmp"
+    )
+    output_path = os.path.normpath(output_path)
+    os.makedirs(output_path, exist_ok=True)
     try:
-        download_csv_iiflcapital_data(output_path)
+        failed = download_csv_iiflcapital_data(output_path)
+        if failed:
+            # Refuse to wipe + reload the symtoken table when downloads
+            # were incomplete — better to keep the previous contract data
+            # than to publish a half-populated one.
+            raise RuntimeError(
+                f"IIFL Capital contract download incomplete. Failed segments: "
+                f"{', '.join(failed)}. Existing symtoken data left untouched."
+            )
         delete_symtoken_table()
 
         # Process equity segments
@@ -481,6 +552,15 @@ def master_contract_download():
 
 
 def search_symbols(symbol, exchange):
+    # Escape LIKE wildcards so caller-supplied % / _ can't broaden the match
+    # (or trigger CPU-bound full-table scans).
+    escaped = (
+        str(symbol or "")
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
     return SymToken.query.filter(
-        SymToken.symbol.like(f"%{symbol}%"), SymToken.exchange == exchange
+        SymToken.symbol.like(f"%{escaped}%", escape="\\"),
+        SymToken.exchange == exchange,
     ).all()

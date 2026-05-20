@@ -1,10 +1,7 @@
 // pages/flow/FlowIndex.tsx
 // Flow workflow list page
 
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   CheckCircle2,
@@ -23,21 +20,23 @@ import {
   Webhook,
   XCircle,
 } from 'lucide-react'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  listWorkflows,
-  createWorkflow,
-  deleteWorkflow,
   activateWorkflow,
+  createWorkflow,
   deactivateWorkflow,
-  getWebhookInfo,
-  enableWebhook,
+  deleteWorkflow,
   disableWebhook,
+  enableWebhook,
+  flowQueryKeys,
+  getWebhookInfo,
+  importWorkflow,
+  listWorkflows,
   regenerateWebhook,
   updateWebhookAuthType,
-  importWorkflow,
-  flowQueryKeys,
-  type WorkflowListItem,
   type WorkflowExportData,
+  type WorkflowListItem,
 } from '@/api/flow'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -58,9 +57,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { showToast } from '@/utils/toast'
 
 function StatusIcon({ status }: { status: string | null }) {
   switch (status) {
@@ -194,7 +194,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Workflow actions">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -252,9 +252,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
             </DropdownMenu>
           </div>
           {workflow.description && (
-            <CardDescription className="line-clamp-2">
-              {workflow.description}
-            </CardDescription>
+            <CardDescription className="line-clamp-2">{workflow.description}</CardDescription>
           )}
         </CardHeader>
         <CardContent>
@@ -282,9 +280,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
               <Webhook className="h-5 w-5" />
               Webhook Settings
             </DialogTitle>
-            <DialogDescription>
-              Configure webhook for "{workflow.name}"
-            </DialogDescription>
+            <DialogDescription>Configure webhook for "{workflow.name}"</DialogDescription>
           </DialogHeader>
 
           {webhookQuery.isLoading ? (
@@ -366,6 +362,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     variant="outline"
                     size="icon"
                     onClick={() => copyToClipboard(webhookQuery.data.webhook_url, 'URL')}
+                    aria-label="Copy webhook URL"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -384,7 +381,10 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => copyToClipboard(webhookQuery.data.webhook_url_with_symbol, 'URL')}
+                    onClick={() =>
+                      copyToClipboard(webhookQuery.data.webhook_url_with_symbol, 'URL')
+                    }
+                    aria-label="Copy webhook URL with symbol"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -410,6 +410,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                       size="icon"
                       className="absolute right-0 top-0 h-full"
                       onClick={() => setShowSecret(!showSecret)}
+                      aria-label={showSecret ? 'Hide webhook secret' : 'Show webhook secret'}
                     >
                       {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
@@ -418,6 +419,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     variant="outline"
                     size="icon"
                     onClick={() => copyToClipboard(webhookQuery.data.webhook_secret, 'Secret')}
+                    aria-label="Copy webhook secret"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -430,28 +432,39 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
               </div>
 
               {/* URL with Secret (for URL auth type) */}
-              {webhookQuery.data.webhook_auth_type === 'url' && webhookQuery.data.webhook_url_with_secret && (
-                <div className="space-y-2">
-                  <Label>Webhook URL (with secret)</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      readOnly
-                      value={showSecret ? webhookQuery.data.webhook_url_with_secret : webhookQuery.data.webhook_url + '?secret=........'}
-                      className="font-mono text-sm"
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => copyToClipboard(webhookQuery.data.webhook_url_with_secret!, 'URL with secret')}
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
+              {webhookQuery.data.webhook_auth_type === 'url' &&
+                webhookQuery.data.webhook_url_with_secret && (
+                  <div className="space-y-2">
+                    <Label>Webhook URL (with secret)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        readOnly
+                        value={
+                          showSecret
+                            ? webhookQuery.data.webhook_url_with_secret
+                            : `${webhookQuery.data.webhook_url}?secret=........`
+                        }
+                        className="font-mono text-sm"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() =>
+                          copyToClipboard(
+                            webhookQuery.data.webhook_url_with_secret!,
+                            'URL with secret'
+                          )
+                        }
+                        aria-label="Copy webhook URL with secret"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Use this URL for Chartink and other services with fixed payloads
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Use this URL for Chartink and other services with fixed payloads
-                  </p>
-                </div>
-              )}
+                )}
 
               {/* Example Usage */}
               <div className="space-y-2">
@@ -459,9 +472,11 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                 <div className="rounded-lg bg-muted p-4">
                   {webhookQuery.data.webhook_auth_type === 'url' ? (
                     <>
-                      <p className="text-xs text-muted-foreground mb-2">For Chartink (secret in URL):</p>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        For Chartink (secret in URL):
+                      </p>
                       <pre className="text-xs font-mono overflow-x-auto">
-{`POST ${webhookQuery.data.webhook_url}?secret=${showSecret ? webhookQuery.data.webhook_secret : '........'}
+                        {`POST ${webhookQuery.data.webhook_url}?secret=${showSecret ? webhookQuery.data.webhook_secret : '........'}
 
 Chartink payload (sent as-is):
 {
@@ -475,9 +490,11 @@ Chartink payload (sent as-is):
                     </>
                   ) : (
                     <>
-                      <p className="text-xs text-muted-foreground mb-2">For TradingView (secret in payload):</p>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        For TradingView (secret in payload):
+                      </p>
                       <pre className="text-xs font-mono overflow-x-auto">
-{`POST ${webhookQuery.data.webhook_url}
+                        {`POST ${webhookQuery.data.webhook_url}
 
 {
   "secret": "${showSecret ? webhookQuery.data.webhook_secret : '................'}",
@@ -606,9 +623,7 @@ export default function FlowIndex() {
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Flow Editor</h1>
-          <p className="text-muted-foreground">
-            Create and manage your trading automations
-          </p>
+          <p className="text-muted-foreground">Create and manage your trading automations</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setIsImportOpen(true)}>
@@ -648,9 +663,7 @@ export default function FlowIndex() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create New Workflow</DialogTitle>
-            <DialogDescription>
-              Give your workflow a name to get started
-            </DialogDescription>
+            <DialogDescription>Give your workflow a name to get started</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -673,22 +686,23 @@ export default function FlowIndex() {
               onClick={handleCreate}
               disabled={!newWorkflowName.trim() || createMutation.isPending}
             >
-              {createMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
+              {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Create
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isImportOpen} onOpenChange={(open) => {
-        setIsImportOpen(open)
-        if (!open) {
-          setImportJson('')
-          setImportError(null)
-        }
-      }}>
+      <Dialog
+        open={isImportOpen}
+        onOpenChange={(open) => {
+          setIsImportOpen(open)
+          if (!open) {
+            setImportJson('')
+            setImportError(null)
+          }
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Import Workflow</DialogTitle>
@@ -712,9 +726,7 @@ export default function FlowIndex() {
                 <span className="w-full border-t" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">
-                  or paste JSON
-                </span>
+                <span className="bg-background px-2 text-muted-foreground">or paste JSON</span>
               </div>
             </div>
             <div className="space-y-2">
@@ -729,9 +741,7 @@ export default function FlowIndex() {
                 }}
                 className="h-40 font-mono text-sm"
               />
-              {importError && (
-                <p className="text-sm text-destructive">{importError}</p>
-              )}
+              {importError && <p className="text-sm text-destructive">{importError}</p>}
             </div>
           </div>
           <DialogFooter>
@@ -742,9 +752,7 @@ export default function FlowIndex() {
               onClick={handleImport}
               disabled={!importJson.trim() || importMutation.isPending}
             >
-              {importMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
+              {importMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Import
             </Button>
           </DialogFooter>

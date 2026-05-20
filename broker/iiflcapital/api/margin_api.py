@@ -57,14 +57,16 @@ def calculate_margin_api(positions, auth):
             logger.error(f"Failed to parse IIFL Capital margin response: {response.text}")
             return response, {"status": "error", "message": "Invalid response from broker API"}
 
-        logger.info(f"IIFL Capital margin calculation response: {response_data}")
+        # Raw response may include account context — debug only.
+        logger.debug(f"IIFL Capital margin calculation response: {response_data}")
 
         standardized_response = parse_margin_response(response_data)
         return response, standardized_response
 
     except Exception as error:
-        logger.error(f"Error calling IIFL Capital margin API: {error}")
+        # Log full diagnostics internally; return a generic message externally.
+        logger.exception("Error calling IIFL Capital margin API")
         return _mock_response(500), {
             "status": "error",
-            "message": f"Failed to calculate margin: {error}",
+            "message": f"Failed to calculate margin: {type(error).__name__}",
         }

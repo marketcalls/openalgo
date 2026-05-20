@@ -1,16 +1,9 @@
 // components/flow/edges/InsertableEdge.tsx
 // Custom edge with a "+" button to insert nodes between connected nodes
 
-import { useState, useCallback } from 'react'
-import {
-  EdgeLabelRenderer,
-  getSmoothStepPath,
-  useReactFlow,
-  type EdgeProps,
-} from '@xyflow/react'
+import { EdgeLabelRenderer, type EdgeProps, getSmoothStepPath, useReactFlow } from '@xyflow/react'
 import { Plus } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { useCallback, useState } from 'react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +13,8 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { cn } from '@/lib/utils'
 
 // Node categories for the dropdown menu
 const NODE_MENU = {
@@ -172,7 +167,7 @@ export function InsertableEdge({
                 className={cn(
                   'flex h-5 w-5 items-center justify-center rounded-full border bg-background shadow-sm transition-all',
                   'hover:scale-110 hover:border-primary hover:bg-primary hover:text-primary-foreground',
-                  (isHovered || menuOpen) ? 'opacity-100 scale-100' : 'opacity-0 scale-75',
+                  isHovered || menuOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-75',
                   selected && 'opacity-100 scale-100'
                 )}
               >
@@ -187,10 +182,7 @@ export function InsertableEdge({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
                     {nodes.map((node) => (
-                      <DropdownMenuItem
-                        key={node.type}
-                        onClick={() => insertNode(node.type)}
-                      >
+                      <DropdownMenuItem key={node.type} onClick={() => insertNode(node.type)}>
                         {node.label}
                       </DropdownMenuItem>
                     ))}

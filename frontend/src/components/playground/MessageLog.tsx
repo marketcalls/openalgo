@@ -1,9 +1,9 @@
-import { useState, useMemo, useRef, useCallback } from 'react'
+import { ChevronDown, ChevronRight, Download, Search, Trash2 } from 'lucide-react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Trash2, Download, Search, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { WebSocketMessage } from '@/types/websocket'
 
@@ -127,25 +127,37 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
     switch (direction) {
       case 'sent':
         return (
-          <Badge variant="outline" className="bg-sky-500/20 text-sky-400 border-sky-500/30 text-[10px] px-1.5 h-5">
+          <Badge
+            variant="outline"
+            className="bg-sky-500/20 text-sky-400 border-sky-500/30 text-[10px] px-1.5 h-5"
+          >
             SENT
           </Badge>
         )
       case 'received':
         return (
-          <Badge variant="outline" className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 h-5">
+          <Badge
+            variant="outline"
+            className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 h-5"
+          >
             RECEIVED
           </Badge>
         )
       case 'error':
         return (
-          <Badge variant="outline" className="bg-red-500/20 text-red-400 border-red-500/30 text-[10px] px-1.5 h-5">
+          <Badge
+            variant="outline"
+            className="bg-red-500/20 text-red-400 border-red-500/30 text-[10px] px-1.5 h-5"
+          >
             ERROR
           </Badge>
         )
       case 'system':
         return (
-          <Badge variant="outline" className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-[10px] px-1.5 h-5">
+          <Badge
+            variant="outline"
+            className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-[10px] px-1.5 h-5"
+          >
             SYSTEM
           </Badge>
         )
@@ -162,10 +174,7 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
     return (
       <div className="relative group">
         <div
-          className={cn(
-            'cursor-pointer transition-all',
-            !isExpanded && 'truncate'
-          )}
+          className={cn('cursor-pointer transition-all', !isExpanded && 'truncate')}
           onClick={() => toggleExpanded(msg.id)}
         >
           <span className="text-[10px] text-muted-foreground mr-2">
@@ -222,6 +231,7 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
             onClick={onClear}
             disabled={messages.length === 0}
             title="Clear messages"
+            aria-label="Clear messages"
           >
             <Trash2 className="h-3 w-3" />
           </Button>
@@ -232,6 +242,7 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
             onClick={onExport}
             disabled={messages.length === 0}
             title="Export messages"
+            aria-label="Export messages"
           >
             <Download className="h-3 w-3" />
           </Button>

@@ -169,10 +169,8 @@ export function TemplateDialog({
                       'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
                       moneyness.kind === 'ATM' &&
                         'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-                      moneyness.kind === 'ITM' &&
-                        'bg-sky-500/15 text-sky-700 dark:text-sky-400',
-                      moneyness.kind === 'OTM' &&
-                        'bg-muted text-muted-foreground'
+                      moneyness.kind === 'ITM' && 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+                      moneyness.kind === 'OTM' && 'bg-muted text-muted-foreground'
                     )}
                     title={
                       moneyness.kind === 'ATM'

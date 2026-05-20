@@ -75,8 +75,7 @@ export function useSupportedExchanges() {
     // Defaults
     const defaultExchange = tradingExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NSE')
     const defaultFnoExchange = fnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
-    const defaultToolsFnoExchange =
-      toolsFnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
+    const defaultToolsFnoExchange = toolsFnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
 
     // Underlyings filtered to only supported FNO exchanges
     const defaultUnderlyings: Record<string, string[]> = {}

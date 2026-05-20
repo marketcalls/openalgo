@@ -5,27 +5,83 @@ from broker.iiflcapital.mapping.transform_data import (
 from database.token_db import get_symbol
 
 
+# Fields that indicate a dict is an actual order/trade/position/holding row,
+# not a status/metadata wrapper. Used to avoid fabricating phantom UI rows
+# when IIFL returns an empty book wrapped as `{"result": {...wrapper...}}`.
+# Covers the canonical field names plus the variants the per-section
+# transforms accept as fallbacks (orderId, formattedInstrumentName,
+# tradedPrice, etc.) so a record with any of those still passes.
+_ROW_FIELDS = (
+    # Order / trade identifiers
+    "brokerOrderId",
+    "exchangeOrderId",
+    "orderId",
+    # Instrument identifiers
+    "instrumentId",
+    "token",
+    "exchangeInstrumentID",
+    "tradingSymbol",
+    "symbol",
+    "formattedInstrumentName",
+    "nseTradingSymbol",
+    "bseTradingSymbol",
+    # Quantity-bearing fields (any of these implies a real record)
+    "netQuantity",
+    "filledQuantity",
+    "pendingQuantity",
+    "cancelledQuantity",
+    "dpQuantity",
+    "totalQuantity",
+    # Action / price fields specific to real records
+    "transactionType",
+    "tradedPrice",
+    "averageTradedPrice",
+)
+
+
+def _looks_like_row(item) -> bool:
+    """True if a dict carries at least one identifying field of a real row."""
+    if not isinstance(item, dict):
+        return False
+    for field in _ROW_FIELDS:
+        value = item.get(field)
+        # `value not in (None, "")` rather than truthy so legitimate `0` /
+        # `"0"` quantity / netQuantity values on closed positions still
+        # qualify the row.
+        if value not in (None, ""):
+            return True
+    return False
+
+
 def _extract_rows(payload):
     if isinstance(payload, list):
-        return payload
+        # Some IIFL endpoints emit a single status-wrapper element when the
+        # book is empty (e.g. `[{"status": "ok"}]`); strip those so the
+        # downstream transforms don't render them as phantom rows.
+        return [item for item in payload if _looks_like_row(item)]
 
     if not isinstance(payload, dict):
         return []
 
     result = payload.get("result")
     if isinstance(result, list):
-        return result
+        return [item for item in result if _looks_like_row(item)]
     if isinstance(result, dict):
         for key in ("orders", "trades", "positions", "holdings", "data", "positionList"):
             value = result.get(key)
             if isinstance(value, list):
-                return value
-        return [result]
+                return [item for item in value if _looks_like_row(item)]
+        # Only treat a result-dict as a single row when it actually looks
+        # like one. Empty/metadata-only `result` wrappers were previously
+        # rendered as phantom blank rows in the orderbook UI.
+        if _looks_like_row(result):
+            return [result]
+        return []
 
     for key in ("data", "orders", "trades", "positions", "holdings"):
         value = payload.get(key)
         if isinstance(value, list):
-            return value
+            return [item for item in value if _looks_like_row(item)]
 
     return []
 
@@ -100,59 +156,22 @@ def _resolve_order_quantity(row: dict) -> int:
 
 def _resolve_holding_quantity(row: dict) -> float:
     """
-    Resolve holding quantity without inflating totals.
+    Resolve holding quantity preferring settled DP balance.
 
-    IIFL holdings payload can include aggregate fields like `totalQuantity` alongside
-    component quantities (`quantity`, `dpQuantity`, `t1Quantity`). In some accounts,
-    using only `totalQuantity` can overstate effective holdings. Prefer explicit
-    quantity fields first, then fall back to totalQuantity.
+    Per IIFL spec: totalQuantity = dpQuantity + collateralQuantity + t1Quantity
+    + authorizedQuantity. dpQuantity is what the broker UI shows as "settled".
     """
-    # Prefer settled DP quantity first (matches broker holdings page more closely)
-    # before generic quantity fields that may include aggregate values.
-    for key in ("dpQuantity", "dpQty", "availableQuantity", "dpquantity", "dp_qty"):
+    for key in ("dpQuantity", "dpQty", "availableQuantity"):
         dp_qty = _to_float(row.get(key))
         if dp_qty > 0:
             return dp_qty
 
-    qty = 0.0
-    for key in ("quantity", "holdingQuantity", "qty"):
+    for key in ("totalQuantity", "totalQty", "quantity", "holdingQuantity"):
         qty = _to_float(row.get(key))
         if qty > 0:
-            break
+            return qty
 
-    total_qty = 0.0
-    for key in ("totalQuantity", "totalQty", "holdingTotalQuantity"):
-        total_qty = _to_float(row.get(key))
-        if total_qty > 0:
-            break
-
-    t1_qty = 0.0
-    for key in ("t1Quantity", "t1Qty", "t1_quantity", "unsettledQuantity"):
-        t1_qty = _to_float(row.get(key))
-        if t1_qty > 0:
-            break
-
-    # If aggregate quantity appears to include T1, value only settled quantity.
-    if qty > 0 and t1_qty > 0 and qty >= t1_qty:
-        settled = qty - t1_qty
-        if settled >= 0:
-            return settled
-
-    if total_qty > 0 and t1_qty > 0 and total_qty >= t1_qty:
-        settled = total_qty - t1_qty
-        if settled >= 0:
-            return settled
-
-    if qty > 0:
-        return qty
-
-    if total_qty > 0:
-        return total_qty
-
-    if t1_qty > 0:
-        return t1_qty
-
-    return 0.0
+    return _to_float(row.get("t1Quantity"))
 
 
 def map_order_data(order_data):
@@ -279,7 +298,22 @@ def transform_positions_data(positions_data):
         exchange = _map_exchange(broker_exchange)
 
         quantity = int(float(row.get("netQuantity", row.get("quantity", 0)) or 0))
-        average_price = float(row.get("netAveragePrice", row.get("averagePrice", 0)) or 0)
+        average_price = _to_float(row.get("netAveragePrice", row.get("averagePrice", 0)))
+
+        # IIFL position spec exposes only `previousDayClose`; fall back to it when
+        # an upstream LTP isn't injected into the payload.
+        ltp = _to_float(_first_present(row, "ltp", "lastPrice", "previousDayClose"))
+
+        # Spec exposes `realizedPnl` only. Compute MTM unrealized from netQuantity
+        # and netAveragePrice so OpenAlgo's `pnl` field reflects total P&L —
+        # but only when LTP is genuinely populated. A missing LTP defaulting
+        # to 0 would otherwise fabricate a (-average_price * quantity) loss.
+        realized_pnl = _to_float(row.get("realizedPnl"))
+        if quantity and ltp > 0:
+            unrealized_pnl = (ltp - average_price) * quantity
+        else:
+            unrealized_pnl = 0.0
+        pnl = realized_pnl + unrealized_pnl
 
         transformed.append(
             {
@@ -288,8 +322,8 @@ def transform_positions_data(positions_data):
                 "product": reverse_map_product_type(row.get("product", "NORMAL")),
                 "quantity": quantity,
                 "average_price": f"{average_price:.2f}",
-                "ltp": float(row.get("ltp", row.get("lastPrice", row.get("previousDayClose", 0))) or 0),
-                "pnl": float(row.get("pnl", row.get("mtm", 0)) or 0),
+                "ltp": round(ltp, 2),
+                "pnl": round(pnl, 2),
             }
         )
 
@@ -338,11 +372,24 @@ def transform_holdings_data(holdings_data):
     transformed = []
 
     for row in rows:
-        # Prefer NSE instrument symbol if present
-        symbol = row.get("nseTradingSymbol") or row.get("tradingSymbol") or row.get("symbol") or ""
-        exchange = "NSE"
-
         quantity = int(_resolve_holding_quantity(row))
+
+        # IIFL holdings expose nse* and bse* pairs. Pick the populated side so
+        # BSE-only scrips aren't mislabeled as NSE with an empty symbol.
+        nse_symbol = row.get("nseTradingSymbol")
+        bse_symbol = row.get("bseTradingSymbol")
+        if nse_symbol:
+            symbol, exchange = nse_symbol, "NSE"
+        elif bse_symbol:
+            symbol, exchange = bse_symbol, "BSE"
+        else:
+            symbol = row.get("tradingSymbol") or row.get("formattedInstrumentName") or row.get("symbol") or ""
+            exchange = "NSE"
+
+        # Skip empty placeholder rows IIFL returns when the account has no
+        # settled holdings (avg=0, qty=0, no trading symbol).
+        if quantity <= 0:
+            continue
         avg_price = _to_float(row.get("averageTradedPrice", row.get("averagePrice", 0)))
         ltp = _to_float(row.get("ltp", row.get("previousDayClose", avg_price)), avg_price)
 

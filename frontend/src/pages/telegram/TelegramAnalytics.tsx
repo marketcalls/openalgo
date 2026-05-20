@@ -1,7 +1,6 @@
 import { ArrowLeft, BarChart3, Bell, MessageSquare, TrendingUp, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,6 +17,7 @@ import type {
   TelegramAnalytics as TelegramAnalyticsType,
   TelegramUser,
 } from '@/types/telegram'
+import { showToast } from '@/utils/toast'
 
 export default function TelegramAnalytics() {
   const [analytics, setAnalytics] = useState<TelegramAnalyticsType | null>(null)
