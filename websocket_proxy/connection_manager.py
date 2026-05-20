@@ -273,6 +273,9 @@ class ConnectionPool:
 
         # Subscription tracking: (symbol, exchange, mode) -> adapter_index
         self.subscription_map: dict[tuple[str, str, int], int] = {}
+        # Per-subscription depth_level so auth-recovery restore can re-issue
+        # mode=3 (Depth) at its originally requested depth, not the default.
+        self.subscription_depths: dict[tuple[str, str, int], int] = {}
 
         # Shared ZeroMQ publisher
         self.shared_publisher = SharedZmqPublisher()
@@ -417,6 +420,7 @@ class ConnectionPool:
                 self.adapters.clear()
                 self.adapter_symbol_counts.clear()
                 self.subscription_map.clear()
+                self.subscription_depths.clear()
                 self.connected = False
                 self.initialized = False
             try:
@@ -496,11 +500,13 @@ class ConnectionPool:
             f"Refreshing token and rebuilding pool."
         )
 
-        # Snapshot subscriptions before initialize(force=True) clears them.
-        # depth_level is not tracked in subscription_map, so mode=3 restores
-        # use the default depth.
+        # Snapshot (symbol, exchange, mode, depth_level) before
+        # initialize(force=True) clears subscription_map / subscription_depths.
         with self.lock:
-            prior_subs = list(self.subscription_map.keys())
+            prior_subs = [
+                (s, e, m, self.subscription_depths.get((s, e, m), 5))
+                for (s, e, m) in self.subscription_map
+            ]
 
         self._clear_auth_cache_for_user()
         reinit = self.initialize(force=True)
@@ -526,9 +532,9 @@ class ConnectionPool:
                 f"Restoring {len(prior_subs)} subscription(s) after auth refresh"
             )
             restored = 0
-            for symbol, exchange, mode in prior_subs:
+            for symbol, exchange, mode, depth in prior_subs:
                 try:
-                    sub_result = self._subscribe_inner(symbol, exchange, mode)
+                    sub_result = self._subscribe_inner(symbol, exchange, mode, depth)
                     if sub_result.get("status") == "success":
                         restored += 1
                     else:
@@ -681,6 +687,7 @@ class ConnectionPool:
                         result = adapter.subscribe(symbol, exchange, mode, depth_level)
                         if result.get("status") == "success":
                             self.subscription_map[sub_key] = adapter_idx
+                            self.subscription_depths[sub_key] = depth_level
                             # Don't increment adapter_symbol_counts — same symbol, already counted
                             result["connection"] = adapter_idx + 1
                             self.logger.info(
@@ -691,6 +698,7 @@ class ConnectionPool:
                     else:
                         # COVERED: higher mode already active — just track, skip broker call
                         self.subscription_map[sub_key] = adapter_idx
+                        self.subscription_depths[sub_key] = depth_level
                         # Don't increment adapter_symbol_counts — same symbol, already counted
                         self.logger.debug(
                             f"Tracked {symbol}.{exchange} mode {mode} "
@@ -708,6 +716,7 @@ class ConnectionPool:
 
                     if result.get("status") == "success":
                         self.subscription_map[sub_key] = adapter_idx
+                        self.subscription_depths[sub_key] = depth_level
                         self.adapter_symbol_counts[adapter_idx] += 1
                         symbols_on_conn = self.adapter_symbol_counts[adapter_idx]
                         total_symbols = sum(self.adapter_symbol_counts)
@@ -783,8 +792,11 @@ class ConnectionPool:
                 adapter_idx = self.subscription_map[sub_key]
                 adapter = self.adapters[adapter_idx]
 
-                # Remove tracking entry
+                # Remove tracking entry. Stash the prior depth so rollback paths
+                # below can restore both maps atomically if the broker call fails.
+                old_depth = self.subscription_depths.get(sub_key, 5)
                 del self.subscription_map[sub_key]
+                self.subscription_depths.pop(sub_key, None)
 
                 # Check what modes remain for this symbol
                 remaining_modes = self._get_existing_modes(symbol, exchange)
@@ -801,6 +813,7 @@ class ConnectionPool:
                     else:
                         # Rollback tracking on failure
                         self.subscription_map[sub_key] = adapter_idx
+                        self.subscription_depths[sub_key] = old_depth
                     return result
 
                 else:
@@ -827,7 +840,8 @@ class ConnectionPool:
                                 f"{new_highest}, rolling back: {result}"
                             )
                             self.subscription_map[sub_key] = adapter_idx
-                            adapter.subscribe(symbol, exchange, mode, 5)
+                            self.subscription_depths[sub_key] = old_depth
+                            adapter.subscribe(symbol, exchange, mode, old_depth)
                             return {
                                 "status": "error",
                                 "code": "DOWNGRADE_FAILED",
@@ -849,6 +863,7 @@ class ConnectionPool:
                 # Rollback tracking on exception
                 if sub_key not in self.subscription_map:
                     self.subscription_map[sub_key] = adapter_idx
+                    self.subscription_depths[sub_key] = old_depth
                 self.logger.exception(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 
@@ -875,6 +890,7 @@ class ConnectionPool:
                     adapter.unsubscribe_all()
 
             self.subscription_map.clear()
+            self.subscription_depths.clear()
             self.adapter_symbol_counts = [0] * len(self.adapters)
 
             self.logger.info("[POOL] Unsubscribed from all symbols")
