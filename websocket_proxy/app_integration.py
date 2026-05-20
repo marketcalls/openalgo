@@ -3,6 +3,7 @@ import atexit
 import os
 import platform
 import signal
+import subprocess
 import sys
 import threading
 
@@ -20,6 +21,16 @@ if "eventlet" in sys.modules:
 else:
     _original_threading = threading
 
+
+def _eventlet_active() -> bool:
+    """True when eventlet has monkey-patched the stdlib (gunicorn worker)."""
+    try:
+        from eventlet.patcher import is_monkey_patched
+        return bool(is_monkey_patched("socket"))
+    except Exception:
+        return False
+
+
 # Set the correct event loop policy for Windows to avoid ZeroMQ warnings
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -29,6 +40,7 @@ if platform.system() == "Windows":
 _websocket_server_started = False
 _websocket_proxy_instance = None
 _websocket_thread = None
+_websocket_subprocess = None  # set when running under eventlet (gunicorn)
 
 logger = get_logger(__name__)
 
@@ -58,6 +70,12 @@ def should_start_websocket():
 def cleanup_websocket_server():
     """Clean up WebSocket server resources - cross-platform compatible"""
     global _websocket_proxy_instance, _websocket_thread
+
+    # If we spawned the WS as a subprocess (gunicorn+eventlet path), there is
+    # no in-process thread or proxy instance to clean up — just kill the child.
+    if _websocket_subprocess is not None:
+        _terminate_websocket_subprocess()
+        return
 
     try:
         logger.info("Cleaning up WebSocket server...")
@@ -137,12 +155,102 @@ def signal_handler(signum, frame):
     os._exit(0)
 
 
+def _spawn_websocket_subprocess():
+    """
+    Spawn the WebSocket proxy as a child *process* (not a thread).
+
+    Required under gunicorn+eventlet: an in-process asyncio thread shares the
+    process with the eventlet hub, and any eventlet-monkey-patched semaphore
+    (stdlib logging RLock, socketio lock, broker adapter `threading.Lock`)
+    touched from both threads triggers `greenlet.error: Cannot switch to a
+    different thread` and silently corrupts WS state (GitHub issue #1421).
+
+    The child runs `python -m websocket_proxy.server` in a fresh interpreter
+    with no eventlet monkey-patching, so all the offending primitives are
+    real OS locks. Systemd's cgroup-based KillMode (default: control-group)
+    cleans up the child when the unit stops; our atexit handler covers
+    graceful gunicorn shutdown.
+    """
+    global _websocket_subprocess
+
+    if _websocket_subprocess is not None and _websocket_subprocess.poll() is None:
+        logger.debug("WebSocket subprocess already running, skipping spawn")
+        return
+
+    # Find the openalgo project root (parent of websocket_proxy/)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    cmd = [sys.executable, "-u", "-m", "websocket_proxy.server"]
+    logger.debug(f"Spawning WebSocket subprocess: {' '.join(cmd)} (cwd={project_root})")
+
+    try:
+        # Inherit stdout/stderr so the child's logging lands in the same
+        # systemd journal as gunicorn. The WS server already uses Python
+        # logging via utils.logging, so file/json log handlers fire too.
+        _websocket_subprocess = subprocess.Popen(
+            cmd,
+            cwd=project_root,
+            stdout=None,
+            stderr=None,
+            # Do NOT set start_new_session=True — staying in the gunicorn
+            # cgroup means systemd reaps the child if gunicorn dies hard.
+        )
+        logger.info(f"WebSocket subprocess started with PID {_websocket_subprocess.pid}")
+    except Exception as e:
+        logger.exception(f"Failed to spawn WebSocket subprocess: {e}")
+        _websocket_subprocess = None
+        return
+
+    # Graceful shutdown on clean gunicorn exit
+    atexit.register(_terminate_websocket_subprocess)
+
+
+def _terminate_websocket_subprocess():
+    """SIGTERM the WS child on shutdown; SIGKILL if it ignores TERM."""
+    global _websocket_subprocess
+    if _websocket_subprocess is None:
+        return
+    if _websocket_subprocess.poll() is not None:
+        _websocket_subprocess = None
+        return
+    try:
+        logger.info(f"Terminating WebSocket subprocess PID {_websocket_subprocess.pid}")
+        _websocket_subprocess.terminate()
+        try:
+            _websocket_subprocess.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            logger.warning("WebSocket subprocess did not exit on SIGTERM, sending SIGKILL")
+            _websocket_subprocess.kill()
+            _websocket_subprocess.wait(timeout=5)
+    except Exception as e:
+        logger.warning(f"Error terminating WebSocket subprocess: {e}")
+    finally:
+        _websocket_subprocess = None
+
+
 def start_websocket_server():
     """
-    Start the WebSocket proxy server in a separate thread.
-    This function should be called when the Flask app starts.
+    Start the WebSocket proxy server.
+
+    Under gunicorn+eventlet: spawned as a child process (avoids the
+    eventlet/asyncio cross-OS-thread greenlet crash class).
+
+    Under the dev server (no eventlet): run as a real OS thread inside the
+    Flask process, preserving the long-standing dev workflow.
     """
     global _websocket_proxy_instance, _websocket_thread
+
+    if _eventlet_active():
+        _spawn_websocket_subprocess()
+        # Register signal handlers so Ctrl+C in dev forwards cleanly. Under
+        # systemd these are typically replaced by the unit's signal handling.
+        try:
+            signal.signal(signal.SIGINT, signal_handler)
+            if hasattr(signal, "SIGTERM"):
+                signal.signal(signal.SIGTERM, signal_handler)
+        except Exception as e:
+            logger.warning(f"Could not register signal handlers: {e}")
+        return None
 
     logger.debug("Starting WebSocket proxy server in a separate thread")
 
