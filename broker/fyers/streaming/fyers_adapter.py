@@ -50,6 +50,10 @@ class FyersAdapter:
         # Connection state
         self.connected = False
         self.connecting = False
+        # Last error from connect(), exposed so the outer adapter can surface
+        # the underlying auth/network failure rather than a generic message
+        # (issue #1419). Reset on each connect() attempt.
+        self.last_error: str | None = None
 
         # Threading
         self.lock = threading.Lock()
@@ -63,6 +67,10 @@ class FyersAdapter:
         """
         Connect to Fyers HSM WebSocket
 
+        On failure, ``self.last_error`` is populated with the underlying error
+        message so callers can surface it (issue #1419 — ConnectionPool needs
+        the real auth keyword to trigger token refresh, not a generic bool).
+
         Returns:
             True if connection successful, False otherwise
         """
@@ -72,10 +80,12 @@ class FyersAdapter:
 
         if self.connecting:
             self.logger.warning("Connection already in progress")
+            self.last_error = "Connection already in progress"
             return False
 
         try:
             self.connecting = True
+            self.last_error = None
             self.logger.info("Connecting to Fyers HSM WebSocket...")
 
             # Initialize WebSocket client
@@ -103,10 +113,12 @@ class FyersAdapter:
                 self.logger.info("✅ Connected to Fyers HSM WebSocket")
                 return True
             else:
-                self.logger.error("❌ Failed to authenticate with Fyers HSM WebSocket")
+                self.last_error = "Failed to authenticate with Fyers HSM WebSocket (timeout)"
+                self.logger.error(f"❌ {self.last_error}")
                 return False
 
         except Exception as e:
+            self.last_error = str(e)
             self.logger.error(f"❌ Connection error: {e}")
             return False
         finally:

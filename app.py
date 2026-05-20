@@ -864,7 +864,12 @@ if is_docker:
         "Running in Docker/standalone mode - WebSocket server started separately by start.sh"
     )
 else:
-    logger.debug("Running in local/integrated mode - Starting WebSocket proxy in Flask")
+    # Under gunicorn+eventlet, start_websocket_proxy() spawns a child *process*
+    # (not a thread) so the WS asyncio loop never shares an eventlet hub with
+    # gunicorn — closes the greenlet.error cross-thread crash class entirely
+    # (including GitHub issue #1421). Under the dev server (no eventlet) it
+    # still uses a real OS thread, as before.
+    logger.debug("Starting WebSocket proxy")
     start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed

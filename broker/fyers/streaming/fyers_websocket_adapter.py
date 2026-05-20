@@ -154,10 +154,16 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # self.logger.info("Connecting to Fyers HSM WebSocket...")
 
-            # Connect to Fyers
+            # Connect to Fyers. On failure, propagate the underlying error
+            # message from FyersAdapter.last_error so the ConnectionPool can
+            # detect auth-token expiry via keyword match and rebuild this
+            # adapter with a fresh token from auth_db (issue #1419).
             success = self.fyers_adapter.connect()
             if not success:
-                raise ConnectionError("Failed to connect to Fyers WebSocket")
+                err = getattr(self.fyers_adapter, "last_error", None) or (
+                    "Failed to connect to Fyers WebSocket"
+                )
+                raise ConnectionError(err)
 
             self.connected = True
             self.running = True
@@ -253,21 +259,29 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             depth_level: Depth level for order book (not used in Fyers)
         """
         try:
-            # Auto-reconnect if disconnected
-            if not self.connected or not self.fyers_adapter:
+            # Auto-reconnect if disconnected. The two pre-existing branches
+            # (outer adapter missing vs inner FyersAdapter disconnected) are
+            # collapsed into a single connect() call: connect() recreates the
+            # inner adapter if absent and reuses it otherwise. On failure, the
+            # underlying error from connect_result["message"] is surfaced so
+            # the ConnectionPool's auth-recovery (issue #1419) can detect a
+            # stale token via keyword match and rebuild this adapter against
+            # a freshly-read auth_db token.
+            needs_reconnect = (
+                not self.connected
+                or not self.fyers_adapter
+                or not self.fyers_adapter.connected
+            )
+            if needs_reconnect:
                 self.logger.info("Not connected to Fyers - attempting to reconnect...")
                 connect_result = self.connect()
                 if not connect_result or connect_result.get("status") != "success":
-                    self.logger.error("Failed to reconnect to Fyers WebSocket")
-                    return {"status": "error", "message": "Failed to reconnect to Fyers WebSocket"}
+                    err = (connect_result or {}).get(
+                        "message"
+                    ) or "Failed to reconnect to Fyers WebSocket"
+                    self.logger.error(f"Failed to reconnect to Fyers WebSocket: {err}")
+                    return {"status": "error", "message": err}
                 self.logger.info("Successfully reconnected to Fyers WebSocket")
-
-            # Ensure adapter is properly connected
-            if self.fyers_adapter and not self.fyers_adapter.connected:
-                self.logger.info("Fyers adapter exists but not connected, reconnecting...")
-                if not self.fyers_adapter.connect():
-                    self.logger.error("Failed to reconnect Fyers adapter")
-                    return {"status": "error", "message": "Failed to reconnect Fyers adapter"}
 
             with self.lock:
                 # Convert to OpenAlgo format

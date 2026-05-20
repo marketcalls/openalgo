@@ -132,10 +132,24 @@ class FyersHSMWebSocket:
         self.access_token = access_token
         self.logger = logging.getLogger("fyers_hsm_websocket")
 
-        # Extract HSM key from token
+        # Initialize health-check stop event BEFORE the HSM key extraction so
+        # cleanup paths can reference it even when __init__ raises (the
+        # extraction call below). Without this the disconnect logged after a
+        # failed init crashes with "no attribute '_health_check_stop_event'".
+        self._health_check_stop_event = threading.Event()
+
+        # Extract HSM key from token. _extract_hsm_key returns None either when
+        # the JWT exp claim is in the past (logged as "Access token has
+        # expired") or when decoding fails. The most common cause in
+        # production is the daily token expiry, so the raised message includes
+        # auth keywords so the websocket_proxy ConnectionPool recovery (issue
+        # #1419) can detect it and rebuild the adapter with a fresh token.
         self.hsm_key = self._extract_hsm_key(access_token)
         if not self.hsm_key:
-            raise ValueError("Failed to extract HSM key from access token")
+            raise ValueError(
+                "Failed to extract HSM key from access token — "
+                "access token has expired or is invalid"
+            )
 
         self.logger.debug(f"HSM key extracted: {self.hsm_key[:20]}...")
 
@@ -150,10 +164,10 @@ class FyersHSMWebSocket:
         self.reconnect_enabled = True
         self.reconnect_attempts = 0
 
-        # Health check state
+        # Health check state. _health_check_stop_event is already initialized
+        # at the top of __init__ so cleanup-after-failed-init paths can use it.
         self._last_message_time = None
         self._health_check_thread = None
-        self._health_check_stop_event = threading.Event()  # Signal to stop health check thread
 
         # Data structures
         self.subscriptions = {}  # topic_id -> topic_name mapping
