@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
+import { BarChart3, BookOpen, LogOut, Menu, Moon, Search, Sun, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { authApi } from '@/api/auth'
@@ -26,6 +26,8 @@ import { useAuthStore } from '@/stores/authStore'
 import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { CommandPalette } from './CommandPalette'
+import { useCommandPalette } from '@/hooks/useCommandPalette'
 
 export function Navbar() {
   const location = useLocation()
@@ -35,6 +37,7 @@ export function Navbar() {
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
   const { capabilities } = useBrokerStore()
+  const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette()
 
   // Filter menu items based on broker capabilities
   const filteredProfileMenuItems = profileMenuItems.filter((item) => {
@@ -188,6 +191,30 @@ export function Navbar() {
 
         {/* Right Side */}
         <div className="ml-auto flex items-center gap-1 sm:gap-2">
+          {/* Search / Command Palette trigger */}
+          <button
+            id="cmd-palette-trigger"
+            onClick={() => setCmdOpen(true)}
+            aria-label="Open command palette (Ctrl+K)"
+            className="hidden md:flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span>Search…</span>
+            <span className="ml-2 flex items-center gap-0.5">
+              <kbd className="rounded border bg-background px-1 py-0.5 font-mono text-[10px]">Ctrl</kbd>
+              <kbd className="rounded border bg-background px-1 py-0.5 font-mono text-[10px]">K</kbd>
+            </span>
+          </button>
+          {/* Mobile search icon */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 md:hidden"
+            onClick={() => setCmdOpen(true)}
+            aria-label="Search (Ctrl+K)"
+          >
+            <Search className="h-4 w-4" />
+          </Button>
           {/* Broker Badge */}
           {user?.broker && (
             <Badge variant="outline" className="hidden sm:flex text-xs">
@@ -295,6 +322,8 @@ export function Navbar() {
         onOpenChange={setShowLogoutDialog}
         onConfirm={handleLogout}
       />
+
+      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
     </nav>
   )
 }
