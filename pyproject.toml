@@ -122,7 +122,6 @@ dependencies = [
   "requests==2.33.1",
   "rich==13.7.1",
   "rpds-py==0.30.0",
-  "scipy==1.17.1",
   "setuptools==80.10.1",
   "simple-websocket==1.1.0",
   "simplejson==3.20.2",
