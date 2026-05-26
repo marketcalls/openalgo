@@ -14,7 +14,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -22,13 +21,17 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { Strategy } from '@/types/strategy'
+import { showToast } from '@/utils/toast'
 
 export default function StrategyIndex() {
   const navigate = useNavigate()
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [loading, setLoading] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const [hostConfig, setHostConfig] = useState<{
+    host_server: string
+    is_localhost: boolean
+  } | null>(null)
 
   const fetchStrategies = async () => {
     try {
@@ -53,7 +56,8 @@ export default function StrategyIndex() {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
-          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          is_localhost:
+            window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
         })
       }
     }

@@ -1,7 +1,6 @@
 import { ArrowLeft, Bell, BellOff, Search, Send, Trash2, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import {
   AlertDialog,
@@ -36,6 +35,7 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import type { CommandStats, TelegramUser } from '@/types/telegram'
+import { showToast } from '@/utils/toast'
 
 export default function TelegramUsers() {
   const [users, setUsers] = useState<TelegramUser[]>([])
@@ -290,6 +290,7 @@ export default function TelegramUsers() {
                               setMessageText('')
                             }}
                             title="Send message"
+                            aria-label="Send message"
                           >
                             <Send className="h-4 w-4" />
                           </Button>
@@ -299,6 +300,7 @@ export default function TelegramUsers() {
                             className="h-8 w-8 text-destructive hover:text-destructive"
                             onClick={() => setUnlinkUser(user)}
                             title="Unlink user"
+                            aria-label="Unlink user"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>

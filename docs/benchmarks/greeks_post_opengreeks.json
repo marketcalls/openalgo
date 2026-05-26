@@ -1,0 +1,1142 @@
+{
+  "engine": "opengreeks==0.1.0 (Black-76)",
+  "spot": 23659.0,
+  "expiry": "26MAY26",
+  "samples": [
+    {
+      "type": "CE",
+      "strike": 21000,
+      "moneyness": "DEEP ITM",
+      "symbol": "NIFTY26MAY2621000CE",
+      "latency_ms": 1305.6,
+      "response": {
+        "days_to_expiry": 5.6109,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.955,
+          "gamma": 5.6e-05,
+          "rho": -0.413712,
+          "theta": -14.361,
+          "vega": 2.781
+        },
+        "implied_volatility": 57.95,
+        "interest_rate": 0,
+        "option_price": 2691.3,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 21000.0,
+        "symbol": "NIFTY26MAY2621000CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 21500,
+      "moneyness": "DEEP ITM",
+      "symbol": "NIFTY26MAY2621500CE",
+      "latency_ms": 115.43,
+      "response": {
+        "days_to_expiry": 5.6108,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.9565,
+          "gamma": 6.9e-05,
+          "rho": -0.335644,
+          "theta": -11.0622,
+          "vega": 2.7066
+        },
+        "implied_volatility": 45.86,
+        "interest_rate": 0,
+        "option_price": 2183.45,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 21500.0,
+        "symbol": "NIFTY26MAY2621500CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 22000,
+      "moneyness": "DEEP ITM",
+      "symbol": "NIFTY26MAY2622000CE",
+      "latency_ms": 109.73,
+      "response": {
+        "days_to_expiry": 5.6108,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.9242,
+          "gamma": 0.000117,
+          "rho": -0.261541,
+          "theta": -15.5292,
+          "vega": 4.1851
+        },
+        "implied_volatility": 41.64,
+        "interest_rate": 0,
+        "option_price": 1701.4,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 22000.0,
+        "symbol": "NIFTY26MAY2622000CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 22500,
+      "moneyness": "DEEP ITM",
+      "symbol": "NIFTY26MAY2622500CE",
+      "latency_ms": 103.56,
+      "response": {
+        "days_to_expiry": 5.6108,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.9002,
+          "gamma": 0.000186,
+          "rho": -0.185111,
+          "theta": -14.6981,
+          "vega": 5.141
+        },
+        "implied_volatility": 32.08,
+        "interest_rate": 0,
+        "option_price": 1204.2,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 22500.0,
+        "symbol": "NIFTY26MAY2622500CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23000,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2623000CE",
+      "latency_ms": 116.54,
+      "response": {
+        "days_to_expiry": 5.6108,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.8231,
+          "gamma": 0.000354,
+          "rho": -0.112216,
+          "theta": -16.9492,
+          "vega": 7.6122
+        },
+        "implied_volatility": 24.99,
+        "interest_rate": 0,
+        "option_price": 730,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23000.0,
+        "symbol": "NIFTY26MAY2623000CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23200,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2623200CE",
+      "latency_ms": 109.06,
+      "response": {
+        "days_to_expiry": 5.6108,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.7601,
+          "gamma": 0.000464,
+          "rho": -0.085307,
+          "theta": -18.5441,
+          "vega": 9.1177
+        },
+        "implied_volatility": 22.82,
+        "interest_rate": 0,
+        "option_price": 554.95,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23200.0,
+        "symbol": "NIFTY26MAY2623200CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23300,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2623300CE",
+      "latency_ms": 113.83,
+      "response": {
+        "days_to_expiry": 5.6108,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.7192,
+          "gamma": 0.000528,
+          "rho": -0.072502,
+          "theta": -19.1669,
+          "vega": 9.888
+        },
+        "implied_volatility": 21.75,
+        "interest_rate": 0,
+        "option_price": 471.65,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23300.0,
+        "symbol": "NIFTY26MAY2623300CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23400,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2623400CE",
+      "latency_ms": 106.97,
+      "response": {
+        "days_to_expiry": 5.6108,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.6715,
+          "gamma": 0.000599,
+          "rho": -0.060104,
+          "theta": -19.4506,
+          "vega": 10.6035
+        },
+        "implied_volatility": 20.58,
+        "interest_rate": 0,
+        "option_price": 391,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23400.0,
+        "symbol": "NIFTY26MAY2623400CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23500,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2623500CE",
+      "latency_ms": 100.49,
+      "response": {
+        "days_to_expiry": 5.6107,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.6122,
+          "gamma": 0.000655,
+          "rho": -0.049298,
+          "theta": -19.9708,
+          "vega": 11.2363
+        },
+        "implied_volatility": 19.94,
+        "interest_rate": 0,
+        "option_price": 320.7,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23500.0,
+        "symbol": "NIFTY26MAY2623500CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23600,
+      "moneyness": "ATM",
+      "symbol": "NIFTY26MAY2623600CE",
+      "latency_ms": 102.71,
+      "response": {
+        "days_to_expiry": 5.6107,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.5463,
+          "gamma": 0.0007,
+          "rho": -0.039406,
+          "theta": -19.9964,
+          "vega": 11.6234
+        },
+        "implied_volatility": 19.3,
+        "interest_rate": 0,
+        "option_price": 256.35,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23600.0,
+        "symbol": "NIFTY26MAY2623600CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23650,
+      "moneyness": "ATM",
+      "symbol": "NIFTY26MAY2623650CE",
+      "latency_ms": 119.82,
+      "response": {
+        "days_to_expiry": 5.6107,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.5111,
+          "gamma": 0.000718,
+          "rho": -0.034771,
+          "theta": -19.7508,
+          "vega": 11.6977
+        },
+        "implied_volatility": 18.95,
+        "interest_rate": 0,
+        "option_price": 226.2,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23650.0,
+        "symbol": "NIFTY26MAY2623650CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23700,
+      "moneyness": "ATM",
+      "symbol": "NIFTY26MAY2623700CE",
+      "latency_ms": 109.29,
+      "response": {
+        "days_to_expiry": 5.6107,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.4748,
+          "gamma": 0.000726,
+          "rho": -0.030605,
+          "theta": -19.4601,
+          "vega": 11.679
+        },
+        "implied_volatility": 18.7,
+        "interest_rate": 0,
+        "option_price": 199.1,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23700.0,
+        "symbol": "NIFTY26MAY2623700CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23800,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2623800CE",
+      "latency_ms": 107.5,
+      "response": {
+        "days_to_expiry": 5.6107,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.4006,
+          "gamma": 0.000723,
+          "rho": -0.023165,
+          "theta": -18.408,
+          "vega": 11.3372
+        },
+        "implied_volatility": 18.22,
+        "interest_rate": 0,
+        "option_price": 150.7,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23800.0,
+        "symbol": "NIFTY26MAY2623800CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 23900,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2623900CE",
+      "latency_ms": 129.98,
+      "response": {
+        "days_to_expiry": 5.6107,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.3261,
+          "gamma": 0.000694,
+          "rho": -0.016832,
+          "theta": -16.6753,
+          "vega": 10.5713
+        },
+        "implied_volatility": 17.7,
+        "interest_rate": 0,
+        "option_price": 109.5,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23900.0,
+        "symbol": "NIFTY26MAY2623900CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 24000,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2624000CE",
+      "latency_ms": 110.68,
+      "response": {
+        "days_to_expiry": 5.6107,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.2557,
+          "gamma": 0.000634,
+          "rho": -0.011859,
+          "theta": -14.5418,
+          "vega": 9.4334
+        },
+        "implied_volatility": 17.3,
+        "interest_rate": 0,
+        "option_price": 77.15,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 24000.0,
+        "symbol": "NIFTY26MAY2624000CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 24200,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2624200CE",
+      "latency_ms": 105.73,
+      "response": {
+        "days_to_expiry": 5.6106,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.1399,
+          "gamma": 0.000454,
+          "rho": -0.005319,
+          "theta": -9.7149,
+          "vega": 6.5241
+        },
+        "implied_volatility": 16.71,
+        "interest_rate": 0,
+        "option_price": 34.6,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 24200.0,
+        "symbol": "NIFTY26MAY2624200CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 24500,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2624500CE",
+      "latency_ms": 106.2,
+      "response": {
+        "days_to_expiry": 5.6106,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.0471,
+          "gamma": 0.0002,
+          "rho": -0.00146,
+          "theta": -4.302,
+          "vega": 2.8852
+        },
+        "implied_volatility": 16.73,
+        "interest_rate": 0,
+        "option_price": 9.5,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 24500.0,
+        "symbol": "NIFTY26MAY2624500CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 25000,
+      "moneyness": "DEEP OTM",
+      "symbol": "NIFTY26MAY2625000CE",
+      "latency_ms": 122.48,
+      "response": {
+        "days_to_expiry": 5.6106,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.0101,
+          "gamma": 4.8e-05,
+          "rho": -0.000292,
+          "theta": -1.3385,
+          "vega": 0.7885
+        },
+        "implied_volatility": 19.05,
+        "interest_rate": 0,
+        "option_price": 1.9,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 25000.0,
+        "symbol": "NIFTY26MAY2625000CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 25500,
+      "moneyness": "DEEP OTM",
+      "symbol": "NIFTY26MAY2625500CE",
+      "latency_ms": 148.39,
+      "response": {
+        "days_to_expiry": 5.6106,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.0051,
+          "gamma": 2.1e-05,
+          "rho": -0.000169,
+          "theta": -0.9007,
+          "vega": 0.432
+        },
+        "implied_volatility": 23.4,
+        "interest_rate": 0,
+        "option_price": 1.1,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 25500.0,
+        "symbol": "NIFTY26MAY2625500CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "CE",
+      "strike": 26000,
+      "moneyness": "DEEP OTM",
+      "symbol": "NIFTY26MAY2626000CE",
+      "latency_ms": 108.99,
+      "response": {
+        "days_to_expiry": 5.6106,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": 0.0033,
+          "gamma": 1.2e-05,
+          "rho": -0.000123,
+          "theta": -0.716,
+          "vega": 0.2891
+        },
+        "implied_volatility": 27.8,
+        "interest_rate": 0,
+        "option_price": 0.8,
+        "option_type": "CE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 26000.0,
+        "symbol": "NIFTY26MAY2626000CE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 21000,
+      "moneyness": "DEEP OTM",
+      "symbol": "NIFTY26MAY2621000PE",
+      "latency_ms": 110.27,
+      "response": {
+        "days_to_expiry": 5.6106,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.0058,
+          "gamma": 1.5e-05,
+          "rho": -0.00033,
+          "theta": -1.673,
+          "vega": 0.4875
+        },
+        "implied_volatility": 38.51,
+        "interest_rate": 0,
+        "option_price": 2.15,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 21000.0,
+        "symbol": "NIFTY26MAY2621000PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 21500,
+      "moneyness": "DEEP OTM",
+      "symbol": "NIFTY26MAY2621500PE",
+      "latency_ms": 116.51,
+      "response": {
+        "days_to_expiry": 5.6106,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.0079,
+          "gamma": 2.3e-05,
+          "rho": -0.000384,
+          "theta": -1.8268,
+          "vega": 0.6357
+        },
+        "implied_volatility": 32.24,
+        "interest_rate": 0,
+        "option_price": 2.5,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 21500.0,
+        "symbol": "NIFTY26MAY2621500PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 22000,
+      "moneyness": "DEEP OTM",
+      "symbol": "NIFTY26MAY2622000PE",
+      "latency_ms": 113.15,
+      "response": {
+        "days_to_expiry": 5.6105,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.0141,
+          "gamma": 4.5e-05,
+          "rho": -0.000607,
+          "theta": -2.5205,
+          "vega": 1.0509
+        },
+        "implied_volatility": 26.91,
+        "interest_rate": 0,
+        "option_price": 3.95,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 22000.0,
+        "symbol": "NIFTY26MAY2622000PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 22500,
+      "moneyness": "DEEP OTM",
+      "symbol": "NIFTY26MAY2622500PE",
+      "latency_ms": 112.04,
+      "response": {
+        "days_to_expiry": 5.6105,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.0318,
+          "gamma": 0.000111,
+          "rho": -0.001245,
+          "theta": -4.1104,
+          "vega": 2.0959
+        },
+        "implied_volatility": 22.01,
+        "interest_rate": 0,
+        "option_price": 8.1,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 22500.0,
+        "symbol": "NIFTY26MAY2622500PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23000,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2623000PE",
+      "latency_ms": 113.38,
+      "response": {
+        "days_to_expiry": 5.6105,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.1117,
+          "gamma": 0.000343,
+          "rho": -0.004657,
+          "theta": -9.3921,
+          "vega": 5.577
+        },
+        "implied_volatility": 18.9,
+        "interest_rate": 0,
+        "option_price": 30.3,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23000.0,
+        "symbol": "NIFTY26MAY2623000PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23200,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2623200PE",
+      "latency_ms": 116.44,
+      "response": {
+        "days_to_expiry": 5.6105,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.1838,
+          "gamma": 0.00051,
+          "rho": -0.008108,
+          "theta": -12.3388,
+          "vega": 7.798
+        },
+        "implied_volatility": 17.76,
+        "interest_rate": 0,
+        "option_price": 52.75,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23200.0,
+        "symbol": "NIFTY26MAY2623200PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23300,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2623300PE",
+      "latency_ms": 114.07,
+      "response": {
+        "days_to_expiry": 5.6105,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.234,
+          "gamma": 0.000606,
+          "rho": -0.010744,
+          "theta": -13.8195,
+          "vega": 8.9921
+        },
+        "implied_volatility": 17.25,
+        "interest_rate": 0,
+        "option_price": 69.9,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23300.0,
+        "symbol": "NIFTY26MAY2623300PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23400,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2623400PE",
+      "latency_ms": 111.33,
+      "response": {
+        "days_to_expiry": 5.6105,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.2946,
+          "gamma": 0.000701,
+          "rho": -0.014195,
+          "theta": -15.1127,
+          "vega": 10.1146
+        },
+        "implied_volatility": 16.77,
+        "interest_rate": 0,
+        "option_price": 92.35,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23400.0,
+        "symbol": "NIFTY26MAY2623400PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23500,
+      "moneyness": "OTM",
+      "symbol": "NIFTY26MAY2623500PE",
+      "latency_ms": 151.58,
+      "response": {
+        "days_to_expiry": 5.6105,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.3654,
+          "gamma": 0.000787,
+          "rho": -0.018599,
+          "theta": -16.0152,
+          "vega": 11.0299
+        },
+        "implied_volatility": 16.29,
+        "interest_rate": 0,
+        "option_price": 121,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23500.0,
+        "symbol": "NIFTY26MAY2623500PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23600,
+      "moneyness": "ATM",
+      "symbol": "NIFTY26MAY2623600PE",
+      "latency_ms": 124.06,
+      "response": {
+        "days_to_expiry": 5.6104,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.4453,
+          "gamma": 0.000855,
+          "rho": -0.023994,
+          "theta": -16.2726,
+          "vega": 11.5917
+        },
+        "implied_volatility": 15.75,
+        "interest_rate": 0,
+        "option_price": 156.1,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23600.0,
+        "symbol": "NIFTY26MAY2623600PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23650,
+      "moneyness": "ATM",
+      "symbol": "NIFTY26MAY2623650PE",
+      "latency_ms": 187.67,
+      "response": {
+        "days_to_expiry": 5.6093,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.4883,
+          "gamma": 0.00088,
+          "rho": -0.027086,
+          "theta": -16.1047,
+          "vega": 11.6957
+        },
+        "implied_volatility": 15.45,
+        "interest_rate": 0,
+        "option_price": 176.25,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23650.0,
+        "symbol": "NIFTY26MAY2623650PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23700,
+      "moneyness": "ATM",
+      "symbol": "NIFTY26MAY2623700PE",
+      "latency_ms": 113.3,
+      "response": {
+        "days_to_expiry": 5.6093,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.5329,
+          "gamma": 0.000893,
+          "rho": -0.030582,
+          "theta": -15.7766,
+          "vega": 11.6609
+        },
+        "implied_volatility": 15.18,
+        "interest_rate": 0,
+        "option_price": 199,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23700.0,
+        "symbol": "NIFTY26MAY2623700PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23800,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2623800PE",
+      "latency_ms": 118.01,
+      "response": {
+        "days_to_expiry": 5.6093,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.6256,
+          "gamma": 0.000888,
+          "rho": -0.038504,
+          "theta": -14.4276,
+          "vega": 11.1162
+        },
+        "implied_volatility": 14.56,
+        "interest_rate": 0,
+        "option_price": 250.55,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23800.0,
+        "symbol": "NIFTY26MAY2623800PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 23900,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2623900PE",
+      "latency_ms": 102.45,
+      "response": {
+        "days_to_expiry": 5.6093,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.7261,
+          "gamma": 0.000846,
+          "rho": -0.047133,
+          "theta": -11.6809,
+          "vega": 9.7672
+        },
+        "implied_volatility": 13.42,
+        "interest_rate": 0,
+        "option_price": 306.7,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 23900.0,
+        "symbol": "NIFTY26MAY2623900PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 24000,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2624000PE",
+      "latency_ms": 119.28,
+      "response": {
+        "days_to_expiry": 5.6092,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -0.8217,
+          "gamma": 0.000716,
+          "rho": -0.057767,
+          "theta": -8.4705,
+          "vega": 7.6511
+        },
+        "implied_volatility": 12.42,
+        "interest_rate": 0,
+        "option_price": 375.9,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 24000.0,
+        "symbol": "NIFTY26MAY2624000PE",
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 24200,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2624200PE",
+      "latency_ms": 99.51,
+      "response": {
+        "days_to_expiry": 5.6092,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -1.0,
+          "gamma": 0,
+          "rho": 0,
+          "theta": 0,
+          "vega": 0
+        },
+        "implied_volatility": 0,
+        "interest_rate": 0,
+        "intrinsic_value": 541.0,
+        "note": "Deep ITM option with no time value - theoretical Greeks returned",
+        "option_price": 531.6,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 24200.0,
+        "symbol": "NIFTY26MAY2624200PE",
+        "time_value": 0,
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 24500,
+      "moneyness": "ITM",
+      "symbol": "NIFTY26MAY2624500PE",
+      "latency_ms": 108.61,
+      "response": {
+        "days_to_expiry": 5.6092,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -1.0,
+          "gamma": 0,
+          "rho": 0,
+          "theta": 0,
+          "vega": 0
+        },
+        "implied_volatility": 0,
+        "interest_rate": 0,
+        "intrinsic_value": 841.0,
+        "note": "Deep ITM option with no time value - theoretical Greeks returned",
+        "option_price": 806.6,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 24500.0,
+        "symbol": "NIFTY26MAY2624500PE",
+        "time_value": 0,
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 25000,
+      "moneyness": "DEEP ITM",
+      "symbol": "NIFTY26MAY2625000PE",
+      "latency_ms": 352.66,
+      "response": {
+        "days_to_expiry": 5.6091,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -1.0,
+          "gamma": 0,
+          "rho": 0,
+          "theta": 0,
+          "vega": 0
+        },
+        "implied_volatility": 0,
+        "interest_rate": 0,
+        "intrinsic_value": 1341.0,
+        "note": "Deep ITM option with no time value - theoretical Greeks returned",
+        "option_price": 1300,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 25000.0,
+        "symbol": "NIFTY26MAY2625000PE",
+        "time_value": 0,
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 25500,
+      "moneyness": "DEEP ITM",
+      "symbol": "NIFTY26MAY2625500PE",
+      "latency_ms": 111.79,
+      "response": {
+        "days_to_expiry": 5.6091,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -1.0,
+          "gamma": 0,
+          "rho": 0,
+          "theta": 0,
+          "vega": 0
+        },
+        "implied_volatility": 0,
+        "interest_rate": 0,
+        "intrinsic_value": 1841.0,
+        "note": "Deep ITM option with no time value - theoretical Greeks returned",
+        "option_price": 1807.15,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 25500.0,
+        "symbol": "NIFTY26MAY2625500PE",
+        "time_value": 0,
+        "underlying": "NIFTY"
+      }
+    },
+    {
+      "type": "PE",
+      "strike": 26000,
+      "moneyness": "DEEP ITM",
+      "symbol": "NIFTY26MAY2626000PE",
+      "latency_ms": 111.71,
+      "response": {
+        "days_to_expiry": 5.6091,
+        "exchange": "NFO",
+        "expiry_date": "26-May-2026",
+        "greeks": {
+          "delta": -1.0,
+          "gamma": 0,
+          "rho": 0,
+          "theta": 0,
+          "vega": 0
+        },
+        "implied_volatility": 0,
+        "interest_rate": 0,
+        "intrinsic_value": 2341.0,
+        "note": "Deep ITM option with no time value - theoretical Greeks returned",
+        "option_price": 2296.65,
+        "option_type": "PE",
+        "spot_price": 23659,
+        "status": "success",
+        "strike": 26000.0,
+        "symbol": "NIFTY26MAY2626000PE",
+        "time_value": 0,
+        "underlying": "NIFTY"
+      }
+    }
+  ]
+}

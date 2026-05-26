@@ -1,4 +1,4 @@
-import type { Node as ReactFlowNode, Edge as ReactFlowEdge } from '@xyflow/react'
+import type { Edge as ReactFlowEdge, Node as ReactFlowNode } from '@xyflow/react'
 
 // =============================================================================
 // TRIGGER NODE DATA TYPES
@@ -11,9 +11,9 @@ export interface StartNodeData {
   time: string
   days?: number[]
   executeAt?: string
-  intervalMinutes?: number  // Legacy - kept for backward compatibility
-  intervalValue?: number    // New - interval value (e.g., 1, 5, 10)
-  intervalUnit?: 'seconds' | 'minutes' | 'hours'  // New - interval unit
+  intervalMinutes?: number // Legacy - kept for backward compatibility
+  intervalValue?: number // New - interval value (e.g., 1, 5, 10)
+  intervalUnit?: 'seconds' | 'minutes' | 'hours' // New - interval unit
   marketHoursOnly?: boolean
 }
 
@@ -24,7 +24,7 @@ export interface PriceAlertNodeData {
   exchange: string
   condition: 'above' | 'below' | 'crosses_above' | 'crosses_below'
   price: number
-  ltp?: number  // Live LTP from quotes API
+  ltp?: number // Live LTP from quotes API
   enabled?: boolean
 }
 
@@ -102,7 +102,13 @@ export interface OptionsOrderNodeData {
 /** Options Multi-Order - Multi-leg strategies */
 export interface OptionsMultiOrderNodeData {
   label?: string
-  strategy: 'iron_condor' | 'straddle' | 'strangle' | 'bull_call_spread' | 'bear_put_spread' | 'custom'
+  strategy:
+    | 'iron_condor'
+    | 'straddle'
+    | 'strangle'
+    | 'bull_call_spread'
+    | 'bear_put_spread'
+    | 'custom'
   underlying: string
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
   expiryDate: string
@@ -200,7 +206,13 @@ export interface PositionCheckNodeData {
   symbol: string
   exchange: string
   product: 'MIS' | 'CNC' | 'NRML'
-  condition: 'exists' | 'not_exists' | 'quantity_above' | 'quantity_below' | 'pnl_above' | 'pnl_below'
+  condition:
+    | 'exists'
+    | 'not_exists'
+    | 'quantity_above'
+    | 'quantity_below'
+    | 'pnl_above'
+    | 'pnl_below'
   threshold?: number
 }
 
@@ -355,7 +367,7 @@ export interface IntervalsNodeData {
 /** Symbol Node - Get symbol info (lotsize, tick_size, expiry, etc.) */
 export interface SymbolNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
   outputVariable?: string
 }
@@ -363,10 +375,10 @@ export interface SymbolNodeData {
 /** OptionSymbol Node - Resolve option symbol from underlying */
 export interface OptionSymbolNodeData {
   label?: string
-  underlying: string  // NIFTY, BANKNIFTY, etc. - can use {{variable}}
+  underlying: string // NIFTY, BANKNIFTY, etc. - can use {{variable}}
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string  // Format: 30DEC25 - can use {{variable}}
-  offset: string  // ATM, ITM1-10, OTM1-10 - can use {{variable}}
+  expiryDate: string // Format: 30DEC25 - can use {{variable}}
+  offset: string // ATM, ITM1-10, OTM1-10 - can use {{variable}}
   optionType: 'CE' | 'PE'
   outputVariable?: string
 }
@@ -392,33 +404,33 @@ export interface PositionBookNodeData {
 /** SyntheticFuture Node - Calculate synthetic future price */
 export interface SyntheticFutureNodeData {
   label?: string
-  underlying: string  // NIFTY, BANKNIFTY, etc.
+  underlying: string // NIFTY, BANKNIFTY, etc.
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string  // Format: 25NOV25
+  expiryDate: string // Format: 25NOV25
   outputVariable?: string
 }
 
 /** OptionChain Node - Get option chain data */
 export interface OptionChainNodeData {
   label?: string
-  underlying: string  // NIFTY, BANKNIFTY, etc.
+  underlying: string // NIFTY, BANKNIFTY, etc.
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string  // Format: 30DEC25
-  strikeCount?: number  // Optional: limit strikes around ATM
+  expiryDate: string // Format: 30DEC25
+  strikeCount?: number // Optional: limit strikes around ATM
   outputVariable?: string
 }
 
 /** Holidays Node - Get market holidays */
 export interface HolidaysNodeData {
   label?: string
-  year?: number  // Optional: defaults to current year
+  year?: number // Optional: defaults to current year
   outputVariable?: string
 }
 
 /** Timings Node - Get market timings */
 export interface TimingsNodeData {
   label?: string
-  date?: string  // Optional: YYYY-MM-DD format, defaults to today
+  date?: string // Optional: YYYY-MM-DD format, defaults to today
   outputVariable?: string
 }
 
@@ -429,31 +441,31 @@ export interface TimingsNodeData {
 /** Subscribe LTP Node - Real-time LTP streaming */
 export interface SubscribeLTPNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
-  outputVariable?: string  // Variable to store live LTP
+  outputVariable?: string // Variable to store live LTP
 }
 
 /** Subscribe Quote Node - Real-time Quote streaming (OHLC + volume) */
 export interface SubscribeQuoteNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
-  outputVariable?: string  // Variable to store live quote data
+  outputVariable?: string // Variable to store live quote data
 }
 
 /** Subscribe Depth Node - Real-time Depth streaming (order book) */
 export interface SubscribeDepthNodeData {
   label?: string
-  symbol: string  // Can use {{variable}} interpolation
+  symbol: string // Can use {{variable}} interpolation
   exchange: string
-  outputVariable?: string  // Variable to store live depth data
+  outputVariable?: string // Variable to store live depth data
 }
 
 /** Unsubscribe Node - Stop real-time streaming */
 export interface UnsubscribeNodeData {
   label?: string
-  symbol?: string  // Symbol to unsubscribe, or empty for all
+  symbol?: string // Symbol to unsubscribe, or empty for all
   exchange?: string
   streamType: 'ltp' | 'quote' | 'depth' | 'all'
 }
@@ -502,9 +514,9 @@ export interface TelegramAlertNodeData {
 /** Delay Node - Wait for duration */
 export interface DelayNodeData {
   label?: string
-  delayMs?: number  // Legacy: milliseconds
-  delayValue?: number  // New: value
-  delayUnit?: 'seconds' | 'minutes' | 'hours'  // New: unit
+  delayMs?: number // Legacy: milliseconds
+  delayValue?: number // New: value
+  delayUnit?: 'seconds' | 'minutes' | 'hours' // New: unit
 }
 
 /** Wait Until Node - Pause until specific time */
@@ -525,7 +537,18 @@ export interface LogNodeData {
 export interface VariableNodeData {
   label?: string
   variableName: string
-  operation: 'set' | 'get' | 'add' | 'subtract' | 'multiply' | 'divide' | 'parse_json' | 'stringify' | 'increment' | 'decrement' | 'append'
+  operation:
+    | 'set'
+    | 'get'
+    | 'add'
+    | 'subtract'
+    | 'multiply'
+    | 'divide'
+    | 'parse_json'
+    | 'stringify'
+    | 'increment'
+    | 'decrement'
+    | 'append'
   value: string | number | object
   sourceVariable?: string // For operations that read from another variable
   jsonPath?: string // For accessing nested JSON properties like "data.ltp"

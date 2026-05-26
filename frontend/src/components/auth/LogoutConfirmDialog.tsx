@@ -7,19 +7,15 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+} from '@/components/ui/alert-dialog'
 
 interface LogoutConfirmDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
 }
 
-export function LogoutConfirmDialog({
-  open,
-  onOpenChange,
-  onConfirm,
-}: LogoutConfirmDialogProps) {
+export function LogoutConfirmDialog({ open, onOpenChange, onConfirm }: LogoutConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -27,25 +23,16 @@ export function LogoutConfirmDialog({
           <AlertDialogTitle>Confirm Logout</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-3">
-              <p>
-                Are you sure you want to logout? Once logged out:
-              </p>
+              <p>Are you sure you want to logout? Once logged out:</p>
               <ul className="list-disc pl-5 space-y-1">
+                <li>All automated orders and running strategies will stop working.</li>
                 <li>
-                  All automated orders and running strategies will stop
-                  working.
+                  External signals from TradingView, ChartInk, or any other source will not be
+                  processed.
                 </li>
-                <li>
-                  External signals from TradingView, ChartInk, or any
-                  other source will not be processed.
-                </li>
-                <li>
-                  Open positions will remain as-is but will not be
-                  managed automatically.
-                </li>
+                <li>Open positions will remain as-is but will not be managed automatically.</li>
                 <li className="font-medium text-destructive">
-                  All devices connected to this account will be logged
-                  out immediately.
+                  All devices connected to this account will be logged out immediately.
                 </li>
               </ul>
             </div>
@@ -62,5 +49,5 @@ export function LogoutConfirmDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  );
+  )
 }

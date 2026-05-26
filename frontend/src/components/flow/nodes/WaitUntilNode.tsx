@@ -3,9 +3,9 @@
  * Pauses workflow execution until a specific time is reached
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Hourglass } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { WaitUntilNodeData } from '@/types/flow'
 
@@ -16,17 +16,8 @@ interface WaitUntilNodeProps {
 
 export const WaitUntilNode = memo(({ data, selected }: WaitUntilNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node node-utility min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node node-utility min-w-[120px]', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded bg-amber-500/10">
@@ -34,9 +25,7 @@ export const WaitUntilNode = memo(({ data, selected }: WaitUntilNodeProps) => {
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Wait Until</div>
-            <div className="text-[9px] text-muted-foreground">
-              Pause execution
-            </div>
+            <div className="text-[9px] text-muted-foreground">Pause execution</div>
           </div>
         </div>
         <div className="space-y-1">
@@ -53,11 +42,7 @@ export const WaitUntilNode = memo(({ data, selected }: WaitUntilNodeProps) => {
           )}
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

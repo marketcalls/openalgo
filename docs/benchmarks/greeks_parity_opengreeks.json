@@ -1,0 +1,1736 @@
+{
+  "engine_a": "py_vollib==1.0.1",
+  "engine_b": "opengreeks==0.1.0",
+  "parity": [
+    {
+      "symbol": "NIFTY26MAY2621000CE",
+      "type": "CE",
+      "moneyness": "DEEP ITM",
+      "F": 23659,
+      "K": 21000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 2691.3,
+      "flag": "c",
+      "iv_pyvollib": 0.5790227872456866,
+      "iv_opengreeks": 0.579022787245813,
+      "iv_abs_err": 1.2645440250480533e-13,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.9549889177853218,
+          "opengreeks": 0.9549889177853218,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 5.577299758798835e-05,
+          "opengreeks": 5.577299758798835e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -14.337888752027416,
+          "opengreeks": -14.337888752027416,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 2.7832238306479242,
+          "opengreeks": 2.7832238306479242,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.4143790923287672,
+          "opengreeks": -0.4143790923287671,
+          "abs_err": 1.1102230246251565e-16,
+          "rel_err": 2.6792447910096506e-16
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2621500CE",
+      "type": "CE",
+      "moneyness": "DEEP ITM",
+      "F": 23659,
+      "K": 21500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 2183.45,
+      "flag": "c",
+      "iv_pyvollib": 0.4582764267771907,
+      "iv_opengreeks": 0.45827642677757846,
+      "iv_abs_err": 3.877453913503359e-13,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.9564779174263289,
+          "opengreeks": 0.9564779174263289,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 6.858299304365004e-05,
+          "opengreeks": 6.858299304365004e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -11.04438097372936,
+          "opengreeks": -11.04438097372936,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 2.7087719554223817,
+          "opengreeks": 2.7087719554223817,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.3361854973972603,
+          "opengreeks": -0.33618549739725984,
+          "abs_err": 4.440892098500626e-16,
+          "rel_err": 1.32096480451474e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2622000CE",
+      "type": "CE",
+      "moneyness": "DEEP ITM",
+      "F": 23659,
+      "K": 22000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 1701.4,
+      "flag": "c",
+      "iv_pyvollib": 0.41605066711763494,
+      "iv_opengreeks": 0.4160506671176413,
+      "iv_abs_err": 6.38378239159465e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.924221603285828,
+          "opengreeks": 0.924221603285828,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.00011681101660597424,
+          "opengreeks": 0.00011681101660597424,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -15.504085597963613,
+          "opengreeks": -15.504085597963613,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 4.188499985140513,
+          "opengreeks": 4.188499985140513,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.2619643249315069,
+          "opengreeks": -0.2619643249315071,
+          "abs_err": 2.220446049250313e-16,
+          "rel_err": 8.47613906905404e-16
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2622500CE",
+      "type": "CE",
+      "moneyness": "DEEP ITM",
+      "F": 23659,
+      "K": 22500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 1204.2,
+      "flag": "c",
+      "iv_pyvollib": 0.3205688579044991,
+      "iv_opengreeks": 0.3205688579049078,
+      "iv_abs_err": 4.086730953645201e-13,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.9001864829896747,
+          "opengreeks": 0.9001864829896747,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0001862281637997683,
+          "opengreeks": 0.0001862281637997683,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -14.674318109147897,
+          "opengreeks": -14.674318109147897,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 5.14511614638303,
+          "opengreeks": 5.14511614638303,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.18541050904109593,
+          "opengreeks": -0.18541050904109546,
+          "abs_err": 4.718447854656915e-16,
+          "rel_err": 2.544865379562212e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623000CE",
+      "type": "CE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 23000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 730,
+      "flag": "c",
+      "iv_pyvollib": 0.24965524216419177,
+      "iv_opengreeks": 0.24965524216419013,
+      "iv_abs_err": 1.6375789613221059e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.8231394353950366,
+          "opengreeks": 0.8231394353950366,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.00035407468285986887,
+          "opengreeks": 0.00035407468285986887,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -16.921784598279036,
+          "opengreeks": -16.921784598279036,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 7.618405000390449,
+          "opengreeks": 7.618405000390449,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.11239800000000001,
+          "opengreeks": -0.11239800000000001,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623200CE",
+      "type": "CE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 23200.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 554.95,
+      "flag": "c",
+      "iv_pyvollib": 0.22804523797117365,
+      "iv_opengreeks": 0.22804523797117335,
+      "iv_abs_err": 3.0531133177191805e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.7600603912464889,
+          "opengreeks": 0.7600603912464889,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.00046428902673057267,
+          "opengreeks": 0.00046428902673057267,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -18.514003578820535,
+          "opengreeks": -18.514003578820535,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 9.1251060217943,
+          "opengreeks": 9.1251060217943,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.08544557547945207,
+          "opengreeks": -0.08544557547945163,
+          "abs_err": 4.440892098500626e-16,
+          "rel_err": 5.197334178606557e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623300CE",
+      "type": "CE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 23300.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 471.65,
+      "flag": "c",
+      "iv_pyvollib": 0.217341155311511,
+      "iv_opengreeks": 0.21734115531151085,
+      "iv_abs_err": 1.3877787807814457e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.7191932934937644,
+          "opengreeks": 0.7191932934937644,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0005283150117263736,
+          "opengreeks": 0.0005283150117263736,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -19.135807877877674,
+          "opengreeks": -19.135807877877674,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 9.896084939711285,
+          "opengreeks": 9.896084939711285,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.07261988589041096,
+          "opengreeks": -0.07261988589041175,
+          "abs_err": 7.91033905045424e-16,
+          "rel_err": 1.0892800165496755e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623400CE",
+      "type": "CE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 23400.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 391,
+      "flag": "c",
+      "iv_pyvollib": 0.20567522142405145,
+      "iv_opengreeks": 0.20567522142405176,
+      "iv_abs_err": 3.0531133177191805e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.671504965455587,
+          "opengreeks": 0.671504965455587,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0005986766232164193,
+          "opengreeks": 0.0005986766232164193,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -19.418968437150653,
+          "opengreeks": -19.418968437150653,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 10.612134992667727,
+          "opengreeks": 10.612134992667727,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.060202216438356174,
+          "opengreeks": -0.060202216438356174,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623500CE",
+      "type": "CE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 23500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 320.7,
+      "flag": "c",
+      "iv_pyvollib": 0.1992818357071148,
+      "iv_opengreeks": 0.19928183570711644,
+      "iv_abs_err": 1.6375789613221059e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.6122008355215526,
+          "opengreeks": 0.6122008355215526,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0006547611726864026,
+          "opengreeks": 0.0006547611726864026,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -19.938305976142818,
+          "opengreeks": -19.938305976142818,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.245509191315078,
+          "opengreeks": 11.245509191315078,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.04937813506849316,
+          "opengreeks": -0.049378135068492986,
+          "abs_err": 1.734723475976807e-16,
+          "rel_err": 3.5131409348906066e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623600CE",
+      "type": "CE",
+      "moneyness": "ATM",
+      "F": 23659,
+      "K": 23600.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 256.35,
+      "flag": "c",
+      "iv_pyvollib": 0.19289110389827185,
+      "iv_opengreeks": 0.1928911038982722,
+      "iv_abs_err": 3.3306690738754696e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.5462876235467723,
+          "opengreeks": 0.5462876235467723,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0006997569011801079,
+          "opengreeks": 0.0006997569011801079,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -19.963721180083205,
+          "opengreeks": -19.963721180083205,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.632896944705058,
+          "opengreeks": 11.632896944705058,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.03947017438356165,
+          "opengreeks": -0.03947017438356142,
+          "abs_err": 2.2898349882893854e-16,
+          "rel_err": 5.801431141492612e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623650CE",
+      "type": "CE",
+      "moneyness": "ATM",
+      "F": 23659,
+      "K": 23650.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 226.2,
+      "flag": "c",
+      "iv_pyvollib": 0.1893115098016702,
+      "iv_opengreeks": 0.18931150980167,
+      "iv_abs_err": 1.942890293094024e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.5111459120548165,
+          "opengreeks": 0.5111459120548165,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0007175451913215158,
+          "opengreeks": 0.0007175451913215158,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -19.718469586336102,
+          "opengreeks": -19.718469586336102,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.70724667975498,
+          "opengreeks": 11.70724667975498,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.034827983013698625,
+          "opengreeks": -0.034827983013698466,
+          "abs_err": 1.5959455978986625e-16,
+          "rel_err": 4.5823658443583756e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623700CE",
+      "type": "CE",
+      "moneyness": "ATM",
+      "F": 23659,
+      "K": 23700.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 199.1,
+      "flag": "c",
+      "iv_pyvollib": 0.18682394485343468,
+      "iv_opengreeks": 0.18682394485343562,
+      "iv_abs_err": 9.43689570931383e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.4748439273320341,
+          "opengreeks": 0.4748439273320341,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0007259366448057259,
+          "opengreeks": 0.0007259366448057259,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -19.428250949585326,
+          "opengreeks": -19.428250949585326,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.68852607166937,
+          "opengreeks": 11.68852607166937,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.0306553997260274,
+          "opengreeks": -0.030655399726027457,
+          "abs_err": 5.551115123125783e-17,
+          "rel_err": 1.810811528388818e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623800CE",
+      "type": "CE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 23800.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 150.7,
+      "flag": "c",
+      "iv_pyvollib": 0.1820502284057459,
+      "iv_opengreeks": 0.1820502284057561,
+      "iv_abs_err": 1.021405182655144e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.400618799416514,
+          "opengreeks": 0.400618799416514,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0007231738038326575,
+          "opengreeks": 0.0007231738038326575,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -18.377864731535105,
+          "opengreeks": -18.377864731535105,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.346512762902346,
+          "opengreeks": 11.346512762902346,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.023203258356164373,
+          "opengreeks": -0.023203258356164498,
+          "abs_err": 1.249000902703301e-16,
+          "rel_err": 5.382868576177712e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623900CE",
+      "type": "CE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 23900.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 109.5,
+      "flag": "c",
+      "iv_pyvollib": 0.1768608589269845,
+      "iv_opengreeks": 0.17686085892698408,
+      "iv_abs_err": 4.163336342344337e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.32605150249656245,
+          "opengreeks": 0.32605150249656245,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0006941078412933063,
+          "opengreeks": 0.0006941078412933063,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -16.647932974514372,
+          "opengreeks": -16.647932974514372,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 10.580036656058384,
+          "opengreeks": 10.580036656058384,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.016859700000000005,
+          "opengreeks": -0.016859700000000002,
+          "abs_err": 3.469446951953614e-18,
+          "rel_err": 2.0578343339167442e-16
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2624000CE",
+      "type": "CE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 24000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 77.15,
+      "flag": "c",
+      "iv_pyvollib": 0.17283661562701108,
+      "iv_opengreeks": 0.1728366156270097,
+      "iv_abs_err": 1.3877787807814457e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.2557403048431397,
+          "opengreeks": 0.2557403048431397,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0006338136659351258,
+          "opengreeks": 0.0006338136659351258,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -14.517873726549764,
+          "opengreeks": -14.517873726549764,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 9.441170582963696,
+          "opengreeks": 9.441170582963696,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.011878774931506854,
+          "opengreeks": -0.011878774931507354,
+          "abs_err": 4.996003610813204e-16,
+          "rel_err": 4.2058239503822704e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2624200CE",
+      "type": "CE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 24200.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 34.6,
+      "flag": "c",
+      "iv_pyvollib": 0.1669558528999666,
+      "iv_opengreeks": 0.1669558528999892,
+      "iv_abs_err": 2.2620794126737565e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.13985120358524475,
+          "opengreeks": 0.13985120358524475,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.00045378481716192964,
+          "opengreeks": 0.00045378481716192964,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -9.698915296754498,
+          "opengreeks": -9.698915296754498,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 6.529502635512757,
+          "opengreeks": 6.529502635512757,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.005327357260273976,
+          "opengreeks": -0.005327357260274169,
+          "abs_err": 1.9255430583342559e-16,
+          "rel_err": 3.614443267570962e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2624500CE",
+      "type": "CE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 24500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 9.5,
+      "flag": "c",
+      "iv_pyvollib": 0.16717975621931436,
+      "iv_opengreeks": 0.16717975621932452,
+      "iv_abs_err": 1.0158540675320182e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.04712131604976589,
+          "opengreeks": 0.04712131604976589,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0002004101865944986,
+          "opengreeks": 0.0002004101865944986,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -4.294939751452035,
+          "opengreeks": -4.294939751452035,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 2.8875663483467533,
+          "opengreeks": 2.8875663483467533,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.0014627136986301338,
+          "opengreeks": -0.001462713698630137,
+          "abs_err": 3.2526065174565133e-18,
+          "rel_err": 2.2236795351699084e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2625000CE",
+      "type": "CE",
+      "moneyness": "DEEP OTM",
+      "F": 23659,
+      "K": 25000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 1.9,
+      "flag": "c",
+      "iv_pyvollib": 0.19032579082009876,
+      "iv_opengreeks": 0.19032579082008766,
+      "iv_abs_err": 1.1102230246251565e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.010098408360061671,
+          "opengreeks": 0.010098408360061671,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 4.810960655125797e-05,
+          "opengreeks": 4.810960655125797e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -1.3362785574931832,
+          "opengreeks": -1.3362785574931832,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 0.7891470549416362,
+          "opengreeks": 0.7891470549416362,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.0002925427397260278,
+          "opengreeks": -0.00029254273972601955,
+          "abs_err": 8.239936510889834e-18,
+          "rel_err": 2.8166607445485407e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2625500CE",
+      "type": "CE",
+      "moneyness": "DEEP OTM",
+      "F": 23659,
+      "K": 25500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 1.1,
+      "flag": "c",
+      "iv_pyvollib": 0.2337775407481102,
+      "iv_opengreeks": 0.2337775407480962,
+      "iv_abs_err": 1.3988810110276972e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.005103642399167924,
+          "opengreeks": 0.005103642399167924,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 2.1457432822645307e-05,
+          "opengreeks": 2.1457432822645307e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -0.899193670828875,
+          "opengreeks": -0.899193670828875,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 0.43232369495546125,
+          "opengreeks": 0.43232369495546125,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.00016936684931506834,
+          "opengreeks": -0.00016936684931506766,
+          "abs_err": 6.776263578034403e-19,
+          "rel_err": 4.000938557597368e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2626000CE",
+      "type": "CE",
+      "moneyness": "DEEP OTM",
+      "F": 23659,
+      "K": 26000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 0.8,
+      "flag": "c",
+      "iv_pyvollib": 0.2777328816705993,
+      "iv_opengreeks": 0.27773288167061083,
+      "iv_abs_err": 1.1546319456101628e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": 0.0032579520829886725,
+          "opengreeks": 0.0032579520829886725,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 1.208621858087606e-05,
+          "opengreeks": 1.208621858087606e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -0.7148500522123646,
+          "opengreeks": -0.7148500522123646,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 0.28929853636797864,
+          "opengreeks": 0.28929853636797864,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.00012317589041095875,
+          "opengreeks": -0.00012317589041095628,
+          "abs_err": 2.4665599424045226e-18,
+          "rel_err": 2.0024697480774834e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2621000PE",
+      "type": "PE",
+      "moneyness": "DEEP OTM",
+      "F": 23659,
+      "K": 21000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 2.15,
+      "flag": "p",
+      "iv_pyvollib": 0.3847368518204089,
+      "iv_opengreeks": 0.38473685182036865,
+      "iv_abs_err": 4.0245584642661925e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.005848175635041577,
+          "opengreeks": -0.005848175635041577,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 1.4715446421930449e-05,
+          "opengreeks": 1.4715446421930449e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -1.6702094022189655,
+          "opengreeks": -1.6702094022189655,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 0.48793921222351955,
+          "opengreeks": 0.48793921222351955,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.0003310352054794517,
+          "opengreeks": -0.000331035205479453,
+          "abs_err": 1.3010426069826053e-18,
+          "rel_err": 3.930224294718904e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2621500PE",
+      "type": "PE",
+      "moneyness": "DEEP OTM",
+      "F": 23659,
+      "K": 21500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 2.5,
+      "flag": "p",
+      "iv_pyvollib": 0.32217826682664086,
+      "iv_opengreeks": 0.32217826682663053,
+      "iv_abs_err": 1.0325074129013956e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.007897680839107463,
+          "opengreeks": -0.007897680839107463,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 2.291424291743966e-05,
+          "opengreeks": 2.291424291743966e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -1.823760910169198,
+          "opengreeks": -1.823760910169198,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 0.63625358966717,
+          "opengreeks": 0.63625358966717,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.0003849246575342463,
+          "opengreeks": -0.00038492465753423347,
+          "abs_err": 1.2847795743953228e-17,
+          "rel_err": 3.3377429822900273e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2622000PE",
+      "type": "PE",
+      "moneyness": "DEEP OTM",
+      "F": 23659,
+      "K": 22000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 3.95,
+      "flag": "p",
+      "iv_pyvollib": 0.2689056677795052,
+      "iv_opengreeks": 0.2689056677795303,
+      "iv_abs_err": 2.5091040356528538e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.014063381884920113,
+          "opengreeks": -0.014063381884920113,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 4.538216390029945e-05,
+          "opengreeks": 4.538216390029945e-05,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -2.5162571411427397,
+          "opengreeks": -2.5162571411427397,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 1.0517527298162703,
+          "opengreeks": 1.0517527298162703,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.0006081809589041107,
+          "opengreeks": -0.0006081809589041517,
+          "abs_err": 4.098284211995207e-17,
+          "rel_err": 6.738593426831316e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2622500PE",
+      "type": "PE",
+      "moneyness": "DEEP OTM",
+      "F": 23659,
+      "K": 22500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 8.1,
+      "flag": "p",
+      "iv_pyvollib": 0.21987972956821036,
+      "iv_opengreeks": 0.21987972956822754,
+      "iv_abs_err": 1.7180701306074297e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.031826272330283026,
+          "opengreeks": -0.031826272330283026,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.00011069273328821745,
+          "opengreeks": 0.00011069273328821745,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -4.103546963638744,
+          "opengreeks": -4.103546963638744,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 2.0976488943515195,
+          "opengreeks": 2.0976488943515195,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.0012471558904109572,
+          "opengreeks": -0.0012471558904110151,
+          "abs_err": 5.789639601072594e-17,
+          "rel_err": 4.642274190089274e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623000PE",
+      "type": "PE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 23000.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 30.3,
+      "flag": "p",
+      "iv_pyvollib": 0.18881310645774457,
+      "iv_opengreeks": 0.1888131064577363,
+      "iv_abs_err": 8.271161533457416e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.11171294554666406,
+          "opengreeks": -0.11171294554666406,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.00034300579235668256,
+          "opengreeks": 0.00034300579235668256,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -9.376389450357456,
+          "opengreeks": -9.376389450357456,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 5.581643357354178,
+          "opengreeks": 5.581643357354178,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.004665286849315067,
+          "opengreeks": -0.004665286849315097,
+          "abs_err": 2.949029909160572e-17,
+          "rel_err": 6.3212188326502e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623200PE",
+      "type": "PE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 23200.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 52.75,
+      "flag": "p",
+      "iv_pyvollib": 0.1774024804272648,
+      "iv_opengreeks": 0.17740248042727275,
+      "iv_abs_err": 7.93809462606987e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.183794622706606,
+          "opengreeks": -0.183794622706606,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0005104538291350644,
+          "opengreeks": 0.0005104538291350644,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -12.318157424440109,
+          "opengreeks": -12.318157424440109,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 7.804492106635908,
+          "opengreeks": 7.804492106635908,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.008121910273972603,
+          "opengreeks": -0.008121910273972324,
+          "abs_err": 2.7929047963226594e-16,
+          "rel_err": 3.438728946899076e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623300PE",
+      "type": "PE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 23300.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 69.9,
+      "flag": "p",
+      "iv_pyvollib": 0.17230637889942713,
+      "iv_opengreeks": 0.17230637889942813,
+      "iv_abs_err": 9.992007221626409e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.2339695027016925,
+          "opengreeks": -0.2339695027016925,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0006060283055268597,
+          "opengreeks": 0.0006060283055268597,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -13.7963920995815,
+          "opengreeks": -13.7963920995815,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 8.999590665844565,
+          "opengreeks": 8.999590665844565,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.010762493424657538,
+          "opengreeks": -0.01076249342465776,
+          "abs_err": 2.220446049250313e-16,
+          "rel_err": 2.063133478124255e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623400PE",
+      "type": "PE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 23400.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 92.35,
+      "flag": "p",
+      "iv_pyvollib": 0.1675162775412034,
+      "iv_opengreeks": 0.16751627754120332,
+      "iv_abs_err": 8.326672684688674e-17,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.2946141008821803,
+          "opengreeks": -0.2946141008821803,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0007011795955522362,
+          "opengreeks": 0.0007011795955522362,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -15.087358344354735,
+          "opengreeks": -15.087358344354735,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 10.12312909574818,
+          "opengreeks": 10.12312909574818,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.014219116849315072,
+          "opengreeks": -0.014219116849314985,
+          "abs_err": 8.673617379884035e-17,
+          "rel_err": 6.099969127338482e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623500PE",
+      "type": "PE",
+      "moneyness": "OTM",
+      "F": 23659,
+      "K": 23500.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 121,
+      "flag": "p",
+      "iv_pyvollib": 0.1627876665867019,
+      "iv_opengreeks": 0.16278766658670335,
+      "iv_abs_err": 1.4432899320127035e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.36544972716615276,
+          "opengreeks": -0.36544972716615276,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0007868438358123055,
+          "opengreeks": 0.0007868438358123055,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -15.988269172685023,
+          "opengreeks": -15.988269172685023,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.039223770151715,
+          "opengreeks": 11.039223770151715,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.018630353424657537,
+          "opengreeks": -0.018630353424657537,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623600PE",
+      "type": "PE",
+      "moneyness": "ATM",
+      "F": 23659,
+      "K": 23600.0,
+      "t": 0.015396986301369864,
+      "r": 0.0,
+      "price": 156.1,
+      "flag": "p",
+      "iv_pyvollib": 0.15738821985395077,
+      "iv_opengreeks": 0.15738821985395338,
+      "iv_abs_err": 2.609024107869118e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.44527165673971175,
+          "opengreeks": -0.44527165673971175,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0008552856422299917,
+          "opengreeks": 0.0008552856422299917,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -16.245217733620418,
+          "opengreeks": -16.245217733620418,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.60143995858044,
+          "opengreeks": 11.60143995858044,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.024034695616438367,
+          "opengreeks": -0.024034695616438135,
+          "abs_err": 2.3245294578089215e-16,
+          "rel_err": 9.671557713504286e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623650PE",
+      "type": "PE",
+      "moneyness": "ATM",
+      "F": 23659,
+      "K": 23650.0,
+      "t": 0.01539068493150685,
+      "r": 0.0,
+      "price": 176.25,
+      "flag": "p",
+      "iv_pyvollib": 0.15436414369092316,
+      "iv_opengreeks": 0.15436414369092305,
+      "iv_abs_err": 1.1102230246251565e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.48825559587077466,
+          "opengreeks": -0.48825559587077466,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.000880136507087929,
+          "opengreeks": 0.000880136507087929,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -16.08099067133036,
+          "opengreeks": -16.08099067133036,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.704346752461188,
+          "opengreeks": 11.704346752461188,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.027126082191780823,
+          "opengreeks": -0.027126082191780823,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623700PE",
+      "type": "PE",
+      "moneyness": "ATM",
+      "F": 23659,
+      "K": 23700.0,
+      "t": 0.01539068493150685,
+      "r": 0.0,
+      "price": 199,
+      "flag": "p",
+      "iv_pyvollib": 0.1516699512804178,
+      "iv_opengreeks": 0.15166995128041727,
+      "iv_abs_err": 5.273559366969494e-16,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.5329200177842454,
+          "opengreeks": -0.5329200177842454,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0008931063601870818,
+          "opengreeks": 0.0008931063601870818,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -15.753323268287904,
+          "opengreeks": -15.753323268287904,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.66953217098579,
+          "opengreeks": 11.66953217098579,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.030627463013698637,
+          "opengreeks": -0.030627463013698075,
+          "abs_err": 5.620504062164855e-16,
+          "rel_err": 1.835119043210008e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623800PE",
+      "type": "PE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 23800.0,
+      "t": 0.01539068493150685,
+      "r": 0.0,
+      "price": 250.55,
+      "flag": "p",
+      "iv_pyvollib": 0.1454974698170509,
+      "iv_opengreeks": 0.14549746981706946,
+      "iv_abs_err": 1.8568480086855743e-14,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.6255785330252575,
+          "opengreeks": -0.6255785330252575,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0008875041527713439,
+          "opengreeks": 0.0008875041527713439,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -14.406257872267208,
+          "opengreeks": -14.406257872267208,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 11.124398840063433,
+          "opengreeks": 11.124398840063433,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.03856136109589041,
+          "opengreeks": -0.03856136109589002,
+          "abs_err": 3.885780586188048e-16,
+          "rel_err": 1.0076876115771148e-14
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2623900PE",
+      "type": "PE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 23900.0,
+      "t": 0.01539068493150685,
+      "r": 0.0,
+      "price": 306.7,
+      "flag": "p",
+      "iv_pyvollib": 0.13406639183289948,
+      "iv_opengreeks": 0.13406639183289953,
+      "iv_abs_err": 5.551115123125783e-17,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.7260923904270968,
+          "opengreeks": -0.7260923904270968,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.000846294034880817,
+          "opengreeks": 0.000846294034880817,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -11.66355739050293,
+          "opengreeks": -11.66355739050293,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 9.77444072315379,
+          "opengreeks": 9.77444072315379,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.047203230684931506,
+          "opengreeks": -0.04720323068493163,
+          "abs_err": 1.249000902703301e-16,
+          "rel_err": 2.6460072426822567e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2624000PE",
+      "type": "PE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 24000.0,
+      "t": 0.01539068493150685,
+      "r": 0.0,
+      "price": 375.9,
+      "flag": "p",
+      "iv_pyvollib": 0.12410724663371349,
+      "iv_opengreeks": 0.12410724663371586,
+      "iv_abs_err": 2.373101715136272e-15,
+      "greeks": {
+        "delta": {
+          "pyvollib": -0.821667989714723,
+          "opengreeks": -0.821667989714723,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "gamma": {
+          "pyvollib": 0.0007161403106095459,
+          "opengreeks": 0.0007161403106095459,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "theta": {
+          "pyvollib": -8.457895405814698,
+          "opengreeks": -8.457895405814698,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "vega": {
+          "pyvollib": 7.6567766219056255,
+          "opengreeks": 7.6567766219056255,
+          "abs_err": 0.0,
+          "rel_err": 0.0
+        },
+        "rho": {
+          "pyvollib": -0.05785358465753425,
+          "opengreeks": -0.05785358465753448,
+          "abs_err": 2.2898349882893854e-16,
+          "rel_err": 3.95798290087662e-15
+        }
+      }
+    },
+    {
+      "symbol": "NIFTY26MAY2624200PE",
+      "type": "PE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 24200.0,
+      "t": 0.01539068493150685,
+      "r": 0.0,
+      "price": 531.6,
+      "flag": "p",
+      "iv_pyvollib": null,
+      "iv_opengreeks": null,
+      "iv_abs_err": null,
+      "greeks": {}
+    },
+    {
+      "symbol": "NIFTY26MAY2624500PE",
+      "type": "PE",
+      "moneyness": "ITM",
+      "F": 23659,
+      "K": 24500.0,
+      "t": 0.01539068493150685,
+      "r": 0.0,
+      "price": 806.6,
+      "flag": "p",
+      "iv_pyvollib": null,
+      "iv_opengreeks": null,
+      "iv_abs_err": null,
+      "greeks": {}
+    },
+    {
+      "symbol": "NIFTY26MAY2625000PE",
+      "type": "PE",
+      "moneyness": "DEEP ITM",
+      "F": 23659,
+      "K": 25000.0,
+      "t": 0.015390410958904109,
+      "r": 0.0,
+      "price": 1300,
+      "flag": "p",
+      "iv_pyvollib": null,
+      "iv_opengreeks": null,
+      "iv_abs_err": null,
+      "greeks": {}
+    },
+    {
+      "symbol": "NIFTY26MAY2625500PE",
+      "type": "PE",
+      "moneyness": "DEEP ITM",
+      "F": 23659,
+      "K": 25500.0,
+      "t": 0.015390410958904109,
+      "r": 0.0,
+      "price": 1807.15,
+      "flag": "p",
+      "iv_pyvollib": null,
+      "iv_opengreeks": null,
+      "iv_abs_err": null,
+      "greeks": {}
+    },
+    {
+      "symbol": "NIFTY26MAY2626000PE",
+      "type": "PE",
+      "moneyness": "DEEP ITM",
+      "F": 23659,
+      "K": 26000.0,
+      "t": 0.015390410958904109,
+      "r": 0.0,
+      "price": 2296.65,
+      "flag": "p",
+      "iv_pyvollib": null,
+      "iv_opengreeks": null,
+      "iv_abs_err": null,
+      "greeks": {}
+    }
+  ],
+  "per_function_speedup": [
+    {
+      "function": "implied_volatility",
+      "pyvollib_us": 17.291,
+      "opengreeks_us": 0.375,
+      "speedup": 46.1
+    },
+    {
+      "function": "delta",
+      "pyvollib_us": 1.75,
+      "opengreeks_us": 0.209,
+      "speedup": 8.4
+    },
+    {
+      "function": "gamma",
+      "pyvollib_us": 1.458,
+      "opengreeks_us": 0.209,
+      "speedup": 7.0
+    },
+    {
+      "function": "theta",
+      "pyvollib_us": 5.792,
+      "opengreeks_us": 0.209,
+      "speedup": 27.7
+    },
+    {
+      "function": "vega",
+      "pyvollib_us": 1.5,
+      "opengreeks_us": 0.209,
+      "speedup": 7.2
+    },
+    {
+      "function": "rho",
+      "pyvollib_us": 3.958,
+      "opengreeks_us": 0.209,
+      "speedup": 18.9
+    }
+  ],
+  "chain_speedup": {
+    "n_options": 35,
+    "iterations": 200,
+    "pyvollib_median_ms": 1.484708,
+    "opengreeks_median_ms": 0.116292,
+    "speedup": 12.767069101915867
+  }
+}

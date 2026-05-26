@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
 import { Radio, Wifi, WifiOff } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Table,
   TableBody,
@@ -22,7 +22,7 @@ export interface PnLTabProps {
 }
 
 function formatCurrency(v: number): string {
-  if (!isFinite(v)) return '—'
+  if (!Number.isFinite(v)) return '—'
   const abs = Math.abs(v)
   const sign = v < 0 ? '-' : v > 0 ? '+' : ''
   return `${sign}₹${abs.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
@@ -49,13 +49,7 @@ function useFlashOnChange(value: number | undefined): 'up' | 'down' | null {
   return flash
 }
 
-function PriceCell({
-  value,
-  isClosed,
-}: {
-  value: number | undefined
-  isClosed: boolean
-}) {
+function PriceCell({ value, isClosed }: { value: number | undefined; isClosed: boolean }) {
   const flash = useFlashOnChange(isClosed ? undefined : value)
   if (isClosed || value === undefined) {
     return <span className="text-muted-foreground">—</span>
@@ -96,9 +90,7 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
   // and don't consume a WebSocket subscription.
   const openLegs = useMemo(
     () =>
-      legs.filter(
-        (l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0) && l.symbol
-      ),
+      legs.filter((l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0) && l.symbol),
     [legs]
   )
 
@@ -328,10 +320,7 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
         {rows.length > 0 && (
           <TableFooter>
             <TableRow>
-              <TableCell
-                colSpan={6}
-                className="text-[10px] font-semibold uppercase tracking-wider"
-              >
+              <TableCell colSpan={6} className="text-[10px] font-semibold uppercase tracking-wider">
                 Total P&amp;L
               </TableCell>
               <TableCell className="whitespace-nowrap text-right text-sm">

@@ -16,6 +16,8 @@
  * the rest of this page lifetime to avoid noise.
  */
 
+import { tryAutoReloadOnChunkError } from '@/utils/chunkReload'
+
 interface ClientErrorPayload {
   message: string
   stack?: string
@@ -155,9 +157,7 @@ export function installGlobalErrorReporter(): void {
     // Stale-bundle recovery: if a top-level script tag failed to load
     // (e.g. preload of the new entry chunk after a deploy), reload once
     // to fetch the fresh index.html.
-    void import('@/utils/chunkReload').then(({ tryAutoReloadOnChunkError }) => {
-      tryAutoReloadOnChunkError(event.message)
-    })
+    tryAutoReloadOnChunkError(event.message)
   })
 
   window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
@@ -181,8 +181,6 @@ export function installGlobalErrorReporter(): void {
     // ErrorBoundary, but rapid navigation or non-React import() callers
     // can let them surface here instead. tryAutoReloadOnChunkError is a
     // no-op for unrelated rejections.
-    void import('@/utils/chunkReload').then(({ tryAutoReloadOnChunkError }) => {
-      tryAutoReloadOnChunkError(message)
-    })
+    tryAutoReloadOnChunkError(message)
   })
 }

@@ -12,7 +12,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { chartinkApi } from '@/api/chartink'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -37,6 +36,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink'
+import { showToast } from '@/utils/toast'
 
 export default function ViewChartinkStrategy() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -48,7 +48,10 @@ export default function ViewChartinkStrategy() {
   const [deleting, setDeleting] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copiedField, setCopiedField] = useState<string | null>(null)
-  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const [hostConfig, setHostConfig] = useState<{
+    host_server: string
+    is_localhost: boolean
+  } | null>(null)
 
   const fetchStrategy = async () => {
     if (!strategyId) return
@@ -76,7 +79,8 @@ export default function ViewChartinkStrategy() {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
-          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          is_localhost:
+            window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
         })
       }
     }
@@ -106,7 +110,10 @@ export default function ViewChartinkStrategy() {
       const response = await chartinkApi.toggleStrategy(strategy.id)
       if (response.status === 'success') {
         setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active })
-        showToast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated', 'chartink')
+        showToast.success(
+          response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated',
+          'chartink'
+        )
       } else {
         showToast.error(response.message || 'Failed to toggle strategy', 'chartink')
       }
@@ -288,6 +295,7 @@ export default function ViewChartinkStrategy() {
                   variant="outline"
                   size="icon"
                   onClick={() => copyToClipboard(webhookUrl, 'url')}
+                  aria-label={copiedField === 'url' ? 'Webhook URL copied' : 'Copy webhook URL'}
                 >
                   {copiedField === 'url' ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -387,6 +395,7 @@ export default function ViewChartinkStrategy() {
                         size="icon"
                         className="text-red-500 hover:text-red-600 hover:bg-red-50"
                         onClick={() => handleDeleteMapping(mapping.id)}
+                        aria-label="Delete symbol mapping"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

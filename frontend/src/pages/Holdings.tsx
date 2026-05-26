@@ -9,7 +9,6 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { tradingApi } from '@/api/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -24,7 +23,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useLivePrice, calculateLiveStats } from '@/hooks/useLivePrice'
+import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -52,7 +52,11 @@ export default function Holdings() {
 
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
   // Automatically pauses when tab is hidden
-  const { data: enhancedHoldings, isLive, isPaused } = useLivePrice(holdings, {
+  const {
+    data: enhancedHoldings,
+    isLive,
+    isPaused,
+  } = useLivePrice(holdings, {
     enabled: holdings.length > 0,
     useMultiQuotesFallback: true,
     staleThreshold: 5000,

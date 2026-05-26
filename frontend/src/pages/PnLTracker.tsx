@@ -1,11 +1,11 @@
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { showToast } from '@/utils/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useThemeStore } from '@/stores/themeStore'
-import { useAuthStore } from '@/stores/authStore'
 import { makeFormatCurrency } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
+import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
@@ -74,7 +74,9 @@ export default function PnLTracker() {
   // cascade: user?.broker changes → formatCurrency new ref → initChart new ref
   // → both useEffects fire → duplicate chart init + duplicate API requests.
   const formatCurrencyRef = useRef(formatCurrency)
-  useEffect(() => { formatCurrencyRef.current = formatCurrency }, [formatCurrency])
+  useEffect(() => {
+    formatCurrencyRef.current = formatCurrency
+  }, [formatCurrency])
 
   // Initialize chart
   const initChart = useCallback(() => {
@@ -89,7 +91,7 @@ export default function PnLTracker() {
     // Remove existing watermark before creating a new one — prevents stacking
     // multiple watermark divs when initChart is called more than once (e.g. on
     // theme change or dependency array re-evaluation).
-    if (watermarkRef.current && watermarkRef.current.parentNode) {
+    if (watermarkRef.current?.parentNode) {
       watermarkRef.current.parentNode.removeChild(watermarkRef.current)
       watermarkRef.current = null
     }
@@ -342,7 +344,7 @@ export default function PnLTracker() {
         chartRef.current.remove()
         chartRef.current = null
       }
-      if (watermarkRef.current && watermarkRef.current.parentNode) {
+      if (watermarkRef.current?.parentNode) {
         watermarkRef.current.parentNode.removeChild(watermarkRef.current)
         watermarkRef.current = null
       }

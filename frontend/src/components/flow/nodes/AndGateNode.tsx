@@ -3,8 +3,8 @@
  * Combines multiple condition inputs - outputs Yes only if ALL inputs are Yes
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 
 interface AndGateNodeProps {
@@ -19,15 +19,10 @@ export const AndGateNode = memo(({ data, selected }: AndGateNodeProps) => {
   const inputCount = data.inputCount || 2
 
   return (
-    <div
-      className={cn(
-        'workflow-node node-condition min-w-[100px]',
-        selected && 'selected'
-      )}
-    >
+    <div className={cn('workflow-node node-condition min-w-[100px]', selected && 'selected')}>
       {/* Multiple input handles */}
       {Array.from({ length: inputCount }).map((_, i) => {
-        const position = (i + 1) / (inputCount + 1) * 100
+        const position = ((i + 1) / (inputCount + 1)) * 100
         return (
           <Handle
             key={`input-${i}`}
@@ -46,9 +41,7 @@ export const AndGateNode = memo(({ data, selected }: AndGateNodeProps) => {
           </div>
         </div>
         <div className="rounded bg-muted/50 px-2 py-1 text-center">
-          <div className="text-[9px] text-muted-foreground">
-            All conditions must be true
-          </div>
+          <div className="text-[9px] text-muted-foreground">All conditions must be true</div>
         </div>
         {/* Handle labels */}
         <div className="mt-2 flex justify-between px-1 text-[8px]">

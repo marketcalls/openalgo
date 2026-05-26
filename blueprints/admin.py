@@ -2188,7 +2188,8 @@ def api_mcp_kill_switch():
 # The PUT endpoint surfaces this clearly via restart_required=true.
 
 import re
-import stat as _stat
+
+from utils.env_check import _atomic_replace_text
 
 
 _ENV_KEY_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*)$")
@@ -2214,12 +2215,16 @@ def _read_env_bool(key: str, default: bool) -> bool:
 
 
 def _set_env_value(env_path: Path, key: str, value: str) -> None:
-    """Atomically update or append KEY = 'VALUE' in .env, preserving mode.
+    """Update or append ``KEY = 'VALUE'`` in .env.
 
     Matches the existing single-quoted style install.sh writes. Quotes
     and backslashes inside the value are forbidden — the only callers
     here pass booleans and a validated HTTPS URL, so escaping isn't
     needed and rejecting odd input is safer than encoding it.
+
+    Persistence goes through ``utils.env_check._atomic_replace_text``
+    which falls back to in-place truncate on Docker single-file bind
+    mounts (rename(2) over a mountpoint returns EBUSY/EXDEV).
     """
     if not _ENV_KEY_PATTERN.match(key):
         raise ValueError(f"Refusing to write malformed env key: {key!r}")
@@ -2245,14 +2250,12 @@ def _set_env_value(env_path: Path, key: str, value: str) -> None:
             lines[-1] = lines[-1] + "\n"
         lines.append(new_line)
 
-    original_mode = _stat.S_IMODE(env_path.stat().st_mode)
-    tmp_path = env_path.with_name(env_path.name + ".tmp")
-    tmp_path.write_text("".join(lines))
-    try:
-        tmp_path.chmod(original_mode)
-    except OSError:
-        pass  # cross-fs or unprivileged — atomic replace below still works
-    tmp_path.replace(env_path)
+    # Reuse the rotate_pepper helper: it already handles the Docker single-file
+    # bind-mount case (install-docker.sh maps ./.env:/app/.env, which makes
+    # /app/.env a mountpoint that rename(2) refuses to overwrite — EBUSY/EXDEV)
+    # plus Windows ERROR_ACCESS_DENIED retries. See issue #1337 for the user
+    # report on the admin MCP-settings save path.
+    _atomic_replace_text(str(env_path), "".join(lines))
 
 
 def _mcp_settings_payload() -> dict:

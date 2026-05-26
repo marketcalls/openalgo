@@ -25,12 +25,7 @@ export interface WhatsAppConfig {
   is_running?: boolean
 }
 
-export type WhatsAppPairStatus =
-  | 'idle'
-  | 'starting'
-  | 'awaiting_scan'
-  | 'paired'
-  | 'failed'
+export type WhatsAppPairStatus = 'idle' | 'starting' | 'awaiting_scan' | 'paired' | 'failed'
 
 export interface WhatsAppPairState {
   status: WhatsAppPairStatus

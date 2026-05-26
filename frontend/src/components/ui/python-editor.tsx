@@ -1,11 +1,11 @@
-import CodeMirror from '@uiw/react-codemirror'
 import { python } from '@codemirror/lang-python'
-import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { createTheme } from '@uiw/codemirror-themes'
-import { useThemeStore } from '@/stores/themeStore'
+import CodeMirror from '@uiw/react-codemirror'
 import { useMemo } from 'react'
+import { useThemeStore } from '@/stores/themeStore'
 
 interface PythonEditorProps {
   value: string
@@ -140,12 +140,7 @@ export function PythonEditor({
   const isDark = mode === 'dark' || appMode === 'analyzer'
 
   const extensions = useMemo(() => {
-    return [
-      python(),
-      createPythonTheme(isDark),
-      createBaseTheme(isDark),
-      EditorView.lineWrapping,
-    ]
+    return [python(), createPythonTheme(isDark), createBaseTheme(isDark), EditorView.lineWrapping]
   }, [isDark])
 
   return (
