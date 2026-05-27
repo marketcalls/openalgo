@@ -310,7 +310,7 @@ def process_definedge_allmaster_csv(path):
 
         # Define column names based on DefinedGe format
         # Based on the sample: ['NFO', '144537', 'ZYDUSLIFE', 'ZYDUSLIFE30SEP25P1360', 'OPTSTK', '30092025', '5', '900', 'PE', '136000', '2', '1', 'Unnamed: 12', '1.000000', 'Unnamed: 14']
-        # Format appears to be: Exchange, Token, Name, TradingSymbol, InstrumentType, Expiry, LotSize, TickSize, OptionType, StrikePrice, ...
+        # Format: Exchange, Token, Name, TradingSymbol, InstrumentType, Expiry, TickSize (paise), LotSize, OptionType, StrikePrice (paise), ...
         column_names = [
             "Exchange",
             "Token",
@@ -318,8 +318,8 @@ def process_definedge_allmaster_csv(path):
             "TradingSymbol",
             "InstrumentType",
             "Expiry",
-            "LotSize",
             "TickSize",
+            "LotSize",
             "OptionType",
             "StrikePrice",
             "Col10",
@@ -346,7 +346,9 @@ def process_definedge_allmaster_csv(path):
             pd.to_numeric(df["StrikePrice"], errors="coerce").fillna(0.0) / 100
         )  # Convert paise to rupees
         processed_df["lotsize"] = pd.to_numeric(df["LotSize"], errors="coerce").fillna(1)
-        processed_df["tick_size"] = pd.to_numeric(df["TickSize"], errors="coerce").fillna(0.05)
+        processed_df["tick_size"] = (
+            pd.to_numeric(df["TickSize"], errors="coerce").fillna(5) / 100
+        )  # Convert paise to rupees
 
         # Map instrument types based on exchange and instrument type
         processed_df["instrumenttype"] = df["InstrumentType"].fillna("EQ")
