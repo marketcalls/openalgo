@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+BREW_PREFIX="$(brew --prefix)"
+GRAFANA_HOME="${GRAFANA_HOME:-$BREW_PREFIX/share/grafana}"
+GRAFANA_CONFIG="${GRAFANA_CONFIG:-$BREW_PREFIX/etc/grafana/grafana.ini}"
+GRAFANA_DATA_DIR="${GRAFANA_DATA_DIR:-$REPO_ROOT/.tmp/grafana/data}"
+GRAFANA_LOG_DIR="${GRAFANA_LOG_DIR:-$REPO_ROOT/.tmp/grafana/log}"
+GRAFANA_PLUGIN_DIR="${GRAFANA_PLUGIN_DIR:-$REPO_ROOT/.tmp/grafana/plugins}"
+
+mkdir -p "$GRAFANA_DATA_DIR" "$GRAFANA_LOG_DIR" "$GRAFANA_PLUGIN_DIR"
+
+export GF_PATHS_DATA="$GRAFANA_DATA_DIR"
+export GF_PATHS_LOGS="$GRAFANA_LOG_DIR"
+export GF_PATHS_PLUGINS="$GRAFANA_PLUGIN_DIR"
+export GF_PATHS_PROVISIONING="$REPO_ROOT/config/grafana/provisioning"
+export GF_SERVER_HTTP_ADDR="${GF_SERVER_HTTP_ADDR:-127.0.0.1}"
+export GF_SERVER_HTTP_PORT="${GF_SERVER_HTTP_PORT:-3001}"
+export GF_AUTH_ANONYMOUS_ENABLED="${GF_AUTH_ANONYMOUS_ENABLED:-true}"
+export GF_AUTH_ANONYMOUS_ORG_ROLE="${GF_AUTH_ANONYMOUS_ORG_ROLE:-Viewer}"
+export GF_SECURITY_ADMIN_USER="${GF_SECURITY_ADMIN_USER:-admin}"
+export GF_SECURITY_ADMIN_PASSWORD="${GF_SECURITY_ADMIN_PASSWORD:-admin}"
+
+exec grafana server \
+  --homepath "$GRAFANA_HOME" \
+  --config "$GRAFANA_CONFIG"

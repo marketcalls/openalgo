@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: lean_mes_strategy
+    static_configs:
+      - targets:
+          - 127.0.0.1:9108

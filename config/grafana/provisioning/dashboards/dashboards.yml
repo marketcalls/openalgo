@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: Lean Strategies
+    orgId: 1
+    folder: Lean
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /Users/arifkhan/github/lean-strategies/config/grafana/dashboards

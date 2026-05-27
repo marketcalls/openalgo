@@ -20,6 +20,13 @@ if [[ "${LIVE_CONFIRM:-}" != "true" ]]; then
   exit 1
 fi
 
+if [[ "${IB_TRADING_MODE:-paper}" == "live" && "${LIVE_CONFIRM_REAL:-}" != "true" ]]; then
+  echo "Safety check: IB_TRADING_MODE=live can place real orders."
+  echo "For paper testing, run with IB_TRADING_MODE=paper."
+  echo "For real trading, also set LIVE_CONFIRM_REAL=true."
+  exit 1
+fi
+
 mkdir -p "$REPO_ROOT/.tmp"
 CONFIG_PATH="$REPO_ROOT/.tmp/live-ib.config.json"
 TEMPLATE_PATH="$REPO_ROOT/config/templates/live-interactive.template.json"

@@ -6,9 +6,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 load_env() {
   if [[ -f "$REPO_ROOT/.env" ]]; then
-    set -a
-    source "$REPO_ROOT/.env"
-    set +a
+    local line key
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+      key="${line%%=*}"
+      [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+      if [[ -z "${!key+x}" ]]; then
+        eval "export $line"
+      fi
+    done < "$REPO_ROOT/.env"
   fi
 }
 
