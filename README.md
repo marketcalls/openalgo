@@ -210,6 +210,51 @@ You can run that command repeatedly while the live strategy is running to captur
 - Do not keep IB credentials in `.env` unless you intentionally want Lean to automate Gateway login.
 - `IB_TRADING_MODE=live` is blocked unless `LIVE_CONFIRM_REAL=true` is also set.
 
+## Run live locally with FYERS
+
+This repo can run Lean live against the local FYERS brokerage project at:
+
+```text
+/Users/arifkhan/github/Lean-Brokerages/Lean.Brokerages.Fyers/QuantConnect.FyersBrokerage
+```
+
+The runner builds that brokerage project, copies the FYERS plugin DLL and required FYERS dependencies into `/Users/arifkhan/github/Lean/Launcher/bin/Debug`, generates `.tmp/live-fyers.config.json`, and starts Lean with `FyersBrokerage` as both the live brokerage and data queue handler.
+
+Required `.env` values:
+
+```bash
+FYERS_CLIENT_ID=
+FYERS_SECRET_KEY=
+```
+
+Optional useful values:
+
+```bash
+FYERS_ACCESS_TOKEN=
+FYERS_REFRESH_TOKEN=
+FYERS_ACCOUNT_ID=
+FYERS_TEST_SYMBOL=SBIN
+FYERS_PLACE_TEST_ORDER=false
+FYERS_TEST_QUANTITY=1
+FYERS_TEST_HOLD_MINUTES=2
+```
+
+Connect and subscribe only:
+
+```bash
+LIVE_CONFIRM=true scripts/run-live-fyers.sh
+```
+
+Submit one guarded live test order:
+
+```bash
+LIVE_CONFIRM=true LIVE_CONFIRM_FYERS_ORDER=true FYERS_PLACE_TEST_ORDER=true scripts/run-live-fyers.sh
+```
+
+The default strategy is `strategies/python/FyersBrokerageSmokeTestStrategy.py`. It subscribes to one NSE equity symbol, logs live heartbeats, and only places an order when `FYERS_PLACE_TEST_ORDER=true`.
+
+The FYERS brokerage factory was adjusted to read the `fyers-*` values from Lean config, so values generated from `.env` are passed into the live job instead of using placeholder defaults.
+
 
 ### Command to activate leans conda environment
 ````

@@ -111,5 +111,31 @@ generate_config() {
     -e "s|__IB_HOST__|${IB_HOST:-127.0.0.1}|g" \
     -e "s|__IB_PORT__|${IB_PORT:-4002}|g" \
     -e "s|__IB_TRADING_MODE__|${IB_TRADING_MODE:-paper}|g" \
+    -e "s|__FYERS_API_URL__|${FYERS_API_URL:-https://api-t1.fyers.in/api/v3}|g" \
+    -e "s|__FYERS_DATA_API_URL__|${FYERS_DATA_API_URL:-https://api-t1.fyers.in/data}|g" \
+    -e "s|__FYERS_MARKET_DATA_SOCKET_URL__|${FYERS_MARKET_DATA_SOCKET_URL:-wss://socket.fyers.in/data}|g" \
+    -e "s|__FYERS_ORDER_SOCKET_URL__|${FYERS_ORDER_SOCKET_URL:-wss://socket.fyers.in/order}|g" \
+    -e "s|__FYERS_CLIENT_ID__|${FYERS_CLIENT_ID:-}|g" \
+    -e "s|__FYERS_SECRET_KEY__|${FYERS_SECRET_KEY:-}|g" \
+    -e "s|__FYERS_REDIRECT_URL__|${FYERS_REDIRECT_URL:-https://127.0.0.1}|g" \
+    -e "s|__FYERS_BOOTSTRAP_AUTHORIZATION_CODE__|${FYERS_BOOTSTRAP_AUTHORIZATION_CODE:-}|g" \
+    -e "s|__FYERS_ACCESS_TOKEN__|${FYERS_ACCESS_TOKEN:-}|g" \
+    -e "s|__FYERS_REFRESH_TOKEN__|${FYERS_REFRESH_TOKEN:-}|g" \
+    -e "s|__FYERS_AUTH_STATE__|${FYERS_AUTH_STATE:-}|g" \
+    -e "s|__FYERS_ACCOUNT_ID__|${FYERS_ACCOUNT_ID:-}|g" \
+    -e "s|__FYERS_AUTH_USE_INTEGRATED_BROWSER__|${FYERS_AUTH_USE_INTEGRATED_BROWSER:-true}|g" \
+    -e "s|__FYERS_AUTH_ENABLE_HEADLESS_FALLBACK__|${FYERS_AUTH_ENABLE_HEADLESS_FALLBACK:-true}|g" \
+    -e "s|__FYERS_AUTH_BOOTSTRAP_ON_CONNECT__|${FYERS_AUTH_BOOTSTRAP_ON_CONNECT:-false}|g" \
+    -e "s|__FYERS_AUTH_CALLBACK_HOST__|${FYERS_AUTH_CALLBACK_HOST:-127.0.0.1}|g" \
+    -e "s|__FYERS_AUTH_CALLBACK_PORT__|${FYERS_AUTH_CALLBACK_PORT:-5000}|g" \
+    -e "s|__FYERS_AUTH_CALLBACK_PATH__|${FYERS_AUTH_CALLBACK_PATH:-/fyers/callback}|g" \
+    -e "s|__FYERS_AUTH_CALLBACK_TIMEOUT_SECONDS__|${FYERS_AUTH_CALLBACK_TIMEOUT_SECONDS:-180}|g" \
+    -e "s|__FYERS_AUTH_SECURE_STORE_ENABLED__|${FYERS_AUTH_SECURE_STORE_ENABLED:-true}|g" \
+    -e "s|__FYERS_AUTH_SECURE_STORE_NAMESPACE__|${FYERS_AUTH_SECURE_STORE_NAMESPACE:-QuantConnect.FyersBrokerage}|g" \
+    -e "s|__FYERS_AUTH_SECURE_STORE_ACCOUNT_SCOPE__|${FYERS_AUTH_SECURE_STORE_ACCOUNT_SCOPE:-}|g" \
+    -e "s|__FYERS_TEST_SYMBOL__|${FYERS_TEST_SYMBOL:-SBIN}|g" \
+    -e "s|__FYERS_PLACE_TEST_ORDER__|${FYERS_PLACE_TEST_ORDER:-false}|g" \
+    -e "s|__FYERS_TEST_QUANTITY__|${FYERS_TEST_QUANTITY:-1}|g" \
+    -e "s|__FYERS_TEST_HOLD_MINUTES__|${FYERS_TEST_HOLD_MINUTES:-2}|g" \
     "$template" > "$output"
 }
