@@ -30,10 +30,15 @@
   "ib-password": "__IB_PASSWORD__",
   "ib-host": "__IB_HOST__",
   "ib-port": "__IB_PORT__",
+  "ib-tws-dir": "__IB_TWS_DIR__",
+  "ib-version": "__IB_VERSION__",
   "ib-trading-mode": "__IB_TRADING_MODE__",
+  "ib-agent-description": "__IB_AGENT_DESCRIPTION__",
+  "ib-weekly-restart-utc-time": "__IB_WEEKLY_RESTART_UTC_TIME__",
+  "ib-financial-advisors-group-filter": "__IB_FINANCIAL_ADVISORS_GROUP_FILTER__",
   "ib-enable-delayed-streaming-data": false,
   "ib-skip-subscription-validation": true,
-  "ib-use-existing-gateway": true,
+  "ib-use-existing-gateway": "__IB_USE_EXISTING_GATEWAY__",
 
   "debugging": false,
   "debugging-method": "LocalCmdline"

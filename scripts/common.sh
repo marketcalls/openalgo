@@ -18,6 +18,10 @@ load_env() {
   fi
 }
 
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\/&|\\]/\\&/g'
+}
+
 resolve_lean_paths() {
   local default_lean_repo
   default_lean_repo="$(cd "$REPO_ROOT/../Lean" && pwd 2>/dev/null || true)"
@@ -99,18 +103,39 @@ configure_python_runtime() {
 generate_config() {
   local template="$1"
   local output="$2"
+  local ib_account ib_user_name ib_password ib_host ib_port ib_tws_dir ib_version ib_trading_mode
+  local ib_agent_description ib_weekly_restart_utc_time ib_financial_advisors_group_filter ib_use_existing_gateway
+
+  ib_account="$(escape_sed_replacement "${IB_ACCOUNT:-}")"
+  ib_user_name="$(escape_sed_replacement "${IB_USER_NAME:-}")"
+  ib_password="$(escape_sed_replacement "${IB_PASSWORD:-}")"
+  ib_host="$(escape_sed_replacement "${IB_HOST:-127.0.0.1}")"
+  ib_port="$(escape_sed_replacement "${IB_PORT:-4002}")"
+  ib_tws_dir="$(escape_sed_replacement "${IB_TWS_DIR:-$HOME/Jts}")"
+  ib_version="$(escape_sed_replacement "${IB_VERSION:-1034}")"
+  ib_trading_mode="$(escape_sed_replacement "${IB_TRADING_MODE:-paper}")"
+  ib_agent_description="$(escape_sed_replacement "${IB_AGENT_DESCRIPTION:-Individual}")"
+  ib_weekly_restart_utc_time="$(escape_sed_replacement "${IB_WEEKLY_RESTART_UTC_TIME:-22:00:00}")"
+  ib_financial_advisors_group_filter="$(escape_sed_replacement "${IB_FINANCIAL_ADVISORS_GROUP_FILTER:-}")"
+  ib_use_existing_gateway="$(escape_sed_replacement "${IB_USE_EXISTING_GATEWAY:-true}")"
 
   sed \
     -e "s|__ALGORITHM_TYPE__|$ALGORITHM_TYPE_NAME|g" \
     -e "s|__ALGORITHM_LOCATION__|$STRATEGY_PATH|g" \
     -e "s|__DATA_FOLDER__|$LEAN_DATA_DIR|g" \
     -e "s|__PYTHON_VENV__|${PYTHON_VENV:-}|g" \
-    -e "s|__IB_ACCOUNT__|${IB_ACCOUNT:-}|g" \
-    -e "s|__IB_USER_NAME__|${IB_USER_NAME:-}|g" \
-    -e "s|__IB_PASSWORD__|${IB_PASSWORD:-}|g" \
-    -e "s|__IB_HOST__|${IB_HOST:-127.0.0.1}|g" \
-    -e "s|__IB_PORT__|${IB_PORT:-4002}|g" \
-    -e "s|__IB_TRADING_MODE__|${IB_TRADING_MODE:-paper}|g" \
+    -e "s|__IB_ACCOUNT__|$ib_account|g" \
+    -e "s|__IB_USER_NAME__|$ib_user_name|g" \
+    -e "s|__IB_PASSWORD__|$ib_password|g" \
+    -e "s|__IB_HOST__|$ib_host|g" \
+    -e "s|__IB_PORT__|$ib_port|g" \
+    -e "s|__IB_TWS_DIR__|$ib_tws_dir|g" \
+    -e "s|__IB_VERSION__|$ib_version|g" \
+    -e "s|__IB_TRADING_MODE__|$ib_trading_mode|g" \
+    -e "s|__IB_AGENT_DESCRIPTION__|$ib_agent_description|g" \
+    -e "s|__IB_WEEKLY_RESTART_UTC_TIME__|$ib_weekly_restart_utc_time|g" \
+    -e "s|__IB_FINANCIAL_ADVISORS_GROUP_FILTER__|$ib_financial_advisors_group_filter|g" \
+    -e "s|__IB_USE_EXISTING_GATEWAY__|$ib_use_existing_gateway|g" \
     -e "s|__FYERS_API_URL__|${FYERS_API_URL:-https://api-t1.fyers.in/api/v3}|g" \
     -e "s|__FYERS_DATA_API_URL__|${FYERS_DATA_API_URL:-https://api-t1.fyers.in/data}|g" \
     -e "s|__FYERS_MARKET_DATA_SOCKET_URL__|${FYERS_MARKET_DATA_SOCKET_URL:-wss://socket.fyers.in/data}|g" \

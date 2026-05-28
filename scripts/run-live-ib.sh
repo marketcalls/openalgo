@@ -14,6 +14,32 @@ if [[ -z "${IB_ACCOUNT:-}" ]]; then
   exit 1
 fi
 
+if [[ "$IB_ACCOUNT" == "U1234567" || "$IB_ACCOUNT" == "DU1234567" ]]; then
+  echo "Error: IB_ACCOUNT still has a placeholder value: $IB_ACCOUNT"
+  echo "Set IB_ACCOUNT to your actual IB account id, usually U... or DU... for paper."
+  exit 1
+fi
+
+if [[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]]; then
+  if [[ -z "${IB_USER_NAME:-}" || -z "${IB_PASSWORD:-}" ]]; then
+    echo "Error: IB_USER_NAME and IB_PASSWORD are required when IB_USE_EXISTING_GATEWAY=false."
+    echo "IBAutomater needs credentials to launch and log in to IB Gateway/TWS."
+    exit 1
+  fi
+
+  if [[ "$IB_USER_NAME" =~ ^(U|DU)[0-9]+$ ]]; then
+    echo "Error: IB_USER_NAME looks like an IB account id, not a login username: $IB_USER_NAME"
+    echo "Use your actual IBKR login username for IB_USER_NAME. Keep the U.../DU... value in IB_ACCOUNT."
+    exit 1
+  fi
+
+  if [[ ! -d "${IB_TWS_DIR:-$HOME/Jts}" ]]; then
+    echo "Error: IB_TWS_DIR does not exist: ${IB_TWS_DIR:-$HOME/Jts}"
+    echo "Install IB Gateway locally or set IB_TWS_DIR to the IB Gateway/TWS installation folder."
+    exit 1
+  fi
+fi
+
 if [[ "${LIVE_CONFIRM:-}" != "true" ]]; then
   echo "Safety check: set LIVE_CONFIRM=true to run live mode"
   echo "Example: LIVE_CONFIRM=true scripts/run-live-ib.sh strategies/python/YourAlgo.py YourAlgo"
@@ -39,6 +65,11 @@ echo "  class:    $ALGORITHM_TYPE_NAME"
 echo "  account:  $IB_ACCOUNT"
 echo "  host:     ${IB_HOST:-127.0.0.1}:${IB_PORT:-4002}"
 echo "  mode:     ${IB_TRADING_MODE:-paper}"
+echo "  automater: $([[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]] && echo enabled || echo disabled)"
+if [[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]]; then
+  echo "  ib dir:   ${IB_TWS_DIR:-$HOME/Jts}"
+  echo "  version:  ${IB_VERSION:-1034}"
+fi
 echo "  pyvenv:   ${PYTHON_VENV:-<not-set>}"
 echo "  pydll:    ${PYTHONNET_PYDLL:-<not-set>}"
 echo "  config:   $CONFIG_PATH"

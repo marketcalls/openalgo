@@ -173,6 +173,49 @@ The live template at `config/templates/live-interactive.template.json` pins the 
 
 The last two flags are supported by the local Interactive Brokers brokerage DLL. They skip QuantConnect product-subscription validation and connect to the existing Gateway socket instead of trying to launch Gateway from a default install path.
 
+### Start IB Gateway with IBAutomater
+
+By default, `.env` uses:
+
+```bash
+IB_USE_EXISTING_GATEWAY=true
+```
+
+That tells the local IB brokerage to connect to an already-open Gateway/TWS session and skip IBAutomater.
+
+To have Lean start/manage IB Gateway through IBAutomater, set:
+
+```bash
+IB_USE_EXISTING_GATEWAY=false
+IB_USER_NAME=your_ib_username
+IB_PASSWORD=your_ib_password
+IB_TWS_DIR=/Users/arifkhan/Jts
+IB_VERSION=1046
+IB_TRADING_MODE=paper
+IB_HOST=127.0.0.1
+IB_PORT=4002
+```
+
+You can update those values interactively without printing the password:
+
+```bash
+scripts/set-ib-credentials.sh
+```
+
+Then run:
+
+```bash
+LIVE_CONFIRM=true IB_USE_EXISTING_GATEWAY=false IB_TRADING_MODE=paper scripts/run-live-ib.sh strategies/python/MesSimpleBuySellTestStrategy.py MesSimpleBuySellTestStrategy
+```
+
+Notes:
+- `IB_TWS_DIR` must be the local IB Gateway/TWS install folder. On macOS/Linux the usual default is `~/Jts`; on Windows it is usually `C:\Jts`.
+- `IB_VERSION` must match the installed Gateway build folder/version expected by IBAutomater.
+- This Mac has IB Gateway 10.46 installed at `/Users/arifkhan/Applications/IB Gateway 10.46`. IBAutomater expects a Unix-style launcher at `/Users/arifkhan/ibgateway/ibgateway`, so this setup includes a small wrapper there plus symlinks to the 10.46 `.install4j`, `jars`, `data`, and app resources.
+- If another IB Gateway/TWS session is already open, IBAutomater may fail or detect the existing session. Close other IB sessions before using Automater.
+- Two-factor authentication may still require your manual approval during login or weekly restart.
+- Keep `ib-skip-subscription-validation=true` in the generated config for local Lean runs that should not call QuantConnect subscription validation.
+
 If you rebuild or replace Lean, rebuild the local IB brokerage and copy the DLL into the Lean launcher output:
 
 ```bash
