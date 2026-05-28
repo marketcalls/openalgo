@@ -166,7 +166,23 @@ def create_app():
     app.jinja_env.filters["indian_number"] = format_indian_number
 
     # Environment variables
-    app.secret_key = os.getenv("APP_KEY")
+    # Security: Require APP_KEY (fail fast if missing). This is the Flask
+    # secret used to sign session cookies and generate CSRF tokens. If it
+    # were left as None, session/CSRF protection would silently break.
+    # Must be at least 32 characters for cryptographic security.
+    _app_key = os.getenv("APP_KEY")
+    if not _app_key:
+        raise RuntimeError(
+            "CRITICAL: APP_KEY environment variable is not set. "
+            "This is required to sign session cookies and CSRF tokens. "
+            'Generate one using: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    if len(_app_key) < 32:
+        raise RuntimeError(
+            f"CRITICAL: APP_KEY must be at least 32 characters (got {len(_app_key)}). "
+            'Generate a secure key using: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    app.secret_key = _app_key
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 
     # Dynamic cookie security configuration based on HOST_SERVER
