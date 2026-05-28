@@ -3,7 +3,6 @@ import os
 
 from broker.dhan.api.baseurl import get_url
 from broker.dhan.mapping.margin_data import (
-    parse_batch_margin_response,
     parse_margin_response,
     transform_margin_position,
 )
@@ -124,29 +123,140 @@ def calculate_single_margin(position_data, auth, client_id):
         return MockResponse(), error_response
 
 
-def calculate_margin_api(positions, auth, api_key=None):
-    """
-    Calculate margin requirement for a basket of positions using Dhan API.
+def calculate_basket_margin_api(positions_payload, auth, client_id):
+    """Call Dhan ``/v2/margincalculator/multi`` for true basket margin.
 
-    IMPORTANT: Dhan's margin calculator API accepts only ONE order at a time.
-    For multi-leg strategies:
-    - We calculate margin for each leg individually
-    - Sum up all the individual margins
-    - Return the total as combined margin requirement
-
-    NOTE: This is a simple summation approach. It does NOT account for:
-    - Spread benefits (hedge/combo margin benefits)
-    - Portfolio-level optimizations
-
-    This limitation is due to Dhan API design, not OpenAlgo.
+    Dhan's basket endpoint computes SPAN + exposure with spread / hedge
+    benefit for up to 50 positions in a single round-trip. This replaces
+    the prior per-leg loop + summation approach which inflated defined-
+    risk-spread margin 4-5x by treating each leg as independent.
 
     Args:
-        positions: List of positions in OpenAlgo format
-        auth: Authentication token for Dhan
-        api_key: OpenAlgo API key (optional, for client ID lookup)
+        positions_payload: List of transformed positions in Dhan format.
+        auth: Dhan access token.
+        client_id: Dhan client ID.
 
     Returns:
-        Tuple of (response, response_data)
+        Tuple of ``(httpx response, standardized response dict)``.
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "access-token": auth,
+    }
+    if client_id:
+        headers["client-id"] = client_id
+
+    payload = json.dumps({
+        "dhanClientId": client_id,
+        "scripList": positions_payload,
+    })
+    logger.info(f"Dhan BASKET margin payload: {payload}")
+
+    client = get_httpx_client()
+    try:
+        url = get_url("/v2/margincalculator/multi")
+        logger.info(f"Calling Dhan basket margin API: {url}")
+        response = client.post(url, headers=headers, content=payload)
+        response.status = response.status_code
+
+        try:
+            response_data = response.json()
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse JSON from Dhan: {response.text}")
+            return response, {
+                "status": "error",
+                "message": "Invalid response from broker API",
+            }
+
+        logger.info("=" * 80)
+        logger.info("DHAN BASKET MARGIN API - RAW RESPONSE")
+        logger.info("=" * 80)
+        logger.info(f"Response Status Code: {response.status_code}")
+        logger.info(f"Full Response: {json.dumps(response_data, indent=2)}")
+        logger.info("=" * 80)
+
+        if response.status_code == 200 and isinstance(response_data, dict):
+            # Dhan /v2/margincalculator/multi response key shape has
+            # diverged between docs (snake_case) and live API
+            # (camelCase observed empirically 2026-05-28). The sandbox
+            # parser at broker/dhan_sandbox/mapping/margin_data.py also
+            # uses snake_case (per docs). Read snake_case first to match
+            # docs + sandbox; fall back to camelCase for live-API
+            # responses that haven't migrated. If both are missing the
+            # field stays 0.0 (matches prior behavior for malformed
+            # responses).
+            def _pick(*keys):
+                for k in keys:
+                    v = response_data.get(k)
+                    if v is not None and v != "":
+                        try:
+                            return float(v)
+                        except (TypeError, ValueError):
+                            continue
+                return 0.0
+
+            standardized = {
+                "status": "success",
+                "data": {
+                    "total_margin_required": _pick("total_margin", "totalMargin"),
+                    "span_margin": _pick("span_margin", "spanMargin"),
+                    "exposure_margin": _pick(
+                        "exposure_margin", "exposureMargin", "exposure",
+                    ),
+                    "hedge_benefit": _pick("hedge_benefit", "hedgeBenefit"),
+                },
+            }
+        else:
+            msg = (
+                response_data.get("errorMessage")
+                if isinstance(response_data, dict)
+                else str(response_data)
+            )
+            standardized = {
+                "status": "error",
+                "message": msg or "Basket margin call failed",
+            }
+
+        logger.info("STANDARDIZED OPENALGO RESPONSE")
+        logger.info("=" * 80)
+        logger.info(
+            f"Standardized Response: {json.dumps(standardized, indent=2)}"
+        )
+        logger.info("=" * 80)
+
+        return response, standardized
+
+    except Exception as e:
+        logger.exception(f"Error calling Dhan basket margin API: {e}")
+        error_response = {
+            "status": "error",
+            "message": f"Failed to calculate basket margin: {str(e)}",
+        }
+
+        class MockResponse:
+            status_code = 500
+            status = 500
+
+        return MockResponse(), error_response
+
+
+def calculate_margin_api(positions, auth, api_key=None):
+    """Calculate margin requirement for a basket of positions using Dhan API.
+
+    Uses Dhan's ``/v2/margincalculator/multi`` endpoint which accepts a
+    list of positions (up to 50) via ``scripList`` field and returns
+    SPAN + exposure + hedge benefit for the basket as a whole. This
+    correctly accounts for spread benefits in defined-risk strategies
+    (e.g. bull put spread, iron condor, calendar spread).
+
+    Args:
+        positions: List of positions in OpenAlgo format.
+        auth: Authentication token for Dhan.
+        api_key: OpenAlgo API key (optional, for client ID lookup).
+
+    Returns:
+        Tuple of ``(response, response_data)``.
     """
     # Get client ID
     client_id = get_client_id(api_key)
@@ -189,58 +299,27 @@ def calculate_margin_api(positions, auth, api_key=None):
 
     # Log the margin calculation strategy
     logger.info("=" * 80)
-    logger.info("DHAN MULTI-LEG MARGIN CALCULATION")
+    logger.info("DHAN BASKET MARGIN CALCULATION")
     logger.info("=" * 80)
     logger.info(f"Total positions received: {len(positions)}")
     logger.info(f"Valid positions to process: {len(transformed_positions)}")
     if skipped_count > 0:
         logger.warning(f"Skipped positions (invalid/missing symbols): {skipped_count}")
-    logger.info("")
-    logger.warning("⚠ LIMITATION: Dhan API supports only single-leg margin calculation")
-    logger.warning("⚠ Strategy: Calculate each leg individually and SUM the margins")
-    logger.warning("⚠ Note: Does NOT include spread/hedge benefits (if any)")
     logger.info("=" * 80)
 
-    # Calculate margin for each position
-    margin_responses = []
-    last_response = None
-    success_count = 0
-    error_count = 0
-
-    for idx, position_data in enumerate(transformed_positions, 1):
-        logger.info(
-            f"Calculating margin for leg {idx}/{len(transformed_positions)}: {position_data.get('securityId')}"
-        )
-        response, parsed_response = calculate_single_margin(position_data, auth, client_id)
-        last_response = response
-        margin_responses.append(parsed_response)
-
-        # Track success/failure
-        if parsed_response.get("status") == "error":
-            error_count += 1
-            logger.warning(f"Leg {idx} failed: {parsed_response.get('message')}")
-        else:
-            success_count += 1
-            data = parsed_response.get("data", {})
-            logger.info(f"Leg {idx} margin: Rs. {data.get('total_margin_required', 0):,.2f}")
-
-    # Log summary of individual calculations
-    logger.info("")
-    logger.info("INDIVIDUAL LEG CALCULATION SUMMARY")
-    logger.info("-" * 80)
-    logger.info(f"Successful calculations: {success_count}/{len(transformed_positions)}")
-    logger.info(f"Failed calculations: {error_count}/{len(transformed_positions)}")
-    logger.info("")
-
-    # Aggregate the responses
-    if len(margin_responses) == 1:
-        # Single position - return as-is
-        final_response = margin_responses[0]
-        logger.info("Single leg strategy - returning individual margin")
+    # Single round-trip basket call to Dhan /v2/margincalculator/multi.
+    # Dhan returns SPAN + exposure + hedge benefit for the basket as a
+    # whole (not summed per-leg). For defined-risk spreads this is the
+    # correct economic margin; per-leg sum overstated margin 4-5x.
+    last_response, final_response = calculate_basket_margin_api(
+        transformed_positions, auth, client_id,
+    )
+    if final_response.get("status") == "success":
+        logger.info("Basket margin via /v2/margincalculator/multi (hedge-aware)")
     else:
-        # Multiple positions - aggregate by summing
-        final_response = parse_batch_margin_response(margin_responses)
-        logger.info(f"Multi-leg strategy - summed {success_count} individual leg margins")
+        logger.warning(
+            f"Basket margin failed: {final_response.get('message')}"
+        )
 
     # Log the final aggregated response
     logger.info("=" * 80)
@@ -253,7 +332,7 @@ def calculate_margin_api(positions, auth, api_key=None):
         logger.info(f"Total Margin Required:   Rs. {data.get('total_margin_required', 0):,.2f}")
         logger.info(f"SPAN Margin:             Rs. {data.get('span_margin', 0):,.2f}")
         logger.info(f"Exposure Margin:         Rs. {data.get('exposure_margin', 0):,.2f}")
+        logger.info(f"Hedge Benefit:           Rs. {data.get('hedge_benefit', 0):,.2f}")
     logger.info("=" * 80)
 
-    # Return the last HTTP response object and the aggregated data
     return last_response, final_response
