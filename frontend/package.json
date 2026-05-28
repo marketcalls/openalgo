@@ -75,7 +75,8 @@
     "lodash-es": "4.18.1",
     "rollup": ">=4.59.0",
     "protocol-buffers-schema": ">=3.6.1",
-    "postcss": ">=8.5.10"
+    "postcss": ">=8.5.10",
+    "ws": ">=8.20.1"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.0",
