@@ -26,8 +26,22 @@ REM ============================================================================
 setlocal enabledelayedexpansion
 
 REM Configuration
+REM Load APP_NAME from local .env if present, otherwise use default
+set APP_NAME=openalgo
 set IMAGE=marketcalls/openalgo:latest
 set CONTAINER=openalgo
+
+if exist "%OPENALGO_DIR%\%ENV_FILE%" (
+    for /f "tokens=2 delims==" %%i in ('findstr /I "^APP_NAME" "%OPENALGO_DIR%\%ENV_FILE%"') do (
+        set APP_NAME=%%i
+        REM Remove quotes and spaces
+        for /f "useback tokens=*" %%a in ('!APP_NAME!') do set APP_NAME=%%~a
+        if not "!APP_NAME!"=="" (
+            set IMAGE=!APP_NAME!:latest
+            set CONTAINER=!APP_NAME!
+        )
+    )
+)
 set ENV_FILE=.env
 set SAMPLE_ENV_URL=https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env
 REM Use the directory where the script is located
