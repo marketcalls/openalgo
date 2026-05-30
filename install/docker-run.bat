@@ -26,6 +26,14 @@ REM ============================================================================
 setlocal enabledelayedexpansion
 
 REM Configuration
+REM Define variables BEFORE using them
+set ENV_FILE=.env
+set SAMPLE_ENV_URL=https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env
+REM Use the directory where the script is located
+set OPENALGO_DIR=%~dp0
+REM Remove trailing backslash
+if "%OPENALGO_DIR:~-1%"=="\" set OPENALGO_DIR=%OPENALGO_DIR:~0,-1%
+
 REM Load APP_NAME from local .env if present, otherwise use default
 set APP_NAME=openalgo
 set IMAGE=marketcalls/openalgo:latest
@@ -34,20 +42,21 @@ set CONTAINER=openalgo
 if exist "%OPENALGO_DIR%\%ENV_FILE%" (
     for /f "tokens=2 delims==" %%i in ('findstr /I "^APP_NAME" "%OPENALGO_DIR%\%ENV_FILE%"') do (
         set APP_NAME=%%i
-        REM Remove quotes and spaces
-        for /f "useback tokens=*" %%a in ('!APP_NAME!') do set APP_NAME=%%~a
+        REM Remove quotes and leading/trailing spaces safely (no command execution)
+        set APP_NAME=!APP_NAME:"=!
+        for /f "tokens=* delims= " %%a in ("!APP_NAME!") do set APP_NAME=%%a
+        REM Validate APP_NAME contains only safe characters (alphanumeric, dash, underscore)
+        echo !APP_NAME! | findstr /R "^[a-zA-Z0-9_-]*$" >nul
+        if errorlevel 1 (
+            echo [WARNING] Invalid APP_NAME in .env, using default
+            set APP_NAME=openalgo
+        )
         if not "!APP_NAME!"=="" (
             set IMAGE=!APP_NAME!:latest
             set CONTAINER=!APP_NAME!
         )
     )
 )
-set ENV_FILE=.env
-set SAMPLE_ENV_URL=https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env
-REM Use the directory where the script is located
-set OPENALGO_DIR=%~dp0
-REM Remove trailing backslash
-if "%OPENALGO_DIR:~-1%"=="\" set OPENALGO_DIR=%OPENALGO_DIR:~0,-1%
 set SETUP_FAILED=0
 
 REM XTS Brokers that require market data credentials
