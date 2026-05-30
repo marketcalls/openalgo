@@ -473,6 +473,13 @@ class MarketDataService:
                         "timestamp": market_data.get("timestamp", timestamp),
                     }
 
+                    # Also update LTP from depth
+                    cache_entry["ltp"] = {
+                        "value": market_data.get("ltp", 0),
+                        "timestamp": market_data.get("timestamp", timestamp),
+                        "volume": market_data.get("volume", 0),
+                    }
+
                 cache_entry["last_update"] = timestamp
                 self.metrics["total_updates"] += 1
 
@@ -907,8 +914,21 @@ class MarketDataService:
             mode: Update mode (1=LTP, 2=Quote, 3=Depth)
             data: Full data to broadcast
         """
-        mode_to_event = {1: "ltp", 2: "quote", 3: "depth"}
-        event_type = mode_to_event.get(mode, "all")
+
+        # Map mode -> supported event types
+        if mode == 1:
+            event_types = {"ltp"}
+
+        elif mode == 2:
+            # Quote packets contain LTP too
+            event_types = {"quote", "ltp"}
+
+        elif mode == 3:
+            # Depth packets contain LTP too
+            event_types = {"depth", "ltp"}
+
+        else:
+            event_types = {"all"}
 
         # Process subscribers by priority (CRITICAL first)
         for priority in sorted(self.priority_subscribers.keys()):
@@ -919,7 +939,9 @@ class MarketDataService:
                 try:
                     # Check event type filter
                     sub_event_type = subscriber.get("event_type", "all")
-                    if sub_event_type != "all" and sub_event_type != event_type:
+
+                    # Match any supported event type
+                    if (sub_event_type != "all" and sub_event_type not in event_types):
                         continue
 
                     # Check symbol filter
@@ -943,12 +965,31 @@ class MarketDataService:
             mode: Update mode (1=LTP, 2=Quote, 3=Depth)
             data: Full data to broadcast
         """
-        mode_to_event = {1: "ltp", 2: "quote", 3: "depth"}
-        event_type = mode_to_event.get(mode, "all")
 
         # Broadcast to specific event subscribers
+        # Map mode -> supported event types
+        if mode == 1:
+            event_types = {"ltp"}
+
+        elif mode == 2:
+            # Quote packets contain LTP too
+            event_types = {"quote", "ltp"}
+
+        elif mode == 3:
+            # Depth packets contain LTP too
+            event_types = {"depth", "ltp"}
+
+        else:
+            event_types = {"all"}
+
         with self.data_lock:
-            subscribers = list(self.subscribers[event_type].values())
+            subscribers = []
+
+            for event_type in event_types:
+                subscribers.extend(
+                    list(self.subscribers[event_type].values())
+                )
+
             all_subscribers = list(self.subscribers["all"].values())
 
         for subscriber in subscribers + all_subscribers:
