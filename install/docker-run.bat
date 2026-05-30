@@ -45,15 +45,32 @@ if exist "%OPENALGO_DIR%\%ENV_FILE%" (
         REM Remove quotes and leading/trailing spaces safely (no command execution)
         set APP_NAME=!APP_NAME:"=!
         for /f "tokens=* delims= " %%a in ("!APP_NAME!") do set APP_NAME=%%a
-        REM Validate APP_NAME contains only safe characters (alphanumeric, dash, underscore)
-        echo !APP_NAME! | findstr /R "^[a-zA-Z0-9_-]*$" >nul
-        if errorlevel 1 (
-            echo [WARNING] Invalid APP_NAME in .env, using default
-            set APP_NAME=openalgo
-        )
+        
+        REM Validate APP_NAME contains only safe characters - NO PIPELINE EXPANSION
+        REM Check if any dangerous characters exist by string substitution
         if not "!APP_NAME!"=="" (
-            set IMAGE=!APP_NAME!:latest
-            set CONTAINER=!APP_NAME!
+            set "_INVALID=0"
+            REM Check for dangerous shell metacharacters: & | > < ` $ " ' space
+            set "_TEST=!APP_NAME:&=!"
+            if not "!_TEST!"=="!APP_NAME!" set "_INVALID=1"
+            set "_TEST=!APP_NAME:|=!"
+            if not "!_TEST!"=="!APP_NAME!" set "_INVALID=1"
+            set "_TEST=!APP_NAME:>=!"
+            if not "!_TEST!"=="!APP_NAME!" set "_INVALID=1"
+            set "_TEST=!APP_NAME:</=!"
+            if not "!_TEST!"=="!APP_NAME!" set "_INVALID=1"
+            set "_TEST=!APP_NAME:^=!"
+            if not "!_TEST!"=="!APP_NAME!" set "_INVALID=1"
+            set "_TEST=!APP_NAME:$=!"
+            if not "!_TEST!"=="!APP_NAME!" set "_INVALID=1"
+            
+            if "!_INVALID!"=="1" (
+                echo [WARNING] Invalid APP_NAME in .env, using default
+                set APP_NAME=openalgo
+            ) else (
+                set IMAGE=!APP_NAME!:latest
+                set CONTAINER=!APP_NAME!
+            )
         )
     )
 )
