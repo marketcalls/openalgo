@@ -180,7 +180,7 @@ Incoming Request
             → Service layer → Broker API
 ```
 
-Registered in `app.py:319-323`: security middleware first, then traffic logging (so traffic wraps outside security). Session cleanup happens in `teardown_appcontext` after the response is sent.
+Registered in `app.py` (`init_security_middleware` then `init_traffic_logging`, ~lines 247-251): security middleware first, then traffic logging (so traffic wraps outside security). Session cleanup happens in `teardown_appcontext` after the response is sent.
 
 ## Runtime Constraints
 

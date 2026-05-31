@@ -1,9 +1,11 @@
 import json
 import time
 import urllib.parse
+from datetime import date, datetime, timedelta
 
 import httpx
 import pandas as pd
+import pytz
 
 from database.token_db import get_br_symbol, get_brexchange, get_token
 from utils.httpx_client import get_httpx_client
@@ -30,9 +32,32 @@ class BrokerData:
         self.last_quote_error = None
         logger.info(f"Using quotes baseUrl: {self.quotes_base_url}")
 
-        # Define empty timeframe map since Kotak Neo doesn't support historical data
-        self.timeframe_map = {}
-        logger.warning("Kotak Neo does not support historical data intervals")
+        # Kotak Neo's official API has NO historical/candle endpoint (confirmed via
+        # Kotak support + the Neo v2 SDK, which expose only quotes + the live feed).
+        # To still satisfy the OpenAlgo /history and /ticker contract, get_history()
+        # sources candles from the free Yahoo Finance chart API for indices and cash
+        # equities. Option/future legs have no free historical source and return an
+        # empty (graceful) frame.
+        #
+        # timeframe_map: OpenAlgo interval code -> Yahoo Finance interval string.
+        # (The /api/v1/intervals endpoint also derives supported intervals from this.)
+        self.timeframe_map = {
+            "1m": "1m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "1h": "60m",
+            "D": "1d",
+        }
+        # OpenAlgo index symbol -> Yahoo Finance ticker. Scoped to the indices the
+        # Qwantonomous app uses (NIFTY / BANKNIFTY / SENSEX). Any other symbol
+        # degrades to an empty history frame rather than risk returning the wrong
+        # index's data; add more here once their Yahoo tickers are verified.
+        self._yahoo_index_map = {
+            "NIFTY": "^NSEI",
+            "BANKNIFTY": "^NSEBANK",
+            "SENSEX": "^BSESN",
+        }
 
     def _get_kotak_exchange(self, exchange):
         """Map OpenAlgo exchange to Kotak exchange segment"""
@@ -168,9 +193,7 @@ class BrokerData:
                 # For indices, map to correct Neo API format and use static exchange mapping
                 kotak_exchange = self._get_kotak_exchange(exchange)
                 candidates = self._get_index_symbol_candidates(symbol)
-                logger.info(
-                    f"QUOTES API - Index candidates for {symbol}: {candidates}"
-                )
+                logger.info(f"QUOTES API - Index candidates for {symbol}: {candidates}")
                 response, query = self._query_index_with_candidates(
                     kotak_exchange, candidates, "all"
                 )
@@ -278,9 +301,7 @@ class BrokerData:
                 # For indices, map to correct Neo API format and use static exchange mapping
                 kotak_exchange = self._get_kotak_exchange(exchange)
                 candidates = self._get_index_symbol_candidates(symbol)
-                logger.debug(
-                    f"DEPTH API - Index candidates for {symbol}: {candidates}"
-                )
+                logger.debug(f"DEPTH API - Index candidates for {symbol}: {candidates}")
                 response, query = self._query_index_with_candidates(
                     kotak_exchange, candidates, "depth"
                 )
@@ -609,23 +630,178 @@ class BrokerData:
             "totalsellqty": 0,
         }
 
+    # Yahoo Finance chart API host (free, no-auth historical candles). Used because
+    # Kotak Neo's official API exposes no historical/candle endpoint.
+    _YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+
+    def _yahoo_ticker(self, symbol: str, exchange: str) -> str | None:
+        """Map an OpenAlgo symbol+exchange to a Yahoo Finance ticker.
+
+        Returns None for instruments Yahoo doesn't carry (option/future legs,
+        unmapped indices) so the caller can degrade gracefully to empty history.
+        """
+        sym = symbol.upper().strip()
+        exch = exchange.upper().strip()
+
+        # Indices: match by exchange (NSE_INDEX/BSE_INDEX) or by known index name
+        # (handles callers that pass an index symbol on a plain NSE/BSE exchange).
+        if "INDEX" in exch or sym in self._yahoo_index_map:
+            return self._yahoo_index_map.get(sym)
+
+        # Cash equities.
+        if exch == "NSE":
+            return f"{sym}.NS"
+        if exch == "BSE":
+            return f"{sym}.BO"
+
+        # F&O / currency / commodities: no free historical source.
+        return None
+
+    def _ist_midnight_epoch(self, value, end: bool = False) -> int:
+        """Convert a YYYY-MM-DD date (str/date/datetime) to an epoch-second boundary
+        in IST. With end=True, returns the start of the *next* day so the requested
+        end date is inclusive."""
+        ist = pytz.timezone("Asia/Kolkata")
+        if isinstance(value, datetime):
+            d = value.date()
+        elif isinstance(value, date):
+            d = value
+        else:
+            d = datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+        midnight = ist.localize(datetime(d.year, d.month, d.day))
+        if end:
+            midnight = midnight + timedelta(days=1)
+        return int(midnight.timestamp())
+
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
-        """Placeholder for historical data - not supported by Kotak Neo"""
-        empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        logger.warning("Kotak Neo does not support historical data")
-        return empty_df
+        """Historical OHLCV candles.
+
+        Kotak Neo's official API has no historical/candle endpoint, so candles are
+        fetched from the free Yahoo Finance chart API for indices and cash equities.
+        Option/future legs (no free historical source) return an empty frame, which
+        OpenAlgo serves as {"status": "success", "data": []} so the client degrades
+        gracefully and fills from the live feed.
+
+        Returns a DataFrame with columns:
+        timestamp (epoch seconds), open, high, low, close, volume, oi.
+        """
+        empty_df = pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
+        )
+
+        yahoo_interval = self.timeframe_map.get(interval)
+        if yahoo_interval is None:
+            logger.warning(
+                f"Unsupported interval '{interval}' for Kotak historical data; "
+                f"supported: {list(self.timeframe_map)}"
+            )
+            return empty_df
+
+        ticker = self._yahoo_ticker(symbol, exchange)
+        if ticker is None:
+            logger.info(
+                f"No free historical source for {symbol} ({exchange}); Kotak Neo has "
+                "no candle API. Returning empty history."
+            )
+            return empty_df
+
+        try:
+            period1 = self._ist_midnight_epoch(start_date)
+            period2 = self._ist_midnight_epoch(end_date, end=True)
+        except ValueError:
+            logger.exception(f"Invalid history date range: {start_date} .. {end_date}")
+            return empty_df
+
+        url = self._YAHOO_CHART_URL.format(ticker=urllib.parse.quote(ticker))
+        params = {
+            "interval": yahoo_interval,
+            "period1": period1,
+            "period2": period2,
+            "events": "history",
+            "includeAdjustedClose": "false",
+        }
+        headers = {"User-Agent": "Mozilla/5.0"}  # Yahoo rejects requests with no UA
+
+        client = get_httpx_client()
+        try:
+            response = client.get(url, params=params, headers=headers)
+            if response.status_code != 200:
+                logger.warning(
+                    f"Yahoo history HTTP {response.status_code} for {ticker} "
+                    f"({symbol}/{exchange}): {response.text[:200]}"
+                )
+                return empty_df
+            payload = response.json()
+        except Exception:
+            logger.exception(f"Error fetching Yahoo history for {ticker}")
+            return empty_df
+
+        chart = (payload or {}).get("chart") or {}
+        if chart.get("error"):
+            logger.warning(f"Yahoo history error for {ticker}: {chart.get('error')}")
+            return empty_df
+
+        results = chart.get("result") or []
+        if not results:
+            return empty_df
+        result = results[0]
+
+        timestamps = result.get("timestamp") or []
+        quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+
+        rows = []
+        for i, ts in enumerate(timestamps):
+            o = opens[i] if i < len(opens) else None
+            h = highs[i] if i < len(highs) else None
+            low_v = lows[i] if i < len(lows) else None
+            c = closes[i] if i < len(closes) else None
+            v = volumes[i] if i < len(volumes) else None
+            # Yahoo emits null OHLC for gap/holiday candles; skip incomplete rows.
+            if o is None or h is None or low_v is None or c is None:
+                continue
+            rows.append(
+                {
+                    "timestamp": int(ts),
+                    "open": float(o),
+                    "high": float(h),
+                    "low": float(low_v),
+                    "close": float(c),
+                    "volume": float(v) if v is not None else 0.0,
+                    "oi": 0,
+                }
+            )
+
+        if not rows:
+            return empty_df
+
+        df = pd.DataFrame(rows)
+        # Restrict to the requested window (Yahoo can return slightly outside it).
+        df = df[(df["timestamp"] >= period1) & (df["timestamp"] < period2)]
+        df = (
+            df.sort_values("timestamp").drop_duplicates(subset=["timestamp"]).reset_index(drop=True)
+        )
+        logger.info(
+            f"Kotak get_history: {len(df)} '{interval}' candles for {symbol} "
+            f"({exchange}) via Yahoo {ticker}"
+        )
+        return df
 
     def get_supported_intervals(self) -> dict:
-        """Return supported intervals matching the format expected by intervals.py"""
-        intervals = {
+        """Supported intervals, derived from timeframe_map. Sourced from Yahoo
+        Finance because Kotak Neo has no native historical API. Matches the
+        seconds/minutes/hours/days/weeks/months shape used elsewhere in OpenAlgo."""
+        return {
             "seconds": [],
-            "minutes": [],
-            "hours": [],
-            "days": [],
+            "minutes": ["1m", "5m", "15m", "30m"],
+            "hours": ["1h"],
+            "days": ["D"],
             "weeks": [],
             "months": [],
         }
-        logger.warning("Kotak Neo does not support historical data intervals")
-        return intervals
