@@ -24,6 +24,7 @@ mimetypes.add_type("application/font-woff", ".woff")
 mimetypes.add_type("application/font-woff2", ".woff2")
 
 from flask import Flask, session
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 
 from blueprints.admin import admin_bp  # Import the admin blueprint
@@ -203,6 +204,7 @@ def create_app():
     if USE_HTTPS:
         app.config["SESSION_COOKIE_NAME"] = f"__Secure-{session_cookie_name}"
 
+
     # CSRF configuration from environment variables
     csrf_enabled = os.getenv("CSRF_ENABLED", "TRUE").upper() == "TRUE"
     app.config["WTF_CSRF_ENABLED"] = csrf_enabled
@@ -249,6 +251,12 @@ def create_app():
 
     # Initialize traffic logging middleware after security
     init_traffic_logging(app)
+
+    # Behind our nginx the console is served under a path prefix; nginx strips
+    # the prefix and sends X-Forwarded-Prefix. ProxyFix turns that into
+    # SCRIPT_NAME so url_for() generates prefixed URLs. x_prefix only — leave
+    # x_for=0 so the existing utils/ip_helper.py keeps owning client-IP logic.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_prefix=1)
 
     # Register other blueprints
     app.register_blueprint(auth_bp)
