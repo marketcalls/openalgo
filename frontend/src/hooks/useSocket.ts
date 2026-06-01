@@ -123,7 +123,7 @@ export function useSocket() {
     }
 
     // Create audio element
-    audioRef.current = new Audio('/sounds/alert.mp3')
+    audioRef.current = new Audio(`${import.meta.env.BASE_URL}sounds/alert.mp3`)
     audioRef.current.preload = 'auto'
 
     // Enable audio on user interaction
@@ -143,6 +143,7 @@ export function useSocket() {
     // Use polling transport only - WebSocket upgrade fails with threading async mode
     // Polling is still real-time via HTTP long-polling
     socketRef.current = io(`${protocol}//${host}:${port}`, {
+      path: `${import.meta.env.BASE_URL}socket.io`,
       transports: ['polling'],
       upgrade: false,
       reconnectionAttempts: 5,
@@ -164,7 +165,7 @@ export function useSocket() {
         duration: 10000,
       })
       setTimeout(() => {
-        window.location.href = '/login'
+        window.location.href = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/login`
       }, 2000)
     })
 
