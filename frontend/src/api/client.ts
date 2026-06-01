@@ -1,10 +1,15 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || ''
+// Serve under the Vite base path: BASE_URL is "/" by default or e.g.
+// "/portfolio/openalgo/" when built with OPENALGO_BASE. Strip the trailing
+// slash so `${API_BASE_URL}/api/v1` and `${API_BASE_URL}/auth/...` stay correct.
+const API_BASE_URL =
+  (import.meta.env.VITE_API_URL as string | undefined) ??
+  import.meta.env.BASE_URL.replace(/\/$/, '')
 
 // Helper to fetch CSRF token
 export async function fetchCSRFToken(): Promise<string> {
-  const response = await fetch('/auth/csrf-token', {
+  const response = await fetch(`${API_BASE_URL}/auth/csrf-token`, {
     credentials: 'include',
   })
   const data = await response.json()
@@ -36,7 +41,7 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       // Handle unauthorized - redirect to login
-      window.location.href = '/login'
+      window.location.href = `${API_BASE_URL}/login`
     }
     return Promise.reject(error)
   }
@@ -125,7 +130,7 @@ webClient.interceptors.response.use(
     const status = error.response?.status
     if (status === 401) {
       // Unauthorized - redirect to login
-      window.location.href = '/login'
+      window.location.href = `${API_BASE_URL}/login`
     } else if (status === 403) {
       // Forbidden - user doesn't have permission for this resource
       // Create a more descriptive error for the caller to handle
