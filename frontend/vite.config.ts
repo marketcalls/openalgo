@@ -5,6 +5,7 @@ import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: process.env.OPENALGO_BASE || '/',
   plugins: [
     react(),
     tailwindcss(),
