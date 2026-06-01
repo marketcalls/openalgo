@@ -330,6 +330,51 @@ _FALLBACK_TO_INPLACE_ERRNOS = frozenset(
 )
 
 
+def _target_needs_inplace_write(path: str) -> bool:
+    """True when ``path`` must be rewritten in place rather than via the
+    tmp-file + ``os.replace`` rename pattern.
+
+    The rename pattern writes ``path + ".tmp"`` (created in ``path``'s parent
+    directory) and atomically renames it onto ``path``. That only works when
+    the tmp file and the target live on the same filesystem. For a Docker
+    single-file bind mount (``./.env:/app/.env``) they do NOT: ``/app/.env`` is
+    on the host mount (one ``st_dev``) while ``/app`` — and therefore
+    ``/app/.env.tmp`` — is the container's overlay filesystem (a different
+    ``st_dev``).
+
+    On most POSIX kernels that cross-device rename fails with ``EXDEV`` and the
+    caller's existing fallback handles it. But on Docker Desktop's virtiofs /
+    gRPC-FUSE the rename SILENTLY SUCCEEDS by shadowing the mount point with a
+    container-local inode: the container sees the new content, but the write
+    never reaches the host ``.env`` and the next container recreation discards
+    it. That is exactly the "env_check says it saved the keys but the host
+    .env still shows placeholders" first-run bug. Detect the mismatch up front
+    so we write through the real inode instead.
+
+    Returns False on any error or when the devices match — the common
+    same-filesystem case (e.g. ``uv run app.py`` against a normal host file) —
+    so the crash-atomic rename path stays the default everywhere it works.
+    """
+    try:
+        parent = os.path.dirname(os.path.abspath(path)) or os.getcwd()
+        if os.stat(path).st_dev != os.stat(parent).st_dev:
+            return True
+    except OSError:
+        return False
+    # Secondary, Linux-only signal: a single-file bind mount appears as a mount
+    # point in /proc/self/mountinfo even on the rare setup where st_dev matches.
+    try:
+        realpath = os.path.realpath(path)
+        with open("/proc/self/mountinfo", encoding="utf-8") as f:
+            for line in f:
+                fields = line.split(" ")
+                if len(fields) > 4 and fields[4] == realpath:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def _atomic_replace_text(path: str, content: str) -> None:
     """Atomic-write ``content`` to ``path``, falling back to in-place rewrite
     when the strict atomic pattern can't work in the current environment.
@@ -365,43 +410,50 @@ def _atomic_replace_text(path: str, content: str) -> None:
         except OSError:
             pass
 
-    # Pattern 1 — write tmp + atomic rename.
-    try:
-        with open(tmp, "w", encoding="utf-8", newline="") as f:
-            f.write(content)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                # fsync failure on tmp is non-fatal — the rename below either
-                # succeeds (durable enough) or we fall through to in-place.
-                pass
-        if os.name != "nt":
-            os.chmod(tmp, 0o600)
+    # Pattern 1 — write tmp + atomic rename. Skipped entirely when the target
+    # is a bind-mounted / separate-filesystem file: there the rename either
+    # fails (EXDEV) or — on Docker Desktop virtiofs — silently shadows the
+    # mount with a container-local inode, so the new content never reaches the
+    # host file. _target_needs_inplace_write detects that up front and we drop
+    # straight to the in-place rewrite below, which writes through the real
+    # inode. See _target_needs_inplace_write for the full rationale.
+    if not _target_needs_inplace_write(path):
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    # fsync failure on tmp is non-fatal — the rename below either
+                    # succeeds (durable enough) or we fall through to in-place.
+                    pass
+            if os.name != "nt":
+                os.chmod(tmp, 0o600)
 
-        last_err = None
-        for _ in range(3):
-            try:
-                os.replace(tmp, path)
-                return
-            except OSError as e:
-                last_err = e
-                if e.errno in _FALLBACK_TO_INPLACE_ERRNOS:
-                    # Cross-FS rename or permission issue — break out to fallback.
-                    break
-                if os.name == "nt":
-                    time.sleep(0.15)
-                    continue
-                # Unrecognised POSIX error — propagate.
+            last_err = None
+            for _ in range(3):
+                try:
+                    os.replace(tmp, path)
+                    return
+                except OSError as e:
+                    last_err = e
+                    if e.errno in _FALLBACK_TO_INPLACE_ERRNOS:
+                        # Cross-FS rename or permission issue — break to fallback.
+                        break
+                    if os.name == "nt":
+                        time.sleep(0.15)
+                        continue
+                    # Unrecognised POSIX error — propagate.
+                    raise
+            if last_err is not None and last_err.errno not in _FALLBACK_TO_INPLACE_ERRNOS:
+                _cleanup_tmp()
+                raise last_err
+        except OSError as e:
+            if e.errno not in _FALLBACK_TO_INPLACE_ERRNOS:
                 raise
-        if last_err is not None and last_err.errno not in _FALLBACK_TO_INPLACE_ERRNOS:
-            _cleanup_tmp()
-            raise last_err
-    except OSError as e:
-        if e.errno not in _FALLBACK_TO_INPLACE_ERRNOS:
-            raise
-        # Tmp creation/fsync hit a recoverable errno (EACCES on /app/.env.tmp
-        # in the user's report). Fall through.
+            # Tmp creation/fsync hit a recoverable errno (EACCES on /app/.env.tmp
+            # in the user's report). Fall through.
 
     _cleanup_tmp()
 
@@ -815,6 +867,17 @@ def _migrate_fernet_db(env_path: str, pepper: str, new_salt: str) -> None:
                     (table,),
                 )
                 if cur.fetchone() is None:
+                    continue
+                # The encrypted column may not exist yet: on a fresh install
+                # _migrate_fernet_db can run before a later schema migration
+                # adds the column (e.g. flow_workflows.api_key). The table is
+                # present but the column is not — there is nothing to migrate,
+                # so skip it instead of letting the SELECT raise and abort the
+                # whole rotation with a "no such column" warning.
+                existing_cols = {
+                    r[1] for r in conn.execute(f"PRAGMA table_info({table})")
+                }
+                if col not in existing_cols:
                     continue
                 cur = conn.execute(
                     f"SELECT {pk} AS pk, {col} AS ct FROM {table} "
