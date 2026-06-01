@@ -23,7 +23,7 @@ mimetypes.add_type("application/json", ".json")
 mimetypes.add_type("application/font-woff", ".woff")
 mimetypes.add_type("application/font-woff2", ".woff2")
 
-from flask import Flask, session
+from flask import Flask, session, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 
@@ -203,6 +203,11 @@ def create_app():
     # Add cookie prefix for HTTPS environments
     if USE_HTTPS:
         app.config["SESSION_COOKIE_NAME"] = f"__Secure-{session_cookie_name}"
+
+    import os as _os
+    _url_prefix = _os.getenv("URL_PREFIX", "").rstrip("/")
+    if _url_prefix:
+        app.config["SESSION_COOKIE_PATH"] = _url_prefix
 
 
     # CSRF configuration from environment variables
@@ -425,6 +430,18 @@ def create_app():
 
         # NOTE: Telegram bot auto-start moved to background init thread
         # (after DB tables are created) to avoid "no such table" on fresh install
+
+    @app.after_request
+    def _prefix_redirect_location(response):
+        # Hardcoded redirect("/path") calls return a root-relative Location that
+        # ignores SCRIPT_NAME. When served under a prefix, prepend it — unless the
+        # Location already starts with the prefix (url_for-based redirects do).
+        script_name = request.environ.get("SCRIPT_NAME", "")
+        if script_name:
+            loc = response.headers.get("Location")
+            if loc and loc.startswith("/") and not loc.startswith(script_name + "/") and loc != script_name:
+                response.headers["Location"] = script_name + loc
+        return response
 
     @app.before_request
     def wait_for_db_ready():
