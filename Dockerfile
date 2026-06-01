@@ -15,6 +15,8 @@ RUN pip install --no-cache-dir uv && \
 
 # ------------------------------ Frontend Builder Stage --------------------- #
 FROM node:20-bullseye-slim AS frontend-builder
+ARG OPENALGO_BASE=/
+ENV OPENALGO_BASE=$OPENALGO_BASE
 WORKDIR /app
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm install
