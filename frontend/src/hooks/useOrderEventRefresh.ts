@@ -128,6 +128,7 @@ export function useSocketConnection(enabled = true): {
     const port = window.location.port
 
     socketRef.current = io(`${protocol}//${host}:${port}`, {
+      path: `${import.meta.env.BASE_URL}socket.io`,
       transports: ['polling'],
       upgrade: false,
     })
