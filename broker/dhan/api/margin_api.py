@@ -2,16 +2,20 @@ import json
 import os
 
 from broker.dhan.api.baseurl import get_url
-from broker.dhan.mapping.margin_data import (
-    parse_batch_margin_response,
-    parse_margin_response,
-    transform_margin_position,
-)
+from broker.dhan.mapping.margin_data import parse_margin_response, transform_margin_position
 from database.auth_db import get_user_id, verify_api_key
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class BrokerResponse:
+    """Small response-compatible object used for local validation failures."""
+
+    def __init__(self, status_code):
+        self.status_code = status_code
+        self.status = status_code
 
 
 def get_client_id(api_key=None):
@@ -24,21 +28,35 @@ def get_client_id(api_key=None):
     Returns:
         Client ID string or None
     """
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
+    broker_api_key = os.getenv("BROKER_API_KEY")
 
-    # Extract client_id from BROKER_API_KEY if format is client_id:::api_key
-    client_id = None
-    if BROKER_API_KEY and ":::" in BROKER_API_KEY:
-        client_id, _ = BROKER_API_KEY.split(":::")
+    if broker_api_key and ":::" in broker_api_key:
+        client_id, _ = broker_api_key.split(":::", 1)
         return client_id
 
-    # If client_id not found in API key, try to fetch from database
     if api_key:
         user_id = verify_api_key(api_key)
         if user_id:
-            client_id = get_user_id(user_id)
+            return get_user_id(user_id)
 
-    return client_id
+    return None
+
+
+def _normalise_success_response(response, response_data):
+    """
+    Keep services.margin_service status handling aligned with response_data.
+
+    The RESTX margin service currently treats any broker HTTP 200 as success.
+    Dhan can send error payloads with HTTP 200, so convert those local parser
+    failures into a non-200 response-like object.
+    """
+    if (
+        getattr(response, "status_code", None) == 200
+        and isinstance(response_data, dict)
+        and response_data.get("status") == "error"
+    ):
+        return BrokerResponse(400), response_data
+    return response, response_data
 
 
 def calculate_single_margin(position_data, auth, client_id):
@@ -53,92 +71,193 @@ def calculate_single_margin(position_data, auth, client_id):
     Returns:
         Tuple of (response, parsed_response_data)
     """
-    AUTH_TOKEN = auth
-
-    # Prepare headers
     headers = {
-        "access-token": AUTH_TOKEN,
+        "access-token": auth,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
 
-    # Add client-id header if available
     if client_id:
         headers["client-id"] = client_id
 
-    # Prepare payload
     payload = json.dumps(position_data)
+    logger.info(
+        "Dhan single margin request: exchange=%s qty=%s product=%s",
+        position_data.get("exchangeSegment"),
+        position_data.get("quantity"),
+        position_data.get("productType"),
+    )
 
-    logger.info(f"Dhan margin calculation payload: {payload}")
-
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     try:
-        # Get the URL for margin calculator endpoint
         url = get_url("/v2/margincalculator")
-
-        logger.info(f"Calling Dhan margin API: {url}")
-
-        # Make the POST request
         response = client.post(url, headers=headers, content=payload)
-
-        # Add status attribute for compatibility
         response.status = response.status_code
 
-        # Parse the JSON response
         try:
             response_data = response.json()
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON response from Dhan: {response.text}")
-            error_response = {"status": "error", "message": "Invalid response from broker API"}
-            return response, error_response
+            return BrokerResponse(502), {
+                "status": "error",
+                "message": "Invalid response from broker API",
+            }
 
-        logger.info("=" * 80)
-        logger.info("DHAN MARGIN API - RAW RESPONSE")
-        logger.info("=" * 80)
-        logger.info(f"Response Status Code: {response.status_code}")
-        logger.info(f"Full Response: {json.dumps(response_data, indent=2)}")
-        logger.info("=" * 80)
+        logger.debug(
+            "Dhan single margin response status=%s keys=%s",
+            response.status_code,
+            list(response_data.keys())
+            if isinstance(response_data, dict)
+            else type(response_data).__name__,
+        )
 
-        # Parse and standardize the response
-        standardized_response = parse_margin_response(response_data)
-
-        # Log the standardized response
-        logger.info("STANDARDIZED OPENALGO RESPONSE")
-        logger.info("=" * 80)
-        logger.info(f"Standardized Response: {json.dumps(standardized_response, indent=2)}")
-        logger.info("=" * 80)
-
-        return response, standardized_response
+        parsed_response = parse_margin_response(response_data)
+        return _normalise_success_response(response, parsed_response)
 
     except Exception as e:
-        logger.error(f"Error calling Dhan margin API: {e}")
-        error_response = {"status": "error", "message": f"Failed to calculate margin: {str(e)}"}
+        logger.exception(f"Error calling Dhan margin API: {e}")
+        return BrokerResponse(500), {
+            "status": "error",
+            "message": f"Failed to calculate margin: {str(e)}",
+        }
 
-        # Create a mock response object
-        class MockResponse:
-            status_code = 500
-            status = 500
 
-        return MockResponse(), error_response
+def _broker_error_message(response_data):
+    """Return broker error text when Dhan sends an error payload."""
+    if not isinstance(response_data, dict):
+        return None
+
+    status = str(response_data.get("status", "")).lower()
+    if response_data.get("errorType") or status in {"error", "failed", "failure"}:
+        return str(
+            response_data.get("errorMessage")
+            or response_data.get("message")
+            or response_data.get("errors")
+            or response_data.get("error")
+            or "Dhan margin API returned an error"
+        )
+
+    return None
+
+
+def _pick_float(data, *keys):
+    """Return the first parseable numeric value under the given keys."""
+    for key in keys:
+        value = data.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def parse_basket_margin_response(response_data):
+    """
+    Parse Dhan multi-margin response into the standard RESTX margin shape.
+
+    Dhan's docs show snake_case keys for the multi endpoint. Live responses
+    can use camelCase. Accept both and expose OpenAlgo's common margin fields.
+    """
+    try:
+        if not response_data or not isinstance(response_data, dict):
+            return {"status": "error", "message": "Invalid response from broker"}
+
+        error_message = _broker_error_message(response_data)
+        if error_message:
+            return {"status": "error", "message": error_message}
+
+        total_margin = _pick_float(response_data, "total_margin", "totalMargin")
+        span_margin = _pick_float(response_data, "span_margin", "spanMargin")
+        exposure_margin = _pick_float(
+            response_data, "exposure_margin", "exposureMargin", "exposure"
+        )
+
+        return {
+            "status": "success",
+            "data": {
+                "total_margin_required": total_margin,
+                "span_margin": span_margin,
+                "exposure_margin": exposure_margin,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Error parsing Dhan basket margin response: {e}")
+        return {
+            "status": "error",
+            "message": f"Failed to parse basket margin response: {str(e)}",
+        }
+
+
+def calculate_basket_margin(positions_data, auth, client_id):
+    """
+    Calculate margin using Dhan /v2/margincalculator/multi.
+
+    Returns the same two-tuple shape as calculate_single_margin:
+    (response_like, standardized_response).
+    """
+    headers = {
+        "access-token": auth,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if client_id:
+        headers["client-id"] = client_id
+
+    payload = {
+        "dhanClientId": client_id,
+        "includePosition": True,
+        "includeOrder": True,
+        "scripList": positions_data,
+    }
+
+    logger.info("Dhan basket margin request: positions=%s", len(positions_data))
+
+    client = get_httpx_client()
+
+    try:
+        url = get_url("/v2/margincalculator/multi")
+        response = client.post(url, headers=headers, content=json.dumps(payload))
+        response.status = response.status_code
+
+        try:
+            response_data = response.json()
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse Dhan basket margin response: {response.text}")
+            return BrokerResponse(502), {
+                "status": "error",
+                "message": "Invalid response from broker API",
+            }
+
+        logger.debug(
+            "Dhan basket margin response status=%s keys=%s",
+            response.status_code,
+            list(response_data.keys())
+            if isinstance(response_data, dict)
+            else type(response_data).__name__,
+        )
+
+        parsed_response = parse_basket_margin_response(response_data)
+        return _normalise_success_response(response, parsed_response)
+
+    except Exception as e:
+        logger.exception(f"Error calling Dhan basket margin API: {e}")
+        return BrokerResponse(500), {
+            "status": "error",
+            "message": f"Failed to calculate basket margin: {str(e)}",
+        }
 
 
 def calculate_margin_api(positions, auth, api_key=None):
     """
-    Calculate margin requirement for a basket of positions using Dhan API.
+    Calculate margin requirement for positions using Dhan API.
 
-    IMPORTANT: Dhan's margin calculator API accepts only ONE order at a time.
-    For multi-leg strategies:
-    - We calculate margin for each leg individually
-    - Sum up all the individual margins
-    - Return the total as combined margin requirement
-
-    NOTE: This is a simple summation approach. It does NOT account for:
-    - Spread benefits (hedge/combo margin benefits)
-    - Portfolio-level optimizations
-
-    This limitation is due to Dhan API design, not OpenAlgo.
+    One position is sent to Dhan's single-order calculator. Two or more
+    positions are sent to Dhan's multi-order calculator so spread/hedge
+    benefits are included by the broker.
 
     Args:
         positions: List of positions in OpenAlgo format
@@ -148,23 +267,18 @@ def calculate_margin_api(positions, auth, api_key=None):
     Returns:
         Tuple of (response, response_data)
     """
-    # Get client ID
     client_id = get_client_id(api_key)
 
     if not client_id:
         logger.error("Could not determine Dhan client ID")
-        error_response = {
+        return BrokerResponse(400), {
             "status": "error",
-            "message": "Could not determine Dhan client ID. Please ensure BROKER_API_KEY is configured correctly.",
+            "message": (
+                "Could not determine Dhan client ID. Please ensure BROKER_API_KEY "
+                "is configured correctly."
+            ),
         }
 
-        class MockResponse:
-            status_code = 400
-            status = 400
-
-        return MockResponse(), error_response
-
-    # Transform all positions
     transformed_positions = []
     skipped_count = 0
 
@@ -176,84 +290,20 @@ def calculate_margin_api(positions, auth, api_key=None):
             skipped_count += 1
 
     if not transformed_positions:
-        error_response = {
+        return BrokerResponse(400), {
             "status": "error",
             "message": "No valid positions to calculate margin. Check if symbols are valid.",
         }
 
-        class MockResponse:
-            status_code = 400
-            status = 400
-
-        return MockResponse(), error_response
-
-    # Log the margin calculation strategy
-    logger.info("=" * 80)
-    logger.info("DHAN MULTI-LEG MARGIN CALCULATION")
-    logger.info("=" * 80)
-    logger.info(f"Total positions received: {len(positions)}")
-    logger.info(f"Valid positions to process: {len(transformed_positions)}")
     if skipped_count > 0:
         logger.warning(f"Skipped positions (invalid/missing symbols): {skipped_count}")
-    logger.info("")
-    logger.warning("⚠ LIMITATION: Dhan API supports only single-leg margin calculation")
-    logger.warning("⚠ Strategy: Calculate each leg individually and SUM the margins")
-    logger.warning("⚠ Note: Does NOT include spread/hedge benefits (if any)")
-    logger.info("=" * 80)
 
-    # Calculate margin for each position
-    margin_responses = []
-    last_response = None
-    success_count = 0
-    error_count = 0
+    if len(transformed_positions) == 1:
+        logger.info("Dhan margin route: single-order calculator")
+        return calculate_single_margin(transformed_positions[0], auth, client_id)
 
-    for idx, position_data in enumerate(transformed_positions, 1):
-        logger.info(
-            f"Calculating margin for leg {idx}/{len(transformed_positions)}: {position_data.get('securityId')}"
-        )
-        response, parsed_response = calculate_single_margin(position_data, auth, client_id)
-        last_response = response
-        margin_responses.append(parsed_response)
-
-        # Track success/failure
-        if parsed_response.get("status") == "error":
-            error_count += 1
-            logger.warning(f"Leg {idx} failed: {parsed_response.get('message')}")
-        else:
-            success_count += 1
-            data = parsed_response.get("data", {})
-            logger.info(f"Leg {idx} margin: Rs. {data.get('total_margin_required', 0):,.2f}")
-
-    # Log summary of individual calculations
-    logger.info("")
-    logger.info("INDIVIDUAL LEG CALCULATION SUMMARY")
-    logger.info("-" * 80)
-    logger.info(f"Successful calculations: {success_count}/{len(transformed_positions)}")
-    logger.info(f"Failed calculations: {error_count}/{len(transformed_positions)}")
-    logger.info("")
-
-    # Aggregate the responses
-    if len(margin_responses) == 1:
-        # Single position - return as-is
-        final_response = margin_responses[0]
-        logger.info("Single leg strategy - returning individual margin")
-    else:
-        # Multiple positions - aggregate by summing
-        final_response = parse_batch_margin_response(margin_responses)
-        logger.info(f"Multi-leg strategy - summed {success_count} individual leg margins")
-
-    # Log the final aggregated response
-    logger.info("=" * 80)
-    logger.info("FINAL MARGIN CALCULATION RESULT")
-    logger.info("=" * 80)
-    logger.info(f"Final Response: {json.dumps(final_response, indent=2)}")
-    if final_response.get("status") == "success":
-        data = final_response.get("data", {})
-        logger.info("")
-        logger.info(f"Total Margin Required:   Rs. {data.get('total_margin_required', 0):,.2f}")
-        logger.info(f"SPAN Margin:             Rs. {data.get('span_margin', 0):,.2f}")
-        logger.info(f"Exposure Margin:         Rs. {data.get('exposure_margin', 0):,.2f}")
-    logger.info("=" * 80)
-
-    # Return the last HTTP response object and the aggregated data
-    return last_response, final_response
+    logger.info(
+        "Dhan margin route: multi-order calculator for %s positions",
+        len(transformed_positions),
+    )
+    return calculate_basket_margin(transformed_positions, auth, client_id)
