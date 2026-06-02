@@ -10,7 +10,8 @@ opengreeks is a Rust reimplementation with byte-identical signatures to py_volli
 
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
+from zoneinfo import ZoneInfo
 
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
@@ -18,6 +19,8 @@ from utils.logging import get_logger
 # opengreeks is lazy-loaded inside calculate_greeks() and check_opengreeks_availability().
 
 logger = get_logger(__name__)
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 # Exchange-specific symbol mappings
 NSE_INDEX_SYMBOLS = {
@@ -152,7 +155,9 @@ def parse_option_symbol(
                     )
                 logger.info(f"Using custom expiry time: {custom_expiry_time}")
             except Exception as e:
-                raise ValueError(f"Failed to parse expiry_time '{custom_expiry_time}': {str(e)}")
+                raise ValueError(
+                    f"Failed to parse expiry_time '{custom_expiry_time}': {str(e)}"
+                ) from e
         else:
             # Use default expiry time based on exchange:
             # NFO/BFO: 15:30 (3:30 PM)
@@ -184,7 +189,7 @@ def parse_option_symbol(
 
     except Exception as e:
         logger.exception(f"Error parsing option symbol {symbol}: {e}")
-        raise ValueError(f"Failed to parse option symbol {symbol}: {str(e)}")
+        raise ValueError(f"Failed to parse option symbol {symbol}: {str(e)}") from e
 
 
 def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
@@ -228,14 +233,19 @@ def calculate_time_to_expiry(expiry: datetime) -> tuple[float, float]:
     Returns:
         Tuple of (time_in_years, time_in_days)
     """
-    current_time = datetime.now()
+    if expiry.tzinfo is None:
+        expiry_for_calc = expiry.replace(tzinfo=INDIA_TZ)
+        current_time = datetime.now(INDIA_TZ)
+    else:
+        expiry_for_calc = expiry
+        current_time = datetime.now(expiry.tzinfo)
 
-    if expiry < current_time:
-        logger.warning(f"Option has already expired: {expiry}")
+    if expiry_for_calc < current_time:
+        logger.warning(f"Option has already expired: {expiry_for_calc}")
         return 0.0, 0.0
 
     # Calculate time to expiry
-    time_delta = expiry - current_time
+    time_delta = expiry_for_calc - current_time
     days_to_expiry = time_delta.total_seconds() / (60 * 60 * 24)
     years_to_expiry = days_to_expiry / 365.0
 
@@ -248,6 +258,54 @@ def calculate_time_to_expiry(expiry: datetime) -> tuple[float, float]:
     logger.info(f"Time to expiry: {days_to_expiry:.4f} days ({years_to_expiry:.6f} years)")
 
     return years_to_expiry, days_to_expiry
+
+
+def _expired_option_greeks_response(
+    option_symbol: str,
+    exchange: str,
+    base_symbol: str,
+    expiry: datetime,
+    strike: float,
+    opt_type: str,
+    spot_price: float,
+    option_price: float,
+    interest_rate: float | None,
+) -> dict[str, Any]:
+    """Return a stable batch response for expired option legs."""
+    if opt_type == "CE":
+        intrinsic_value = max(spot_price - strike, 0)
+    else:
+        intrinsic_value = max(strike - spot_price, 0)
+
+    return {
+        "status": "success",
+        "symbol": option_symbol,
+        "exchange": exchange,
+        "underlying": base_symbol,
+        "strike": round(strike, 2),
+        "option_type": opt_type,
+        "expiry_date": expiry.strftime("%d-%b-%Y"),
+        "days_to_expiry": 0,
+        "spot_price": round(spot_price, 2),
+        "option_price": round(option_price, 2),
+        "intrinsic_value": round(intrinsic_value, 2),
+        "time_value": round(max(option_price - intrinsic_value, 0), 2),
+        "interest_rate": round(interest_rate or 0, 2),
+        "implied_volatility": 0,
+        "greeks": {
+            "delta": 0,
+            "gamma": 0,
+            "theta": 0,
+            "vega": 0,
+            "rho": 0,
+        },
+        "note": "Option has expired - Greeks are no longer applicable",
+    }
+
+
+def _is_expired_option_response(response: dict[str, Any]) -> bool:
+    message = str(response.get("message", "")).lower()
+    return "option has expired" in message
 
 
 def calculate_greeks(
@@ -280,14 +338,14 @@ def calculate_greeks(
     try:
         # opengreeks is lazy-loaded to keep startup snappy (Rust core, NumPy-only deps).
         try:
-            from opengreeks.black76 import (
-                delta as black_delta,
-                gamma as black_gamma,
-                implied_volatility as black_iv,
-                rho as black_rho,
-                theta as black_theta,
-                vega as black_vega,
-            )
+            from opengreeks import black76
+
+            black_delta = black76.delta
+            black_gamma = black76.gamma
+            black_iv = black76.implied_volatility
+            black_rho = black76.rho
+            black_theta = black76.theta
+            black_vega = black76.vega
         except ImportError:
             logger.error("opengreeks library not installed.")
             return (
@@ -792,9 +850,24 @@ def get_multi_option_greeks(
             if calc_success:
                 success_count += 1
             else:
-                failed_count += 1
-                calc_response.setdefault("symbol", symbol)
-                calc_response.setdefault("exchange", exchange)
+                if _is_expired_option_response(calc_response):
+                    base_symbol, expiry, strike, opt_type = parsed_symbols[symbol]
+                    calc_response = _expired_option_greeks_response(
+                        option_symbol=symbol,
+                        exchange=exchange,
+                        base_symbol=base_symbol,
+                        expiry=expiry,
+                        strike=strike,
+                        opt_type=opt_type,
+                        spot_price=spot_price,
+                        option_price=option_price,
+                        interest_rate=interest_rate,
+                    )
+                    success_count += 1
+                else:
+                    failed_count += 1
+                    calc_response.setdefault("symbol", symbol)
+                    calc_response.setdefault("exchange", exchange)
             results.append(calc_response)
         except Exception as e:
             logger.exception(f"Error calculating Greeks for {symbol}: {e}")
@@ -815,6 +888,23 @@ def get_multi_option_greeks(
         "data": results,
         "summary": {"total": len(symbols), "success": success_count, "failed": failed_count},
     }
+    if failed_count > 0:
+        messages = []
+        for result in results:
+            if result.get("status") == "error" and result.get("message"):
+                message = result["message"]
+                if message not in messages:
+                    messages.append(message)
+        if messages:
+            if response["status"] == "error":
+                response["message"] = (
+                    f"All option Greeks calculations failed: {'; '.join(messages[:3])}"
+                )
+            else:
+                response["message"] = (
+                    f"{failed_count} option Greeks calculation(s) failed: "
+                    f"{'; '.join(messages[:3])}"
+                )
 
     logger.info(f"Multi Greeks completed: {success_count}/{len(symbols)} successful")
 

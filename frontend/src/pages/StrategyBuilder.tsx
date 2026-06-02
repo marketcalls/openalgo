@@ -522,7 +522,7 @@ export default function StrategyBuilder() {
           })
         )
         if (cancelled) return
-        if (res.data.status === 'success' && res.data.data) {
+        if ((res.data.status === 'success' || res.data.status === 'partial') && res.data.data) {
           const map: Record<string, LegGreeks> = {}
           for (const leg of legs) {
             const hit = res.data.data.find((r) => r.symbol === leg.symbol)
