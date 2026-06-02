@@ -176,6 +176,29 @@ def revoke_user_tokens(revoke_db_tokens=True):
                     logger.info(f"Auto-expiry: Cleared active sessions for user: {username}")
                 except Exception as session_error:
                     logger.warning(f"Error clearing active sessions: {session_error}")
+
+                try:
+                    from extensions import socketio
+
+                    socketio.emit(
+                        "force_logout",
+                        {
+                            "message": (
+                                "Session expired at market close. Please log in again "
+                                "and complete broker authentication."
+                            ),
+                        },
+                    )
+                    socketio.emit(
+                        "active_sessions_update",
+                        {
+                            "count": 0,
+                            "sessions": [],
+                        },
+                    )
+                    logger.info(f"Auto-expiry: Broadcast force logout for user: {username}")
+                except Exception as socket_error:
+                    logger.warning(f"Error broadcasting auto-expiry logout: {socket_error}")
             else:
                 logger.info(
                     f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)"
