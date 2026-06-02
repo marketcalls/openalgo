@@ -31,7 +31,7 @@ from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, is_session_valid, revoke_user_tokens
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -134,6 +134,32 @@ def check_setup_required():
     return jsonify({"status": "success", "needs_setup": needs_setup})
 
 
+def _broker_validation_failure_reason(funds_data):
+    """Return a reason when a broker funds response represents auth/API failure."""
+    if not funds_data:
+        return "empty funds response"
+
+    if not isinstance(funds_data, dict):
+        return None
+
+    status = str(funds_data.get("status", "")).lower()
+    if status in {"error", "failed", "failure"}:
+        return str(
+            funds_data.get("message")
+            or funds_data.get("errorMessage")
+            or funds_data.get("errors")
+            or funds_data.get("error")
+            or "broker returned error status"
+        )
+
+    for key in ("errorType", "errorCode", "errorMessage", "errors", "error"):
+        value = funds_data.get(key)
+        if value:
+            return str(value)
+
+    return None
+
+
 def _try_resume_broker_session(username):
     """
     Check if the user has an existing valid broker session in the DB.
@@ -163,7 +189,20 @@ def _try_resume_broker_session(username):
         import importlib
         try:
             broker_module = importlib.import_module(f"broker.{broker}.api.funds")
+            if hasattr(broker_module, "test_auth_token"):
+                is_valid, error_message = broker_module.test_auth_token(auth_token)
+                if not is_valid:
+                    logger.info(
+                        f"Broker token expired or invalid for {username}: {error_message}"
+                    )
+                    return None
             funds_data = broker_module.get_margin_data(auth_token)
+            failure_reason = _broker_validation_failure_reason(funds_data)
+            if failure_reason:
+                logger.info(
+                    f"Broker token expired or invalid for {username}: {failure_reason}"
+                )
+                return None
             # get_margin_data returns {} on failure (doesn't raise) — treat empty as invalid
             if not funds_data:
                 logger.info(f"Broker token expired or invalid for {username} (empty funds response)")
@@ -231,13 +270,18 @@ def login():
         # Check if already logged in (check logged_in first — it means
         # broker auth is complete; "user" alone means only password was done)
         if session.get("logged_in"):
-            logger.info(f"[LOGIN] Already fully logged in, redirecting to /dashboard")
-            return jsonify(
-                {"status": "success", "message": "Already logged in", "redirect": "/dashboard"}
-            ), 200
+            if is_session_valid():
+                logger.info("[LOGIN] Already fully logged in, redirecting to /dashboard")
+                return jsonify(
+                    {"status": "success", "message": "Already logged in", "redirect": "/dashboard"}
+                ), 200
+
+            logger.info("[LOGIN] Existing session expired; clearing before password login")
+            revoke_user_tokens()
+            session.clear()
 
         if "user" in session:
-            logger.info(f"[LOGIN] User in session but not logged_in, redirecting to /broker")
+            logger.info("[LOGIN] User in session but not logged_in, redirecting to /broker")
             return jsonify(
                 {"status": "success", "message": "Already logged in", "redirect": "/broker"}
             ), 200
@@ -272,14 +316,14 @@ def login():
             resumed = _try_resume_broker_session(username)
             logger.info(f"[LOGIN] Resume result: {resumed is not None}, type={type(resumed).__name__ if resumed else 'None'}")
             if resumed:
-                logger.info(f"[LOGIN] Returning resume response to frontend")
+                logger.info("[LOGIN] Returning resume response to frontend")
                 from database.auth_db import log_login_attempt
                 log_login_attempt(username, ip, ua, status="success",
                                   login_type="resume", broker=session.get("broker"))
                 return resumed
 
             # No valid broker session — redirect to broker login
-            logger.info(f"[LOGIN] No valid broker session, redirecting to /broker")
+            logger.info("[LOGIN] No valid broker session, redirecting to /broker")
             from database.auth_db import log_login_attempt
             log_login_attempt(username, ip, ua, status="success", login_type="password")
             return jsonify({"status": "success"}), 200
@@ -295,11 +339,15 @@ def login():
     if find_user_by_username() is None:
         return redirect("/setup")
 
+    if session.get("logged_in"):
+        if is_session_valid():
+            return redirect("/dashboard")
+
+        revoke_user_tokens()
+        session.clear()
+
     if "user" in session:
         return redirect("/broker")
-
-    if session.get("logged_in"):
-        return redirect("/dashboard")
 
     return redirect("/login")
 
