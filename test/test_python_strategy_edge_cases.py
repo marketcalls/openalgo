@@ -507,7 +507,170 @@ def test_subprocess_env_includes_strategy_exchange(ps_module, monkeypatch, tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Edge case 11: get_market_status reasons
+# Edge case 11: restored psutil processes under eventlet
+# ---------------------------------------------------------------------------
+
+
+def test_stop_restored_psutil_process_does_not_call_wait(ps_module, monkeypatch):
+    """Restored strategies are tracked as psutil.Process objects.
+
+    Under gunicorn-eventlet, psutil.Process.wait(timeout) can crash because
+    eventlet removes select.poll. The stop path must poll liveness instead.
+    """
+
+    class RestoredProcess:
+        pid = 424242
+
+        def __init__(self):
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout=None):
+            raise AttributeError("module 'select' has no attribute 'poll'")
+
+        def is_running(self):
+            return not self.terminated
+
+        def status(self):
+            return ps_module.psutil.STATUS_ZOMBIE
+
+    process = RestoredProcess()
+    ps_module.RUNNING_STRATEGIES["restored"] = {
+        "process": process,
+        "pid": process.pid,
+        "started_at": datetime.now(IST),
+        "log_file": None,
+    }
+    ps_module.STRATEGY_CONFIGS["restored"] = {
+        "name": "Restored",
+        "exchange": "NSE",
+        "is_running": True,
+        "pid": process.pid,
+    }
+
+    monkeypatch.setattr(ps_module.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(ps_module, "save_configs", lambda: None)
+    monkeypatch.setattr(ps_module, "broadcast_status_update", lambda *a, **kw: None)
+    monkeypatch.setattr(ps_module, "cleanup_strategy_logs", lambda *a, **kw: None)
+
+    success, msg = ps_module.stop_strategy_process("restored")
+
+    assert success, msg
+    assert process.terminated is True
+    assert process.killed is False
+    assert "restored" not in ps_module.RUNNING_STRATEGIES
+    assert ps_module.STRATEGY_CONFIGS["restored"]["is_running"] is False
+    assert ps_module.STRATEGY_CONFIGS["restored"]["pid"] is None
+
+
+def test_cleanup_dead_processes_clears_restored_zombie(ps_module, monkeypatch):
+    """A zombie psutil.Process should be reaped from strategy state."""
+
+    class ZombieProcess:
+        pid = 515151
+
+        def is_running(self):
+            return True
+
+        def status(self):
+            return ps_module.psutil.STATUS_ZOMBIE
+
+    ps_module.RUNNING_STRATEGIES["zombie"] = {
+        "process": ZombieProcess(),
+        "pid": ZombieProcess.pid,
+        "started_at": datetime.now(IST),
+        "log_file": None,
+    }
+    ps_module.STRATEGY_CONFIGS["zombie"] = {
+        "name": "Zombie",
+        "exchange": "NSE",
+        "is_running": True,
+        "pid": ZombieProcess.pid,
+    }
+
+    monkeypatch.setattr(ps_module.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(ps_module, "save_configs", lambda: None)
+
+    ps_module.cleanup_dead_processes()
+
+    assert "zombie" not in ps_module.RUNNING_STRATEGIES
+    assert ps_module.STRATEGY_CONFIGS["zombie"]["is_running"] is False
+    assert ps_module.STRATEGY_CONFIGS["zombie"]["pid"] is None
+
+
+def test_restore_adopts_live_strategy_when_contracts_not_ready(
+    ps_module, monkeypatch, tmp_path
+):
+    """A live strategy must not be marked stopped just because contracts are not ready.
+
+    Otherwise the later master-contract hook can start a duplicate process.
+    """
+
+    strat = tmp_path / "live_strategy.py"
+    strat.write_text("import time; time.sleep(3600)\n")
+
+    class LiveProcess:
+        pid = 616161
+
+        def is_running(self):
+            return True
+
+        def status(self):
+            return "running"
+
+        def cmdline(self):
+            return [sys.executable, "-u", str(strat)]
+
+    process = LiveProcess()
+    ps_module.STRATEGY_CONFIGS["live"] = {
+        "name": "Live",
+        "file_path": str(strat),
+        "exchange": "NSE",
+        "is_running": True,
+        "pid": process.pid,
+        "last_started": datetime.now(IST).isoformat(),
+    }
+
+    monkeypatch.setattr(
+        ps_module,
+        "check_master_contract_ready",
+        lambda skip_on_startup=False: (False, "Master contracts not ready for broker: test"),
+    )
+    monkeypatch.setattr(ps_module.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(ps_module.psutil, "Process", lambda pid: process)
+    monkeypatch.setattr(ps_module, "save_configs", lambda: None)
+    monkeypatch.setattr(
+        ps_module,
+        "start_strategy_process",
+        lambda strategy_id: pytest.fail("live strategy should not be restarted"),
+    )
+
+    ps_module.restore_strategy_states()
+
+    assert "live" in ps_module.RUNNING_STRATEGIES
+    assert ps_module.STRATEGY_CONFIGS["live"]["is_running"] is True
+    assert ps_module.STRATEGY_CONFIGS["live"]["pid"] == process.pid
+    assert "is_error" not in ps_module.STRATEGY_CONFIGS["live"]
+
+
+def test_process_lock_is_reentrant_for_nested_stop(ps_module):
+    """cleanup/delete paths can call stop_strategy_process while holding PROCESS_LOCK."""
+    assert isinstance(ps_module.PROCESS_LOCK, type(ps_module.threading.RLock()))
+
+    with ps_module.PROCESS_LOCK:
+        acquired = ps_module.PROCESS_LOCK.acquire(timeout=0)
+        assert acquired is True
+        ps_module.PROCESS_LOCK.release()
+
+
+# ---------------------------------------------------------------------------
+# Edge case 12: get_market_status reasons
 # ---------------------------------------------------------------------------
 
 
@@ -553,7 +716,7 @@ def test_market_status_reasons_for_each_state(ps_module):
 
 
 # ---------------------------------------------------------------------------
-# Edge case 12: CRYPTO with manually_stopped is still respected
+# Edge case 13: CRYPTO with manually_stopped is still respected
 # ---------------------------------------------------------------------------
 
 
@@ -586,7 +749,7 @@ def test_crypto_manually_stopped_not_resumed(ps_module, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Edge case 13: Schedule with empty days list (shouldn't crash)
+# Edge case 14: Schedule with empty days list (shouldn't crash)
 # ---------------------------------------------------------------------------
 
 
@@ -612,7 +775,7 @@ def test_empty_schedule_days_treated_as_all(ps_module, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Edge case 14: get_effective_session_window edge — exact start/end boundaries
+# Edge case 15: get_effective_session_window edge - exact start/end boundaries
 # ---------------------------------------------------------------------------
 
 
@@ -624,7 +787,6 @@ def test_session_boundary_inclusive(calendar_db):
     assert win is not None
 
     # Construct an "is_market_open" check at the exact start_ms boundary
-    midnight_ist = IST.localize(datetime(2026, 4, 14, 0, 0, 0))
     start_dt = datetime.fromtimestamp(win["start_ms"] / 1000, tz=IST)
     end_dt = datetime.fromtimestamp(win["end_ms"] / 1000, tz=IST)
     assert start_dt.hour == 17 and start_dt.minute == 0
@@ -632,7 +794,7 @@ def test_session_boundary_inclusive(calendar_db):
 
 
 # ---------------------------------------------------------------------------
-# Edge case 15: Backward compat — strategies without scheduler_days
+# Edge case 16: Backward compat - strategies without scheduler_days
 # ---------------------------------------------------------------------------
 
 
