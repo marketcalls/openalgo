@@ -61,7 +61,7 @@ IST = pytz.timezone("Asia/Kolkata")
 RUNNING_STRATEGIES = {}  # {strategy_id: {'process': subprocess.Popen, 'started_at': datetime}}
 STRATEGY_CONFIGS = {}  # {strategy_id: config_dict}
 SCHEDULER = None
-PROCESS_LOCK = threading.Lock()  # Thread lock for process operations
+PROCESS_LOCK = threading.RLock()  # Reentrant lock for nested process operations
 
 # SSE (Server-Sent Events) for real-time status updates
 SSE_SUBSCRIBERS = []  # List of Queue objects for SSE clients
@@ -156,7 +156,7 @@ def load_configs():
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 STRATEGY_CONFIGS = json.load(f)
             mutated = False
-            for sid, cfg in STRATEGY_CONFIGS.items():
+            for cfg in STRATEGY_CONFIGS.values():
                 if "exchange" not in cfg or not cfg.get("exchange"):
                     cfg["exchange"] = "NSE"
                     mutated = True
@@ -666,15 +666,13 @@ def stop_strategy_process(strategy_id):
                         except ProcessLookupError:
                             pass  # Process already dead
             elif hasattr(process, "terminate"):
-                # For psutil.Process objects
-                try:
-                    process.terminate()
-                    process.wait(timeout=5)
-                except psutil.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass  # Process already dead or no permission
+                # Restored strategies are tracked as psutil.Process objects.
+                # Do not call psutil.Process.wait(timeout): under
+                # gunicorn-eventlet on Linux, psutil's pidfd wait path needs
+                # select.poll(), which eventlet removes from the patched
+                # select module.
+                if not terminate_psutil_process_safely(process, terminate_timeout=5, kill_timeout=2):
+                    return False, f"Failed to stop strategy PID {pid}"
             else:
                 # Fallback: use PID directly
                 terminate_process_cross_platform(pid)
@@ -713,6 +711,80 @@ def stop_strategy_process(strategy_id):
             return False, f"Failed to stop strategy: {str(e)}"
 
 
+def psutil_process_has_exited(process):
+    """Return True when a psutil.Process is gone or zombie, without Process.wait()."""
+    pid = getattr(process, "pid", None)
+    if not pid:
+        return True
+
+    if not IS_WINDOWS:
+        try:
+            waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                return True
+        except ChildProcessError:
+            # Restored strategies are usually not children of this process.
+            pass
+        except OSError:
+            pass
+
+    try:
+        if not psutil.pid_exists(pid):
+            return True
+        if not process.is_running():
+            return True
+        try:
+            dead_statuses = {psutil.STATUS_ZOMBIE}
+            status_dead = getattr(psutil, "STATUS_DEAD", None)
+            if status_dead:
+                dead_statuses.add(status_dead)
+            return process.status() in dead_statuses
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return True
+        except psutil.AccessDenied:
+            return False
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return True
+    except psutil.AccessDenied:
+        return False
+
+
+def wait_for_psutil_process_exit(process, timeout):
+    """Poll for psutil.Process exit in a way that is safe under eventlet."""
+    deadline = monotonic() + timeout
+    while monotonic() < deadline:
+        if psutil_process_has_exited(process):
+            return True
+        sleep(0.1)
+    return psutil_process_has_exited(process)
+
+
+def terminate_psutil_process_safely(process, terminate_timeout=3, kill_timeout=2):
+    """Terminate a psutil.Process without using psutil's eventlet-unsafe wait path."""
+    pid = getattr(process, "pid", "unknown")
+
+    try:
+        process.terminate()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return True
+    except psutil.AccessDenied:
+        logger.warning(f"Access denied while terminating process {pid}")
+        return psutil_process_has_exited(process)
+
+    if wait_for_psutil_process_exit(process, terminate_timeout):
+        return True
+
+    try:
+        process.kill()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return True
+    except psutil.AccessDenied:
+        logger.warning(f"Access denied while killing process {pid}")
+        return psutil_process_has_exited(process)
+
+    return wait_for_psutil_process_exit(process, kill_timeout)
+
+
 def terminate_process_cross_platform(pid):
     """Terminate a process in a cross-platform way"""
     try:
@@ -742,17 +814,21 @@ def terminate_process_cross_platform(pid):
             sleep(0.1)
             alive = []
             for p in all_procs:
-                try:
-                    if p.is_running() and p.status() != psutil.STATUS_ZOMBIE:
-                        alive.append(p)
-                except psutil.NoSuchProcess:
-                    pass
+                if not psutil_process_has_exited(p):
+                    alive.append(p)
 
         for p in alive:
             try:
                 p.kill()
             except psutil.NoSuchProcess:
                 pass
+
+        if alive:
+            kill_deadline = monotonic() + 2
+            while monotonic() < kill_deadline and any(
+                not psutil_process_has_exited(p) for p in alive
+            ):
+                sleep(0.1)
 
     except psutil.NoSuchProcess:
         pass  # Process already dead
@@ -811,7 +887,7 @@ def cleanup_dead_processes():
             elif hasattr(process, "is_running"):
                 # For psutil.Process objects
                 try:
-                    if not process.is_running():
+                    if psutil_process_has_exited(process):
                         is_dead = True
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     is_dead = True
@@ -1760,7 +1836,7 @@ def start_strategy(strategy_id):
         elif not is_scheduled_day:
             reason = f"Today ({today_day.capitalize()}) is not in schedule"
             # Find next scheduled day
-            next_days = [d for d in schedule_days]
+            next_days = list(schedule_days)
             next_start = f"next scheduled day ({', '.join(next_days)}) at {schedule_start} IST"
         else:
             reason = f"Outside schedule hours ({schedule_start} - {schedule_stop} IST)"
@@ -2650,6 +2726,57 @@ import atexit
 atexit.register(cleanup_on_exit)
 
 
+def restore_running_strategy_process(strategy_id, config):
+    """Adopt a still-live strategy process from persisted config."""
+    pid = config.get("pid")
+    if not pid:
+        return False
+
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+
+        process = psutil.Process(pid)
+        if psutil_process_has_exited(process):
+            return False
+
+        strategy_file = config.get("file_path", "")
+        cmdline = " ".join(process.cmdline())
+
+        if not strategy_file or strategy_file not in cmdline:
+            logger.debug(f"PID {pid} exists but not our strategy process")
+            return False
+
+        ist_now = get_ist_time()
+
+        # Find the current log file
+        log_pattern = f"{strategy_id}_*_IST.log"
+        log_files = list(LOGS_DIR.glob(log_pattern))
+        current_log = max(log_files, key=lambda f: f.stat().st_mtime) if log_files else None
+
+        RUNNING_STRATEGIES[strategy_id] = {
+            "process": process,
+            "pid": pid,
+            "started_at": datetime.fromisoformat(config.get("last_started", ist_now.isoformat())),
+            "log_file": str(current_log) if current_log else None,
+            "log_handle": None,  # We can't restore the file handle
+        }
+
+        logger.info(f"Restored running strategy {strategy_id} (PID: {pid})")
+        return True
+
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        logger.debug(f"Process {pid} for strategy {strategy_id} no longer exists")
+    except psutil.AccessDenied:
+        logger.warning(
+            f"Cannot inspect process {pid} for strategy {strategy_id}; preserving existing state"
+        )
+    except Exception as e:
+        logger.exception(f"Error checking process {pid} for strategy {strategy_id}: {e}")
+
+    return False
+
+
 def restore_strategy_states():
     """Restore strategy states on startup - restart running strategies or mark as error"""
     logger.debug("Restoring strategy states from previous session...")
@@ -2658,10 +2785,22 @@ def restore_strategy_states():
     # since the session might not be fully initialized yet
     contracts_ready, contract_message = check_master_contract_ready(skip_on_startup=False)
 
+    restored_count = 0
+    error_count = 0
+
+    for strategy_id, config in STRATEGY_CONFIGS.items():
+        if (
+            config.get("is_running")
+            and config.get("pid")
+            and restore_running_strategy_process(strategy_id, config)
+        ):
+            restored_count += 1
+
     # If we can't determine the broker (no active auth), delay strategy restoration
     if "No broker" in contract_message:
         logger.info("No active broker found during startup - delaying strategy restoration")
-        # Don't mark as error yet, wait for proper session initialization
+        if restored_count:
+            logger.info(f"Restored {restored_count} live strategies while broker is unavailable")
         return
 
     if not contracts_ready:
@@ -2669,8 +2808,12 @@ def restore_strategy_states():
             f"Master contracts not ready - strategies will remain in error state until contracts are downloaded: {contract_message}"
         )
         # Mark all running strategies as error state due to master contract dependency
-        for strategy_id, config in STRATEGY_CONFIGS.items():
+        for config in STRATEGY_CONFIGS.values():
             if config.get("is_running"):
+                if config.get("pid") and check_process_status(config.get("pid")):
+                    # A live strategy is already running. Keep its state intact
+                    # so a later master-contract refresh cannot start a duplicate.
+                    continue
                 config["is_running"] = False
                 config["is_error"] = True
                 config["error_message"] = "Waiting for master contracts to be downloaded"
@@ -2679,55 +2822,9 @@ def restore_strategy_states():
         save_configs()
         return
 
-    restored_count = 0
-    error_count = 0
-    cleaned_count = 0
-
     for strategy_id, config in STRATEGY_CONFIGS.items():
         if config.get("is_running") and config.get("pid"):
-            pid = config.get("pid")
-            strategy_restored = False
-
-            try:
-                # Check if process is still running
-                if psutil.pid_exists(pid):
-                    process = psutil.Process(pid)
-
-                    # Check if it's actually our strategy process
-                    cmdline = " ".join(process.cmdline())
-                    strategy_file = config.get("file_path", "")
-
-                    if strategy_file and strategy_file in cmdline:
-                        # Process is still running, restore it to RUNNING_STRATEGIES
-                        ist_now = get_ist_time()
-
-                        # Find the current log file
-                        log_pattern = f"{strategy_id}_*_IST.log"
-                        log_files = list(LOGS_DIR.glob(log_pattern))
-                        current_log = (
-                            max(log_files, key=lambda f: f.stat().st_mtime) if log_files else None
-                        )
-
-                        RUNNING_STRATEGIES[strategy_id] = {
-                            "process": process,
-                            "pid": pid,
-                            "started_at": datetime.fromisoformat(
-                                config.get("last_started", ist_now.isoformat())
-                            ),
-                            "log_file": str(current_log) if current_log else None,
-                            "log_handle": None,  # We can't restore the file handle
-                        }
-
-                        logger.info(f"Restored running strategy {strategy_id} (PID: {pid})")
-                        restored_count += 1
-                        strategy_restored = True
-                    else:
-                        logger.debug(f"PID {pid} exists but not our strategy process")
-
-            except psutil.NoSuchProcess:
-                logger.debug(f"Process {pid} for strategy {strategy_id} no longer exists")
-            except Exception as e:
-                logger.exception(f"Error checking process {pid} for strategy {strategy_id}: {e}")
+            strategy_restored = strategy_id in RUNNING_STRATEGIES
 
             # If strategy wasn't restored, try to restart it automatically
             if not strategy_restored:

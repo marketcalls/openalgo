@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { type AlertCategories, useAlertStore } from '@/stores/alertStore'
@@ -65,6 +66,7 @@ const showCategoryToast = (
 }
 
 export function useSocket() {
+  const navigate = useNavigate()
   const { isAuthenticated } = useAuthStore()
   const socketRef = useRef<Socket | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -164,7 +166,7 @@ export function useSocket() {
         duration: 10000,
       })
       setTimeout(() => {
-        window.location.href = '/login'
+        navigate('/login', { replace: true })
       }, 2000)
     })
 
