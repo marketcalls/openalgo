@@ -98,8 +98,30 @@ class WebSocketProxy:
         self.socket = self.context.socket(zmq.SUB)
         # Connecting to ZMQ
         ZMQ_HOST = os.getenv("ZMQ_HOST", "127.0.0.1")
-        ZMQ_PORT = os.getenv("ZMQ_PORT")
-        self.socket.connect(f"tcp://{ZMQ_HOST}:{ZMQ_PORT}")  # Connect to broker adapter publisher
+        # Default to 5555 when ZMQ_PORT isn't set — older releases use 5555
+        ZMQ_PORT = os.getenv("ZMQ_PORT", "5555")
+        # Connect to a small range of candidate ports so the proxy still
+        # receives messages if the publisher auto-bound to a nearby free port
+        try:
+            base_port = int(ZMQ_PORT)
+        except Exception:
+            base_port = 5555
+
+        candidate_ports = [base_port] + list(range(base_port + 1, base_port + 6))
+        connected_any = False
+        for port in candidate_ports:
+            try:
+                self.socket.connect(f"tcp://{ZMQ_HOST}:{port}")
+                logger.debug(f"ZMQ SUB socket connecting to tcp://{ZMQ_HOST}:{port}")
+                connected_any = True
+            except Exception as e:
+                logger.debug(f"ZMQ SUB connect failed for tcp://{ZMQ_HOST}:{port}: {e}")
+
+        if not connected_any:
+            logger.warning(
+                f"ZMQ SUB socket did not connect to any candidate ports starting at {base_port};"
+                " incoming market data may not be received until a publisher binds."
+            )
 
         # Set up ZeroMQ subscriber to receive all messages
         self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all topics
