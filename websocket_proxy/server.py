@@ -247,11 +247,11 @@ class WebSocketProxy:
             # Wait for all connections to close with timeout
             if close_tasks:
                 try:
-                    await asyncio.wait_for(
-                        asyncio.gather(*close_tasks, return_exceptions=True),
+                    await aio.wait_for(
+                        aio.gather(*close_tasks, return_exceptions=True),
                         timeout=2.0,  # 2 second timeout
                     )
-                except asyncio.TimeoutError:
+                except aio.TimeoutError:
                     logger.warning("Timeout waiting for client connections to close")
 
             # Disconnect all broker adapters
