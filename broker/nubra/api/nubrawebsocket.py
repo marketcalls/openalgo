@@ -63,8 +63,12 @@ class NubraWebSocket:
     WebSocket client for streaming Nubra market data.
     """
 
-    def __init__(self, auth_token: str, device_id: str = "OPENALGO"):
+    def __init__(self, auth_token: str, device_id: str = "OPENALGO", token_provider=None):
         self.bt = auth_token
+        # Optional zero-arg callable returning a fresh auth token from the
+        # database. Invoked before each (re)connect so daily token rollover
+        # (~3 AM IST) does not leave the feed dead with the construction-time token.
+        self.token_provider = token_provider
         self.device_id = device_id
         self.url = WS_URL
         self.ws: Optional[websocket.WebSocketApp] = None
@@ -109,6 +113,24 @@ class NubraWebSocket:
         while not self._stop_event.is_set():
             try:
                 logger.info(f"Connecting to Nubra WebSocket (attempt {reconnect_attempts + 1})...")
+
+                # Re-read a fresh auth token from the database before each
+                # connect attempt so a reconnect after the daily token rollover
+                # uses a live token. The Authorization header below is rebuilt
+                # from self.bt each iteration. Keep the existing token if none.
+                if self.token_provider is not None:
+                    try:
+                        fresh_token = self.token_provider()
+                        if fresh_token:
+                            self.bt = fresh_token
+                        else:
+                            logger.warning(
+                                "Nubra token_provider returned no token; keeping existing auth token"
+                            )
+                    except Exception as token_err:
+                        logger.warning(
+                            f"Nubra token_provider failed; keeping existing auth token: {token_err}"
+                        )
 
                 # Close old socket before creating new one (prevent FD leak)
                 if self.ws:

@@ -14,6 +14,8 @@ from urllib.parse import urlencode
 
 import websocket
 
+from database.auth_db import get_auth_token
+
 
 class DhanWebSocket:
     """
@@ -49,7 +51,13 @@ class DhanWebSocket:
     HEALTH_CHECK_INTERVAL = 30
     DATA_TIMEOUT = 90
 
-    def __init__(self, client_id: str, access_token: str, is_20_depth: bool = False):
+    def __init__(
+        self,
+        client_id: str,
+        access_token: str,
+        is_20_depth: bool = False,
+        user_id: str | None = None,
+    ):
         """
         Initialize Dhan WebSocket client
 
@@ -57,10 +65,13 @@ class DhanWebSocket:
             client_id: Dhan client ID
             access_token: Access token for authentication
             is_20_depth: If True, connects to 20-level depth endpoint
+            user_id: OpenAlgo user id, used to re-read a fresh access token from
+                the database on reconnect (tokens roll over daily at ~3 AM IST)
         """
         self.client_id = client_id
         self.access_token = access_token
         self.is_20_depth = is_20_depth
+        self.user_id = user_id
 
         # WebSocket connection
         self.ws = None
@@ -115,6 +126,31 @@ class DhanWebSocket:
         self.logger.debug(
             f"Dhan WebSocket URL constructed: {self.ws_url[:100]}..."
         )  # Log first 100 chars for security
+
+    def _refresh_access_token(self):
+        """Re-read a fresh access token from the database and rebuild ws_url.
+
+        Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
+        re-read the current token from the database (bypassing the auth cache,
+        which can hold a stale token after rollover) and rebuild the URL that
+        embeds the token. If no fresh token is available, keep the existing one
+        rather than crashing.
+        """
+        if not self.user_id:
+            return
+        try:
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not fresh_token:
+                self.logger.warning(
+                    "No fresh auth token found on reconnect - keeping existing token"
+                )
+                return
+            with self.lock:
+                self.access_token = fresh_token
+                self._build_url()
+            self.logger.info("Refreshed Dhan access token from database for reconnect")
+        except Exception as e:
+            self.logger.error(f"Error refreshing access token on reconnect: {e}")
 
     def connect(self):
         """Establish WebSocket connection"""
@@ -182,6 +218,13 @@ class DhanWebSocket:
                     f"Reconnecting in {delay} seconds... (attempt {reconnect_attempt}/{max_reconnect_attempts})"
                 )
                 time.sleep(delay)
+
+                # Re-read a fresh access token from the database before the loop
+                # rebuilds the WebSocketApp with self.ws_url. Without this, a
+                # reconnect after the ~3 AM IST daily token rollover would reuse
+                # the dead construction-time token and the feed would stay dead
+                # until a process restart.
+                self._refresh_access_token()
 
     def disconnect(self):
         """Disconnect from WebSocket with proper resource cleanup"""

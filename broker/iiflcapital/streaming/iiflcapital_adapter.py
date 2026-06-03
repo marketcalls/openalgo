@@ -83,6 +83,14 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._key_to_symbol: dict[str, tuple[str, str]] = {}
 
     # ----------------------------------------------------------------- lifecycle
+    def _fetch_fresh_token(self) -> str | None:
+        """Re-read a fresh IIFL session token from the DB. Used as the client's
+        token_provider so a daily-rolled token (~3 AM IST) is picked up on
+        reconnect instead of the dead one."""
+        if not self.user_id:
+            return None
+        return self.get_auth_token_for_user(self.user_id, bypass_cache=True)
+
     def initialize(
         self,
         broker_name: str,
@@ -129,6 +137,10 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.ws_client = IiflcapitalWebSocket(
                 user_session=auth_token,
                 on_ticks=self._handle_ticks,
+                # token_provider lets the client re-read a fresh session from the
+                # DB before each reconnect (tokens roll daily ~3 AM IST), instead
+                # of reusing the dead construction-time session.
+                token_provider=self._fetch_fresh_token,
             )
             self.ws_client.on_connect = self._on_connect
             self.ws_client.on_disconnect = self._on_disconnect

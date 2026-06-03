@@ -18,6 +18,8 @@ import requests
 import websocket
 from google.protobuf.json_format import MessageToDict
 
+from database.auth_db import get_auth_token
+
 from . import MarketDataFeedV3_pb2
 
 
@@ -40,8 +42,13 @@ class UpstoxWebSocketClient:
     HEALTH_CHECK_INTERVAL = 30
     DATA_TIMEOUT = 90
 
-    def __init__(self, auth_token: str):
+    def __init__(self, auth_token: str, user_id: str | None = None):
         self.auth_token = auth_token
+        # user_id is used on reconnect to re-read a fresh bearer token from the
+        # database. Indian broker tokens roll over daily at ~3 AM IST, so the
+        # reconnect must NOT sign the new authorize request with the dead
+        # construction-time token.
+        self.user_id = user_id
         self.ws: websocket.WebSocketApp | None = None
         self.logger = logging.getLogger("upstox_websocket")
         self._subscriptions: set = set()
@@ -154,6 +161,14 @@ class UpstoxWebSocketClient:
                     f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})..."
                 )
             time.sleep(delay)
+
+            # Re-read a fresh bearer token from the database before re-fetching
+            # the WebSocket URL. _get_websocket_url() signs the authorize request
+            # with self.auth_token; without this refresh a reconnect after the
+            # ~3 AM IST daily token rollover would sign with the dead
+            # construction-time token and the feed would stay dead until a
+            # process restart.
+            self._refresh_auth_token()
 
             # Re-fetch WebSocket URL for reconnection
             ws_url = self._get_websocket_url()
@@ -348,6 +363,29 @@ class UpstoxWebSocketClient:
         return bool(
             self.auth_token and isinstance(self.auth_token, str) and len(self.auth_token) >= 10
         )
+
+    def _refresh_auth_token(self):
+        """Re-read a fresh bearer token from the database before a reconnect.
+
+        Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
+        re-read the current token from the database (bypassing the auth cache,
+        which can hold a stale token after rollover) so the authorize request is
+        signed with the live bearer. If no fresh token is available, keep the
+        existing one rather than crashing.
+        """
+        if not self.user_id:
+            return
+        try:
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not fresh_token:
+                self.logger.warning(
+                    "No fresh auth token found on reconnect - keeping existing token"
+                )
+                return
+            self.auth_token = fresh_token
+            self.logger.info("Refreshed Upstox auth token from database for reconnect")
+        except Exception as e:
+            self.logger.error(f"Error refreshing auth token on reconnect: {e}")
 
     def _get_websocket_url(self) -> str | None:
         """Get WebSocket URL from Upstox authorization endpoint"""

@@ -798,6 +798,19 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 except Exception as cleanup_err:
                     self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
 
+            # Re-read a fresh auth token from the database before recreating the client.
+            # Indian broker tokens roll over daily at ~3 AM IST, so a reconnect after
+            # rollover must not reuse the construction-time token.
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            with self.lock:
+                if fresh_token:
+                    self.susertoken = fresh_token
+                else:
+                    self.logger.warning(
+                        "Could not fetch fresh auth token from database; "
+                        "reusing existing token for reconnection"
+                    )
+
             # Recreate WebSocket client
             self.ws_client = ZebuWebSocket(
                 user_id=self.actid,  # Both user_id and actid should be the Zebu account ID

@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
 
 from broker.samco.api.data import BrokerData
 from broker.samco.streaming.samcoWebSocket import SamcoWebSocket
@@ -123,6 +124,20 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.info(
                         f"Connecting to Samco WebSocket (attempt {self.reconnect_attempts + 1})"
                     )
+
+                    # Re-read a fresh session token from the database before connecting.
+                    # Indian broker tokens roll over daily at ~3 AM IST, so a reconnect
+                    # after rollover must not reuse the construction-time token. Apply the
+                    # same unquote() parsing the SamcoWebSocket constructor uses.
+                    fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+                    if fresh_token:
+                        self.ws_client.session_token = unquote(fresh_token)
+                    else:
+                        self.logger.warning(
+                            "Could not fetch fresh auth token from database; "
+                            "reusing existing token for reconnection"
+                        )
+
                     self.ws_client.connect()
                     self.reconnect_attempts = 0  # Reset attempts on successful connection
                     break

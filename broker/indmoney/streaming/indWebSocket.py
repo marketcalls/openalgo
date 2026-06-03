@@ -42,6 +42,7 @@ class IndWebSocket:
         retry_delay=10,
         retry_multiplier=2,
         retry_duration=60,
+        token_provider=None,
     ):
         """
         Initialize the IndWebSocket instance
@@ -50,6 +51,10 @@ class IndWebSocket:
         ----------
         access_token: string
             Access token from INDstocks authentication
+        token_provider: callable
+            Optional zero-arg callable returning a fresh access token from the
+            DB. Called before each reconnect so a daily-rolled token (~3 AM IST)
+            is picked up instead of reusing the dead construction-time token.
         max_retry_attempt: int
             Maximum number of retry attempts on connection failure
         retry_strategy: int
@@ -62,6 +67,7 @@ class IndWebSocket:
             Maximum duration for retries in minutes
         """
         self.access_token = access_token
+        self.token_provider = token_provider
         self.DISCONNECT_FLAG = True
         self.last_pong_timestamp = None
         self.MAX_RETRY_ATTEMPT = max_retry_attempt
@@ -249,6 +255,23 @@ class IndWebSocket:
             logger.error(f"Error during resubscribe: {e}")
             raise e
 
+    def _refresh_access_token(self):
+        """Re-read a fresh access token from the DB via token_provider before a
+        reconnect. Keeps the existing token if the provider yields nothing."""
+        if not self.token_provider:
+            return
+        try:
+            fresh = self.token_provider()
+            if fresh:
+                self.access_token = fresh
+                logger.info("Refreshed INDmoney access token before reconnect")
+            else:
+                logger.warning(
+                    "No fresh INDmoney access token available; reusing existing token"
+                )
+        except Exception as e:
+            logger.error(f"Error refreshing access token: {e}")
+
     def connect(self):
         """Establish WebSocket connection to price feed"""
         headers = {"Authorization": self.access_token}
@@ -306,6 +329,9 @@ class IndWebSocket:
                 raise Exception(f"Invalid retry strategy {self.retry_strategy}")
 
             try:
+                # Re-read a fresh token before reconnecting so a daily-rolled
+                # token (~3 AM IST) is used instead of the dead one.
+                self._refresh_access_token()
                 self.close_connection()
                 self.connect()
             except Exception as e:

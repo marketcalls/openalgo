@@ -29,7 +29,7 @@ class FirstockWebSocket:
     DISCONNECTED = 2
     ERROR = 3
 
-    def __init__(self, user_id, auth_token, max_retry_attempt=5, retry_delay=5):
+    def __init__(self, user_id, auth_token, max_retry_attempt=5, retry_delay=5, token_provider=None):
         """
         Initialize the Firstock WebSocket client
 
@@ -43,11 +43,17 @@ class FirstockWebSocket:
             Maximum number of retry attempts on connection failure
         retry_delay : int
             Delay between retry attempts in seconds
+        token_provider : callable, optional
+            Callable returning a fresh auth_token (susertoken) from the DB.
+            Used to refresh the token before each reconnect, since Firstock
+            tokens roll over daily at ~3 AM IST and the token is baked into
+            the connection URL.
         """
         self.user_id = user_id
         self.auth_token = auth_token
         self.max_retry_attempt = max_retry_attempt
         self.retry_delay = retry_delay
+        self.token_provider = token_provider
 
         # Connection management
         self.wsapp = None
@@ -92,6 +98,27 @@ class FirstockWebSocket:
     def _sanity_check(self):
         """Validate initialization parameters"""
         return bool(self.user_id and self.auth_token)
+
+    def _refresh_auth_token(self):
+        """Re-read a fresh auth token (susertoken) from the DB via token_provider.
+
+        Updates self.auth_token in place so the next _build_wsapp bakes the
+        current day's token into the connection URL. On failure the existing
+        token is kept.
+        """
+        if not self.token_provider:
+            return
+        try:
+            fresh = self.token_provider()
+            if fresh:
+                self.auth_token = fresh
+                self.logger.info("Refreshed Firstock auth token before reconnect")
+            else:
+                self.logger.warning(
+                    "Could not fetch fresh auth token on reconnect; using existing token"
+                )
+        except Exception as e:
+            self.logger.error(f"Error refreshing auth token before reconnect: {e}")
 
     def _build_wsapp(self):
         """
@@ -235,6 +262,12 @@ class FirstockWebSocket:
                 if self._shutdown_event.wait(self.retry_delay):
                     self.logger.info("Shutdown requested during retry wait; exiting supervisor")
                     break
+
+                # Re-read a fresh token from the DB before the next iteration
+                # rebuilds the connection URL. Firstock tokens roll over daily
+                # at ~3 AM IST; reusing the construction-time token reconnects
+                # with a dead jKey and the feed stays dead until a restart.
+                self._refresh_auth_token()
         finally:
             self.connection_state = self.DISCONNECTED
             self.logger.info("WebSocket supervisor exiting")
