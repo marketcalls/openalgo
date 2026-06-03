@@ -54,8 +54,16 @@ def map_order_data(order_data):
                 ):
                     order["productType"] = "NRML"
             else:
+                # Symbol resolution failed (e.g. stale/partial master contract).
+                # Never leave a null tradingSymbol — fall back to the raw broker
+                # symbol or securityId so the row stays usable instead of
+                # crashing the positions UI with null.toUpperCase(). See #1463.
+                order["tradingSymbol"] = (
+                    order.get("tradingSymbol") or str(order.get("securityId") or "")
+                )
                 logger.warning(
-                    f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol."
+                    f"Symbol not found for token {instrument_token} and exchange {exchange}. "
+                    f"Falling back to raw symbol '{order['tradingSymbol']}'."
                 )
 
     return order_data
@@ -190,7 +198,10 @@ def transform_positions_data(positions_data):
             if api_key_obj:
                 api_key = decrypt_token(api_key_obj.api_key_encrypted)
                 symbols_payload = [
-                    {"symbol": pos.get("tradingSymbol", ""), "exchange": pos.get("exchangeSegment", "")}
+                    {
+                        "symbol": pos.get("tradingSymbol") or "",
+                        "exchange": pos.get("exchangeSegment") or "",
+                    }
                     for pos in positions_data
                     if pos.get("tradingSymbol") and pos.get("exchangeSegment")
                 ]
@@ -208,14 +219,17 @@ def transform_positions_data(positions_data):
     for position in positions_data:
         realized_pnl = float(position.get("realizedProfit", 0))
         unrealized_pnl = float(position.get("unrealizedProfit", 0))
-        symbol = position.get("tradingSymbol", "")
-        exchange = position.get("exchangeSegment", "")
+        # Coerce nulls: dict.get(k, "") returns None (not "") when the key is
+        # present with a null value, so a null symbol/exchange/product would
+        # otherwise reach the frontend and crash null.toUpperCase(). See #1463.
+        symbol = position.get("tradingSymbol") or ""
+        exchange = position.get("exchangeSegment") or ""
         ltp = ltp_map.get(f"{exchange}:{symbol}", 0.0)
 
         transformed_position = {
             "symbol": symbol,
             "exchange": exchange,
-            "product": position.get("productType", ""),
+            "product": position.get("productType") or "",
             "quantity": position.get("netQty", 0),
             "average_price": position.get("costPrice", 0.0),
             "ltp": round(ltp, 2),

@@ -136,7 +136,10 @@ def map_exchange(brexchange):
         "BSE_CURRENCY": "BCD",
         "MCX_COMM": "MCX",
     }
-    return exchange_mapping.get(brexchange)  # Default to MARKET if not found
+    # Fall back to the raw broker segment instead of None so an unmapped
+    # segment degrades to a visible label rather than propagating null
+    # downstream (which crashes the positions UI). See issue #1463.
+    return exchange_mapping.get(brexchange, brexchange)
 
 
 def map_product_type(product):
