@@ -88,8 +88,12 @@ class FyersAdapter:
             self.last_error = None
             self.logger.info("Connecting to Fyers HSM WebSocket...")
 
-            # Initialize WebSocket client
-            self.ws_client = FyersHSMWebSocket(access_token=self.access_token, log_path="")
+            # Initialize WebSocket client. Pass user_id so the client can
+            # re-read a fresh access token from the database on reconnect
+            # (tokens roll over daily at ~3 AM IST).
+            self.ws_client = FyersHSMWebSocket(
+                access_token=self.access_token, log_path="", user_id=self.userid
+            )
 
             # Set callbacks
             self.ws_client.set_callbacks(
@@ -110,16 +114,16 @@ class FyersAdapter:
 
             if self.ws_client.is_connected():
                 self.connected = True
-                self.logger.info("✅ Connected to Fyers HSM WebSocket")
+                self.logger.info("Connected to Fyers HSM WebSocket")
                 return True
             else:
                 self.last_error = "Failed to authenticate with Fyers HSM WebSocket (timeout)"
-                self.logger.error(f"❌ {self.last_error}")
+                self.logger.error(f"{self.last_error}")
                 return False
 
         except Exception as e:
             self.last_error = str(e)
-            self.logger.error(f"❌ Connection error: {e}")
+            self.logger.error(f"Connection error: {e}")
             return False
         finally:
             self.connecting = False
@@ -284,7 +288,7 @@ class FyersAdapter:
                     self.logger.warning(f"Unmapped subscription: {fs}")
 
                 # Final verification
-                self.logger.debug("\n📊 Mapping Summary:")
+                self.logger.debug("\nMapping Summary:")
                 self.logger.debug(f"   Active subscriptions: {len(self.active_subscriptions)}")
                 self.logger.debug(f"   HSM tokens generated: {len(hsm_tokens)}")
                 self.logger.debug(f"   Mappings created: {len(self.hsm_to_symbol)}")
@@ -293,12 +297,12 @@ class FyersAdapter:
 
                 self.logger.debug(f"\nSubscribing to {len(hsm_tokens)} HSM tokens...")
                 for token in hsm_tokens:
-                    self.logger.debug(f"  ➡️ {token}")
+                    self.logger.debug(f" {token}")
 
                 # Subscribe to HSM WebSocket with all tokens at once
                 self.ws_client.subscribe_symbols(hsm_tokens, token_mappings)
 
-                # self.logger.info(f"\n✅ Successfully sent subscription for {len(hsm_tokens)} HSM tokens")
+                # self.logger.info(f"\nSuccessfully sent subscription for {len(hsm_tokens)} HSM tokens")
                 # self.logger.info(f"Expected data for {len(self.active_subscriptions)} symbols")
                 # self.logger.info("="*60 + "\n")
                 return True
@@ -379,7 +383,7 @@ class FyersAdapter:
                     full_symbol = self.hsm_to_symbol[hsm_token]
                     if full_symbol in self.active_subscriptions:
                         matched_subscription = self.active_subscriptions[full_symbol]
-                        self.logger.debug(f"✅ Matched by HSM token: {hsm_token} -> {full_symbol}")
+                        self.logger.debug(f"Matched by HSM token: {hsm_token} -> {full_symbol}")
                 else:
                     # Log missing mapping for debugging
                     self.logger.debug(f"HSM token {hsm_token} not in mappings")
@@ -394,7 +398,7 @@ class FyersAdapter:
                             # Update reverse mapping for future fast lookup
                             self.hsm_to_symbol[hsm_token] = full_symbol
                             self.logger.debug(
-                                f"✅ Matched by HSM token (fallback): {hsm_token} -> {full_symbol}"
+                                f"Matched by HSM token (fallback): {hsm_token} -> {full_symbol}"
                             )
                             break
 
@@ -404,7 +408,7 @@ class FyersAdapter:
                 # Try exact match
                 if original_symbol in self.active_subscriptions:
                     matched_subscription = self.active_subscriptions[original_symbol]
-                    self.logger.debug(f"✅ Matched by original_symbol: {original_symbol}")
+                    self.logger.debug(f"Matched by original_symbol: {original_symbol}")
                 else:
                     # Try to find a match in active subscriptions
                     # Handle cases like NSE:NIFTY25SEPFUT -> NFO:NIFTY30SEP25FUT
@@ -418,7 +422,7 @@ class FyersAdapter:
                             if "NIFTY" in sub_info["symbol"] and "FUT" in sub_info["symbol"]:
                                 matched_subscription = sub_info
                                 self.logger.debug(
-                                    f"✅ Matched NFO future by pattern: {original_symbol} -> {full_symbol}"
+                                    f"Matched NFO future by pattern: {original_symbol} -> {full_symbol}"
                                 )
                                 # Update the mapping for future use
                                 if hsm_token and hsm_token not in self.hsm_to_symbol:
@@ -439,7 +443,7 @@ class FyersAdapter:
                         ):
                             matched_subscription = sub_info
                             self.logger.debug(
-                                f"✅ Matched by symbol name: {fyers_symbol} -> {full_symbol}"
+                                f"Matched by symbol name: {fyers_symbol} -> {full_symbol}"
                             )
                             # Update the mapping for future use
                             if hsm_token and hsm_token not in self.hsm_to_symbol:
@@ -462,7 +466,7 @@ class FyersAdapter:
                             if fyers_core and sub_core and fyers_core in sub_core:
                                 matched_subscription = sub_info
                                 self.logger.debug(
-                                    f"✅ Matched NFO by core symbol: {fyers_symbol} -> {full_symbol}"
+                                    f"Matched NFO by core symbol: {fyers_symbol} -> {full_symbol}"
                                 )
                                 # Update the mapping for future use
                                 if hsm_token and hsm_token not in self.hsm_to_symbol:
@@ -474,12 +478,12 @@ class FyersAdapter:
                 if not matched_subscription and len(self.active_subscriptions) == 1:
                     for full_symbol, sub_info in self.active_subscriptions.items():
                         matched_subscription = sub_info
-                        self.logger.debug(f"✅ Single subscription match: {full_symbol}")
+                        self.logger.debug(f"Single subscription match: {full_symbol}")
                         break
 
             # Final check - if still no match, log detailed debug info and return
             if not matched_subscription:
-                self.logger.warning(f"❌ No HSM token match for data. HSM token: {hsm_token}")
+                self.logger.warning(f"No HSM token match for data. HSM token: {hsm_token}")
                 self.logger.debug(f"   HSM to Symbol mappings: {self.hsm_to_symbol}")
                 self.logger.debug(f"   Symbol to HSM mappings: {self.symbol_to_hsm}")
                 self.logger.debug(
@@ -561,9 +565,9 @@ class FyersAdapter:
                     sell_levels = depth.get("sell", [])
                     bid1 = buy_levels[0]["price"] if buy_levels else "N/A"
                     ask1 = sell_levels[0]["price"] if sell_levels else "N/A"
-                    self.logger.debug(f"🎉 {full_symbol} depth: Bid={bid1}, Ask={ask1}")
+                    self.logger.debug(f"{full_symbol} depth: Bid={bid1}, Ask={ask1}")
                 else:
-                    self.logger.debug(f"🎉 {full_symbol} data: LTP={side_data.get('ltp', 0)}")
+                    self.logger.debug(f"{full_symbol} data: LTP={side_data.get('ltp', 0)}")
 
                 cb(side_data)
 

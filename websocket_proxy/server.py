@@ -81,6 +81,19 @@ class WebSocketProxy:
         self.last_message_time: dict[tuple[str, str, int], float] = {}
         self.message_throttle_interval = 0.05  # 50ms minimum between messages
 
+        # OBSERVABILITY: last time any tick was delivered to each user. Used to
+        # surface "adapter is connected but silent while subscribed" — the
+        # stale-feed symptom behind issues #1226/#1419/#1421. This is a
+        # diagnostic signal only: it is logged and exposed via get_adapter_health(),
+        # never used to auto-evict (a quiet market or illiquid symbol legitimately
+        # produces no ticks, so auto-eviction would churn healthy feeds). Actual
+        # eviction stays with the connected-state check in authenticate_client.
+        self.last_tick_time: dict[str, float] = {}  # user_id -> epoch seconds
+        self._last_stale_warn: dict[str, float] = {}  # user_id -> epoch of last warning
+        self._stale_tick_warn_seconds = int(os.getenv("WS_STALE_TICK_WARN_SECONDS", "120"))
+        self._last_stale_check = time.time()
+        self._stale_check_interval = 30  # evaluate stale-feed warnings at most every 30s
+
         # MODE_MAP retained for any external consumers that imported it from
         # this class. New code should call normalize_mode() / normalize_mode_or_none()
         # at module level — those accept case-insensitive strings AND ints.
@@ -247,11 +260,11 @@ class WebSocketProxy:
             # Wait for all connections to close with timeout
             if close_tasks:
                 try:
-                    await asyncio.wait_for(
-                        asyncio.gather(*close_tasks, return_exceptions=True),
+                    await aio.wait_for(
+                        aio.gather(*close_tasks, return_exceptions=True),
                         timeout=2.0,  # 2 second timeout
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("Timeout waiting for client connections to close")
 
             # Disconnect all broker adapters
@@ -408,6 +421,79 @@ class WebSocketProxy:
                 f"{total_subs} unique subscriptions, "
                 f"{len(self.last_message_time)} throttle entries"
             )
+
+    def _users_with_active_subscriptions(self) -> set:
+        """Return the set of user_ids that currently have at least one client
+        subscribed to at least one symbol."""
+        active_users = set()
+        for client_set in self.subscription_index.values():
+            for client_id in client_set:
+                user_id = self.user_mapping.get(client_id)
+                if user_id:
+                    active_users.add(user_id)
+        return active_users
+
+    def _log_stale_adapters(self):
+        """Observability only: warn when a broker adapter reports connected but
+        has delivered no ticks for longer than the threshold while the user still
+        has active subscriptions. This surfaces the stale-feed symptom of issues
+        #1226/#1419/#1421 without auto-evicting (a quiet market legitimately has
+        no ticks). Actual recovery is handled by the connected-state eviction in
+        authenticate_client.
+        """
+        current_time = time.time()
+        if current_time - self._last_stale_check < self._stale_check_interval:
+            return
+        self._last_stale_check = current_time
+
+        threshold = self._stale_tick_warn_seconds
+        if threshold <= 0:
+            return
+
+        active_users = self._users_with_active_subscriptions()
+        for user_id, adapter in list(self.broker_adapters.items()):
+            if user_id not in active_users:
+                continue  # no subscriptions => no ticks expected
+            if not bool(getattr(adapter, "connected", False)):
+                continue  # disconnected adapters are handled on next auth
+            last_tick = self.last_tick_time.get(user_id)
+            if last_tick is None:
+                continue  # never delivered yet (just connected) — don't flag
+            silent_for = current_time - last_tick
+            if silent_for < threshold:
+                continue
+            # Throttle repeat warnings per user to once per threshold window
+            if current_time - self._last_stale_warn.get(user_id, 0) < threshold:
+                continue
+            self._last_stale_warn[user_id] = current_time
+            broker = self.user_broker_mapping.get(user_id, "unknown")
+            logger.warning(
+                f"Stale feed: {broker} adapter for user {user_id} reports connected "
+                f"but no ticks for {silent_for:.0f}s while subscribed. If this persists, "
+                f"the broker WebSocket may be silently dead (reconnect/restart may be needed)."
+            )
+
+    def get_adapter_health(self) -> dict:
+        """Per-user adapter health snapshot for diagnostics (#1432).
+
+        Returns connected state, seconds since last tick, and whether the user
+        has active subscriptions — enough to triage the stale-feed class of bug
+        from /admin/diagnostics without a code dive.
+        """
+        current_time = time.time()
+        active_users = self._users_with_active_subscriptions()
+        health = {}
+        for user_id, adapter in self.broker_adapters.items():
+            last_tick = self.last_tick_time.get(user_id)
+            health[user_id] = {
+                "broker": self.user_broker_mapping.get(user_id, "unknown"),
+                "connected": bool(getattr(adapter, "connected", False)),
+                "has_subscriptions": user_id in active_users,
+                "seconds_since_last_tick": (
+                    round(current_time - last_tick, 1) if last_tick is not None else None
+                ),
+            }
+        return health
 
     async def handle_client(self, websocket):
         """
@@ -610,23 +696,12 @@ class WebSocketProxy:
             dict: Broker configuration containing broker_name and credentials
         """
         try:
-            from sqlalchemy import text
+            from database.auth_db import Auth
 
-            from database.auth_db import get_broker_name
+            auth_obj = Auth.query.filter_by(name=user_id).first()
 
-            # Get user's connected broker from database
-            # This queries the auth_token table to find the user's active broker
-            query = text("""
-                SELECT broker FROM auth_token 
-                WHERE user_id = :user_id 
-                ORDER BY id DESC 
-                LIMIT 1
-            """)
-
-            result = db.session.execute(query, {"user_id": user_id}).fetchone()
-
-            if result and result.broker:
-                broker_name = result.broker
+            if auth_obj and not auth_obj.is_revoked and auth_obj.broker:
+                broker_name = auth_obj.broker
                 logger.info(f"Found broker '{broker_name}' for user {user_id} from database")
             else:
                 # Fallback to environment variable
@@ -706,8 +781,46 @@ class WebSocketProxy:
             )
             return
 
+        previous_broker_name = self.user_broker_mapping.get(user_id)
+
         # Store the broker mapping for this user
         self.user_broker_mapping[user_id] = broker_name
+
+        # A successful API-key auth is not enough: the cached broker adapter/pool
+        # can be disconnected or still hold a previous day's broker token. Evict
+        # it before the normal create/connect path runs so the fresh DB token is
+        # used immediately after broker re-login.
+        if user_id in self.broker_adapters:
+            cached_adapter = self.broker_adapters[user_id]
+            cached_connected = bool(getattr(cached_adapter, "connected", False))
+            broker_changed = bool(previous_broker_name and previous_broker_name != broker_name)
+
+            if broker_changed or not cached_connected:
+                reason = (
+                    f"broker changed {previous_broker_name}->{broker_name}"
+                    if broker_changed
+                    else "cached adapter disconnected"
+                )
+                logger.info(
+                    f"Cached {broker_name} adapter for user {user_id} is stale ({reason}) - "
+                    "evicting to rebuild with fresh credentials"
+                )
+                try:
+                    cached_adapter.disconnect()
+                except Exception as adapter_error:
+                    logger.warning(
+                        f"Error disconnecting stale adapter for user {user_id}: {adapter_error}"
+                    )
+                self.broker_adapters.pop(user_id, None)
+
+                try:
+                    from .broker_factory import cleanup_pools_for_user
+
+                    cleanup_pools_for_user(user_id, broker_name=previous_broker_name or broker_name)
+                except Exception as pool_error:
+                    logger.warning(
+                        f"Error cleaning stale connection pools for user {user_id}: {pool_error}"
+                    )
 
         # Create or reuse broker adapter
         if user_id not in self.broker_adapters:
@@ -1419,6 +1532,23 @@ class WebSocketProxy:
                 except Exception as adapter_error:
                     logger.warning(f"Error disconnecting adapter for user {user_id}: {adapter_error}")
 
+            # broker_adapters only tracks the wrapper currently attached to a
+            # client. The global connection-pool registry may still contain an
+            # old per-user pool after logout/re-login, especially when the
+            # invalidation races with a dashboard reconnect. Purge it too.
+            try:
+                from .broker_factory import cleanup_pools_for_user
+
+                removed_pools = cleanup_pools_for_user(user_id)
+                if removed_pools:
+                    logger.info(
+                        f"Disconnected {removed_pools} cached connection pool(s) for user {user_id}"
+                    )
+            except Exception as pool_error:
+                logger.warning(
+                    f"Error cleaning connection pools for user {user_id}: {pool_error}"
+                )
+
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse cache invalidation message: {e}")
         except Exception as e:
@@ -1516,6 +1646,9 @@ class WebSocketProxy:
 
                 # RESOURCE CLEANUP: Periodically clean stale throttle entries
                 self._cleanup_stale_throttle_entries()
+
+                # OBSERVABILITY: periodically warn on connected-but-silent feeds
+                self._log_stale_adapters()
 
                 # OPTIMIZATION 1: Increased timeout to reduce busy-waiting
                 try:
@@ -1658,6 +1791,11 @@ class WebSocketProxy:
                     user_id = self.user_mapping.get(client_id)
                     if not user_id:
                         continue
+
+                    # OBSERVABILITY: record that this user's feed is live (a tick
+                    # was delivered). Cheap dict write; lets _log_stale_adapters()
+                    # detect connected-but-silent adapters.
+                    self.last_tick_time[user_id] = current_time
 
                     # Check broker match (important for multi-broker setups)
                     client_broker = self.user_broker_mapping.get(user_id)

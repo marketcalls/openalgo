@@ -68,13 +68,16 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required access token")
                 raise ValueError("Missing required access token")
 
-        # Create IndWebSocket instance
+        # Create IndWebSocket instance. token_provider lets the client re-read a
+        # fresh token from the DB before each reconnect (tokens roll daily ~3 AM
+        # IST), instead of reusing the dead construction-time token.
         self.ws_client = IndWebSocket(
             access_token=access_token,
             max_retry_attempt=5,
             retry_strategy=1,  # Exponential backoff
             retry_delay=5,
             retry_multiplier=2,
+            token_provider=self._fetch_fresh_token,
         )
 
         # Set callbacks
@@ -86,6 +89,14 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.running = True
         self.logger.info(f"INDmoney WebSocket adapter initialized for user {user_id}")
+
+    def _fetch_fresh_token(self) -> str | None:
+        """Re-read a fresh auth token from the DB. Used as the client's
+        token_provider and by the adapter reconnect path so a daily-rolled
+        token (~3 AM IST) is picked up instead of the dead one."""
+        if not self.user_id:
+            return None
+        return get_auth_token(self.user_id, bypass_cache=True)
 
     def connect(self) -> None:
         """Establish connection to INDmoney WebSocket"""
@@ -99,6 +110,11 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Connect to INDmoney WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
+                # Refresh the client's token before connecting so a reconnect
+                # after the daily token rollover uses a live token.
+                if self.ws_client:
+                    self.ws_client._refresh_access_token()
+
                 self.logger.info(
                     f"Connecting to INDmoney WebSocket (attempt {self.reconnect_attempts + 1})"
                 )
@@ -303,7 +319,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
                     self.ws_client.subscribe(instruments=ltp_instruments, mode="ltp")
                     self.logger.info(
-                        f"✓ Resubscribed to {len(ltp_instruments)} instruments in LTP mode"
+                        f"Resubscribed to {len(ltp_instruments)} instruments in LTP mode"
                     )
 
                 if quote_instruments:
@@ -312,7 +328,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
                     self.ws_client.subscribe(instruments=quote_instruments, mode="quote")
                     self.logger.info(
-                        f"✓ Resubscribed to {len(quote_instruments)} instruments in QUOTE mode"
+                        f"Resubscribed to {len(quote_instruments)} instruments in QUOTE mode"
                     )
 
                 if not ltp_instruments and not quote_instruments:

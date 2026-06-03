@@ -42,6 +42,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         super().__init__()
         self.logger = logging.getLogger("upstox_websocket")
         self.ws_client: UpstoxWebSocketClient | None = None
+        self.user_id: str | None = None
         self.subscriptions: dict[str, dict[str, Any]] = {}
         self.market_status: dict[str, Any] = {}
         self.connected = False
@@ -67,11 +68,14 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     ) -> dict[str, Any]:
         """Initialize the adapter with authentication data"""
         try:
+            self.user_id = user_id
             auth_token = self._get_auth_token(auth_data, user_id)
             if not auth_token:
                 return self._create_error_response("AUTH_ERROR", "No authentication token found")
 
-            self.ws_client = UpstoxWebSocketClient(auth_token)
+            # Pass user_id so the client can re-read a fresh bearer token from
+            # the database on reconnect (tokens roll over daily at ~3 AM IST).
+            self.ws_client = UpstoxWebSocketClient(auth_token, user_id=user_id)
             self.ws_client.callbacks = {
                 "on_connect": self._on_connect,
                 "on_message": self._on_market_data,
@@ -222,7 +226,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for mode_str, instrument_keys in keys_by_mode.items():
             try:
                 self.logger.info(
-                    f"📦 Batch subscribing {len(instrument_keys)} instrument(s) in {mode_str} mode"
+                    f"Batch subscribing {len(instrument_keys)} instrument(s) in {mode_str} mode"
                 )
                 self.ws_client.subscribe(instrument_keys, mode_str)
             except Exception as e:
@@ -397,7 +401,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for mode_str, instrument_keys in keys_by_mode.items():
             try:
                 self.logger.info(
-                    f"🔌 Replaying {len(instrument_keys)} subscription(s) in {mode_str} mode "
+                    f"Replaying {len(instrument_keys)} subscription(s) in {mode_str} mode "
                     f"after WS handshake"
                 )
                 self.ws_client.subscribe(instrument_keys, mode_str)

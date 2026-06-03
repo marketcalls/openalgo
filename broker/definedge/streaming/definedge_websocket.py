@@ -17,7 +17,12 @@ logger = logging.getLogger(__name__)
 class DefinedGeWebSocket:
     """DefinedGe Securities WebSocket client for real-time data streaming"""
 
-    def __init__(self, auth_data):
+    def __init__(self, auth_data, token_provider=None):
+        # Optional callable that returns a fresh auth_data dict from the DB.
+        # Used to refresh susertoken/api_session_key before each reconnect,
+        # since DefinEdge (Noren) tokens roll over daily at ~3 AM IST.
+        self.token_provider = token_provider
+
         # Accept auth_data as dict (following Angel pattern)
         if isinstance(auth_data, dict):
             # Extract from dictionary
@@ -81,6 +86,37 @@ class DefinedGeWebSocket:
         self.heartbeat_thread = None
         self.heartbeat_interval = 50  # 50 seconds as per API docs
         self.heartbeat_running = False
+
+    def _refresh_tokens(self):
+        """Re-read fresh auth tokens from the DB via token_provider.
+
+        Updates susertoken and api_session_key in place so a reconnect uses
+        the current day's token. On failure the existing tokens are kept.
+        """
+        if not self.token_provider:
+            return
+        try:
+            fresh = self.token_provider()
+            if not fresh or not isinstance(fresh, dict):
+                logger.warning(
+                    "Could not fetch fresh tokens on reconnect; using existing tokens"
+                )
+                return
+
+            auth_token = fresh.get("auth_token", "")
+            susertoken = fresh.get("feed_token", "")
+
+            if susertoken:
+                self.susertoken = susertoken
+            if auth_token:
+                if ":::" in auth_token:
+                    parts = auth_token.split(":::")
+                    self.api_session_key = parts[0] if len(parts) > 0 else ""
+                else:
+                    self.api_session_key = auth_token
+            logger.info("Refreshed DefinedGe auth tokens before reconnect")
+        except Exception as e:
+            logger.error(f"Error refreshing tokens before reconnect: {e}")
 
     def connect(self, ssl_verify=True):
         """Connect to DefinedGe WebSocket"""
@@ -186,6 +222,8 @@ class DefinedGeWebSocket:
             def delayed_reconnect():
                 time.sleep(self.reconnect_delay)
                 if self.should_reconnect:
+                    # Re-read fresh token from DB before reconnecting
+                    self._refresh_tokens()
                     self.connect()
 
             threading.Thread(target=delayed_reconnect, daemon=True).start()
@@ -350,10 +388,10 @@ class DefinedGeWebSocket:
 
             if now < market_open or now > market_close:
                 logger.warning(
-                    f"⏰ Market closed - No OHLC expected (Current: {now.strftime('%H:%M')})"
+                    f"Market closed - No OHLC expected (Current: {now.strftime('%H:%M')})"
                 )
             else:
-                logger.warning(f"⚠️ Market open but NO OHLC in ACK for {exchange}|{token}")
+                logger.warning(f"Market open but NO OHLC in ACK for {exchange}|{token}")
 
         logger.debug(f"Full ACK message: {data}")
 

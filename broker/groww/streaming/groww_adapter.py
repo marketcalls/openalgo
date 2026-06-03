@@ -147,12 +147,25 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        # Create WebSocket client with callbacks
+        # Create WebSocket client with callbacks. token_provider lets the client
+        # re-read a fresh token from the DB before each reconnect (tokens roll
+        # daily ~3 AM IST), instead of reusing the dead construction-time token.
         self.ws_client = GrowwNATSWebSocket(
-            auth_token=auth_token, on_data=self._on_data, on_error=self._on_error
+            auth_token=auth_token,
+            on_data=self._on_data,
+            on_error=self._on_error,
+            token_provider=self._fetch_fresh_token,
         )
 
         self.running = True
+
+    def _fetch_fresh_token(self) -> str | None:
+        """Re-read a fresh auth token from the DB. Used as the client's
+        token_provider so a daily-rolled token (~3 AM IST) is picked up on
+        reconnect instead of the dead one."""
+        if not self.user_id:
+            return None
+        return get_auth_token(self.user_id, bypass_cache=True)
 
     def connect(self) -> None:
         """Establish connection to Groww WebSocket"""
@@ -699,7 +712,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         spec["sub_key"] = item["sub_key_override"]
                     batch_specs.append(spec)
 
-                self.logger.info(f"📦 Batch subscribing {len(batch_specs)} symbols")
+                self.logger.info(f"Batch subscribing {len(batch_specs)} symbols")
                 sub_keys = self.ws_client.subscribe_batch(batch_specs)
 
                 for item, sub_key in zip(queue, sub_keys):
@@ -749,7 +762,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         try:
             self.logger.info(
-                f"📦 Reconnect: batch resubscribing {len(batch_specs)} symbols"
+                f"Reconnect: batch resubscribing {len(batch_specs)} symbols"
             )
             with self.batch_lock:
                 sub_keys = self.ws_client.subscribe_batch(batch_specs)

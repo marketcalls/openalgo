@@ -18,6 +18,7 @@ Implements:
 import json
 import ssl
 import struct
+import sys
 import threading
 import time
 from collections import deque
@@ -26,6 +27,15 @@ from datetime import datetime
 from typing import Any
 
 import websocket
+
+from database.auth_db import get_auth_token
+
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 
 class ZerodhaWebSocket:
@@ -66,18 +76,26 @@ class ZerodhaWebSocket:
     DATA_TIMEOUT = 90
 
     def __init__(
-        self, api_key: str, access_token: str, on_ticks: Callable[[list[dict]], None] = None
+        self,
+        api_key: str,
+        access_token: str,
+        on_ticks: Callable[[list[dict]], None] = None,
+        user_id: str | None = None,
     ):
         """Initialize the Zerodha WebSocket client"""
         self.api_key = api_key
         self.access_token = access_token
         self.on_ticks = on_ticks
+        # user_id is used on reconnect to re-read a fresh access token from the
+        # database. Indian broker tokens roll over daily at ~3 AM IST, so a
+        # reconnect after rollover must NOT reuse the construction-time token.
+        self.user_id = user_id
         self.ws: websocket.WebSocketApp | None = None
         self.connected = False
         self.running = False
         self._ws_thread: threading.Thread | None = None
         self.logger = get_logger(__name__)
-        self.lock = threading.Lock()
+        self.lock = _real_threading.Lock()
 
         # Subscription management
         self.subscribed_tokens: set[int] = set()
@@ -116,8 +134,8 @@ class ZerodhaWebSocket:
         self.error_count = 0
 
         # Connection state
-        self._connection_ready = threading.Event()
-        self._stop_event = threading.Event()
+        self._connection_ready = _real_threading.Event()
+        self._stop_event = _real_threading.Event()
 
         # Fatal-error short-circuit: when an auth failure is detected (expired
         # token, invalid api_key, 3am IST roll-over, etc.) we stop reconnecting
@@ -150,7 +168,7 @@ class ZerodhaWebSocket:
             self._fatal_error = False
             self._fatal_error_message = ""
 
-            self._ws_thread = threading.Thread(
+            self._ws_thread = _real_threading.Thread(
                 target=self._run_websocket, daemon=True, name="ZerodhaWS"
             )
             self._ws_thread.start()
@@ -162,6 +180,46 @@ class ZerodhaWebSocket:
             self.logger.error(f"Error starting WebSocket client: {e}")
             self.running = False
             return False
+
+    def _refresh_access_token(self):
+        """Re-read a fresh access token from the database and rebuild ws_url.
+
+        Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
+        re-read the current token from the database (bypassing the auth cache,
+        which can hold a stale token after rollover) and rebuild the URL that
+        bakes the token in. If no fresh token is available, keep the existing
+        one rather than crashing.
+        """
+        if not self.user_id:
+            return
+        try:
+            auth_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not auth_token:
+                self.logger.warning(
+                    "No fresh auth token found on reconnect — keeping existing token"
+                )
+                return
+            # Same parsing as the adapter's initialize(): auth token format is
+            # api_key:access_token; use the access_token part when present.
+            if ":" in auth_token:
+                parts = auth_token.split(":")
+                access_token = parts[1] if len(parts) >= 2 else auth_token
+            else:
+                access_token = auth_token
+            if not access_token:
+                self.logger.warning(
+                    "Parsed empty access token on reconnect — keeping existing token"
+                )
+                return
+            with self.lock:
+                self.access_token = access_token
+                self.ws_url = (
+                    f"wss://ws.kite.trade?api_key={self.api_key}"
+                    f"&access_token={self.access_token}"
+                )
+            self.logger.info("Refreshed Zerodha access token from database for reconnect")
+        except Exception as e:
+            self.logger.error(f"Error refreshing access token on reconnect: {e}")
 
     def _run_websocket(self):
         """Run the WebSocket connection with reconnection logic"""
@@ -212,6 +270,13 @@ class ZerodhaWebSocket:
             # shutdown does not have to wait out the full backoff.
             if self._stop_event.wait(delay):
                 break
+
+            # Re-read a fresh access token from the database before the loop
+            # rebuilds the WebSocketApp with self.ws_url. Without this, a
+            # reconnect after the ~3 AM IST daily token rollover would reuse the
+            # dead construction-time token and the feed would stay dead until a
+            # process restart.
+            self._refresh_access_token()
 
         self.logger.info("WebSocket thread exited")
 
@@ -268,7 +333,7 @@ class ZerodhaWebSocket:
 
         # Process subscriptions in a separate thread
         if not self._subscription_thread or not self._subscription_thread.is_alive():
-            self._subscription_thread = threading.Thread(
+            self._subscription_thread = _real_threading.Thread(
                 target=self._process_pending_subscriptions, daemon=True
             )
             self._subscription_thread.start()
@@ -517,7 +582,7 @@ class ZerodhaWebSocket:
     def _start_health_check(self):
         if self._health_check_thread and self._health_check_thread.is_alive():
             return
-        self._health_check_thread = threading.Thread(
+        self._health_check_thread = _real_threading.Thread(
             target=self._health_check_loop, daemon=True
         )
         self._health_check_thread.start()

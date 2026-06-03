@@ -178,8 +178,8 @@ def parse_margin_response(response_data):
         logger.info("  - margin_total: Approximate margin required for the order")
         logger.info("  - margin_new_order: Total margin including existing positions")
         logger.info("")
-        logger.warning("⚠ IMPORTANT: Fyers does not provide SPAN/Exposure breakdown")
-        logger.warning("⚠ Using margin_new_order as total_margin_required")
+        logger.warning("IMPORTANT: Fyers does not provide SPAN/Exposure breakdown")
+        logger.warning("Using margin_new_order as total_margin_required")
         logger.info("=" * 80)
 
         # Return standardized format matching OpenAlgo specification

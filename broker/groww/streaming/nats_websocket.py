@@ -28,7 +28,11 @@ class GrowwNATSWebSocket:
     """
 
     def __init__(
-        self, auth_token: str, on_data: Callable | None = None, on_error: Callable | None = None
+        self,
+        auth_token: str,
+        on_data: Callable | None = None,
+        on_error: Callable | None = None,
+        token_provider: Callable | None = None,
     ):
         """
         Initialize Groww WebSocket
@@ -37,8 +41,12 @@ class GrowwNATSWebSocket:
             auth_token: Authentication token for Groww API
             on_data: Callback for market data
             on_error: Callback for errors
+            token_provider: Optional zero-arg callable returning a fresh auth
+                token from the DB. Called before each reconnect so a daily-rolled
+                token (~3 AM IST) is used instead of the dead one.
         """
         self.auth_token = auth_token
+        self.token_provider = token_provider
         self.on_data = on_data or self._default_on_data
         self.on_error = on_error or self._default_on_error
 
@@ -159,6 +167,23 @@ class GrowwNATSWebSocket:
             logger.error(f"Failed to connect to Groww: {e}")
             self.connected = False
             raise
+
+    def _refresh_auth_token(self):
+        """Re-read a fresh auth token from the DB via token_provider before a
+        reconnect. Keeps the existing token if the provider yields nothing."""
+        if not self.token_provider:
+            return
+        try:
+            fresh = self.token_provider()
+            if fresh:
+                self.auth_token = fresh
+                logger.info("Refreshed Groww auth token before reconnect")
+            else:
+                logger.warning(
+                    "No fresh Groww auth token available; reusing existing token"
+                )
+        except Exception as e:
+            logger.error(f"Error refreshing Groww auth token: {e}")
 
     def _generate_socket_token(self):
         """Generate socket token from Groww API using minimal nkeys"""
@@ -486,6 +511,11 @@ class GrowwNATSWebSocket:
             logger.info("Attempting to reconnect...")
             time.sleep(5)
             try:
+                # Re-read a fresh auth token and regenerate the socket token so
+                # the reconnect's Authorization header uses live credentials
+                # instead of the dead daily-rolled token.
+                self._refresh_auth_token()
+                self._generate_socket_token()
                 self._run_websocket()
             except Exception as e:
                 logger.error(f"Reconnection failed: {e}")
@@ -685,7 +715,7 @@ class GrowwNATSWebSocket:
                 instrumenttype == "INDEX" or "INDEX" in str(exchange).upper()
             ):
                 logger.warning(
-                    f"⚠️ INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
+                    f"INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
                 )
                 sub_type = "ltp"
 
@@ -860,7 +890,7 @@ class GrowwNATSWebSocket:
         # Check if this is an index - indices don't have depth, only LTP
         if instrumenttype == "INDEX" or "INDEX" in exchange.upper():
             logger.warning(
-                f"⚠️ INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
+                f"INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
             )
             # Redirect to LTP subscription for indices
             return self.subscribe_ltp(exchange, segment, token, symbol, instrumenttype)
