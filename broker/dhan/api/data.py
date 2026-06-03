@@ -17,28 +17,36 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Rate limiter for Dhan API - max 1 request per second
-_last_api_call_time = 0
+# Rate limiters for Dhan API. Dhan enforces different limits per API class:
+#   - Data/History APIs (/v2/charts/*):   5 req/s -> 0.2s spacing
+#   - Quote APIs (/v2/marketfeed/*):       1 req/s -> 1.1s spacing
+# Each class is throttled independently so fast history fetches don't get
+# capped to the slower quote limit (and vice versa).
 _rate_limit_lock = threading.Lock()
-DHAN_MIN_REQUEST_INTERVAL = 1.1  # seconds between requests
+_last_api_call_time = {"data": 0.0, "quote": 0.0}
+DHAN_DATA_INTERVAL = 0.2  # seconds between /v2/charts/* requests (5 req/s)
+DHAN_QUOTE_INTERVAL = 1.1  # seconds between /v2/marketfeed/* requests (1 req/s)
 
 
-def _apply_rate_limit():
-    """Apply rate limiting to avoid Dhan API error 805 (too many requests)"""
+def _apply_rate_limit(category="data"):
+    """Apply per-category rate limiting to avoid Dhan API error 805 (too many requests)"""
     global _last_api_call_time
+    interval = DHAN_DATA_INTERVAL if category == "data" else DHAN_QUOTE_INTERVAL
     sleep_time = 0
 
     with _rate_limit_lock:
         current_time = time.time()
-        time_since_last_call = current_time - _last_api_call_time
-        if time_since_last_call < DHAN_MIN_REQUEST_INTERVAL:
-            sleep_time = DHAN_MIN_REQUEST_INTERVAL - time_since_last_call
+        time_since_last_call = current_time - _last_api_call_time[category]
+        if time_since_last_call < interval:
+            sleep_time = interval - time_since_last_call
         # Update timestamp immediately to reserve this slot
-        _last_api_call_time = current_time + sleep_time
+        _last_api_call_time[category] = current_time + sleep_time
 
     # Sleep outside the lock to avoid blocking other threads
     if sleep_time > 0:
-        logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Dhan API call")
+        logger.debug(
+            f"Rate limiting ({category}): sleeping {sleep_time:.2f}s before Dhan API call"
+        )
         time.sleep(sleep_time)
 
 
@@ -47,8 +55,10 @@ def get_api_response(endpoint, auth, method="POST", payload="", retry_count=0):
     MAX_RETRIES = 3
     RETRY_DELAY = 2.0  # Base delay for exponential backoff
 
-    # Apply rate limiting before making the request
-    _apply_rate_limit()
+    # Apply rate limiting before making the request. Quote endpoints
+    # (/v2/marketfeed/*) are capped at 1 req/s by Dhan; charts/history at 5 req/s.
+    category = "quote" if endpoint.startswith("/v2/marketfeed") else "data"
+    _apply_rate_limit(category)
 
     AUTH_TOKEN = auth
 
