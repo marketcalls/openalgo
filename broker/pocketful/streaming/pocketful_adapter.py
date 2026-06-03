@@ -100,6 +100,18 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"Connecting to Pocketful WebSocket (attempt {self.reconnect_attempts + 1})"
                 )
 
+                # Re-read a fresh auth token from the database before (re)building the
+                # connection URL. Indian broker tokens roll over daily at ~3 AM IST, so a
+                # reconnect after rollover must not reuse the construction-time token.
+                fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+                if fresh_token:
+                    self.access_token = fresh_token
+                else:
+                    self.logger.warning(
+                        "Could not fetch fresh auth token from database; "
+                        "reusing existing token for reconnection"
+                    )
+
                 # Build WebSocket URL
                 ws_url = f"{self.BASE_URL}/ws/v1/feeds?login_id={self.user_id}&access_token={self.access_token}"
 

@@ -88,8 +88,12 @@ class FyersAdapter:
             self.last_error = None
             self.logger.info("Connecting to Fyers HSM WebSocket...")
 
-            # Initialize WebSocket client
-            self.ws_client = FyersHSMWebSocket(access_token=self.access_token, log_path="")
+            # Initialize WebSocket client. Pass user_id so the client can
+            # re-read a fresh access token from the database on reconnect
+            # (tokens roll over daily at ~3 AM IST).
+            self.ws_client = FyersHSMWebSocket(
+                access_token=self.access_token, log_path="", user_id=self.userid
+            )
 
             # Set callbacks
             self.ws_client.set_callbacks(

@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 
 import websocket
 
+from database.auth_db import get_auth_token
+
 
 class FyersHSMWebSocket:
     """
@@ -121,15 +123,18 @@ class FyersHSMWebSocket:
     HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
     DATA_TIMEOUT = 90  # Consider stalled if no data for 90 seconds
 
-    def __init__(self, access_token: str, log_path: str = ""):
+    def __init__(self, access_token: str, log_path: str = "", user_id: str | None = None):
         """
         Initialize HSM WebSocket client
 
         Args:
             access_token: Fyers access token in format "appid:token"
             log_path: Path for logging (optional)
+            user_id: OpenAlgo user id, used to re-read a fresh access token from
+                the database on reconnect (tokens roll over daily at ~3 AM IST)
         """
         self.access_token = access_token
+        self.user_id = user_id
         self.logger = logging.getLogger("fyers_hsm_websocket")
 
         # Initialize health-check stop event BEFORE the HSM key extraction so
@@ -888,10 +893,50 @@ class FyersHSMWebSocket:
                 if not self._handle_reconnect():
                     self.logger.error("Reconnection failed - stopping HSM WebSocket")
                     break
+                # Re-read a fresh access token from the database before the loop
+                # rebuilds the WebSocketApp with the Authorization header. Without
+                # this, a reconnect after the ~3 AM IST daily token rollover would
+                # reuse the dead construction-time token and the feed would stay
+                # dead until a process restart.
+                self._refresh_access_token()
             else:
                 break
 
         self.logger.debug("HSM WebSocket run loop exited")
+
+    def _refresh_access_token(self):
+        """Re-read a fresh access token from the database before a reconnect.
+
+        Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
+        re-read the current token from the database (bypassing the auth cache,
+        which can hold a stale token after rollover). For Fyers HSM the token is
+        used both in the Authorization header (self.access_token) and to derive
+        the HSM auth key (self.hsm_key), so both are refreshed. If no fresh token
+        is available or the new HSM key cannot be extracted, keep the existing
+        values rather than crashing.
+        """
+        if not self.user_id:
+            return
+        try:
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not fresh_token:
+                self.logger.warning(
+                    "No fresh auth token found on reconnect - keeping existing token"
+                )
+                return
+            new_hsm_key = self._extract_hsm_key(fresh_token)
+            if not new_hsm_key:
+                self.logger.warning(
+                    "Could not extract HSM key from fresh token on reconnect - "
+                    "keeping existing token"
+                )
+                return
+            with self.lock:
+                self.access_token = fresh_token
+                self.hsm_key = new_hsm_key
+            self.logger.info("Refreshed Fyers access token from database for reconnect")
+        except Exception as e:
+            self.logger.error(f"Error refreshing access token on reconnect: {e}")
 
     def _handle_reconnect(self) -> bool:
         """

@@ -28,10 +28,14 @@ class MstockWebSocket:
 
     WS_URL = "wss://ws.mstock.trade"
 
-    def __init__(self, auth_token: str):
+    def __init__(self, auth_token: str, token_provider=None):
         self.auth_token = auth_token
+        # Optional zero-arg callable returning a fresh access token from the
+        # database. Invoked before each reconnect so daily token rollover
+        # (~3 AM IST) does not leave the feed dead with the construction-time token.
+        self.token_provider = token_provider
         self.api_key = os.getenv("BROKER_API_SECRET") or os.getenv("BROKER_API_KEY")
-        self.ws_url = f"{self.WS_URL}?API_KEY={self.api_key}&ACCESS_TOKEN={self.auth_token}"
+        self.ws_url = self._build_ws_url()
 
         # Streaming mode variables
         self.ws: websocket.WebSocketApp | None = None
@@ -42,6 +46,33 @@ class MstockWebSocket:
         self._ws_thread: threading.Thread | None = None
         self._logged_in = False
         self._login_event = threading.Event()
+
+    def _build_ws_url(self) -> str:
+        """Build the WebSocket URL with the current API key and access token."""
+        return f"{self.WS_URL}?API_KEY={self.api_key}&ACCESS_TOKEN={self.auth_token}"
+
+    def _refresh_auth_token(self) -> None:
+        """
+        Re-read a fresh access token from the database (via token_provider) and
+        rebuild the URL baked with it. The construction-time token is dead after
+        the daily rollover (~3 AM IST); keep the existing token if none returned.
+        """
+        if self.token_provider is None:
+            return
+        try:
+            fresh_token = self.token_provider()
+        except Exception as token_err:
+            logger.warning(
+                f"mstock token_provider failed; keeping existing access token: {token_err}"
+            )
+            return
+        if fresh_token:
+            self.auth_token = fresh_token
+            self.ws_url = self._build_ws_url()
+        else:
+            logger.warning(
+                "mstock token_provider returned no token; keeping existing access token"
+            )
 
     @staticmethod
     def parse_binary_packet(data: bytes) -> dict | None:
@@ -219,6 +250,11 @@ class MstockWebSocket:
             delay = min(2 * (1.5 ** self._reconnect_attempts), 60)
             logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
             time.sleep(delay)
+
+            # Re-read a fresh access token before reconnecting so a reconnect
+            # after the daily token rollover uses a live token. Both self.ws_url
+            # and the LOGIN payload in _on_ws_open derive from self.auth_token.
+            self._refresh_auth_token()
 
             # Recreate WebSocketApp for reconnection
             self.ws = websocket.WebSocketApp(

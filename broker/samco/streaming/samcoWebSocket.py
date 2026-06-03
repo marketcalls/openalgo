@@ -230,6 +230,11 @@ class SamcoWebSocket:
 
     def _cleanup_connection_state(self) -> None:
         """Clean up connection state"""
+        # run_forever() has returned, so the current connection lifecycle is
+        # over. Leave running=False so the adapter's reconnect loop can call
+        # connect() and create a fresh WebSocketApp instead of getting the
+        # "already connected or connecting" no-op.
+        self.running = False
         self.connected = False
         self._stop_heartbeat()
 

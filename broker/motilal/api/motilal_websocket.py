@@ -43,7 +43,14 @@ class MotilalWebSocket:
     # WebSocket version
     WEBSOCKET_VERSION = "1.0.0"
 
-    def __init__(self, client_id: str, auth_token: str, api_key: str, use_uat: bool = False):
+    def __init__(
+        self,
+        client_id: str,
+        auth_token: str,
+        api_key: str,
+        use_uat: bool = False,
+        token_provider=None,
+    ):
         """
         Initialize the Motilal Oswal WebSocket client.
 
@@ -52,10 +59,14 @@ class MotilalWebSocket:
             auth_token (str): Authentication token obtained from login
             api_key (str): API key (BROKER_API_SECRET)
             use_uat (bool): Whether to use UAT environment (default: False)
+            token_provider (callable): Optional zero-arg callable returning a fresh
+                auth token from the database. Invoked before each reconnect attempt
+                so daily token rollover (~3 AM IST) does not leave the feed dead.
         """
         self.client_id = client_id
         self.auth_token = auth_token
         self.api_key = api_key
+        self.token_provider = token_provider
         self.ws_url = self.UAT_URL if use_uat else self.PRIMARY_URL
 
         # Connection state
@@ -114,6 +125,24 @@ class MotilalWebSocket:
         Attempts to connect to the WebSocket with exponential backoff retry logic.
         """
         attempt = 0
+
+        # Indian broker tokens roll over daily (~3 AM IST). Re-read a fresh token
+        # from the database before connecting so a reconnect after rollover uses
+        # a live token instead of the dead construction-time one. Keep the
+        # existing token if the provider returns nothing.
+        if self.token_provider is not None:
+            try:
+                fresh_token = self.token_provider()
+                if fresh_token:
+                    self.auth_token = fresh_token
+                else:
+                    logger.warning(
+                        "Motilal token_provider returned no token; keeping existing auth token"
+                    )
+            except Exception as token_err:
+                logger.warning(
+                    f"Motilal token_provider failed; keeping existing auth token: {token_err}"
+                )
 
         while not self._stop_event.is_set() and attempt < self.MAX_RECONNECT_ATTEMPTS:
             try:

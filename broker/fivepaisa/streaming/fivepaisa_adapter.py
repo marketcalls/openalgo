@@ -29,6 +29,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger = logging.getLogger("fivepaisa_websocket")
         self.ws_client = None
         self.user_id = None
+        self.client_code = None
         self.broker_name = "fivepaisa"
         self.reconnect_delay = 5  # Initial delay in seconds
         self.max_reconnect_delay = 60  # Maximum delay in seconds
@@ -66,24 +67,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Get client_id from BROKER_API_KEY environment variable
             # Format: api_key:::user_id:::client_id
-            broker_api_key = os.getenv("BROKER_API_KEY")
-            if broker_api_key:
-                try:
-                    parts = broker_api_key.split(":::")
-                    if len(parts) >= 3:
-                        client_code = parts[2]  # client_id is the third part
-                        self.logger.debug(f"Using client_code from BROKER_API_KEY: {client_code}")
-                    else:
-                        client_code = user_id
-                        self.logger.warning(
-                            "BROKER_API_KEY format incorrect, using user_id as client_code"
-                        )
-                except Exception as e:
-                    self.logger.error(f"Error parsing BROKER_API_KEY: {e}")
-                    client_code = user_id
-            else:
-                client_code = user_id
-                self.logger.warning("BROKER_API_KEY not found, using user_id as client_code")
+            client_code = self._resolve_client_code(user_id)
         else:
             # Use provided tokens
             access_token = auth_data.get("access_token")
@@ -92,6 +76,10 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not access_token:
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
+
+        # Store client_code so reconnection can rebuild the client/URL with a
+        # fresh token without re-parsing BROKER_API_KEY.
+        self.client_code = client_code
 
         # Create FivePaisaWebSocket instance
         self.ws_client = FivePaisaWebSocket(access_token=access_token, client_code=client_code)
@@ -105,6 +93,58 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.running = True
 
+    def _resolve_client_code(self, user_id: str) -> str:
+        """Resolve the 5Paisa client_code from BROKER_API_KEY, falling back to
+        user_id. Format: api_key:::user_id:::client_id"""
+        broker_api_key = os.getenv("BROKER_API_KEY")
+        if broker_api_key:
+            try:
+                parts = broker_api_key.split(":::")
+                if len(parts) >= 3:
+                    client_code = parts[2]  # client_id is the third part
+                    self.logger.debug(f"Using client_code from BROKER_API_KEY: {client_code}")
+                    return client_code
+                self.logger.warning(
+                    "BROKER_API_KEY format incorrect, using user_id as client_code"
+                )
+            except Exception as e:
+                self.logger.error(f"Error parsing BROKER_API_KEY: {e}")
+            return user_id
+        self.logger.warning("BROKER_API_KEY not found, using user_id as client_code")
+        return user_id
+
+    def _rebuild_client_with_fresh_token(self) -> None:
+        """Re-read a fresh auth token from the DB and rebuild the WebSocket
+        client/URL. Indian broker tokens roll over daily (~3 AM IST); the URL
+        bakes the token at connect time, so a reconnect must use a fresh token
+        or the feed stays dead until process restart. If no fresh token is
+        available, keep the existing client and log a warning."""
+        if not self.user_id:
+            return
+
+        fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+        if not fresh_token:
+            self.logger.warning(
+                "No fresh auth token found on reconnect; reusing existing token"
+            )
+            return
+
+        with self.lock:
+            client_code = self.client_code or self._resolve_client_code(self.user_id)
+            try:
+                new_client = FivePaisaWebSocket(
+                    access_token=fresh_token, client_code=client_code
+                )
+                new_client.on_open = self._on_open
+                new_client.on_data = self._on_data
+                new_client.on_error = self._on_error
+                new_client.on_close = self._on_close
+                new_client.on_message = self._on_message
+                self.ws_client = new_client
+                self.logger.info("Rebuilt 5Paisa WebSocket client with fresh auth token")
+            except Exception as e:
+                self.logger.error(f"Failed to rebuild client with fresh token: {e}")
+
     def connect(self) -> None:
         """Establish connection to 5Paisa WebSocket"""
         if not self.ws_client:
@@ -117,6 +157,10 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Connect to 5Paisa WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
+                # Re-read a fresh token before every connect attempt so a
+                # daily-rolled token doesn't leave the feed permanently dead.
+                self._rebuild_client_with_fresh_token()
+
                 self.logger.info(
                     f"Connecting to 5Paisa WebSocket (attempt {self.reconnect_attempts + 1})"
                 )

@@ -148,12 +148,16 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "AUTH_ERROR", "Authentication token not found"
                 )
 
-            # Create streaming WebSocket client (extends existing NubraWebSocket)
+            # Create streaming WebSocket client (extends existing NubraWebSocket).
+            # Pass a token_provider so the client re-reads a fresh auth token from
+            # the database before each reconnect; Indian broker tokens roll over
+            # daily (~3 AM IST) and the construction-time token is dead afterward.
             self.ws_client = _StreamingNubraWebSocket(
                 auth_token=auth_token,
                 on_index_data=self._on_index_data,
                 on_orderbook_data=self._on_orderbook_data,
                 on_ohlcv_data=self._on_ohlcv_data,
+                token_provider=self._get_fresh_auth_token,
             )
 
             self.running = True
@@ -163,6 +167,22 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error initializing adapter: {e}")
             return self._create_error_response("INIT_ERROR", str(e))
+
+    def _get_fresh_auth_token(self) -> str | None:
+        """
+        Re-read a fresh auth token from the database for the current user.
+
+        Used as the token_provider for the Nubra WebSocket client so reconnects
+        after the daily token rollover (~3 AM IST) pick up a live token. Returns
+        None on failure so the client keeps its existing token.
+        """
+        if not self.user_id:
+            return None
+        try:
+            return get_auth_token(self.user_id, bypass_cache=True)
+        except Exception as e:
+            self.logger.warning(f"Failed to re-read fresh Nubra auth token: {e}")
+            return None
 
     def connect(self) -> dict[str, Any]:
         """Connect to Nubra WebSocket."""
