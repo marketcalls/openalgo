@@ -712,7 +712,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         spec["sub_key"] = item["sub_key_override"]
                     batch_specs.append(spec)
 
-                self.logger.info(f"📦 Batch subscribing {len(batch_specs)} symbols")
+                self.logger.info(f"Batch subscribing {len(batch_specs)} symbols")
                 sub_keys = self.ws_client.subscribe_batch(batch_specs)
 
                 for item, sub_key in zip(queue, sub_keys):
@@ -762,7 +762,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         try:
             self.logger.info(
-                f"📦 Reconnect: batch resubscribing {len(batch_specs)} symbols"
+                f"Reconnect: batch resubscribing {len(batch_specs)} symbols"
             )
             with self.batch_lock:
                 sub_keys = self.ws_client.subscribe_batch(batch_specs)

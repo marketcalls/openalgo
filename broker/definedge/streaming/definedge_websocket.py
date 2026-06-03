@@ -388,10 +388,10 @@ class DefinedGeWebSocket:
 
             if now < market_open or now > market_close:
                 logger.warning(
-                    f"⏰ Market closed - No OHLC expected (Current: {now.strftime('%H:%M')})"
+                    f"Market closed - No OHLC expected (Current: {now.strftime('%H:%M')})"
                 )
             else:
-                logger.warning(f"⚠️ Market open but NO OHLC in ACK for {exchange}|{token}")
+                logger.warning(f"Market open but NO OHLC in ACK for {exchange}|{token}")
 
         logger.debug(f"Full ACK message: {data}")
 

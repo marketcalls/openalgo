@@ -319,7 +319,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
                     self.ws_client.subscribe(instruments=ltp_instruments, mode="ltp")
                     self.logger.info(
-                        f"✓ Resubscribed to {len(ltp_instruments)} instruments in LTP mode"
+                        f"Resubscribed to {len(ltp_instruments)} instruments in LTP mode"
                     )
 
                 if quote_instruments:
@@ -328,7 +328,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
                     self.ws_client.subscribe(instruments=quote_instruments, mode="quote")
                     self.logger.info(
-                        f"✓ Resubscribed to {len(quote_instruments)} instruments in QUOTE mode"
+                        f"Resubscribed to {len(quote_instruments)} instruments in QUOTE mode"
                     )
 
                 if not ltp_instruments and not quote_instruments:

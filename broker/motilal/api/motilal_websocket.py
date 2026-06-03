@@ -336,7 +336,7 @@ class MotilalWebSocket:
 
             # Motilal sends BINARY data, not JSON
             if isinstance(message, bytes):
-                logger.debug(f"✓ Received binary message: {len(message)} bytes")
+                logger.debug(f"Received binary message: {len(message)} bytes")
                 logger.debug(f"Binary data (hex): {message.hex()}")
 
                 # Mark as connected when we receive first message (login response)
@@ -344,7 +344,7 @@ class MotilalWebSocket:
                     with self.lock:
                         self.is_connected = True
                     logger.info(
-                        "✓ Motilal WebSocket connection authenticated (received binary response)"
+                        "Motilal WebSocket connection authenticated (received binary response)"
                     )
 
                     # Resubscribe to any previous subscriptions
@@ -420,7 +420,7 @@ class MotilalWebSocket:
 
                 # Log what we're parsing
                 logger.debug(
-                    f"📊 Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}"
+                    f"Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}"
                 )
 
                 # Detailed logging for subscribed scrips to analyze unknown packets
@@ -428,7 +428,7 @@ class MotilalWebSocket:
                 with self.lock:
                     if subscription_key_check in self.subscriptions:
                         logger.debug(
-                            f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}"
+                            f"SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}"
                         )
 
                 # Parse based on message type
@@ -437,20 +437,20 @@ class MotilalWebSocket:
                 if msgtype in ["B", "C", "D", "E", "F"]:  # Market Depth levels 1-5
                     level = ord(msgtype) - ord("B") + 1  # B=1, C=2, D=3, E=4, F=5
                     logger.debug(
-                        f"✓ Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}"
+                        f"Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}"
                     )
                     self._parse_depth_level_packet(body, key, symbol, level)
                 elif msgtype == "A":  # LTP
-                    logger.debug(f"✓ Parsing LTP packet for {key}")
+                    logger.debug(f"Parsing LTP packet for {key}")
                     self._parse_ltp_packet(body, key, symbol)
                 elif msgtype == "G":  # Day OHLC
-                    logger.debug(f"✓ Parsing OHLC packet for {key}")
+                    logger.debug(f"Parsing OHLC packet for {key}")
                     self._parse_ohlc_packet(body, key, symbol)
                 elif msgtype == "H":  # Index data
-                    logger.debug(f"✓ Parsing INDEX packet for {key}")
+                    logger.debug(f"Parsing INDEX packet for {key}")
                     self._parse_index_packet(body, key, symbol)
                 elif msgtype == "m":  # Open Interest
-                    logger.debug(f"✓ Parsing OI packet for {key}")
+                    logger.debug(f"Parsing OI packet for {key}")
                     self._parse_oi_packet(body, key, symbol)
                 elif msgtype == "W":  # DPR (circuit limits)
                     logger.debug(f"Skipping DPR packet for {key}")
@@ -459,14 +459,14 @@ class MotilalWebSocket:
                 elif msgtype == "X":  # Unknown - need to investigate
                     logger.debug(f"Received message type 'X' for {key} - investigating")
                 elif msgtype == "g":  # Lowercase 'g' - possibly alternate OHLC or tick data
-                    logger.debug(f"📦 Packet 'g' for {key}: {body.hex()}")
+                    logger.debug(f"Packet 'g' for {key}: {body.hex()}")
                 elif msgtype == "z":  # Lowercase 'z' - unknown supplementary data
-                    logger.debug(f"📦 Packet 'z' for {key}: {body.hex()}")
+                    logger.debug(f"Packet 'z' for {key}: {body.hex()}")
                 elif msgtype == "Y":  # Uppercase 'Y' - exchange-specific data
-                    logger.debug(f"📦 Packet 'Y' for {key}: {body.hex()}")
+                    logger.debug(f"Packet 'Y' for {key}: {body.hex()}")
                 else:
                     logger.warning(
-                        f"❌ Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}"
+                        f"Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}"
                     )
 
         except Exception as e:
@@ -527,7 +527,7 @@ class MotilalWebSocket:
                     self.last_depth[key]["bids"][level_index] = bid_data
                     self.last_depth[key]["asks"][level_index] = ask_data
                     logger.debug(
-                        f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}"
+                        f"Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}"
                     )
 
         except Exception as e:
@@ -639,9 +639,9 @@ class MotilalWebSocket:
             symbol = None
             if original_instrument and hasattr(original_instrument, "symbol"):
                 symbol = original_instrument.symbol
-                logger.debug(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
+                logger.debug(f"Using subscription symbol: {symbol} for {subscription_key}")
             else:
-                logger.warning(f"✗ No subscription symbol found for {subscription_key}")
+                logger.warning(f"No subscription symbol found for {subscription_key}")
 
             # Process DayOHLC data
             if "Open" in data or "High" in data or "Low" in data or "PrevDayClose" in data:
@@ -719,7 +719,7 @@ class MotilalWebSocket:
                 self.last_quotes[key].update(ltp_data)
 
             logger.debug(
-                f"✓ Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}"
+                f"Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}"
             )
         except Exception as e:
             logger.error(f"Error processing LTP data: {str(e)}")
@@ -789,7 +789,7 @@ class MotilalWebSocket:
                 self.last_depth[key]["time"] = data.get("Time", "")
                 self.last_depth[key]["timestamp"] = datetime.now().isoformat()
 
-            logger.debug(f"✓ Updated market depth level {level} for {key} - Symbol: {symbol}")
+            logger.debug(f"Updated market depth level {level} for {key} - Symbol: {symbol}")
         except Exception as e:
             logger.error(f"Error processing market depth data: {str(e)}")
 
@@ -1216,7 +1216,7 @@ class MotilalWebSocket:
         with self.lock:
             depth = self.last_depth.get(key)
             logger.debug(
-                f"🔍 Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}"
+                f"Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}"
             )
 
             if depth:
@@ -1231,7 +1231,7 @@ class MotilalWebSocket:
 
                 # Log detailed depth summary
                 logger.debug(
-                    f"✓ Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels"
+                    f"Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels"
                 )
                 for i, bid in enumerate(bids_filtered, 1):
                     logger.debug(
@@ -1249,7 +1249,7 @@ class MotilalWebSocket:
                 # Return filtered depth
                 return {"bids": bids_filtered, "asks": asks_filtered, "symbol": depth.get("symbol")}
             else:
-                logger.warning(f"❌ No depth data found for key '{key}'")
+                logger.warning(f"No depth data found for key '{key}'")
                 logger.debug(f"No market depth data available for {key}")
                 logger.debug(f"Available depth keys: {list(self.last_depth.keys())}")
                 return None

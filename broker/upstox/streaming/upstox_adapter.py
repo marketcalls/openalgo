@@ -226,7 +226,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for mode_str, instrument_keys in keys_by_mode.items():
             try:
                 self.logger.info(
-                    f"📦 Batch subscribing {len(instrument_keys)} instrument(s) in {mode_str} mode"
+                    f"Batch subscribing {len(instrument_keys)} instrument(s) in {mode_str} mode"
                 )
                 self.ws_client.subscribe(instrument_keys, mode_str)
             except Exception as e:
@@ -401,7 +401,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for mode_str, instrument_keys in keys_by_mode.items():
             try:
                 self.logger.info(
-                    f"🔌 Replaying {len(instrument_keys)} subscription(s) in {mode_str} mode "
+                    f"Replaying {len(instrument_keys)} subscription(s) in {mode_str} mode "
                     f"after WS handshake"
                 )
                 self.ws_client.subscribe(instrument_keys, mode_str)

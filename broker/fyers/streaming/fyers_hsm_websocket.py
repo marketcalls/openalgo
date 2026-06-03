@@ -1152,7 +1152,7 @@ class FyersHSMWebSocket:
         sub_msg = self._create_subscription_message(hsm_symbols, channel=11)
         self.ws.send(sub_msg, opcode=websocket.ABNF.OPCODE_BINARY)
 
-        # self.logger.info(f"\n✅ Sent subscription request for {len(hsm_symbols)} HSM symbols")
+        # self.logger.info(f"\nSent subscription request for {len(hsm_symbols)} HSM symbols")
         for i, symbol in enumerate(hsm_symbols, 1):
             mapped_symbol = symbol_mappings.get(symbol, "Unknown") if symbol_mappings else "N/A"
             # self.logger.info(f"  {i}. {symbol} => {mapped_symbol}")
