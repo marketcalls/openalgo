@@ -691,7 +691,7 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Mark this as initial snapshot for cache
                     message["_is_snapshot"] = True
                 else:
-                    self.logger.warning("⚠️ No OHLC in touchline ACK (market may be closed)")
+                    self.logger.warning("No OHLC in touchline ACK (market may be closed)")
 
                 # Always process acknowledgment as it contains initial snapshot
                 # Continue processing - don't return
@@ -843,7 +843,7 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             f"Depth feed has OHLC for {exchange}|{token}: {ohlc_check}"
                         )
                     else:
-                        self.logger.warning(f"✗ Depth feed has NO OHLC for {exchange}|{token}")
+                        self.logger.warning(f"Depth feed has NO OHLC for {exchange}|{token}")
 
             # Find the subscription
             subscription = None

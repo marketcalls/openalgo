@@ -508,7 +508,7 @@ def map_portfolio_data(portfolio_data):
                 holding["symbol"] = symbol_from_db
                 holding["exchange"] = exchange
                 logger.info(
-                    f"✓ Mapped holding: {holding.get('scripname')} (token {token} on {exchange}) -> {symbol_from_db}"
+                    f"Mapped holding: {holding.get('scripname')} (token {token} on {exchange}) -> {symbol_from_db}"
                 )
             else:
                 # If symbol not found in database, keep the scripname as fallback

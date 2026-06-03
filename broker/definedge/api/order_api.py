@@ -194,11 +194,11 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 and position_product == product
             ):
                 net_qty = pos_netqty
-                logger.info(f"✓ MATCH FOUND! Net Quantity: {net_qty}")
+                logger.info(f"MATCH FOUND! Net Quantity: {net_qty}")
                 break
 
         if net_qty == "0":
-            logger.info(f"✗ No matching position found for {tradingsymbol} with product {product}")
+            logger.info(f"No matching position found for {tradingsymbol} with product {product}")
     else:
         logger.warning("No positions list available to process")
 
@@ -250,14 +250,14 @@ def place_order_api(data, auth):
         # Process the response based on different possible response formats
         if response_data.get("stat") == "Ok" or response_data.get("status") == "SUCCESS":
             orderid = response_data.get("norenordno") or response_data.get("order_id")
-            logger.info(f"✓ Order placed successfully. Order ID: {orderid}")
+            logger.info(f"Order placed successfully. Order ID: {orderid}")
             logger.info(f"Full success response: {response_data}")
         else:
             # Extract error message if present
             error_msg = response_data.get(
                 "emsg", response_data.get("message", "No error message provided")
             )
-            logger.error(f"✗ Order placement failed: {error_msg}")
+            logger.error(f"Order placement failed: {error_msg}")
             logger.error(f"Full error response: {response_data}")
             orderid = None
 
@@ -521,13 +521,13 @@ def close_all_positions(current_api_key, auth):
                     {"symbol": tradingsymbol, "quantity": quantity, "orderid": orderid}
                 )
                 logger.info(
-                    f"✓ Successfully placed square-off order for {tradingsymbol}, Order ID: {orderid}"
+                    f"Successfully placed square-off order for {tradingsymbol}, Order ID: {orderid}"
                 )
             else:
                 failed_positions.append(
                     {"symbol": tradingsymbol, "error": response.get("message", "Unknown error")}
                 )
-                logger.error(f"✗ Failed to square-off {tradingsymbol}: {response}")
+                logger.error(f"Failed to square-off {tradingsymbol}: {response}")
 
         except Exception as e:
             logger.error(f"Exception while closing position {position}: {str(e)}")
@@ -594,14 +594,14 @@ def cancel_order(orderid, auth):
         # Check if the request was successful based on response format
         # According to docs: status will be "SUCCESS" or error
         if response_data.get("status") == "SUCCESS":
-            logger.info(f"✓ Order cancelled successfully. Order ID: {orderid}")
+            logger.info(f"Order cancelled successfully. Order ID: {orderid}")
             if response_data.get("request_time"):
                 logger.info(f"Request time: {response_data['request_time']}")
             return {"status": "success", "orderid": response_data.get("order_id", orderid)}, 200
         else:
             # Return an error response
             error_msg = response_data.get("message", "Failed to cancel order")
-            logger.error(f"✗ Cancel order failed: {error_msg}")
+            logger.error(f"Cancel order failed: {error_msg}")
             logger.error(f"Full error response: {response_data}")
             return {
                 "status": "error",
@@ -750,15 +750,15 @@ def cancel_all_orders_api(data, auth):
 
                 if status_code == 200:
                     canceled_orders.append(orderid)
-                    logger.info(f"✓ Successfully cancelled order: {orderid}")
+                    logger.info(f"Successfully cancelled order: {orderid}")
                 else:
                     failed_cancellations.append(orderid)
                     logger.error(
-                        f"✗ Failed to cancel order: {orderid}, Response: {cancel_response}"
+                        f"Failed to cancel order: {orderid}, Response: {cancel_response}"
                     )
             except Exception as e:
                 failed_cancellations.append(orderid)
-                logger.error(f"✗ Exception while cancelling order {orderid}: {str(e)}")
+                logger.error(f"Exception while cancelling order {orderid}: {str(e)}")
         else:
             logger.warning(f"Order missing ID field: {order}")
 

@@ -715,7 +715,7 @@ class GrowwNATSWebSocket:
                 instrumenttype == "INDEX" or "INDEX" in str(exchange).upper()
             ):
                 logger.warning(
-                    f"⚠️ INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
+                    f"INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
                 )
                 sub_type = "ltp"
 
@@ -890,7 +890,7 @@ class GrowwNATSWebSocket:
         # Check if this is an index - indices don't have depth, only LTP
         if instrumenttype == "INDEX" or "INDEX" in exchange.upper():
             logger.warning(
-                f"⚠️ INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
+                f"INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
             )
             # Redirect to LTP subscription for indices
             return self.subscribe_ltp(exchange, segment, token, symbol, instrumenttype)
