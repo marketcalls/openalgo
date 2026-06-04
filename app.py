@@ -468,7 +468,15 @@ def create_app():
         # Check if user is logged in and session is expired
         if session.get("logged_in") and not is_session_valid():
             logger.info(f"Session expired for user: {session.get('user')} - revoking tokens")
-            revoke_user_tokens(revoke_db_tokens=False)
+            # Revoke the DB broker token at the daily rollover (same as manual logout).
+            # Indian broker tokens are invalidated broker-side at ~3 AM IST, so a
+            # preserved token is dead anyway; keeping it (revoke_db_tokens=False) made
+            # the next login's session-resume path reuse a stale token and skip broker
+            # OAuth, leaving the WebSocket feed dead with 403s until a restart (#1419).
+            # Revoking sets is_revoked=True so _try_resume_broker_session refuses to
+            # resume and forces a fresh broker authentication. Crypto/24-7 brokers never
+            # reach this branch (is_session_valid() stays True when expiry is disabled).
+            revoke_user_tokens(revoke_db_tokens=True)
             session.clear()
             # Don't redirect here, let individual routes handle it
 
