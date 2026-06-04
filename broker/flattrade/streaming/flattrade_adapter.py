@@ -359,7 +359,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.actid = user_id
 
         # Get auth token from database
-        self.accesstoken = get_auth_token(user_id)
+        self.accesstoken = get_auth_token(user_id, bypass_cache=True)
 
         if not self.actid or not self.accesstoken:
             self.logger.error(f"Missing Flattrade credentials for user {user_id}")

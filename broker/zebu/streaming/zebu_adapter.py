@@ -364,7 +364,7 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.warning(f"No BROKER_API_KEY found. Using user_id '{user_id}' as actid.")
 
         # Get auth token from database
-        self.susertoken = get_auth_token(user_id)
+        self.susertoken = get_auth_token(user_id, bypass_cache=True)
 
         if not self.actid or not self.susertoken:
             self.logger.error(f"Missing Zebu credentials for user {user_id}")

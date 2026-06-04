@@ -55,7 +55,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get access token from database if not provided
         if not auth_data:
             # Fetch authentication token from database
-            access_token = get_auth_token(user_id)
+            access_token = get_auth_token(user_id, bypass_cache=True)
 
             if not access_token:
                 self.logger.error(f"No access token found for user {user_id}")

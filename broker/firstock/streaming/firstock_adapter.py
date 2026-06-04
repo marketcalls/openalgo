@@ -60,7 +60,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if not auth_data:
             # Fetch authentication tokens from database
             # IMPORTANT: For Firstock, this must be the 'susertoken' from login API response
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
 
             # Auth token must come from database (after Firstock login)
 

@@ -117,7 +117,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug("Using access token from auth_data")
             else:
                 # Get from database
-                auth_token = get_auth_token(user_id)
+                auth_token = get_auth_token(user_id, bypass_cache=True)
                 if not auth_token:
                     raise ValueError(f"No auth token found for user {user_id}")
 

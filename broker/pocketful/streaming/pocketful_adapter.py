@@ -66,7 +66,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication tokens from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
 
             if not auth_token:
                 self.logger.error(f"No authentication token found for user {user_id}")

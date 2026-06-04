@@ -113,7 +113,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(f"Session ID (JWT) available for auth: {bool(session_id)}")
             else:
                 # Fetch authentication tokens from database
-                auth_token = get_auth_token(user_id)
+                auth_token = get_auth_token(user_id, bypass_cache=True)
                 feed_token = get_feed_token(user_id)
                 self.logger.info(f"From database: auth_token=[REDACTED], feed_token={feed_token}")
                 self.logger.info(f"feed_token type: {type(feed_token)}, value: {repr(feed_token)}")

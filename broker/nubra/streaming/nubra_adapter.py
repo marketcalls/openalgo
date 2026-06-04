@@ -142,7 +142,7 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.broker_name = broker_name
 
             # Get auth token from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             if not auth_token:
                 return self._create_error_response(
                     "AUTH_ERROR", "Authentication token not found"

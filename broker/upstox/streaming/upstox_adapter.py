@@ -347,7 +347,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Get authentication token from auth_data or database"""
         if auth_data and "auth_token" in auth_data:
             return auth_data["auth_token"]
-        return get_auth_token(user_id)
+        return get_auth_token(user_id, bypass_cache=True)
 
     def _create_instrument_key(self, token_info: dict[str, Any]) -> str:
         """Create instrument key from token info"""

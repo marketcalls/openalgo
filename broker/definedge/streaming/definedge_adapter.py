@@ -164,7 +164,7 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided (following Angel pattern)
         if not auth_data:
             # Fetch authentication tokens from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             feed_token = get_feed_token(user_id)  # This contains susertoken for DefinEdge
 
             if not auth_token:

@@ -57,7 +57,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if not auth_data:
             # Fetch authentication tokens from database
             # For Tradejini, the access token is used for both API and WebSocket
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
 
             if not auth_token:
                 self.logger.error(f"No authentication token found for user {user_id}")

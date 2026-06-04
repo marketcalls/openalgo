@@ -84,8 +84,13 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.api_key:
                 return {"status": "error", "message": "API key not found in environment variables"}
 
-            # Get auth token from database
-            auth_token = get_auth_token(user_id)
+            # Get auth token from database. bypass_cache=True so the initial
+            # connect reads the current token straight from the DB rather than a
+            # possibly-stale auth cache. Under Docker the WS proxy runs as a
+            # separate process with its own cache that is only synced via a
+            # best-effort ZMQ broadcast, so a stale entry here would otherwise
+            # build the adapter with yesterday's dead token and 403 (#1419).
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             if not auth_token:
                 return {"status": "error", "message": "Authentication token not found"}
 
