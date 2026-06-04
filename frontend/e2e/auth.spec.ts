@@ -13,12 +13,7 @@ test.describe('Authentication Flow', () => {
     await page.goto('/login')
     await page.waitForLoadState('networkidle')
 
-    // Look for password input
-    const passwordInput = page.locator('input[type="password"]')
-    const hasPasswordInput = (await passwordInput.count()) > 0
-
-    // Login page should have a password field
-    expect(hasPasswordInput).toBeTruthy()
+    await expect(page.locator('input[type="password"]')).toBeVisible()
   })
 
   test('accessing protected routes requires authentication', async ({ page }) => {
