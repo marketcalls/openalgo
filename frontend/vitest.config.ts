@@ -4,9 +4,11 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   plugins: [react()],
-  esbuild: {
-    jsx: 'automatic',
-    jsxImportSource: 'react',
+  oxc: {
+    jsx: {
+      runtime: 'automatic',
+      importSource: 'react',
+    },
   },
   test: {
     globals: true,
