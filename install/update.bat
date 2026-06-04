@@ -12,7 +12,7 @@ REM Prerequisites:
 REM   - Python 3.12+
 REM   - uv package manager (pip install uv)
 REM   - Git
-REM   - Node.js 20+ (optional, for frontend build)
+REM   - Node.js 20.20+, 22.22+, or 24.13+ (optional, for frontend build)
 REM
 REM ============================================================================
 
@@ -274,18 +274,18 @@ if not exist "%OPENALGO_DIR%\frontend\dist\" (
     if not errorlevel 1 (
         echo [OPTIONAL] Building React frontend (dist\ not found)...
         pushd "%OPENALGO_DIR%\frontend"
-        call npm install
+        call npm ci
         call npm run build
         if errorlevel 1 (
             echo   [WARNING] Frontend build failed.
-            echo   Run manually: cd frontend ^&^& npm install ^&^& npm run build
+            echo   Run manually: cd frontend ^&^& npm ci ^&^& npm run build
         ) else (
             echo   [OK] Frontend built successfully.
         )
         popd
     ) else (
         echo [NOTE] frontend\dist\ not found and Node.js is not installed.
-        echo   Install Node.js and run: cd frontend ^&^& npm install ^&^& npm run build
+        echo   Install Node.js 20.20+, 22.22+, or 24.13+ and run: cd frontend ^&^& npm ci ^&^& npm run build
     )
     echo.
 )
