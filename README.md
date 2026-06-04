@@ -252,7 +252,7 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 ### Frontend
 - **React 19** - UI library
 - **TypeScript** - Type-safe JavaScript
-- **Vite 7** - Fast build tool
+- **Vite 8** - Fast build tool powered by Rolldown
 - **Tailwind CSS 4** - Utility-first CSS framework
 - **shadcn/ui** - Component library built on Radix UI
 - **TanStack Query** - Server state management
@@ -308,7 +308,7 @@ OpenAlgo is part of a larger open-source trading ecosystem:
 - **Disk**: 1GB
 - **CPU**: 1 vCPU
 - **Python**: 3.11, 3.12, 3.13, or 3.14
-- **Node.js**: 20+ (for frontend development)
+- **Node.js**: 20.20+, 22.22+, or 24.13+ (for frontend development)
 
 ### Quick Start with UV
 
