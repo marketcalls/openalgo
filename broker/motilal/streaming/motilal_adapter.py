@@ -65,7 +65,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication tokens from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             # Get API key from environment variable (BROKER_API_SECRET)
             api_key = os.getenv("BROKER_API_SECRET")
 

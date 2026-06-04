@@ -70,7 +70,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             api_secret = auth_data.get("api_secret", "")
         else:
             # OpenAlgo stores the api_key as the auth token
-            api_key    = get_auth_token(user_id) or ""
+            api_key    = get_auth_token(user_id, bypass_cache=True) or ""
             api_secret = os.getenv("BROKER_API_SECRET", "")
 
         if not api_key:

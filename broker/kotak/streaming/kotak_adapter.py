@@ -71,7 +71,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._user_id = user_id
 
         # Load authentication from DB
-        auth_string = get_auth_token(user_id)
+        auth_string = get_auth_token(user_id, bypass_cache=True)
         if not auth_string:
             logger.error(f"No authentication token found for user {user_id}")
             raise ValueError(f"No authentication token found for user {user_id}")
@@ -726,7 +726,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _recreate_ws_client(self):
         """Recreate the WebSocket client with current credentials from DB."""
         try:
-            auth_string = get_auth_token(self._user_id)
+            auth_string = get_auth_token(self._user_id, bypass_cache=True)
             if not auth_string:
                 logger.error(
                     f"Cannot recreate client - no auth token for user {self._user_id}"

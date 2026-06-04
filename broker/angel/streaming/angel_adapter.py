@@ -78,7 +78,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication tokens from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             feed_token = get_feed_token(user_id)
 
             if not auth_token or not feed_token:
@@ -237,7 +237,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Recreate the WebSocket client with current credentials"""
         try:
             # Get tokens from database
-            auth_token = get_auth_token(self.user_id)
+            auth_token = get_auth_token(self.user_id, bypass_cache=True)
             feed_token = get_feed_token(self.user_id)
 
             if not auth_token or not feed_token:

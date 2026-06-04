@@ -59,7 +59,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication token from database
-            session_token = get_auth_token(user_id)
+            session_token = get_auth_token(user_id, bypass_cache=True)
 
             if not session_token:
                 self.logger.error(f"No authentication token found for user {user_id}")
@@ -92,7 +92,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Get or create BrokerData instance
         if not self._broker_data:
-            auth_token = get_auth_token(self.user_id)
+            auth_token = get_auth_token(self.user_id, bypass_cache=True)
             if not auth_token:
                 raise ValueError(f"No auth token found for user {self.user_id}")
             self._broker_data = BrokerData(auth_token)

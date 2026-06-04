@@ -339,7 +339,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.actid = user_id
 
         # Get auth token from database
-        self.susertoken = get_auth_token(user_id)
+        self.susertoken = get_auth_token(user_id, bypass_cache=True)
 
         if not self.actid or not self.susertoken:
             self.logger.error(f"Missing Shoonya credentials for user {user_id}")
@@ -1004,7 +1004,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.warning(f"Error stopping old WebSocket: {e}")
 
             # Fetch fresh auth token from database
-            fresh_token = get_auth_token(self.user_id)
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
 
             # SA-R6-5 fix: Re-check running before creating new client
             # SA-R6-4 fix: Write susertoken under lock

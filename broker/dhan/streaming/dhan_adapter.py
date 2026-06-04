@@ -99,7 +99,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get OAuth access token from database (NOT from BROKER_API_SECRET)
         # BROKER_API_SECRET is the OAuth app secret, not the access token
         if not auth_data:
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             if not auth_token:
                 self.logger.error(f"No OAuth access token found in database for user {user_id}")
                 raise ValueError(f"No OAuth access token found for user {user_id}")

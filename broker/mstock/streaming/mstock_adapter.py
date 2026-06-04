@@ -49,7 +49,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = broker_name
 
         if not auth_data:
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             if not auth_token:
                 self.logger.error(f"No authentication token found for user {user_id}")
                 raise ValueError(f"No authentication token found for user {user_id}")

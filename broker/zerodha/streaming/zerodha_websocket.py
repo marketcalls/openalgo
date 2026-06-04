@@ -137,12 +137,18 @@ class ZerodhaWebSocket:
         self._connection_ready = _real_threading.Event()
         self._stop_event = _real_threading.Event()
 
-        # Fatal-error short-circuit: when an auth failure is detected (expired
-        # token, invalid api_key, 3am IST roll-over, etc.) we stop reconnecting
-        # immediately rather than retrying for ~30-50 minutes against an IP
-        # that the broker may rate-limit post the SEBI static-IP mandate.
+        # Auth/token failure handling. When a 403 is detected (expired token,
+        # invalid api_key, 3am IST roll-over, etc.) we do NOT die on the first
+        # failure (that left the feed dead until a process restart — #1419).
+        # Instead the reconnect loop re-reads a FRESH token from the DB
+        # (bypassing the auth cache, which can be stale in a separate WS-proxy
+        # process under Docker) and retries a bounded number of times. We still
+        # give up if a genuinely fresh token keeps failing, so we never hammer a
+        # known-bad token for ~30-50 minutes against a possibly rate-limited IP.
         self._fatal_error: bool = False
         self._fatal_error_message: str = ""
+        self._auth_refresh_retries: int = 0
+        self._max_auth_refresh_retries: int = 3
 
         self.logger.info("Enhanced Zerodha WebSocket client initialized (sync)")
 
@@ -167,6 +173,7 @@ class ZerodhaWebSocket:
             # is not blocked by a previous auth failure.
             self._fatal_error = False
             self._fatal_error_message = ""
+            self._auth_refresh_retries = 0
 
             self._ws_thread = _real_threading.Thread(
                 target=self._run_websocket, daemon=True, name="ZerodhaWS"
@@ -181,7 +188,7 @@ class ZerodhaWebSocket:
             self.running = False
             return False
 
-    def _refresh_access_token(self):
+    def _refresh_access_token(self) -> bool:
         """Re-read a fresh access token from the database and rebuild ws_url.
 
         Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
@@ -189,16 +196,21 @@ class ZerodhaWebSocket:
         which can hold a stale token after rollover) and rebuild the URL that
         bakes the token in. If no fresh token is available, keep the existing
         one rather than crashing.
+
+        Returns:
+            True if the access token changed (worth retrying the connection),
+            False otherwise (no user_id, no/empty token, or the DB still holds
+            the same token — retrying would just fail again).
         """
         if not self.user_id:
-            return
+            return False
         try:
             auth_token = get_auth_token(self.user_id, bypass_cache=True)
             if not auth_token:
                 self.logger.warning(
                     "No fresh auth token found on reconnect — keeping existing token"
                 )
-                return
+                return False
             # Same parsing as the adapter's initialize(): auth token format is
             # api_key:access_token; use the access_token part when present.
             if ":" in auth_token:
@@ -210,16 +222,19 @@ class ZerodhaWebSocket:
                 self.logger.warning(
                     "Parsed empty access token on reconnect — keeping existing token"
                 )
-                return
+                return False
             with self.lock:
+                changed = access_token != self.access_token
                 self.access_token = access_token
                 self.ws_url = (
                     f"wss://ws.kite.trade?api_key={self.api_key}"
                     f"&access_token={self.access_token}"
                 )
             self.logger.info("Refreshed Zerodha access token from database for reconnect")
+            return changed
         except Exception as e:
             self.logger.error(f"Error refreshing access token on reconnect: {e}")
+            return False
 
     def _run_websocket(self):
         """Run the WebSocket connection with reconnection logic"""
@@ -247,17 +262,40 @@ class ZerodhaWebSocket:
             if not self.running or self._stop_event.is_set():
                 break
 
-            # Auth-failure short-circuit: bail out before incrementing the
-            # reconnect counter so we do not hammer a known-bad token across
-            # ~30-50 minutes of exponential backoff. Caller is expected to
-            # refresh the access_token and call start() again.
+            # Auth/token failure: instead of dying on the first 403 (which left
+            # the feed dead until a process restart — #1419), re-read a FRESH
+            # token from the DB (bypassing the auth cache, which can be stale in
+            # a separate WS-proxy process under Docker) and retry a bounded
+            # number of times. Give up only if a genuinely fresh token still
+            # fails, or if the DB token has not changed (nothing to gain by
+            # retrying the same dead token) — so we never hammer a known-bad
+            # token across ~30-50 minutes of backoff.
             if self._fatal_error:
-                self.logger.error(
-                    f"Stopping WebSocket — fatal error (likely auth/token failure): "
-                    f"{self._fatal_error_message}"
+                if self._auth_refresh_retries >= self._max_auth_refresh_retries:
+                    self.logger.error(
+                        f"Stopping WebSocket — auth/token failure persisted after "
+                        f"{self._max_auth_refresh_retries} token refreshes. "
+                        f"Detail: {self._fatal_error_message}"
+                    )
+                    self.running = False
+                    break
+                self._auth_refresh_retries += 1
+                if not self._refresh_access_token():
+                    self.logger.error(
+                        "Stopping WebSocket — auth/token failure and DB token "
+                        f"unchanged; needs re-login. Detail: {self._fatal_error_message}"
+                    )
+                    self.running = False
+                    break
+                self.logger.info(
+                    f"Auth/token failure — refreshed token from DB, retrying "
+                    f"(attempt {self._auth_refresh_retries}/{self._max_auth_refresh_retries})"
                 )
-                self.running = False
-                break
+                self._fatal_error = False
+                self._fatal_error_message = ""
+                if self._stop_event.wait(self.reconnect_delay):
+                    break
+                continue
 
             self.reconnect_attempts += 1
             if self.reconnect_attempts >= self.max_reconnect_attempts:
@@ -458,6 +496,7 @@ class ZerodhaWebSocket:
         """Called when WebSocket connection is opened"""
         self.connected = True
         self.reconnect_attempts = 0
+        self._auth_refresh_retries = 0
         self.reconnect_delay = 2
         self.last_message_time = time.time()
         self._connection_ready.set()
@@ -538,16 +577,21 @@ class ZerodhaWebSocket:
         return any(token in text for token in self._AUTH_FAILURE_INDICATORS)
 
     def _mark_fatal_error(self, message: str) -> None:
-        """Flag the connection as terminally failed; reconnect loop will exit."""
+        """Flag the connection as an auth/token failure.
+
+        We do NOT stop the client here. The reconnect loop responds by re-reading
+        a fresh token from the DB (bypassing the cache) and retrying a bounded
+        number of times — that self-heal after a daily token rollover or a
+        post-login token refresh is exactly what stopping here would prevent
+        (#1419). The loop still gives up if a genuinely fresh token keeps failing.
+        """
         if self._fatal_error:
             return  # already flagged — keep first message for clarity
         self._fatal_error = True
         self._fatal_error_message = message
-        self.running = False
-        self._stop_event.set()
         self.logger.error(
-            f"Auth/token failure detected — will not retry. Refresh token and "
-            f"call start() again. Detail: {message}"
+            f"Auth/token failure detected — will refresh token from DB and retry. "
+            f"Detail: {message}"
         )
 
     def _on_ws_error(self, ws, error):
