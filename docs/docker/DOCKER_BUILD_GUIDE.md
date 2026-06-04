@@ -73,7 +73,7 @@ The Dockerfile uses **multi-stage builds** for optimization:
    - Installs all Python dependencies from `pyproject.toml`
    - Installs Gunicorn with eventlet support
 
-2. **Frontend Builder Stage** (`node:20-bullseye-slim`)
+2. **Frontend Builder Stage** (`node:22-bullseye-slim`)
    - Installs npm dependencies
    - Builds React frontend (`npm run build`)
    - Outputs to `frontend/dist/`

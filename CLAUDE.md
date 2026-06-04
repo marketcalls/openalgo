@@ -32,7 +32,7 @@ All surfaces share the Sandbox engine (₹1 Crore sandbox capital, exchange-alig
 
 ### Prerequisites
 - Python 3.12+ (required per pyproject.toml)
-- Node.js 20/22/24 for React frontend development
+- Node.js 20.20+, 22.22+, or 24.13+ for React frontend development (per `frontend/package.json`)
 - **uv package manager (required)** - Never use global Python
 
 ### Initial Setup
