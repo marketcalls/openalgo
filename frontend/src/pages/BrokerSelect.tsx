@@ -268,7 +268,7 @@ export default function BrokerSelect() {
                 {(selectedBroker === 'zerodha' || selectedBroker === 'dhan') && (
                   <Alert className="border-amber-500/50 bg-amber-500/10">
                     <Info className="h-4 w-4 text-amber-500" />
-                    <AlertDescription className="text-amber-200">
+                    <AlertDescription className="text-amber-700 dark:text-amber-400">
                       {selectedBroker === 'zerodha'
                         ? 'Zerodha requires an active Kite Connect data subscription for market data access.'
                         : 'Dhan requires an active Data API subscription for market data access.'}
