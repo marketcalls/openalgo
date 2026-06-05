@@ -1,0 +1,1 @@
+import{t as e}from"./react-I_Y09NXr.js";var t=e()(e=>({capabilities:null,isLoaded:!1,fetchCapabilities:async()=>{try{let t=await fetch(`/api/broker/capabilities`,{credentials:`include`});if(t.ok){let n=await t.json();n.status===`success`&&n.data&&e({capabilities:n.data,isLoaded:!0})}}catch{}},clearCapabilities:()=>e({capabilities:null,isLoaded:!1})}));export{t};
