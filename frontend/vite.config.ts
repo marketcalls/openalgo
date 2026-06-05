@@ -17,6 +17,13 @@ export default defineConfig({
     // CPU; nginx passes Content-Encoding through without double-compressing.
     compression({ algorithms: ['brotliCompress', 'gzip'], exclude: [/\.(br|gz)$/], threshold: 1024 }),
   ],
+  // plotly.js-dist-min's UMD wrapper has an unguarded `global.matchMedia`
+  // reference. Vite 8 no longer shims Node's `global` in the browser, so the
+  // /tools pages that load Plotly (StrategyBuilder, MaxPain, OI Tracker, etc.)
+  // threw "global is not defined". Map `global` to the browser `globalThis`.
+  define: {
+    global: 'globalThis',
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
