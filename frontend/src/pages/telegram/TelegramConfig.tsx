@@ -28,9 +28,9 @@ export default function TelegramConfig() {
   const [broadcastEnabled, setBroadcastEnabled] = useState(true)
   const [rateLimit, setRateLimit] = useState(10)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchConfig should not re-run on every render
   useEffect(() => {
     fetchConfig()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchConfig = async () => {
@@ -42,7 +42,7 @@ export default function TelegramConfig() {
       setConfig(configData)
       setBroadcastEnabled(configData.broadcast_enabled)
       setRateLimit(configData.rate_limit_per_minute)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load configuration', 'telegram')
     } finally {
       setIsLoading(false)

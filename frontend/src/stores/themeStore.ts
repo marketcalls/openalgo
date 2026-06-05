@@ -137,7 +137,7 @@ export const useThemeStore = create<ThemeStore>()(
           } else {
             return { success: false, message: data.message || 'Failed to toggle mode' }
           }
-        } catch (error) {
+        } catch (_error) {
           return { success: false, message: 'Network error' }
         } finally {
           set({ isTogglingMode: false })
@@ -164,7 +164,7 @@ export const useThemeStore = create<ThemeStore>()(
           }
           // If request fails (401, etc.) - user is logged out, keep current appMode
           // This preserves the theme across logout for visual continuity
-        } catch (error) {
+        } catch (_error) {
           // On error, keep current appMode - preserves theme across logout
         }
       },

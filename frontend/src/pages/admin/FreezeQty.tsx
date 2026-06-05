@@ -70,6 +70,7 @@ export default function FreezeQtyPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [isUploading, setIsUploading] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of freeze data on mount; fetchFreezeData is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchFreezeData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -93,7 +94,7 @@ export default function FreezeQtyPage() {
       const data = await adminApi.getFreezeList()
       setFreezeData(data)
       setFilteredData(data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load freeze quantities', 'admin')
     } finally {
       setIsLoading(false)

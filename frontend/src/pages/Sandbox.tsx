@@ -86,9 +86,9 @@ export default function Sandbox() {
   const [showResetDialog, setShowResetDialog] = useState(false)
 
   // Fetch configs on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time config load on mount; fetchConfigs has no reactive inputs
   useEffect(() => {
     fetchConfigs()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchConfigs = async () => {
@@ -102,7 +102,7 @@ export default function Sandbox() {
           setConfigs(data.configs)
         }
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load configuration', 'analyzer')
     } finally {
       setIsLoading(false)
@@ -165,7 +165,7 @@ export default function Sandbox() {
       } else {
         showToast.error(data.message, 'analyzer')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to save configuration', 'analyzer')
     }
   }
@@ -196,7 +196,7 @@ export default function Sandbox() {
       } else {
         showToast.error(data.message, 'analyzer')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to reset configuration', 'analyzer')
     } finally {
       setIsResetting(false)

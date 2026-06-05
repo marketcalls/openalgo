@@ -70,6 +70,7 @@ export default function SamcoAuth() {
   const [secretKeySent, setSecretKeySent] = useState(false)
 
   // Load initial state - check if secret key exists
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time init load on mount; loadIpStatus has no reactive inputs
   useEffect(() => {
     loadIpStatus()
   }, [])
@@ -350,6 +351,7 @@ export default function SamcoAuth() {
                 return (
                   <div key={step.key} className="flex items-center flex-1">
                     <button
+                      type="button"
                       onClick={() => accessible && setCurrentStep(step.key)}
                       disabled={!accessible}
                       className={`flex flex-col items-center gap-1 flex-1 ${

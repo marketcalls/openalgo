@@ -214,6 +214,7 @@ export function useLiveQuote(
     fetchRestDataRef.current = fetchRestData
   }, [enabled, hasSymbol, fetchRestData])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: symbol/exchange intentionally restart the interval + initial fetch when the watched instrument changes, even though the body reads them only via the stable fetchRestDataRef
   useEffect(() => {
     if (!enabled || !hasSymbol) return
 
@@ -230,10 +231,10 @@ export function useLiveQuote(
 
     return () => clearInterval(interval)
     // Only depend on stable values that should trigger new interval setup
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, hasSymbol, symbol, exchange, refreshInterval])
 
   // Reset state when symbol changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: symbol/exchange are the intended trigger to clear stale REST data when the watched instrument changes
   useEffect(() => {
     setRestQuotes(null)
     setRestDepth(null)

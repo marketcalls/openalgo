@@ -103,7 +103,7 @@ export default function GEXDashboard() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -134,8 +134,7 @@ export default function GEXDashboard() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // Fetch GEX data
   const fetchGEXData = useCallback(async () => {
@@ -163,11 +162,11 @@ export default function GEXDashboard() {
     }
   }, [selectedUnderlying, selectedExpiry, selectedExchange])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: must fire only on selectedExpiry change; including fetchGEXData would re-run with mixed exchange/underlying params during an exchange switch and fire a stale GEX request
   useEffect(() => {
     if (selectedExpiry) {
       fetchGEXData()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExpiry])
 
   // Auto-refresh

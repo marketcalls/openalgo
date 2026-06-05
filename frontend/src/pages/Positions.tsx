@@ -196,7 +196,7 @@ export default function Positions() {
             exchange: prefs.filters.exchange || [],
           })
       }
-    } catch (e) {}
+    } catch (_e) {}
   }, [])
 
   // Save preferences to localStorage
@@ -451,7 +451,7 @@ export default function Positions() {
       } else {
         showToast.error(response.message || 'Failed to close position', 'positions')
       }
-    } catch (err) {
+    } catch (_err) {
       showToast.error('Failed to close position', 'positions')
     }
   }
@@ -465,7 +465,7 @@ export default function Positions() {
       } else {
         showToast.error(response.message || 'Failed to close all positions', 'positions')
       }
-    } catch (err) {
+    } catch (_err) {
       showToast.error('Failed to close all positions', 'positions')
     }
   }

@@ -123,7 +123,7 @@ export default function VolSurface() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings[selectedExchange]])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -151,8 +151,7 @@ export default function VolSurface() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // Toggle an expiry selection
   const toggleExpiry = useCallback((expiry: string) => {
@@ -267,7 +266,7 @@ export default function VolSurface() {
     }
 
     return { data, layout }
-  }, [surfaceData, themeColors, isDark])
+  }, [surfaceData, themeColors])
 
   const plotConfig: Partial<PlotlyTypes.Config> = useMemo(
     () => ({

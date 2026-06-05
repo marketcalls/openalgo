@@ -34,6 +34,7 @@ export default function MarketTimingsPage() {
   const [checkTimings, setCheckTimings] = useState<TodayTiming[] | null>(null)
   const [isChecking, setIsChecking] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of timings on mount; fetchTimings is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchTimings()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,7 +46,7 @@ export default function MarketTimingsPage() {
       setTimings(response.data)
       setTodayTimings(response.today_timings)
       setToday(response.today)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load market timings', 'admin')
     } finally {
       setIsLoading(false)

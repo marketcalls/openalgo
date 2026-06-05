@@ -69,7 +69,7 @@ export function AuthSync({ children }: AuthSyncProps) {
           logout()
           clearCapabilities()
         }
-      } catch (error) {
+      } catch (_error) {
         // On error, don't change auth state - let existing state persist
       } finally {
         setIsChecking(false)
@@ -77,7 +77,7 @@ export function AuthSync({ children }: AuthSyncProps) {
     }
 
     syncSession()
-  }, [setUser, setApiKey, logout, fetchCapabilities, clearCapabilities, syncAppMode])
+  }, [setUser, setApiKey, logout, fetchCapabilities, clearCapabilities, syncAppMode, setActiveSessionCount])
 
   // Show nothing while checking - prevents flash of wrong content
   if (isChecking) {

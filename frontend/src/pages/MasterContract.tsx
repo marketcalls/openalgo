@@ -146,7 +146,7 @@ export default function MasterContract() {
           setPollingInterval(null)
         }
       }
-    } catch (error) {
+    } catch (_error) {
     } finally {
       setIsLoading(false)
     }
@@ -161,9 +161,10 @@ export default function MasterContract() {
         const data = await response.json()
         setCacheHealth(data)
       }
-    } catch (error) {}
+    } catch (_error) {}
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time load on mount; fetchStatus is recreated when pollingInterval changes, so adding it would refire the initial load during polling start/stop and cause duplicate fetches.
   useEffect(() => {
     fetchStatus()
     fetchCacheHealth()
@@ -205,7 +206,7 @@ export default function MasterContract() {
       } else {
         showToast.error(data.message || 'Failed to start download')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to start download')
     } finally {
       setIsDownloading(false)
@@ -232,7 +233,7 @@ export default function MasterContract() {
       } else {
         showToast.error(data.message || 'Failed to reload cache')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to reload cache')
     } finally {
       setIsReloadingCache(false)

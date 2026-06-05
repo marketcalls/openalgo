@@ -517,6 +517,7 @@ export default function CustomStraddle() {
 
   // ── Data fetching ────────────────────────────────────────────
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of available intervals on mount; selectedInterval is only read to seed the initial default and must not retrigger the network call when the user changes the interval.
   useEffect(() => {
     const fetchIntervals = async () => {
       try {
@@ -567,7 +568,7 @@ export default function CustomStraddle() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings])
 
   // Fetch lot size from DB and set adjustment defaults when underlying changes
   useEffect(() => {
@@ -622,7 +623,7 @@ export default function CustomStraddle() {
     return () => {
       cancelled = true
     }
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // ── Load simulation data ─────────────────────────────────────
 

@@ -60,7 +60,7 @@ export default function ViewChartinkStrategy() {
       const data = await chartinkApi.getStrategy(Number(strategyId))
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategy', 'chartink')
       navigate('/chartink')
     } finally {
@@ -75,7 +75,7 @@ export default function ViewChartinkStrategy() {
         const response = await fetch('/api/config/host', { credentials: 'include' })
         const data = await response.json()
         setHostConfig(data)
-      } catch (error) {
+      } catch (_error) {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -87,6 +87,7 @@ export default function ViewChartinkStrategy() {
     fetchHostConfig()
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of the strategy on mount; fetchStrategy is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchStrategy()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -117,7 +118,7 @@ export default function ViewChartinkStrategy() {
       } else {
         showToast.error(response.message || 'Failed to toggle strategy', 'chartink')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to toggle strategy', 'chartink')
     } finally {
       setToggling(false)
@@ -135,7 +136,7 @@ export default function ViewChartinkStrategy() {
       } else {
         showToast.error(response.message || 'Failed to delete strategy', 'chartink')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete strategy', 'chartink')
     } finally {
       setDeleting(false)
@@ -153,7 +154,7 @@ export default function ViewChartinkStrategy() {
       } else {
         showToast.error(response.message || 'Failed to delete mapping', 'chartink')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete mapping', 'chartink')
     }
   }

@@ -69,7 +69,7 @@ export default function Login() {
           }
         }
         // If session check fails (401, etc.), just stay on login page
-      } catch (err) {
+      } catch (_err) {
       } finally {
         setIsCheckingSetup(false)
       }
@@ -142,7 +142,7 @@ export default function Login() {
         // Use redirect from response if provided, otherwise go to broker
         navigate(data.redirect || '/broker')
       }
-    } catch (err) {
+    } catch (_err) {
       setError('Login failed. Please try again.')
     } finally {
       setIsLoading(false)
@@ -192,7 +192,7 @@ export default function Login() {
       setLogin(username, data.broker || '')
       showToast.success('Login successful', 'system')
       navigate(data.redirect || '/broker')
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to verify TOTP. Please try again.')
     } finally {
       setIsLoading(false)

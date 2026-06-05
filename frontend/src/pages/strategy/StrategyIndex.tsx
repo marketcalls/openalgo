@@ -38,7 +38,7 @@ export default function StrategyIndex() {
       setLoading(true)
       const data = await strategyApi.getStrategies()
       setStrategies(data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategies', 'strategy')
     } finally {
       setLoading(false)
@@ -52,7 +52,7 @@ export default function StrategyIndex() {
         const response = await fetch('/api/config/host', { credentials: 'include' })
         const data = await response.json()
         setHostConfig(data)
-      } catch (error) {
+      } catch (_error) {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -64,9 +64,9 @@ export default function StrategyIndex() {
     fetchHostConfig()
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchStrategies should not re-run on every render
   useEffect(() => {
     fetchStrategies()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Get webhook URL using host config

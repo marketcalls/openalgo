@@ -101,6 +101,7 @@ export default function OIProfile() {
   }, [defaultFnoExchange, fnoExchanges])
 
   // Fetch supported intervals on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intervals are fetched once on mount; selectedInterval is only read to validate the initial default, not to re-trigger the fetch
   useEffect(() => {
     const fetchIntervals = async () => {
       try {
@@ -116,7 +117,6 @@ export default function OIProfile() {
       }
     }
     fetchIntervals()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Fetch underlyings when exchange changes
@@ -147,7 +147,7 @@ export default function OIProfile() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings[selectedExchange]])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -178,8 +178,7 @@ export default function OIProfile() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // Fetch profile data
   const fetchProfileData = useCallback(async () => {
@@ -214,8 +213,7 @@ export default function OIProfile() {
     if (selectedExpiry) {
       fetchProfileData()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedExpiry, selectedInterval])
+  }, [selectedExpiry, fetchProfileData])
 
   // Theme colors
   const themeColors = useMemo(

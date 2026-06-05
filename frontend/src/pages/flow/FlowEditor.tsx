@@ -118,7 +118,7 @@ function FlowEditorContent() {
       await authApi.logout()
       logout()
       navigate('/login')
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Logout failed', 'system')
     }
   }

@@ -237,6 +237,7 @@ export default function Playground() {
       })
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time load on mount; loadApiKey/loadEndpoints are stable per-render fetchers and must not refire when their closures are recreated.
   useEffect(() => {
     loadApiKey()
     loadEndpoints()

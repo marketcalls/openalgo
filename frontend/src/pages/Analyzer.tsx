@@ -82,9 +82,9 @@ export default function Analyzer() {
   const [selectedRequest, setSelectedRequest] = useState<ApiRequest | null>(null)
   const [showDetailsDialog, setShowDetailsDialog] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time data load on mount; subsequent fetches are triggered explicitly by the filter form
   useEffect(() => {
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchData = async (start?: string, end?: string) => {
@@ -106,7 +106,7 @@ export default function Analyzer() {
           setData(result.data)
         }
       }
-    } catch (error) {
+    } catch (_error) {
     } finally {
       setIsLoading(false)
     }

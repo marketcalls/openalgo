@@ -186,7 +186,7 @@ export default function HealthMonitor() {
       if (displayToast) {
         showToast.success('Metrics refreshed', 'monitoring')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to fetch health metrics', 'monitoring')
     } finally {
       setLoading(false)
@@ -195,11 +195,13 @@ export default function HealthMonitor() {
   }
 
   // Initial load
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchData is recreated every render but only calls module-level APIs and setters, so adding it would refire on every render.
   useEffect(() => {
     fetchData()
   }, [])
 
   // Auto-refresh
+  // biome-ignore lint/correctness/useExhaustiveDependencies: interval should be recreated only when autoRefresh/tabVisible change; fetchData is recreated every render but reads no reactive closure state, so adding it would needlessly tear down and rebuild the interval on every render.
   useEffect(() => {
     if (!autoRefresh || !tabVisible) return
 
@@ -404,7 +406,7 @@ export default function HealthMonitor() {
       await acknowledgeAlert(alertId)
       showToast.success('Alert acknowledged', 'monitoring')
       fetchData()
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to acknowledge alert', 'monitoring')
     }
   }

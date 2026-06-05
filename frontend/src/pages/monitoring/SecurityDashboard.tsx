@@ -13,7 +13,7 @@ import {
   Shield,
   Trash2,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { webClient } from '@/api/client'
 import {
@@ -205,7 +205,7 @@ export default function SecurityDashboard() {
   }
 
   // Parse DD-MM-YYYY HH:MM:SS AM/PM to comparable value
-  const parseDate = (dateStr: string): number => {
+  const parseDate = useCallback((dateStr: string): number => {
     if (!dateStr || dateStr === 'Unknown' || dateStr === 'Permanent') return 0
     const [datePart, timePart, ampm] = dateStr.split(' ')
     if (!datePart || !timePart) return 0
@@ -222,7 +222,7 @@ export default function SecurityDashboard() {
       parseInt(min, 10),
       parseInt(ss, 10)
     ).getTime()
-  }
+  }, [])
 
   const sortedBannedIPs = useMemo(() => {
     const sorted = [...bannedIPs]
@@ -243,7 +243,7 @@ export default function SecurityDashboard() {
       return dir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [bannedIPs, bannedSort])
+  }, [bannedIPs, bannedSort, parseDate])
 
   const sortedSuspiciousIPs = useMemo(() => {
     const sorted = [...suspiciousIPs]
@@ -262,7 +262,7 @@ export default function SecurityDashboard() {
       return dir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [suspiciousIPs, suspiciousSort])
+  }, [suspiciousIPs, suspiciousSort, parseDate])
 
   const sortedAPIAbuseIPs = useMemo(() => {
     const sorted = [...apiAbuseIPs]
@@ -281,8 +281,9 @@ export default function SecurityDashboard() {
       return dir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [apiAbuseIPs, apiSort])
+  }, [apiAbuseIPs, apiSort, parseDate])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only one-time dashboard load plus a 30s stats refresh interval; the fetch* helpers are stable closures and must not re-trigger the effect.
   useEffect(() => {
     fetchDashboardData()
     fetchStats()
@@ -291,7 +292,6 @@ export default function SecurityDashboard() {
     // Refresh stats every 30 seconds
     const interval = setInterval(fetchStats, 30000)
     return () => clearInterval(interval)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchDashboardData = async () => {
@@ -313,7 +313,7 @@ export default function SecurityDashboard() {
         setSettings(response.data.security_settings)
         setFormSettings(response.data.security_settings)
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load security data', 'monitoring')
     } finally {
       setIsLoading(false)
@@ -324,7 +324,7 @@ export default function SecurityDashboard() {
     try {
       const response = await webClient.get<SecurityStats>('/security/stats')
       setStats(response.data)
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const fetchLoginActivity = async () => {
@@ -334,7 +334,7 @@ export default function SecurityDashboard() {
         attempts: LoginAttemptEntry[]
       }>('/security/api/login-activity')
       setLoginAttempts(Array.isArray(response.data.attempts) ? response.data.attempts : [])
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const fetchActiveSessions = async () => {
@@ -346,7 +346,7 @@ export default function SecurityDashboard() {
       }>('/security/api/active-sessions')
       setActiveSessions(Array.isArray(response.data.sessions) ? response.data.sessions : [])
       setCurrentSessionId(response.data.current_session_id || null)
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const handleClearLoginHistory = async () => {
@@ -354,7 +354,7 @@ export default function SecurityDashboard() {
       await webClient.post('/security/api/login-activity/clear')
       setLoginAttempts([])
       showToast.success('Login history cleared', 'monitoring')
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to clear login history', 'monitoring')
     }
   }

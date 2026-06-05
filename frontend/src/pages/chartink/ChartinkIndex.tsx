@@ -36,7 +36,7 @@ export default function ChartinkIndex() {
       setLoading(true)
       const data = await chartinkApi.getStrategies()
       setStrategies(data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load Chartink strategies', 'chartink')
     } finally {
       setLoading(false)
@@ -50,7 +50,7 @@ export default function ChartinkIndex() {
         const response = await fetch('/api/config/host', { credentials: 'include' })
         const data = await response.json()
         setHostConfig(data)
-      } catch (error) {
+      } catch (_error) {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -62,6 +62,7 @@ export default function ChartinkIndex() {
     fetchHostConfig()
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of strategies on mount; fetchStrategies is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchStrategies()
     // eslint-disable-next-line react-hooks/exhaustive-deps

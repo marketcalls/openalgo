@@ -64,9 +64,9 @@ export default function TelegramIndex() {
   const [showBroadcastConfirm, setShowBroadcastConfirm] = useState(false)
   const [isBroadcasting, setIsBroadcasting] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchData should not re-run on every render
   useEffect(() => {
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchData = async () => {
@@ -75,7 +75,7 @@ export default function TelegramIndex() {
         '/telegram/api/index'
       )
       setData(response.data.data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load Telegram data', 'telegram')
     } finally {
       setIsLoading(false)

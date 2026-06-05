@@ -286,7 +286,7 @@ export default function PnLTracker() {
       } else {
         showToast.error(result.message || 'Failed to load PnL data', 'positions')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load PnL data. Please try again.', 'positions')
     } finally {
       setIsLoading(false)
@@ -325,7 +325,7 @@ export default function PnLTracker() {
         'image/png',
         1.0
       )
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to capture screenshot', 'positions')
     } finally {
       setIsCapturing(false)

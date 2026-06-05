@@ -93,6 +93,7 @@ export function useMarketData({
   }, [])
 
   // Subscribe to symbols when enabled
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-subscribe only when the symbol set (symbolsKey) or mode changes; depending on the `symbols` array identity would re-subscribe every render, and depending on connectionState would tear down/rebuild all subscriptions on each connect/pause flip. The auto-connect check intentionally reads current connectionState without re-firing.
   useEffect(() => {
     if (!enabled || symbols.length === 0) {
       // Clear data when disabled
@@ -137,7 +138,6 @@ export function useMarketData({
       // Unsubscribe from all symbols
       unsubscribes.forEach((unsub) => unsub())
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, symbolsKey, mode])
 
   // Connect function (for manual connection)

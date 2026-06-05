@@ -206,6 +206,7 @@ export default function MultiStrikeOITab({
   }, [chartData])
 
   // ── Chart init ────────────────────────────────────────────────
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chart is rebuilt only on theme/day changes; hiddenSeries, legColorMap and applyDataToChart are intentionally excluded so toggling leg visibility or loading new data updates series in place (effects at lines ~478 and ~562) instead of tearing down and recreating the whole chart.
   const initChart = useCallback(() => {
     if (!chartContainerRef.current) return
     if (chartRef.current) {
@@ -483,6 +484,7 @@ export default function MultiStrikeOITab({
   }, [hiddenSeries])
 
   // Intervals
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only fetch of the available interval list; selectedInterval is read solely to seed a sensible default once and must not re-trigger the fetch when the user changes interval.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -514,6 +516,7 @@ export default function MultiStrikeOITab({
 
   const identity = useMemo(() => legsIdentity(legs), [legs])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: legs is read inside but intentionally keyed via the stable `identity` string (memoized above) instead of the raw `legs` reference, so a new array with identical contents does not retrigger this network fetch; depending on `legs` directly would cause repeated OI data requests.
   const loadData = useCallback(async () => {
     if (!underlying || !exchange) return
     const payloadLegs = legs

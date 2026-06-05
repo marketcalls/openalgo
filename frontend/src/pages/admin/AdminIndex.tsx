@@ -26,7 +26,7 @@ export default function AdminIndex() {
       try {
         const data = await adminApi.getStats()
         setStats(data)
-      } catch (error) {
+      } catch (_error) {
       } finally {
         setIsLoading(false)
       }

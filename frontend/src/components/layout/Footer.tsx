@@ -21,7 +21,7 @@ export function Footer({ className }: FooterProps) {
         if (data.status === 'success') {
           setVersion(data.version)
         }
-      } catch (error) {}
+      } catch (_error) {}
     }
 
     fetchVersion()

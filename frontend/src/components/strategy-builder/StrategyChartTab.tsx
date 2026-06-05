@@ -162,7 +162,40 @@ export default function StrategyChartTab({
   const colorsRef = useRef(colors)
   colorsRef.current = colors
 
+  const applyDataToChart = useCallback((data: StrategyChartData) => {
+    if (!data.series || data.series.length === 0) {
+      underlyingSeriesRef.current?.setData([])
+      combinedSeriesRef.current?.setData([])
+      seriesMapRef.current = new Map()
+      return
+    }
+    const sorted = [...data.series].sort((a, b) => a.time - b.time)
+    const map = new Map<number, StrategyChartPoint>()
+    for (const p of sorted) map.set(p.time, p)
+    seriesMapRef.current = map
+
+    // The underlying column is optional — when the broker doesn't support
+    // the requested interval for the index (e.g., Zerodha 1m on NIFTY),
+    // we skip it. lightweight-charts treats missing values as gaps, so
+    // we filter the points that actually carry an underlying close.
+    const underlyingPoints = sorted
+      .filter(
+        (p): p is StrategyChartPoint & { underlying: number } => typeof p.underlying === 'number'
+      )
+      .map((p) => ({ time: p.time as UTCTimestamp, value: p.underlying }))
+    underlyingSeriesRef.current?.setData(underlyingPoints)
+    combinedSeriesRef.current?.setData(
+      sorted.map((p) => ({ time: p.time as UTCTimestamp, value: p.combined_premium }))
+    )
+    chartRef.current?.timeScale().fitContent()
+  }, [])
+
   // ── Chart init ────────────────────────────────────────────────
+  // showUnderlying/showCombined are intentionally read only as the series'
+  // initial `visible` value at creation time; dedicated effects below sync them
+  // via applyOptions, so adding them here would needlessly rebuild the whole
+  // chart on every toggle.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showUnderlying/showCombined are initial-only; toggles are synced by separate applyOptions effects
   const initChart = useCallback(() => {
     if (!chartContainerRef.current) return
 
@@ -351,36 +384,7 @@ export default function StrategyChartTab({
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colors, selectedDays, underlying])
-
-  const applyDataToChart = useCallback((data: StrategyChartData) => {
-    if (!data.series || data.series.length === 0) {
-      underlyingSeriesRef.current?.setData([])
-      combinedSeriesRef.current?.setData([])
-      seriesMapRef.current = new Map()
-      return
-    }
-    const sorted = [...data.series].sort((a, b) => a.time - b.time)
-    const map = new Map<number, StrategyChartPoint>()
-    for (const p of sorted) map.set(p.time, p)
-    seriesMapRef.current = map
-
-    // The underlying column is optional — when the broker doesn't support
-    // the requested interval for the index (e.g., Zerodha 1m on NIFTY),
-    // we skip it. lightweight-charts treats missing values as gaps, so
-    // we filter the points that actually carry an underlying close.
-    const underlyingPoints = sorted
-      .filter(
-        (p): p is StrategyChartPoint & { underlying: number } => typeof p.underlying === 'number'
-      )
-      .map((p) => ({ time: p.time as UTCTimestamp, value: p.underlying }))
-    underlyingSeriesRef.current?.setData(underlyingPoints)
-    combinedSeriesRef.current?.setData(
-      sorted.map((p) => ({ time: p.time as UTCTimestamp, value: p.combined_premium }))
-    )
-    chartRef.current?.timeScale().fitContent()
-  }, [])
+  }, [colors, selectedDays, underlying, applyDataToChart])
 
   useEffect(() => {
     const cleanup = initChart()
@@ -402,6 +406,7 @@ export default function StrategyChartTab({
   }, [showCombined])
 
   // ── Intervals ─────────────────────────────────────────────────
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of available intervals on mount; selectedInterval is only read to pick a sensible default and must not re-trigger the fetch
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -428,12 +433,16 @@ export default function StrategyChartTab({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── Leg identity — drives auto-refetch on add/remove/toggle ───
   const identity = useMemo(() => legsIdentity(legs, optionExchange), [legs, optionExchange])
 
+  // `legs` is read inside, but we deliberately depend on the derived `identity`
+  // string (legs + optionExchange) instead of the raw `legs` array so that
+  // unrelated leg-object reference changes don't trigger extra broker history
+  // calls — only add/remove/toggle/symbol changes (which change identity) refetch.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: depend on derived `identity` (not raw `legs`) to avoid over-fetching the broker history API
   const loadData = useCallback(async () => {
     if (!underlying || !exchange) return
     const payloadLegs = legs
@@ -476,7 +485,6 @@ export default function StrategyChartTab({
     } finally {
       setIsLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     underlying,
     exchange,

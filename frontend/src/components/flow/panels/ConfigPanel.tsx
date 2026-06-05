@@ -2490,8 +2490,7 @@ export function ConfigPanel() {
 
             {/* ===== UTILITY NODES ===== */}
             {nodeType === 'delay' && (
-              <>
-                <div className="space-y-2">
+              <div className="space-y-2">
                   <Label className="text-xs">Wait Duration</Label>
                   <div className="flex gap-2">
                     <Input
@@ -2518,7 +2517,6 @@ export function ConfigPanel() {
                     </Select>
                   </div>
                 </div>
-              </>
             )}
 
             {nodeType === 'waitUntil' && (

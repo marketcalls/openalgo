@@ -53,9 +53,9 @@ export default function TelegramUsers() {
   const [unlinkUser, setUnlinkUser] = useState<TelegramUser | null>(null)
   const [isUnlinking, setIsUnlinking] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchUsers should not re-run on every render
   useEffect(() => {
     fetchUsers()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -83,7 +83,7 @@ export default function TelegramUsers() {
       setUsers(fetchedUsers)
       setFilteredUsers(fetchedUsers)
       setStats(fetchedStats)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load users', 'telegram')
     } finally {
       setIsLoading(false)

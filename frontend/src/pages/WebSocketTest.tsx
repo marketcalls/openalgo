@@ -557,7 +557,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
       const data = await response.json()
       setSearchResults((data.results || []).slice(0, 8))
       setShowSearchResults(true)
-    } catch (err) {
+    } catch (_err) {
       setSearchResults([])
     } finally {
       setIsSearching(false)
@@ -652,7 +652,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
           newMap.set(key, { symbol, exchange, data: {}, subscriptions: new Set() })
         })
         setActiveSymbols(newMap)
-      } catch (err) {}
+      } catch (_err) {}
     }
   }, [])
 

@@ -58,7 +58,7 @@ export default function EditPythonStrategy() {
       setContent(contentData)
       setCode(contentData.content || '')
       setOriginalCode(contentData.content || '')
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategy', 'pythonStrategy')
       navigate('/python')
     } finally {
@@ -66,9 +66,9 @@ export default function EditPythonStrategy() {
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchData should not re-run on every render
   useEffect(() => {
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleSave = useCallback(async () => {
@@ -88,7 +88,7 @@ export default function EditPythonStrategy() {
       } else {
         showToast.error(response.message || 'Failed to save strategy', 'pythonStrategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to save strategy', 'pythonStrategy')
     } finally {
       setSaving(false)
@@ -135,7 +135,7 @@ export default function EditPythonStrategy() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       showToast.success('Strategy exported', 'pythonStrategy')
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to export strategy', 'pythonStrategy')
     }
   }
