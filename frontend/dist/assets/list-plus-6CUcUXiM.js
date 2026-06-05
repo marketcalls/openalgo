@@ -1,0 +1,1 @@
+import{a as e}from"./utils-Ds01M9Rz.js";var t=e(`list-plus`,[[`path`,{d:`M16 5H3`,key:`m91uny`}],[`path`,{d:`M11 12H3`,key:`51ecnj`}],[`path`,{d:`M16 19H3`,key:`zzsher`}],[`path`,{d:`M18 9v6`,key:`1twb98`}],[`path`,{d:`M21 12h-6`,key:`bt1uis`}]]);export{t};
