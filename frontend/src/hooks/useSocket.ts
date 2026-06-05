@@ -331,7 +331,7 @@ export function useSocket() {
         document.removeEventListener(eventType, handleInteraction)
       })
     }
-  }, [isAuthenticated, playAlertSound, enableAudio])
+  }, [isAuthenticated, playAlertSound, enableAudio, navigate])
 
   return {
     socket: socketRef.current,

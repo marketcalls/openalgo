@@ -79,13 +79,14 @@ export default function ConfigureChartinkSymbols() {
       const data = await chartinkApi.getStrategy(Number(strategyId))
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategy', 'chartink')
     } finally {
       setLoading(false)
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of the strategy on mount; fetchStrategy is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchStrategy()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -106,7 +107,7 @@ export default function ConfigureChartinkSymbols() {
           exchangeFilter as 'NSE' | 'BSE' | undefined
         )
         setSearchResults(results)
-      } catch (error) {
+      } catch (_error) {
       } finally {
         setSearchLoading(false)
       }
@@ -176,7 +177,7 @@ export default function ConfigureChartinkSymbols() {
       } else {
         showToast.error(response.message || 'Failed to add symbol', 'chartink')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to add symbol', 'chartink')
     } finally {
       setSubmitting(false)
@@ -206,7 +207,7 @@ export default function ConfigureChartinkSymbols() {
       } else {
         showToast.error(response.message || 'Failed to add symbols', 'chartink')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to add symbols', 'chartink')
     } finally {
       setSubmitting(false)
@@ -224,7 +225,7 @@ export default function ConfigureChartinkSymbols() {
       } else {
         showToast.error(response.message || 'Failed to remove symbol', 'chartink')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to remove symbol', 'chartink')
     } finally {
       setDeleteDialogOpen(false)

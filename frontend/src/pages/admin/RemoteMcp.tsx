@@ -291,6 +291,7 @@ export default function RemoteMcp() {
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time initial load on mount; loadAll is recreated each render and adding it would re-run the load on every render
   useEffect(() => {
     loadAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps

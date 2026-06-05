@@ -90,7 +90,7 @@ export default function Dashboard() {
       } else {
         setError(data.message || 'Failed to fetch margin data')
       }
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to fetch margin data')
     } finally {
       setIsLoading(false)

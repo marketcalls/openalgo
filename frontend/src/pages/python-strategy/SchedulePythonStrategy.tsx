@@ -36,7 +36,7 @@ export default function SchedulePythonStrategy() {
         if (data.schedule_start_time) setStartTime(data.schedule_start_time)
         if (data.schedule_stop_time) setStopTime(data.schedule_stop_time)
         if (data.schedule_days?.length) setSelectedDays(data.schedule_days)
-      } catch (error) {
+      } catch (_error) {
         showToast.error('Failed to load strategy', 'pythonStrategy')
         navigate('/python')
       } finally {
@@ -44,8 +44,7 @@ export default function SchedulePythonStrategy() {
       }
     }
     fetchStrategy()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategyId])
+  }, [strategyId, navigate])
 
   const handleDayToggle = (day: string) => {
     setSelectedDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]))
@@ -83,7 +82,7 @@ export default function SchedulePythonStrategy() {
       } else {
         showToast.error(response.message || 'Failed to save schedule', 'pythonStrategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to save schedule', 'pythonStrategy')
     } finally {
       setSaving(false)

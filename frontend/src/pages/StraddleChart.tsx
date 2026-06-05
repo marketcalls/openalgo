@@ -185,6 +185,7 @@ export default function StraddleChart() {
 
   // ── Chart initialization ──────────────────────────────────────
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: applyDataToChart is a stable useCallback([]) declared below this one (referencing it here would be a TDZ error); its identity never changes so omitting it is safe
   const initChart = useCallback(() => {
     if (!chartContainerRef.current) return
 
@@ -492,6 +493,7 @@ export default function StraddleChart() {
 
   // ── Data fetching ─────────────────────────────────────────────
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time mount fetch of available intervals; selectedInterval is only read to seed the default and must not re-trigger this fetch when the user changes interval
   useEffect(() => {
     const fetchIntervals = async () => {
       try {
@@ -543,7 +545,7 @@ export default function StraddleChart() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -574,8 +576,7 @@ export default function StraddleChart() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // ── Load straddle data ────────────────────────────────────────
 

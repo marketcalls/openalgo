@@ -63,6 +63,7 @@ export default function TrafficDashboard() {
   const [filter, setFilter] = useState<'all' | 'error' | 'success'>('all')
   const [isRefreshing, setIsRefreshing] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only initial fetch + fixed 30s auto-refresh interval; fetchData is recreated each render and adding it would tear down/recreate the interval on every render
   useEffect(() => {
     fetchData()
     // Auto-refresh every 30 seconds
@@ -80,7 +81,7 @@ export default function TrafficDashboard() {
 
       setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : [])
       setStats(statsResponse.data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load traffic data', 'monitoring')
     } finally {
       setIsLoading(false)

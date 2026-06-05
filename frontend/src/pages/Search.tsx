@@ -90,9 +90,9 @@ export default function Search() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [copyFormat, setCopyFormat] = useState<CopyFormat>('exchange_symbol')
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchResults reads the initial URL searchParams and must not re-run on every render
   useEffect(() => {
     fetchResults()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchResults = async () => {
@@ -137,7 +137,7 @@ export default function Search() {
         showToast.error('Failed to search symbols', 'system')
         setResults([])
       }
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to search symbols. Please check your connection.')
       showToast.error('Failed to search symbols', 'system')
       setResults([])

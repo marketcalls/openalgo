@@ -77,7 +77,7 @@ export default function TradingView() {
         const response = await fetch('/api/config/host', { credentials: 'include' })
         const data = await response.json()
         setHostConfig(data)
-      } catch (error) {
+      } catch (_error) {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -127,7 +127,7 @@ export default function TradingView() {
         const data = await response.json()
         setSearchResults((data.results || []).slice(0, 10))
         setShowResults(true)
-      } catch (error) {
+      } catch (_error) {
         setSearchResults([])
       } finally {
         setIsLoading(false)
@@ -163,7 +163,7 @@ export default function TradingView() {
     setShowResults(false)
   }
 
-  const generateJson = (showError = true) => {
+  const generateJson = useCallback((showError = true) => {
     if (!symbol || !exchange) {
       if (showError) {
         showToast.error('Please select a symbol and exchange', 'clipboard')
@@ -201,7 +201,7 @@ export default function TradingView() {
     }
 
     setGeneratedJson(JSON.stringify(json, null, 2))
-  }
+  }, [symbol, exchange, apiKey, alertMode, product, action, quantity])
 
   // Auto-generate JSON when values change
   useEffect(() => {

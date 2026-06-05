@@ -310,6 +310,7 @@ const OptionChainRow = React.memo(function OptionChainRow({
               )}
             >
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation()
                   onPlaceOrder({
@@ -325,6 +326,7 @@ const OptionChainRow = React.memo(function OptionChainRow({
                 B
               </button>
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation()
                   onPlaceOrder({
@@ -399,6 +401,7 @@ const OptionChainRow = React.memo(function OptionChainRow({
               )}
             >
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation()
                   onPlaceOrder({
@@ -414,6 +417,7 @@ const OptionChainRow = React.memo(function OptionChainRow({
                 B
               </button>
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation()
                   onPlaceOrder({
@@ -554,7 +558,7 @@ export default function OptionChain() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings[selectedExchange], setSelectedUnderlying])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -583,8 +587,7 @@ export default function OptionChain() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // Update previous data ref after render (for flash animation)
   // Using useEffect to update AFTER the current data is rendered

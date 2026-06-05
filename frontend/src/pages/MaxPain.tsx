@@ -92,7 +92,7 @@ export default function MaxPain() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -123,8 +123,7 @@ export default function MaxPain() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // Fetch max pain data - uses requestIdRef to discard stale responses
   const fetchMaxPain = useCallback(async () => {
@@ -152,13 +151,13 @@ export default function MaxPain() {
     }
   }, [selectedUnderlying, selectedExpiry, selectedExchange])
 
+  // Only trigger on expiry change - not on fetchMaxPain identity change,
+  // which would cause a stale request with mixed params during exchange switch.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: must fire only on selectedExpiry change; including fetchMaxPain would re-run with mixed exchange/underlying params during an exchange switch and fire a stale Max Pain request
   useEffect(() => {
     if (selectedExpiry) {
       fetchMaxPain()
     }
-    // Only trigger on expiry change - not on fetchMaxPain identity change,
-    // which would cause a stale request with mixed params during exchange switch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExpiry])
 
   // Theme colors

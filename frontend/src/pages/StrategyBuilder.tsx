@@ -314,7 +314,7 @@ export default function StrategyBuilder() {
         } else {
           setFutureExpiries([])
         }
-      } catch (err) {
+      } catch (_err) {
         if (!cancelled) {
           showToast.error('Failed to fetch expiries')
         }
@@ -348,7 +348,7 @@ export default function StrategyBuilder() {
       } else {
         showToast.error(data.message || 'Failed to load option chain')
       }
-    } catch (err) {
+    } catch (_err) {
       showToast.error('Failed to load option chain')
     } finally {
       if (reqId === requestIdRef.current) setIsRefreshing(false)
@@ -489,6 +489,11 @@ export default function StrategyBuilder() {
   const simulatedSpot = spotPrice !== null ? spotPrice * (1 + spotShiftPct / 100) : 0
 
   // Batch load Greeks for all legs (also used to fill ATM IV for the header)
+  // We intentionally key this fetch on `legs.length` (plus exchange/underlying/atm)
+  // rather than the full `legs` array: the latest `legs` snapshot is read inside
+  // the async body, and depending on the whole array would refire this
+  // un-debounced /multioptiongreeks network call on every leg-object edit.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: key on legs.length to avoid refiring the un-debounced Greeks fetch on every leg edit; the closure reads the latest legs at call time
   useEffect(() => {
     if (!apiKey || legs.length === 0) {
       setGreeksByLeg({})
@@ -831,7 +836,7 @@ export default function StrategyBuilder() {
       }
       setLegs((prev) => [...prev, newLeg])
     },
-    [lotSize, selectedUnderlying, futuresPrice]
+    [lotSize, selectedUnderlying, futuresPrice, chainData?.chain]
   )
 
   // Payoff

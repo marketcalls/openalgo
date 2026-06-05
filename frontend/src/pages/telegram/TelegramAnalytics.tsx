@@ -23,9 +23,9 @@ export default function TelegramAnalytics() {
   const [analytics, setAnalytics] = useState<TelegramAnalyticsType | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchAnalytics should not re-run on every render
   useEffect(() => {
     fetchAnalytics()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchAnalytics = async () => {
@@ -34,7 +34,7 @@ export default function TelegramAnalytics() {
         '/telegram/api/analytics'
       )
       setAnalytics(response.data.data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load analytics', 'telegram')
     } finally {
       setIsLoading(false)

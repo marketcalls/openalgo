@@ -130,7 +130,7 @@ export default function Setup() {
       } else {
         setError('Setup failed. Please try again.')
       }
-    } catch (err) {
+    } catch (_err) {
       setError('Setup failed. Please check your connection and try again.')
     } finally {
       setIsLoading(false)

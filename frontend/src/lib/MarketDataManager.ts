@@ -725,7 +725,7 @@ export class MarketDataManager {
       if (data.status === 'success' && data.api_key) {
         this.apiKey = data.api_key
       }
-    } catch (err) {}
+    } catch (_err) {}
   }
 
   /**
@@ -826,7 +826,7 @@ export class MarketDataManager {
           })
         }
       }
-    } catch (err) {}
+    } catch (_err) {}
   }
 
   /**
