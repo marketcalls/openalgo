@@ -169,8 +169,9 @@ export default function Setup() {
               <Info className="h-5 w-5" />
               <AlertDescription>
                 <strong className="block mb-1">First Time Setup</strong>
-                This form will create the initial administrator account. You'll receive a TOTP QR
-                code for password resets after setup.
+                This form will create the initial administrator account. After signing in, open your
+                Profile and scan the TOTP QR code there to enable two-factor authentication and
+                TOTP-based password resets.
               </AlertDescription>
             </Alert>
           </div>
