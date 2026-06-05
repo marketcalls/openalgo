@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { compression } from 'vite-plugin-compression2'
 import path from 'path'
 
 // https://vite.dev/config/
@@ -8,6 +9,13 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // Emit pre-compressed .br and .gz next to each asset at build time.
+    // CI force-commits frontend/dist/ to main, so these ship to every
+    // deployment (incl. no-nginx laptop installs) without a Node step.
+    // blueprints/react_app.py serves them when the client advertises the
+    // encoding, falling back to the raw asset otherwise. Zero per-request
+    // CPU; nginx passes Content-Encoding through without double-compressing.
+    compression({ algorithms: ['brotliCompress', 'gzip'], exclude: [/\.(br|gz)$/], threshold: 1024 }),
   ],
   resolve: {
     alias: {
@@ -38,5 +46,21 @@ export default defineConfig({
     // Keep the limit high enough for that known vendor cost while still
     // flagging any new app-code chunk that drifts above 1MB.
     chunkSizeWarningLimit: 1100,
+    rollupOptions: {
+      output: {
+        // Split the stable framework libs into their own long-cached chunk
+        // so an app-code change doesn't bust react/router/query for returning
+        // users, and the browser can fetch vendor + page chunks in parallel.
+        // Vite already splits the heavy charting libs (plotly, lightweight-
+        // charts) automatically, so we only carve out the framework core here.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
+            return 'react-vendor'
+          }
+          if (id.includes('tanstack/react-query')) return 'tanstack'
+        },
+      },
+    },
   },
 })
