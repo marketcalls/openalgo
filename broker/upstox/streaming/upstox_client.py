@@ -108,6 +108,8 @@ class UpstoxWebSocketClient:
             on_message=self._on_ws_message,
             on_error=self._on_ws_error,
             on_close=self._on_ws_close,
+            on_ping=self._on_ws_ping,
+            on_pong=self._on_ws_pong,
         )
 
         # Run WebSocket in a daemon thread (same pattern as Angel/Dhan)
@@ -179,6 +181,8 @@ class UpstoxWebSocketClient:
                     on_message=self._on_ws_message,
                     on_error=self._on_ws_error,
                     on_close=self._on_ws_close,
+                    on_ping=self._on_ws_ping,
+                    on_pong=self._on_ws_pong,
                 )
 
     def subscribe(self, instrument_keys: list[str], mode: str = "ltpc") -> bool:
@@ -255,6 +259,26 @@ class UpstoxWebSocketClient:
         # Notify adapter
         if self.callbacks.get("on_connect"):
             self.callbacks["on_connect"]()
+
+    def _on_ws_pong(self, ws, message):
+        """Treat a WebSocket pong as proof the connection is alive.
+
+        Upstox sends no application-level heartbeat, so during a quiet or
+        closed market ``_last_message_time`` would otherwise freeze and the
+        data-stall watchdog (``_health_check_loop``) would force a needless
+        reconnect every ``DATA_TIMEOUT`` seconds — looping through the whole
+        pre-open/overnight window and re-hitting the authorize endpoint on
+        every cycle. The protocol ping/pong (``ping_interval=30``) keeps the
+        socket alive regardless of market activity, so we feed the liveness
+        clock from it — exactly as Zerodha's 1-byte heartbeat feeds its
+        identical watchdog — making the watchdog fire only when the socket is
+        genuinely dead (no data AND no pong).
+        """
+        self._last_message_time = time.time()
+
+    def _on_ws_ping(self, ws, message):
+        """A server-initiated ping also proves the socket is alive."""
+        self._last_message_time = time.time()
 
     def _on_ws_message(self, ws, message):
         """Called for both binary (protobuf) and text (JSON) messages"""

@@ -818,6 +818,24 @@ class FyersHSMWebSocket:
         else:
             self.logger.warning(f"Received unexpected text message: {message}")
 
+    def _on_ws_pong(self, ws, message):
+        """Treat a WebSocket pong as proof the connection is alive.
+
+        The HSM feed sends no application-level heartbeat, so during a quiet or
+        closed market ``_last_message_time`` would otherwise freeze and the
+        data-stall watchdog would force a needless reconnect every
+        ``DATA_TIMEOUT`` seconds. The protocol ping/pong (enabled via
+        ``ping_interval`` on ``run_forever``) keeps the socket alive regardless
+        of market activity, so we feed the liveness clock from it — making the
+        watchdog fire only when the socket is genuinely dead (no data AND no
+        pong).
+        """
+        self._last_message_time = time.time()
+
+    def _on_ws_ping(self, ws, message):
+        """A server-initiated ping also proves the socket is alive."""
+        self._last_message_time = time.time()
+
     def _on_ws_error(self, ws, error):
         """Handle WebSocket error event"""
         self.logger.error(f"HSM WebSocket error: {error}")
@@ -876,11 +894,18 @@ class FyersHSMWebSocket:
                     on_message=self._on_ws_message,
                     on_error=self._on_ws_error,
                     on_close=self._on_ws_close,
+                    on_ping=self._on_ws_ping,
+                    on_pong=self._on_ws_pong,
                     header={"Authorization": self.access_token, "User-Agent": f"{self.source}/1.0"},
                 )
 
-                # Run until disconnection
-                self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+                # Run until disconnection. Enable protocol ping/pong keepalive so
+                # the socket stays alive through idle/quiet periods and the pong
+                # feeds the data-stall watchdog's liveness clock (matches
+                # Dhan/Upstox). Without this the HSM feed had no keepalive at all.
+                self.ws.run_forever(
+                    sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=30, ping_timeout=10
+                )
 
             except Exception as e:
                 self.logger.error(f"HSM WebSocket run error: {e}")
