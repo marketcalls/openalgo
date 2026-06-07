@@ -23,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
 import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
@@ -258,7 +259,11 @@ export default function Holdings() {
           <CardHeader className="pb-2">
             <CardDescription>Total Holding Value</CardDescription>
             <CardTitle className="text-2xl text-primary">
-              {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '---'}
+              {isLoading ? (
+                <Skeleton className="h-7 w-28" />
+              ) : enhancedStats ? (
+                formatCurrency(enhancedStats.totalholdingvalue)
+              ) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -266,7 +271,11 @@ export default function Holdings() {
           <CardHeader className="pb-2">
             <CardDescription>Total Investment Value</CardDescription>
             <CardTitle className="text-2xl">
-              {enhancedStats ? formatCurrency(enhancedStats.totalinvvalue) : '---'}
+              {isLoading ? (
+                <Skeleton className="h-7 w-28" />
+              ) : enhancedStats ? (
+                formatCurrency(enhancedStats.totalinvvalue)
+              ) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -276,12 +285,16 @@ export default function Holdings() {
             <CardTitle
               className={cn(
                 'text-2xl',
-                enhancedStats && isProfit(enhancedStats.totalprofitandloss)
+                !isLoading && enhancedStats && isProfit(enhancedStats.totalprofitandloss)
                   ? 'text-green-600'
-                  : 'text-red-600'
+                  : !isLoading
+                    ? 'text-red-600'
+                    : ''
               )}
             >
-              {enhancedStats ? (
+              {isLoading ? (
+                <Skeleton className="h-7 w-32" />
+              ) : enhancedStats ? (
                 <div className="flex items-center gap-1">
                   {isProfit(enhancedStats.totalprofitandloss) ? (
                     <TrendingUp className="h-5 w-5" />
@@ -302,12 +315,18 @@ export default function Holdings() {
             <CardTitle
               className={cn(
                 'text-2xl',
-                enhancedStats && isProfit(enhancedStats.totalpnlpercentage)
+                !isLoading && enhancedStats && isProfit(enhancedStats.totalpnlpercentage)
                   ? 'text-green-600'
-                  : 'text-red-600'
+                  : !isLoading
+                    ? 'text-red-600'
+                    : ''
               )}
             >
-              {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '---'}
+              {isLoading ? (
+                <Skeleton className="h-7 w-20" />
+              ) : enhancedStats ? (
+                formatPercent(enhancedStats.totalpnlpercentage)
+              ) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
