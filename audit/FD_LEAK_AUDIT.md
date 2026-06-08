@@ -88,13 +88,13 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 - **Fix**: Add `("database.oauth_db", "db_session")` to the teardown `_sessions` list.
 - **Correction (cross-review)**: An earlier draft also flagged `database/whatsapp_db.py`. That is **withdrawn** — `whatsapp_db.py` calls `db_session.remove()` in the `finally` block of each of its helpers (lines 279, 324, 338, 361, 387, 428, 460, 521), so it cleans up locally and is not at risk.
 
-### [FD-5] Un-managed scoped-session query in a request path
+### [FD-5] Un-managed scoped-session query in a request path — RESOLVED
 - **Location**: `broker/groww/mapping/order_data.py:115`
 - **Evidence**: `db_session.query(SymToken).filter_by(...).first()` — no `with` context, no `.remove()`. Runs during order-list mapping (per request).
 - **Mechanism**: Holds the identity-mapped session/connection on the green thread; only released at process exit because no teardown removes the groww `db_session`.
 - **Fix**: Wrap in `with db_session() as session:` like the other groww call sites, and fix FD-2.
 
-### [FD-6] Per-call `ThreadPoolExecutor` never shut down (Flow Telegram alerts)
+### [FD-6] Per-call `ThreadPoolExecutor` never shut down (Flow Telegram alerts) — RESOLVED
 - **Location**: `services/flow_openalgo_client.py:567`
 - **Evidence**:
   ```python
@@ -146,8 +146,8 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 | 1 | FD-1, FD-3 (all 32 broker engines) | **DONE** (commit `7d59a62c`) | Standardized on the shared `database/engine_factory.create_db_engine()` (NullPool on SQLite) |
 | 2 | FD-2 | Mostly defused by #1 | Under NullPool a missing `.remove()` leaks only a session object, not an FD; optionally still add the active broker `db_session` to `app.py` teardown |
 | 3 | FD-4 | Open | Add `oauth_db` (only) to the teardown `_sessions` list |
-| 4 | FD-5 | Open | Wrap groww `order_data.py:115` query in `with db_session()` |
-| 5 | FD-6 | Open | Reuse `telegram_alert_service.alert_executor` |
+| 4 | FD-5 | **DONE** | Wrapped groww `order_data.py:115` query in `with db_session() as session:` |
+| 5 | FD-6 | **DONE** | Reuses the shared `telegram_alert_service.alert_executor` instead of a per-call pool |
 | 6 | FD-7..FD-11, I-2 | Open (Low) | Opportunistic cleanups |
 
 The highest-leverage change — **standardizing the broker engine creation** (priority 1) — is now complete: it resolved FD-1 and FD-3 across all 32 brokers and rendered FD-2 mostly harmless in one stroke, restoring the documented "NullPool everywhere" invariant. A full `broker/` sweep confirms no QueuePool engine or raw DB connection remains at the broker level.
