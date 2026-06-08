@@ -58,7 +58,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/emptyState'
+import { EmptyState } from '@/components/ui/empty-state'
 
 // Sort configuration types
 type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status'
