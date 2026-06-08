@@ -119,12 +119,12 @@ def copy_from_dataframe(df, broker="indmoney"):
                     if (i // chunk_size + 1) % 5 == 0 or total_inserted == total_to_insert:
                         import_pct = int((total_inserted / total_to_insert) * 100)
                         stages = {"download": 100, "process": 100, "import": import_pct}
-                        
+
                         # Overall progress: importing is 60% to 100% of the total task
                         overall_progress = 60 + int(import_pct * 0.4)
-                        
+
                         progress_msg = f"Importing: {total_inserted:,} / {total_to_insert:,} symbols"
-                        update_status(broker, "downloading", progress_msg, progress=overall_progress, stages=stages)
+                        update_status(broker, "downloading", progress_msg)
                         socketio.emit(
                             "master_contract_download",
                             {"status": "downloading", "message": progress_msg, "progress": overall_progress, "stages": stages},
@@ -194,16 +194,16 @@ def download_csv_indmoney_data(output_path):
     total_segments = len(segments)
     for i, segment in enumerate(segments):
         url = f"https://api.indstocks.com/market/instruments?source={segment}"
-        
+
         # Update status for download progress
         progress_pct = int(((i + 1) / total_segments) * 100)
         stages = {"download": progress_pct, "process": 0, "import": 0}
         progress_msg = f"Downloading: {segment.upper()} instruments ({i+1}/{total_segments})"
-        
+
         # Overall progress: download is first 30% of the total task
         overall_progress = int(progress_pct * 0.3)
-        
-        update_status("indmoney", "downloading", progress_msg, progress=overall_progress, stages=stages)
+
+        update_status("indmoney", "downloading", progress_msg)
         socketio.emit(
             "master_contract_download",
             {"status": "downloading", "message": progress_msg, "progress": overall_progress, "stages": stages},
@@ -367,11 +367,11 @@ def process_indmoney_csv(path):
         progress_pct = int(((segments.index(segment) + 1) / len(segments)) * 100)
         stages = {"download": 100, "process": progress_pct, "import": 0}
         progress_msg = f"Formatting: {segment.upper()} instruments..."
-        
+
         # Overall progress: processing is 30% to 60% of the total task
         overall_progress = 30 + int(progress_pct * 0.3)
-        
-        update_status("indmoney", "downloading", progress_msg, progress=overall_progress, stages=stages)
+
+        update_status("indmoney", "downloading", progress_msg)
         socketio.emit(
             "master_contract_download",
             {"status": "downloading", "message": progress_msg, "progress": overall_progress, "stages": stages},
@@ -508,6 +508,7 @@ def master_contract_download():
     Main function to download and process Indmoney master contract data
     """
     logger.info("Downloading Master Contract from Indmoney")
+    from database.master_contract_status_db import update_status
 
     output_path = "tmp"
 
@@ -523,18 +524,23 @@ def master_contract_download():
         if not token_df.empty:
             copy_from_dataframe(token_df, broker="indmoney")
             delete_indmoney_temp_data(output_path)
+            success_msg = "Successfully Downloaded Indmoney Instruments"
+            update_status("indmoney", "success", success_msg, total_symbols=len(token_df))
             return socketio.emit(
                 "master_contract_download",
-                {"status": "success", "message": "Successfully Downloaded Indmoney Instruments"},
+                {"status": "success", "message": success_msg},
             )
         else:
+            error_msg = "No data downloaded from Indmoney"
+            update_status("indmoney", "error", error_msg)
             return socketio.emit(
                 "master_contract_download",
-                {"status": "error", "message": "No data downloaded from Indmoney"},
+                {"status": "error", "message": error_msg},
             )
 
     except Exception as e:
         logger.exception(f"Error during master contract download: {e}")
+        update_status("indmoney", "error", str(e))
         return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
 
 
