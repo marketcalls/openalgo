@@ -11,11 +11,12 @@ import time
 import numpy as np
 import pandas as pd
 import requests
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine, text
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.auth_db import get_auth_token
+from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.logging import get_logger
 
@@ -24,14 +25,7 @@ logger = get_logger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
 
 # Create engine with optimized settings for SQLite concurrency
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=20,
-    max_overflow=50,
-    pool_timeout=30,
-    pool_recycle=3600,
-    connect_args={"timeout": 30, "check_same_thread": False},
-)
+engine = create_db_engine(DATABASE_URL)
 
 # Enable WAL mode for better concurrent access
 try:

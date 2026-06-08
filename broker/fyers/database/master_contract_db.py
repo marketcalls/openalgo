@@ -12,11 +12,12 @@ import httpx
 import numpy as np
 import pandas as pd
 import requests
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.auth_db import get_auth_token
+from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -76,7 +77,7 @@ data_types = {
 
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
 
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -491,7 +492,7 @@ def process_fyers_cds_json(path):
     logger.info("Processing Fyers CDS JSON Data")
     file_path = f"{path}/NSE_CD.json"
 
-    with open(file_path, "r") as f:
+    with open(file_path) as f:
         data = json.load(f)
 
     # Convert dict-of-dicts to DataFrame
@@ -625,7 +626,7 @@ def process_fyers_mcx_json(path):
     logger.info("Processing Fyers MCX JSON Data")
     file_path = f"{path}/MCX_COM.json"
 
-    with open(file_path, "r") as f:
+    with open(file_path) as f:
         data = json.load(f)
 
     # Convert dict-of-dicts to DataFrame
