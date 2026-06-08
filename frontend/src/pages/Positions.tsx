@@ -59,7 +59,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/emptyState'
+import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -198,7 +198,7 @@ export default function Positions() {
             exchange: prefs.filters.exchange || [],
           })
       }
-    } catch (_e) { }
+    } catch (_e) {}
   }, [])
 
   // Save preferences to localStorage
