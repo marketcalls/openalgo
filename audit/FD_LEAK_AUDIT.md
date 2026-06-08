@@ -3,6 +3,7 @@
 > **Generated**: June 2026
 > **Scope**: SQLAlchemy engines/sessions, raw file handles, network sockets (HTTP/WebSocket/ZeroMQ), subprocesses, threads, executors, and schedulers across the full runtime codebase
 > **Methodology**: Manual lifecycle tracing of every resource-acquiring call site. Severity is judged by whether the leak is unbounded in a long-running process (per-request / per-loop / per-reconnect) vs. bounded (import-time / startup singleton).
+> **Status (updated)**: FD-1 and FD-3 are **RESOLVED** — all 32 broker engines now route through the shared `database/engine_factory.create_db_engine()` (NullPool on SQLite), merged in commit `7d59a62c`. This also defuses FD-2 (connections now close on session GC). Findings below are cross-reviewed (independent second pass by Codex); corrections from that review are folded in and marked.
 
 ---
 
@@ -21,10 +22,10 @@ OpenAlgo runs as a single long-lived process (Gunicorn `-w 1` + eventlet in prod
 
 | Severity | Count | Nature |
 | --- | --- | --- |
-| High | 2 | Broker DB engines hold persistent pooled connections to `openalgo.db` with no release path; can grow to the pool cap and exhaust connections |
-| Medium | 4 | NullPool-invariant violations, two scoped sessions missing from teardown, one un-managed request-path query, one per-call executor |
-| Low | 5 | Bounded / standalone-script / defensive-nit items |
-| Informational | 3 | Doc inaccuracy, dead code, per-request open that is correctly closed |
+| High | 2 | **RESOLVED** (commit `7d59a62c`) — broker DB engines held persistent pooled connections to `openalgo.db` with no release path; now all NullPool |
+| Medium | 4 | FD-3 NullPool-invariant violation (resolved with FD-1); `oauth_db` session missing from teardown; one un-managed request-path query; one per-call executor |
+| Low | 5 | Bounded / standalone-script / defensive-nit items (FD-8 covers three module-level `httpx.Client` singletons) |
+| Informational | 3 | Doc inaccuracy (6 schedulers, not 3), dead code, per-request open that is correctly closed |
 
 **Most of the codebase is clean.** Raw file-handle hygiene is excellent (no `json.load(open())`, no `read_csv(open())`, no `with`-less leaks in runtime paths). Streaming WebSocket reconnect loops, the ZeroMQ bus, and — importantly — the Python Strategy Host start/stop/restart lifecycle are all leak-free. The problems are concentrated in the per-broker `master_contract_db.py` modules, which diverge from the hardened core-database pattern.
 
@@ -72,18 +73,20 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 
 ## Medium Findings
 
-### [FD-3] 30 broker engines use bare `create_engine(DATABASE_URL)` (default QueuePool, `check_same_thread` not disabled)
+### [FD-3] 30 broker engines used bare `create_engine(DATABASE_URL)` (default QueuePool) — RESOLVED
 - **Location**: `broker/{zerodha,dhan,angel,aliceblue,fyers,kotak,upstox,groww,paytm,pocketful,shoonya,flattrade,definedge,samco,motilal,mstock,nubra,rmoney,tradejini,wisdom,zebu,ibulls,iifl,iiflcapital,compositedge,jainamxts,fivepaisa,fivepaisaxts,firstock,dhan_sandbox}/database/master_contract_db.py` — e.g. `broker/zerodha/database/master_contract_db.py:27`:
   ```python
   engine = create_engine(DATABASE_URL)   # default QueuePool: 5 + 10 overflow = up to 15 FDs
   ```
-- **Mechanism**: Default `QueuePool` (≈15 connections) to `openalgo.db`, created at import. Bounded per process (normally only the configured broker's module is imported), but it still violates the NullPool invariant and, combined with FD-2, retains connections per thread. It also omits `check_same_thread=False`, which risks SQLite "objects created in a thread can only be used in that same thread" errors.
-- **Fix**: Apply the guarded NullPool pattern to all `broker/*/database/master_contract_db.py`. A single shared helper (e.g. `database/engine_factory.py`) would prevent future drift across 32 copies.
+- **Mechanism**: Default `QueuePool` (≈15 connections) to `openalgo.db`, created at import. Bounded per process (normally only the configured broker's module is imported), but it violates the NullPool invariant and, combined with FD-2, retains connections per thread.
+- **Correction (cross-review)**: An earlier draft also claimed these omit `check_same_thread=False` and therefore risk SQLite "objects created in a thread can only be used in that same thread" errors. **That claim is withdrawn.** A direct probe on the pinned SQLAlchemy 2.x runtime confirmed that bare `create_engine('sqlite:///file.db')` yields a `QueuePool` and that cross-thread connection checkout does **not** raise — so the only real issue here is pooled-connection/FD retention, not a threading error.
+- **Fix (applied)**: All `broker/*/database/master_contract_db.py` now use the shared `database/engine_factory.create_db_engine()` (NullPool on SQLite), preventing future drift across the 32 copies.
 
-### [FD-4] `oauth_db` and `whatsapp_db` scoped sessions missing from teardown
-- **Location**: `database/oauth_db.py` and `database/whatsapp_db.py` define `db_session = scoped_session(...)` but are absent from `app.py:842-865`.
-- **Mechanism**: Same as FD-2 but on core DBs. Damage is limited because both use NullPool (the connection closes on session GC), so the leak is the session object rather than an FD — but it is an inconsistency in the otherwise-complete "19 sessions" list.
-- **Fix**: Add `("database.oauth_db", "db_session")` and `("database.whatsapp_db", "db_session")` to the teardown `_sessions` list.
+### [FD-4] `oauth_db` scoped session missing from teardown
+- **Location**: `database/oauth_db.py` defines `db_session = scoped_session(...)` but is absent from `app.py:842-865`. Its callers in `utils/oauth_tokens.py` and `utils/oauth_keys.py` do not call `.remove()` either (confirmed: zero `db_session.remove()` across `oauth_db.py`/`oauth_tokens.py`/`oauth_keys.py`).
+- **Mechanism**: Same as FD-2 but on a core DB. Damage is limited because `oauth_db` uses NullPool (the connection closes on session GC), so the leak is the session object rather than an FD — but it is an inconsistency in the otherwise-complete "19 sessions" list.
+- **Fix**: Add `("database.oauth_db", "db_session")` to the teardown `_sessions` list.
+- **Correction (cross-review)**: An earlier draft also flagged `database/whatsapp_db.py`. That is **withdrawn** — `whatsapp_db.py` calls `db_session.remove()` in the `finally` block of each of its helpers (lines 279, 324, 338, 361, 387, 428, 460, 521), so it cleans up locally and is not at risk.
 
 ### [FD-5] Un-managed scoped-session query in a request path
 - **Location**: `broker/groww/mapping/order_data.py:115`
@@ -108,7 +111,7 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 | ID | Location | Issue | Why Low |
 | --- | --- | --- | --- |
 | FD-7 | `download/sqlite_downloader.py:31` | Non-NullPool SQLite engine | Standalone historical-data script, not a request path |
-| FD-8 | `broker/tradejini/database/master_contract_db.py:20` | Module-level `httpx.Client` never closed | App-lifetime singleton (one per process), bounded; should route through `get_httpx_client()` |
+| FD-8 | `broker/tradejini/database/master_contract_db.py:20`; `services/telegram_alert_service.py:33`; `broker/dhan/api/gtt_api.py:30` | Module-level `httpx.Client` never explicitly closed | App-lifetime singletons (one per process), bounded; should route through `get_httpx_client()` or close on shutdown. (Added telegram_alert/dhan-gtt per cross-review.) |
 | FD-9 | `sandbox/execution_thread.py:78` | Probe `socket.socket` closed but not in `try/finally` | `connect_ex` returns a code rather than raising; practical leak risk near zero — wrap in `with` for robustness |
 | FD-10 | `blueprints/python_strategy.py:483` | Raw `open()` for subprocess stdout | Deliberate and closed on all paths (lines 535/542/553/564); defensive nit only |
 | FD-11 | `blueprints/historify.py:278,488` + `database/historify_db.py` exports | Temp export files orphaned if the user never downloads | Disk residue, not an FD leak; bounded by user action; cleaned in the download endpoint's `finally` |
@@ -117,7 +120,7 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 
 ## Informational
 
-- **[I-1] Scheduler count vs. docs**: CLAUDE.md says Flow and Historify "share the same scheduler instance," but there are three independent `BackgroundScheduler` singletons (`blueprints/python_strategy.py:110`, `services/flow_scheduler_service.py:57`, `services/historify_scheduler_service.py:60`). Each is a properly-guarded singleton (bounded at 3 total) — not a leak, but the doc is inaccurate.
+- **[I-1] Scheduler count vs. docs**: CLAUDE.md says Flow and Historify "share the same scheduler instance," but there are at least **six** independent `BackgroundScheduler` instances: `blueprints/python_strategy.py:110`, `services/flow_scheduler_service.py:57`, `services/historify_scheduler_service.py:60`, and — added per cross-review — `blueprints/chartink.py:58`, `blueprints/strategy.py:59`, and `sandbox/squareoff_thread.py:330`. Each is a properly-guarded singleton (bounded total) — not a leak, but the doc is inaccurate and the count is higher than stated.
 - **[I-2] Dead code**: `services/telegram_bot_service_v2.py:42` and `services/telegram_bot_service_fixed.py:42` each create an `httpx.AsyncClient` but are not imported anywhere — candidates for deletion (no runtime impact).
 - **[I-3] Per-request audit log open** `blueprints/mcp_http.py:348` uses `with _AUDIT_PATH.open("a")` per MCP request — opened and closed each call, FD-safe (minor perf only).
 
@@ -129,7 +132,8 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 - **Temp files**: `mkstemp` (`whatsapp_bot_service.py:344`) closes the fd on the next line; `NamedTemporaryFile(delete=False)` (`historify.py:778`) is `.close()`d and `os.remove`d in `finally`.
 - **Streaming reconnect loops**: leak-free. `run_forever`-style adapters (zerodha, fyers, dhan, upstox) only reassign `self.ws` after the prior `run_forever()` returns (socket already torn down). Explicit-cleanup adapters (angel `_cleanup_websocket`, iiflcapital MQTT, rmoney socketio) close the old connection before reconnecting.
 - **ZeroMQ bus**: shared `zmq.Context` is reference-counted; sockets closed with `linger=0` and context `.term()`'d on last-adapter cleanup (`websocket_proxy/base_adapter.py:298-348`), including the bind-failure path. SUB socket + context closed on server shutdown (`server.py:281-314`).
-- **Shared HTTP client**: `utils/httpx_client.py:184` is the canonical pooled singleton with `cleanup_httpx_client()` on shutdown; per-request `httpx.Client` uses elsewhere are all `with`/`async with` managed.
+- **Shared HTTP client**: `utils/httpx_client.py:184` is the canonical pooled singleton with `cleanup_httpx_client()` on shutdown; per-request `httpx.Client` uses elsewhere are all `with`/`async with` managed. **Caveat (cross-review)**: a few bounded module-level `httpx.Client` singletons are created outside this helper and never explicitly closed — `services/telegram_alert_service.py:33`, `broker/dhan/api/gtt_api.py:30`, `broker/tradejini/database/master_contract_db.py:20` (see FD-8). One per process, so not an accumulating leak, but they are not "clean" in the strict sense.
+- **Broker engines/connections (full `broker/` sweep)**: after the NullPool fix, a sweep of the entire `broker/` tree found **no** raw `create_engine()` calls, **no** `scoped_session`/`sessionmaker` outside the 32 master-contract modules, **no** raw `sqlite3.connect`/`duckdb.connect`, and every `engine.connect()` inside a `with` block. No QueuePool engine remains at the broker level.
 - **Strategy Host lifecycle**: child stdout/stderr go to a **log file**, not a `PIPE` (`python_strategy.py:500-501`), so there are no orphaned pipe FDs or reader threads. Parent closes the inherited handle immediately after `Popen` (lines 563-566). Stop/restart `.terminate()`+`.wait()` reaps children; a 60s `cleanup_dead_processes` job and `atexit` handler prevent zombie/entry accumulation.
 - **Sockets**: raw socket probes (latency/health/admin) are closed; reconnect paths close before reopening.
 
@@ -137,16 +141,16 @@ The 22 core `database/*.py` modules correctly use the guarded pattern (NullPool 
 
 ## Remediation Priority
 
-| Priority | Items | Effort | Fix |
+| Priority | Items | Status | Fix |
 | --- | --- | --- | --- |
-| 1 | FD-1, FD-3 (all 32 broker engines) | Medium | Standardize on the guarded NullPool pattern (`auth_db.py:158-168`); ideally extract a shared `create_db_engine()` helper |
-| 2 | FD-2 | Low/Medium | After NullPool, optionally add the active broker `db_session` to `app.py` teardown |
-| 3 | FD-4 | Trivial | Add `oauth_db`, `whatsapp_db` to the teardown `_sessions` list |
-| 4 | FD-5 | Trivial | Wrap groww `order_data.py:115` query in `with db_session()` |
-| 5 | FD-6 | Trivial | Reuse `telegram_alert_service.alert_executor` |
-| 6 | FD-7..FD-11, I-2 | Low | Opportunistic cleanups |
+| 1 | FD-1, FD-3 (all 32 broker engines) | **DONE** (commit `7d59a62c`) | Standardized on the shared `database/engine_factory.create_db_engine()` (NullPool on SQLite) |
+| 2 | FD-2 | Mostly defused by #1 | Under NullPool a missing `.remove()` leaks only a session object, not an FD; optionally still add the active broker `db_session` to `app.py` teardown |
+| 3 | FD-4 | Open | Add `oauth_db` (only) to the teardown `_sessions` list |
+| 4 | FD-5 | Open | Wrap groww `order_data.py:115` query in `with db_session()` |
+| 5 | FD-6 | Open | Reuse `telegram_alert_service.alert_executor` |
+| 6 | FD-7..FD-11, I-2 | Open (Low) | Opportunistic cleanups |
 
-The single highest-leverage change is **standardizing the broker engine creation** (priority 1): it resolves FD-1 and FD-3 across all 32 brokers and renders FD-2 mostly harmless in one stroke, restoring the documented "NullPool everywhere" invariant.
+The highest-leverage change — **standardizing the broker engine creation** (priority 1) — is now complete: it resolved FD-1 and FD-3 across all 32 brokers and rendered FD-2 mostly harmless in one stroke, restoring the documented "NullPool everywhere" invariant. A full `broker/` sweep confirms no QueuePool engine or raw DB connection remains at the broker level.
 
 ---
 
