@@ -2,8 +2,10 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  ClipboardList,
   Clock,
   Download,
+  FilterX,
   Loader2,
   Pencil,
   RefreshCw,
@@ -56,6 +58,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+import { EmptyState } from '@/components/ui/emptyState'
 
 // Sort configuration types
 type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status'
@@ -589,18 +592,20 @@ export default function OrderBook() {
               ) : error ? (
                 <div className="text-center py-12 text-muted-foreground">{error}</div>
               ) : sortedAndFilteredOrders.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  {hasActiveFilters ? (
-                    <div>
-                      <p className="mb-4">No orders match your filters</p>
-                      <Button variant="ghost" size="sm" onClick={clearFilters}>
-                        Clear Filters
-                      </Button>
-                    </div>
-                  ) : (
-                    'No orders today'
-                  )}
-                </div>
+                hasActiveFilters ? (
+                  <EmptyState
+                    icon={FilterX}
+                    title="No orders match your filters"
+                    description="Try adjusting or clearing your filters to see results."
+                    action={<Button variant="ghost" size="sm" onClick={clearFilters}>Clear Filters</Button>}
+                  />
+                ) : (
+                  <EmptyState
+                    icon={ClipboardList}
+                    title="No orders today"
+                    description="Orders you place will display here."
+                  />
+                )
               ) : (
                 <div className="overflow-x-auto">
                   <Table>
