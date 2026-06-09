@@ -821,6 +821,21 @@ def broker_callback(broker, para=None):
             logger.exception(f"RMoney callback error: {e}")
             return jsonify({"error": f"Error processing request: {str(e)}"}), 500
 
+    elif broker == "arrow":
+        # Arrow redirects back with `request-token` (hyphen, per its docs). The
+        # generic branch below only checks `request_token`/`code`, so handle the
+        # hyphenated spelling (and other plausible variants) explicitly so the
+        # request token is never silently dropped.
+        code = (
+            request.args.get("request-token")
+            or request.args.get("request_token")
+            or request.args.get("requestToken")
+            or request.args.get("code")
+        )
+        logger.debug(f"Arrow broker - request token present: {bool(code)}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     else:
         code = request.args.get("code") or request.args.get("request_token")
         logger.debug(f"Generic broker - The code is {code}")

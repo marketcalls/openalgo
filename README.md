@@ -51,6 +51,7 @@ Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital,
 - 5paisa (Standard + XTS)
 - AliceBlue
 - AngelOne
+- Arrow
 - Compositedge
 - Definedge
 - Delta Exchange
