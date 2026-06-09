@@ -39,7 +39,7 @@
 ### Broker Setup (Required)
 - Choose your broker from the supported list:
   ```
-  fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, deltaexchange, dhan, dhan_sandbox,
+  fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange, dhan, dhan_sandbox,
   firstock, flattrade, fyers, groww, ibulls, iifl, iiflcaital, indmoney, jainamxts, kotak, motilal,
   mstock, nubra, paytm, pocketful, rmoney, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha
   ```

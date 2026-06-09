@@ -19,6 +19,7 @@ const allBrokers = [
   { id: 'fivepaisaxts', name: '5 Paisa (XTS)', authType: 'totp' },
   { id: 'aliceblue', name: 'Alice Blue', authType: 'totp' },
   { id: 'angel', name: 'Angel One', authType: 'totp' },
+  { id: 'arrow', name: 'Arrow', authType: 'oauth' },
   { id: 'compositedge', name: 'CompositEdge', authType: 'oauth' },
   { id: 'dhan', name: 'Dhan', authType: 'oauth' },
   { id: 'deltaexchange', name: 'Delta Exchange', authType: 'totp' },
@@ -184,6 +185,11 @@ export default function BrokerSelect() {
 
       case 'zerodha':
         loginUrl = `https://kite.trade/connect/login?api_key=${broker_api_key}`
+        break
+
+      case 'arrow':
+        // Arrow hosted login; redirects back to /arrow/callback with request-token.
+        loginUrl = `https://app.arrow.trade/app/login?appID=${broker_api_key}`
         break
 
       case 'paytm':
