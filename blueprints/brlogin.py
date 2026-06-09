@@ -56,9 +56,21 @@ def broker_callback(broker, para=None):
             return redirect(url_for("auth.login"))
 
     if session.get("logged_in"):
-        # Store broker in session and g
-        session["broker"] = broker
-        return redirect(url_for("dashboard_bp.dashboard"))
+        # If an OAuth code or TOTP POST arrived, fall through to exchange the new token
+        # (daily reconnect flow). Only short-circuit when there is nothing to process.
+        has_incoming_code = bool(
+            request.args.get("auth_code")      # fyers, flattrade
+            or request.args.get("code")        # pocketful, zebu, shoonya
+            or request.args.get("request_token")  # zerodha (generic branch)
+            or request.args.get("authCode")    # aliceblue, iiflcapital
+            or request.args.get("apisession")  # icici
+            or request.args.get("requestToken")   # paytm
+            or request.args.get("tokenId")     # dhan
+            or (request.method == "POST")      # totp brokers (angel, kotak, etc.)
+        )
+        if not has_incoming_code:
+            session["broker"] = broker
+            return redirect(url_for("dashboard_bp.dashboard"))
 
     broker_auth_functions = app.broker_auth_functions
     auth_function = broker_auth_functions.get(f"{broker}_auth")

@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
+import { BarChart3, BookOpen, LogOut, Menu, Moon, RefreshCw, Sun, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { authApi } from '@/api/auth'
@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { initiateBrokerReconnect } from '@/utils/brokerLogin'
 import { showToast } from '@/utils/toast'
 
 export function Navbar() {
@@ -32,6 +33,7 @@ export function Navbar() {
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
+  const [isReconnecting, setIsReconnecting] = useState(false)
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
   const { capabilities } = useBrokerStore()
@@ -71,6 +73,21 @@ export function Navbar() {
       }
     } else {
       showToast.error(result.message || 'Failed to toggle mode')
+    }
+  }
+
+  const handleReconnect = async () => {
+    setIsReconnecting(true)
+    try {
+      const result = await initiateBrokerReconnect()
+      if (!result.ok) {
+        showToast.error(result.message)
+      }
+      // on success, window.location.href is already changing — no further action needed
+    } catch {
+      showToast.error('Failed to initiate broker reconnect')
+    } finally {
+      setIsReconnecting(false)
     }
   }
 
@@ -188,11 +205,19 @@ export function Navbar() {
 
         {/* Right Side */}
         <div className="ml-auto flex items-center gap-1 sm:gap-2">
-          {/* Broker Badge */}
+          {/* Reconnect Button */}
           {user?.broker && (
-            <Badge variant="outline" className="hidden sm:flex text-xs">
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden sm:flex items-center gap-1.5 h-8 px-2 text-xs"
+              onClick={handleReconnect}
+              disabled={isReconnecting}
+              title={`Reconnect to ${user.broker}`}
+            >
+              <RefreshCw className={cn('h-3 w-3', isReconnecting && 'animate-spin')} />
               {user.broker}
-            </Badge>
+            </Button>
           )}
 
           {/* Mode Badge */}

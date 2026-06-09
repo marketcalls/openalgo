@@ -7,7 +7,7 @@ import pandas as pd
 from openalgo import api
 
 # Get API key from openalgo portal
-api_key = "your-openalgo-api-key"
+api_key = "cf0715cb983ddec8529e08ed813c27a091d8284be258769105a7341494cf0409"
 
 
 # Set the strategy details and trading parameters
