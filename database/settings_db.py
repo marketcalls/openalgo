@@ -4,12 +4,15 @@ import base64
 import os
 
 from cachetools import TTLCache
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from sqlalchemy import Boolean, Column, Integer, MetaData, String, Text, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 
+from database.auth_db import PEPPER
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -111,33 +114,58 @@ def set_analyze_mode(mode: bool):
         del _settings_cache["analyze_mode"]
 
 
-def _get_encryption_key():
-    """Get or create encryption key for SMTP password"""
-    # Use API_KEY_PEPPER as the base for encryption key
-    pepper = os.getenv("API_KEY_PEPPER", "default-pepper-key")
-    # Create a stable key from the pepper
-    key = base64.urlsafe_b64encode(pepper.ljust(32)[:32].encode())
-    return key
+# SMTP password encryption.
+#
+# New ciphertext uses a strong PBKDF2-HMAC-SHA256 key derived from the
+# validated API_KEY_PEPPER (imported from auth_db, which fails fast if the
+# pepper is missing or too short) plus a dedicated salt -- the same KDF
+# discipline as database/telegram_db.py. Older installs stored the SMTP
+# password under a weak legacy key (the raw pepper, padded/truncated to 32
+# bytes with no KDF); _decrypt_password() transparently falls back to that
+# legacy key so existing values keep working, and re-saving SMTP settings
+# re-encrypts under the strong key, migrating it forward.
+SMTP_KEY_SALT = os.getenv("SMTP_KEY_SALT", "smtp-openalgo-salt").encode()
+
+
+def _get_smtp_fernet() -> Fernet:
+    """Strong Fernet for the SMTP password: PBKDF2(PEPPER, SMTP_KEY_SALT)."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=SMTP_KEY_SALT,
+        iterations=100000,
+    )
+    return Fernet(base64.urlsafe_b64encode(kdf.derive(PEPPER.encode())))
+
+
+def _legacy_smtp_fernet() -> Fernet:
+    """Legacy read-only key (raw pepper, no KDF). Used only to decrypt values
+    stored before the switch to _get_smtp_fernet(); never for new writes.
+    """
+    return Fernet(base64.urlsafe_b64encode(PEPPER.ljust(32)[:32].encode()))
+
+
+# Module-level cipher; PEPPER is fixed for the process lifetime.
+_smtp_fernet = _get_smtp_fernet()
 
 
 def _encrypt_password(password: str) -> str:
-    """Encrypt SMTP password"""
+    """Encrypt SMTP password with the strong per-install key."""
     if not password:
         return None
-    key = _get_encryption_key()
-    f = Fernet(key)
-    encrypted = f.encrypt(password.encode())
-    return encrypted.decode()
+    return _smtp_fernet.encrypt(password.encode()).decode()
 
 
 def _decrypt_password(encrypted_password: str) -> str:
-    """Decrypt SMTP password"""
+    """Decrypt SMTP password, falling back to the legacy key for values
+    written before the KDF upgrade."""
     if not encrypted_password:
         return None
-    key = _get_encryption_key()
-    f = Fernet(key)
-    decrypted = f.decrypt(encrypted_password.encode())
-    return decrypted.decode()
+    token = encrypted_password.encode()
+    try:
+        return _smtp_fernet.decrypt(token).decode()
+    except InvalidToken:
+        return _legacy_smtp_fernet().decrypt(token).decode()
 
 
 def get_smtp_settings():

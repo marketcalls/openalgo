@@ -29,6 +29,7 @@ from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
+from database.auth_db import PEPPER
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -54,14 +55,13 @@ TELEGRAM_KEY_SALT = os.getenv("TELEGRAM_KEY_SALT", "telegram-openalgo-salt").enc
 
 def get_encryption_key():
     """Generate a Fernet key for encrypting API keys"""
-    pepper = os.getenv("API_KEY_PEPPER", "default-pepper-change-in-production")
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=TELEGRAM_KEY_SALT,
         iterations=100000,
     )
-    key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
+    key = base64.urlsafe_b64encode(kdf.derive(PEPPER.encode()))
     return Fernet(key)
 
 

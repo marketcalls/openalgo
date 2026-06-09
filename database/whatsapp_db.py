@@ -49,6 +49,7 @@ from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
+from database.auth_db import PEPPER
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -82,14 +83,13 @@ def _resolve_whatsapp_salt() -> bytes:
 
 
 def _build_fernet() -> Fernet:
-    pepper = os.getenv("API_KEY_PEPPER", "default-pepper-change-in-production")
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=_resolve_whatsapp_salt(),
         iterations=100000,
     )
-    return Fernet(base64.urlsafe_b64encode(kdf.derive(pepper.encode())))
+    return Fernet(base64.urlsafe_b64encode(kdf.derive(PEPPER.encode())))
 
 
 fernet = _build_fernet()

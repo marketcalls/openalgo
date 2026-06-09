@@ -113,8 +113,22 @@ def _telegram_db_fernet(pepper: str) -> Fernet:
 
 
 def _settings_db_fernet(pepper: str) -> Fernet:
-    """Match database/settings_db.py:_get_encryption_key().
-    NB: settings_db uses raw pepper (no PBKDF2), padded/truncated to 32 bytes.
+    """Match database/settings_db.py:_get_smtp_fernet() (PBKDF2 + SMTP_KEY_SALT)."""
+    salt = os.getenv("SMTP_KEY_SALT", "smtp-openalgo-salt").encode()
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
+    return Fernet(key)
+
+
+def _legacy_settings_db_fernet(pepper: str) -> Fernet:
+    """Match the pre-KDF settings_db scheme (raw pepper, padded/truncated to 32
+    bytes, no PBKDF2). Decrypt-only, for SMTP passwords stored before the
+    settings_db KDF upgrade.
     """
     key = base64.urlsafe_b64encode(pepper.ljust(32)[:32].encode())
     return Fernet(key)
@@ -214,6 +228,8 @@ class Rotator:
         self.new_telegram = _telegram_db_fernet(new_pepper)
         self.old_settings = _settings_db_fernet(old_pepper)
         self.new_settings = _settings_db_fernet(new_pepper)
+        # Decrypt-only fallback for SMTP passwords stored before the KDF upgrade.
+        self.old_settings_legacy = _legacy_settings_db_fernet(old_pepper)
         # ph for re-hashing api_key_hash. Argon2 verifier needs the new pepper
         # appended to the plaintext key, then ph.hash() with default params.
         self.ph = PasswordHasher()
@@ -357,8 +373,12 @@ class Rotator:
                 try:
                     pt = self.old_settings.decrypt(smtp_v.encode()).decode()
                 except (InvalidToken, ValueError):
-                    print(f"  WARN: settings.smtp_password_encrypted row {row_id}: cannot decrypt, leaving alone")
-                    continue
+                    # Value may predate the KDF upgrade (raw-pepper legacy key).
+                    try:
+                        pt = self.old_settings_legacy.decrypt(smtp_v.encode()).decode()
+                    except (InvalidToken, ValueError):
+                        print(f"  WARN: settings.smtp_password_encrypted row {row_id}: cannot decrypt, leaving alone")
+                        continue
                 new_ct = self.new_settings.encrypt(pt.encode()).decode()
                 self.conn.execute(
                     "UPDATE settings SET smtp_password_encrypted = ? WHERE id = ?",
