@@ -149,7 +149,7 @@ dependencies = [
   "WTForms==3.2.1",
   "zipp==3.23.1",
   "zmq==0.0.0",
-  "opengreeks>=0.1.0",
+  "opengreeks>=0.2.0",
 ]
 
 [build-system]
