@@ -1791,7 +1791,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numpy", specifier = "==2.4.4" },
     { name = "openalgo", specifier = "==2.0.1" },
-    { name = "opengreeks", specifier = ">=0.1.0" },
+    { name = "opengreeks", specifier = ">=0.2.0" },
     { name = "ordered-set", specifier = "==4.1.0" },
     { name = "orjson", specifier = "==3.11.8" },
     { name = "packaging", specifier = "==24.1" },
@@ -1874,18 +1874,18 @@ dev = [
 
 [[package]]
 name = "opengreeks"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/28/8d/a132bacb880b6d36b442ca7c2255e9c640c1653affb357880879be58a039/opengreeks-0.1.0.tar.gz", hash = "sha256:9b3fb1d66344e5ee2818062f3ae48ba3479fb4ccd28e33332197de24ef586bdb", size = 29335, upload-time = "2026-05-20T16:25:32.102Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/31/d7886e613d822b92556dde7c132a598585d8f50c2c89be4323021ffa11d4/opengreeks-0.2.0.tar.gz", hash = "sha256:7367aff980cbb48346b9d9a25da04122bc1bc8f19b3203cd94af2bfae0cbe15b", size = 39730, upload-time = "2026-05-31T16:46:02.876Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/dd/933168c426aebb55fd29637c81e2e275bd4c276092c3c282bff60fe173b5/opengreeks-0.1.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d61c9d8549e8888acc8f1d9014e0322a00166b66f8ce60ca0a558e0de8135de6", size = 239599, upload-time = "2026-05-20T16:25:23.49Z" },
-    { url = "https://files.pythonhosted.org/packages/6a/d3/6b4be23a1ce62fefa789a501ed34c05ffdd7e1ff23a43881808d734d2505/opengreeks-0.1.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:d6df4a367dc006825eb710af59edeeed6cd1fb5db55192a6fbd977b4ab1bdeaf", size = 230266, upload-time = "2026-05-20T16:25:25.515Z" },
-    { url = "https://files.pythonhosted.org/packages/87/3b/4a74f2ad960d4cd5bbccb4509a730aa7737756b971fe98256a79f709c3e0/opengreeks-0.1.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d5b5a0a85e8df2805930f4a50f4884ee3c7602f21d5f11b06ffc2fd48608cc6", size = 242778, upload-time = "2026-05-20T16:25:27.013Z" },
-    { url = "https://files.pythonhosted.org/packages/73/99/890a39043f020edc2540483c345b4375c5415456fcada3dda2140f7a92f0/opengreeks-0.1.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c19655f534141a7992000f558eebd48503645be6521d179c17b763162ccae78a", size = 252470, upload-time = "2026-05-20T16:25:28.976Z" },
-    { url = "https://files.pythonhosted.org/packages/2b/13/6fc5a45975533a9d6dea9968bbc25ff071a6a4f0b10b3693151177203a82/opengreeks-0.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:9645ecd4a493d5982b33ffd2382b22a48f4ce4b837cf102487a57478223acab2", size = 184047, upload-time = "2026-05-20T16:25:30.36Z" },
+    { url = "https://files.pythonhosted.org/packages/93/6d/1a5566c1816d9c40782c1094b696934517cf1ac1e4063f5f995ac8feac52/opengreeks-0.2.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:648ffb8f1bf52458f19c8457a3761fd78b5c44281e20715e4ca47f0f5bb80f3f", size = 281190, upload-time = "2026-05-31T16:45:56.029Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/7b/6716bf5ebcd22a579cb036d415a547ae55a4f7729114e089ba9588799844/opengreeks-0.2.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:7379af064ace12513a9a945ea8757e5a2fe231f6b77abf175994f2353a457b8e", size = 264626, upload-time = "2026-05-31T16:45:57.529Z" },
+    { url = "https://files.pythonhosted.org/packages/15/2f/61f158c13c4d48a7dca84fd0976331612166eb1e6e7571f2d97b67651965/opengreeks-0.2.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0302759a7ea17c023923ae02e20f7f4fb53033ee11c3b69dd026db11f6c31ffb", size = 277027, upload-time = "2026-05-31T16:45:58.829Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/f9/2a01f49db7771bf1c112ef94c9732dbd36bf2a0f81c4c8efea87745b6f50/opengreeks-0.2.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:bb832b3bfeaa89d9b4bd698d738d44a69eff1e7006ee84ec9cc49f3cd3d8bd21", size = 295199, upload-time = "2026-05-31T16:46:00.241Z" },
+    { url = "https://files.pythonhosted.org/packages/08/a7/e27dd79c3ef892ac955084e91de85764ad924fc845a9d7de37d96668066f/opengreeks-0.2.0-cp39-abi3-win_amd64.whl", hash = "sha256:5a4ff92ddd6bd9268b5cf0b94a3e4069b5170445604fe91e9303a5ae896bdda2", size = 248164, upload-time = "2026-05-31T16:46:01.543Z" },
 ]
 
 [[package]]
