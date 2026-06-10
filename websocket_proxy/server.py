@@ -563,15 +563,14 @@ class WebSocketProxy:
         Args:
             client_id: Client ID to clean up
         """
-        # Remove client from tracking
-        if client_id in self.clients:
-            del self.clients[client_id]
+        # Remove client from tracking safely
+        self.clients.pop(client_id, None)
 
-        # Clean up subscriptions
+        # Clean up subscriptions safely
         if client_id in self.subscriptions:
             subscriptions = self.subscriptions[client_id]
             # Unsubscribe from all subscriptions
-            for sub_json in subscriptions:
+            for sub_json in list(subscriptions):
                 try:
                     # Parse the JSON string to get the subscription info
                     sub_info = json.loads(sub_json)
@@ -586,7 +585,7 @@ class WebSocketProxy:
                         self.subscription_index[sub_key].discard(client_id)
                         # Clean up empty entries and mark for adapter unsubscription
                         if not self.subscription_index[sub_key]:
-                            del self.subscription_index[sub_key]
+                            self.subscription_index.pop(sub_key, None)
                             # Only unsubscribe from adapter when last client unsubscribes
                             should_unsubscribe_from_adapter = True
 
@@ -609,9 +608,9 @@ class WebSocketProxy:
                     logger.exception(f"Error processing subscription: {e}")
                     continue
 
-            del self.subscriptions[client_id]
+            self.subscriptions.pop(client_id, None)
 
-        # Remove from user mapping
+        # Remove from user mapping safely
         if client_id in self.user_mapping:
             user_id = self.user_mapping[client_id]
 
@@ -627,23 +626,27 @@ class WebSocketProxy:
                 adapter = self.broker_adapters[user_id]
                 broker_name = self.user_broker_mapping.get(user_id)
 
-                # For Flattrade and Shoonya, keep the connection alive and just unsubscribe from data
-                if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
-                    logger.info(
-                        f"{broker_name.title()} adapter for user {user_id}: last client disconnected. Unsubscribing all symbols instead of disconnecting."
-                    )
-                    adapter.unsubscribe_all()
-                else:
-                    # For all other brokers, disconnect the adapter completely
-                    logger.info(
-                        f"Last client for user {user_id} disconnected. Disconnecting {broker_name or 'unknown broker'} adapter."
-                    )
-                    adapter.disconnect()
-                    del self.broker_adapters[user_id]
-                    if user_id in self.user_broker_mapping:
-                        del self.user_broker_mapping[user_id]
+                try:
+                    # For Flattrade and Shoonya, keep the connection alive and just unsubscribe from data
+                    if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
+                        logger.info(
+                            f"{broker_name.title()} adapter for user {user_id}: last client disconnected. Unsubscribing all symbols instead of disconnecting."
+                        )
+                        adapter.unsubscribe_all()
+                    else:
+                        # For all other brokers, disconnect the adapter completely
+                        logger.info(
+                            f"Last client for user {user_id} disconnected. Disconnecting {broker_name or 'unknown broker'} adapter."
+                        )
+                        adapter.disconnect()
+                except Exception as e:
+                    logger.exception(f"Error cleaning up adapter state for user {user_id}: {e}")
+                finally:
+                    # Guarantee removal from adapter mappings even if disconnect/unsubscribe raised an exception
+                    self.broker_adapters.pop(user_id, None)
+                    self.user_broker_mapping.pop(user_id, None)
 
-            del self.user_mapping[client_id]
+            self.user_mapping.pop(client_id, None)
 
     async def process_client_message(self, client_id, message):
         """
