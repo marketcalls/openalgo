@@ -3,11 +3,13 @@
 import time
 from datetime import timedelta
 
+import httpx
 import pandas as pd
 
 from broker.arrow.api.baseurl import HISTORICAL_URL, ROOT_URL, get_arrow_headers
 from broker.arrow.database.master_contract_db import SymToken, db_session
 from broker.arrow.mapping.exchange import (
+    QUOTE_UNSUPPORTED_EXCHANGES,
     to_arrow_history_exchange,
     to_arrow_quote_exchange,
 )
@@ -32,6 +34,19 @@ def _scale(value):
 
 class ArrowAPIError(Exception):
     pass
+
+
+# Arrow's INDEX quote endpoint uses its own symbol vocabulary (probed live):
+#   - the 5 NSE derivative indices answer ONLY to their underlying name
+#     (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50 -- "NIFTY 50",
+#     "NIFTY BANK" etc. are rejected),
+#   - everything else answers to the UPPERCASED master-contract display name
+#     ("NIFTY IT", "INDIA VIX", "HANGSENG BEES-NAV", BSE codes like "SMLCAP"),
+#   - MCX iCOMDEX indices are not served by this endpoint at all (their data
+#     still streams over the websocket by token).
+# We therefore try candidates per index and cache the verified name by token.
+_INDEX_QUOTE_NAMES: dict[str, str] = {}  # token -> verified quote symbol
+_INDEX_QUOTE_UNSUPPORTED: set[str] = set()  # tokens rejected for every candidate
 
 
 class BrokerData:
@@ -88,14 +103,79 @@ class BrokerData:
             raise ArrowAPIError(payload.get("message", "Quote request failed"))
         return payload.get("data", {})
 
+    def _quote_index(self, mode, symbol, br_symbol, token):
+        """Quote an index, resolving Arrow's INDEX-exchange symbol vocabulary.
+
+        Tries the OpenAlgo symbol, then the uppercased display name, then the
+        raw display name; caches whichever the API accepts (keyed by token) so
+        the fallback costs extra requests only on first use.
+        """
+        token = str(token)
+        cached = _INDEX_QUOTE_NAMES.get(token)
+        if cached:
+            return self._quote(mode, cached, "INDEX")
+        if token in _INDEX_QUOTE_UNSUPPORTED:
+            raise ArrowAPIError(
+                f"Arrow's quote API does not serve index {symbol} (websocket streaming still works)"
+            )
+
+        candidates = []
+        for cand in (symbol, str(br_symbol).upper(), str(br_symbol)):
+            if cand and cand not in candidates:
+                candidates.append(cand)
+
+        last_err = None
+        for cand in candidates:
+            try:
+                data = self._quote(mode, cand, "INDEX")
+                _INDEX_QUOTE_NAMES[token] = cand
+                return data
+            except httpx.HTTPStatusError as e:
+                if e.response is not None and e.response.status_code == 400:
+                    last_err = e
+                    continue
+                raise
+
+        _INDEX_QUOTE_UNSUPPORTED.add(token)
+        raise ArrowAPIError(
+            f"Arrow's quote API rejected every symbol candidate for index {symbol} ({candidates})"
+        ) from last_err
+
+    def _fetch_quote(self, mode, symbol, exchange):
+        """Lookup + quote with index-aware symbol resolution."""
+        if exchange in QUOTE_UNSUPPORTED_EXCHANGES:
+            raise ArrowAPIError(
+                f"Arrow's quote API does not serve the {exchange} exchange "
+                "(verified live; the official SDK has no code for it either). "
+                "Use websocket streaming for live prices on this exchange."
+            )
+        br_symbol, token, arrow_exchange = self._lookup(symbol, exchange)
+        if arrow_exchange == "INDEX":
+            return self._quote_index(mode, symbol, br_symbol, token)
+        return self._quote(mode, br_symbol, arrow_exchange)
+
+    def _resolve_index_quote_name(self, symbol, br_symbol, token):
+        """Return the verified Arrow quote name for an index, probing (and
+        caching) it via a cheap ltp request if not yet known. None if Arrow's
+        quote API does not serve this index (e.g. MCX iCOMDEX)."""
+        token = str(token)
+        if token in _INDEX_QUOTE_NAMES:
+            return _INDEX_QUOTE_NAMES[token]
+        if token in _INDEX_QUOTE_UNSUPPORTED:
+            return None
+        try:
+            self._quote_index("ltp", symbol, br_symbol, token)
+            return _INDEX_QUOTE_NAMES.get(token)
+        except ArrowAPIError:
+            return None
+
     # --- public API -----------------------------------------------------
 
     def get_quotes(self, symbol, exchange):
         """Return the OpenAlgo quote dict. Uses Arrow `full` mode so bid/ask are
         available. Works for NSE_INDEX/BSE_INDEX (exchange -> INDEX)."""
         try:
-            br_symbol, _token, arrow_exchange = self._lookup(symbol, exchange)
-            q = self._quote("full", br_symbol, arrow_exchange)
+            q = self._fetch_quote("full", symbol, exchange)
 
             bids = q.get("bids") or [{}]
             asks = q.get("asks") or [{}]
@@ -117,8 +197,7 @@ class BrokerData:
     def get_depth(self, symbol, exchange):
         """Return OpenAlgo 5-level market depth. Indices supported via INDEX."""
         try:
-            br_symbol, _token, arrow_exchange = self._lookup(symbol, exchange)
-            q = self._quote("full", br_symbol, arrow_exchange)
+            q = self._fetch_quote("full", symbol, exchange)
 
             raw_bids = q.get("bids") or []
             raw_asks = q.get("asks") or []
@@ -159,13 +238,17 @@ class BrokerData:
         """Alias for get_depth (parity with brokers that expose get_market_depth)."""
         return self.get_depth(symbol, exchange)
 
-    # Arrow rate limit: 10 req/sec per endpoint group (docs/15-rate-limits).
-    # Batch large symbol sets and throttle between batches, mirroring the
-    # zerodha/upstox handlers (which use 500/batch + a per-batch delay).
-    # TODO(arrow): confirm the max instruments allowed per /info/quotes request.
-    _MULTIQUOTE_BATCH_SIZE = 500
-    _MULTIQUOTE_RATE_DELAY = 0.2   # keeps batches under Arrow's 10 req/sec
-    _HISTORY_RATE_DELAY = 0.15     # throttle between historical date-chunks
+    # Two independent Arrow limits govern multiquotes:
+    #   1. /info/quotes accepts AT MOST 100 instruments per request -- a hard
+    #      server cap, verified live (100 -> 200 OK, 101 -> 500 error). NOT
+    #      tunable; raising it breaks every batch.
+    #   2. Market Data rate limit: 10 req/sec (docs/rate-limits).
+    # There is NO cap on the total symbol count: any size set (500+) is
+    # looped in 100-instrument requests, throttled under 10 req/sec
+    # (500 symbols = 5 requests, ~0.8s total).
+    _MULTIQUOTE_MAX_PER_REQUEST = 100
+    _MULTIQUOTE_RATE_DELAY = 0.15  # ~6-7 req/sec, safely under Arrow's 10/sec
+    _HISTORY_RATE_DELAY = 0.15  # throttle between historical date-chunks
 
     def get_multiquotes(self, symbols):
         """Batch quotes via /info/quotes/full. `symbols` is a list of
@@ -174,10 +257,10 @@ class BrokerData:
         try:
             results = []
             n = len(symbols)
-            for i in range(0, n, self._MULTIQUOTE_BATCH_SIZE):
-                batch = symbols[i:i + self._MULTIQUOTE_BATCH_SIZE]
+            for i in range(0, n, self._MULTIQUOTE_MAX_PER_REQUEST):
+                batch = symbols[i : i + self._MULTIQUOTE_MAX_PER_REQUEST]
                 results.extend(self._process_quotes_batch(batch))
-                if i + self._MULTIQUOTE_BATCH_SIZE < n:
+                if i + self._MULTIQUOTE_MAX_PER_REQUEST < n:
                     time.sleep(self._MULTIQUOTE_RATE_DELAY)
             return results
         except Exception as e:
@@ -193,13 +276,22 @@ class BrokerData:
         body = []
         token_map = {}  # token(str) -> original {symbol, exchange}
         for item in symbols:
+            if item.get("exchange") in QUOTE_UNSUPPORTED_EXCHANGES:
+                # CDS/BCD/NCO would 400 the entire batch; skip them.
+                continue
             try:
-                br_symbol, token, arrow_exchange = self._lookup(
-                    item["symbol"], item["exchange"]
-                )
+                br_symbol, token, arrow_exchange = self._lookup(item["symbol"], item["exchange"])
             except Exception:
                 continue
-            body.append({"exchange": arrow_exchange, "symbol": br_symbol})
+            if arrow_exchange == "INDEX":
+                # A single bad symbol 400s the whole batch, so resolve the
+                # index's quote name first (cached after the first probe).
+                name = self._resolve_index_quote_name(item["symbol"], br_symbol, token)
+                if not name:
+                    continue
+                body.append({"exchange": "INDEX", "symbol": name})
+            else:
+                body.append({"exchange": arrow_exchange, "symbol": br_symbol})
             token_map[str(token)] = item
 
         if not body:
