@@ -20,10 +20,10 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import { isActiveRoute, mobileSheetItems, navItems, profileMenuItems } from '@/config/navigation'
+import { isActiveRoute, mobileSheetItems, navItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -34,14 +34,9 @@ export function Navbar() {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
-  const { capabilities } = useBrokerStore()
 
-  // Filter menu items based on broker capabilities
-  const filteredProfileMenuItems = profileMenuItems.filter((item) => {
-    if (item.href === '/leverage') return capabilities?.leverage_config === true
-    if (item.href === '/holdings') return capabilities?.broker_type !== 'crypto'
-    return true
-  })
+  // Profile menu filtered by broker capabilities (shared hook, issue #1480)
+  const filteredProfileMenuItems = useProfileMenuItems()
 
   const handleLogout = async () => {
     try {

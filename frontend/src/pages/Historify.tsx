@@ -82,7 +82,7 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { useSocket } from '@/hooks/useSocket'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -256,6 +256,8 @@ function getDateFromPreset(months: number): string {
 export default function Historify() {
   const { appMode, toggleAppMode, mode, toggleMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
   const navigate = useNavigate()
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
 

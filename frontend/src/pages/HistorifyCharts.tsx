@@ -55,7 +55,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -85,6 +85,8 @@ export default function HistorifyCharts() {
   const navigate = useNavigate()
   const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
   const isDarkMode = mode === 'dark' || appMode === 'analyzer'
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { symbol: urlSymbol } = useParams()
@@ -473,13 +475,7 @@ export default function HistorifyCharts() {
         chartRef.current = null
       }
     }
-  }, [
-    isDarkMode,
-    chartData,
-    isIntradayInterval,
-    isCustomInterval,
-    customIntervalUnit,
-  ])
+  }, [isDarkMode, chartData, isIntradayInterval, isCustomInterval, customIntervalUnit])
 
   const loadCatalog = async () => {
     try {
