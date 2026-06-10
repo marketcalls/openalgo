@@ -397,6 +397,33 @@ def get_websocket_metrics():
         except Exception:
             pass  # Error checking WebSocket connections
 
+        # Cross-process fallback: the WS proxy runs in its own process, so
+        # the in-process pools above are always empty under the current
+        # architecture. The proxy writes a snapshot file every ~10s
+        # (websocket_proxy/server.py _stats_file_writer, GitHub issue #1301).
+        if total_connections == 0 and total_symbols == 0:
+            try:
+                import json as _json
+
+                stats_path = os.getenv(
+                    "WS_PROXY_STATS_FILE", os.path.join("log", "ws_proxy_stats.json")
+                )
+                with open(stats_path) as f:
+                    snapshot = _json.load(f)
+                # Ignore stale snapshots (proxy stopped or file left behind).
+                if time.time() - float(snapshot.get("timestamp", 0)) < 60:
+                    total_connections = int(snapshot.get("total_connections", 0))
+                    total_symbols = int(snapshot.get("total_symbols", 0))
+                    broker_counts: dict = {}
+                    for b in snapshot.get("brokers", []):
+                        broker_counts[b] = broker_counts.get(b, 0) + 1
+                    for b, n in broker_counts.items():
+                        connections[b] = {"broker": b, "count": n, "symbols": total_symbols}
+            except FileNotFoundError:
+                pass  # Proxy not started yet / never wrote a snapshot
+            except Exception:
+                pass  # Malformed snapshot — keep zeros rather than crash
+
         # Determine status
         if total_connections >= WS_CRITICAL_THRESHOLD:
             status = "fail"
