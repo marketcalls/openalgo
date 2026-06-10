@@ -68,11 +68,22 @@ class ArrowWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 on_ticks=self._on_ticks,
                 user_id=user_id,
             )
+            # Keep self.connected truthful: the proxy gates adapter reuse on
+            # it (server.py getattr(adapter, "connected", ...)); without these
+            # hooks healthy adapters read as dead and get evicted/rebuilt.
+            self.ws_client.on_connect = self._on_ws_connect
+            self.ws_client.on_disconnect = self._on_ws_disconnect
             self.logger.info(f"Arrow adapter initialized for user {user_id}")
             return self._create_success_response("Arrow adapter initialized")
         except Exception as e:
             self.logger.exception(f"Error initializing Arrow adapter: {e}")
             return self._create_error_response("INIT_ERROR", str(e))
+
+    def _on_ws_connect(self):
+        self.connected = True
+
+    def _on_ws_disconnect(self):
+        self.connected = False
 
     def connect(self):
         try:
@@ -82,6 +93,7 @@ class ArrowWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.running = True
             # Best-effort wait; subscriptions queue until connected regardless.
             self.ws_client.wait_for_connection(timeout=15.0)
+            self.connected = self.ws_client.is_connected()
             return self._create_success_response("Arrow WebSocket connecting")
         except Exception as e:
             self.logger.exception(f"Error connecting Arrow WebSocket: {e}")
@@ -90,6 +102,7 @@ class ArrowWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self):
         try:
             self.running = False
+            self.connected = False
             if self.ws_client:
                 self.ws_client.stop()
         except Exception as e:

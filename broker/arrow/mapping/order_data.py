@@ -59,12 +59,17 @@ def calculate_order_statistics(order_data):
     total_completed_orders = total_open_orders = total_rejected_orders = 0
 
     for order in order_data or []:
-        if order.get("transactionType") == "BUY":
+        # Accept both raw Arrow codes (B/S) and mapped values (BUY/SELL), and
+        # both raw (COMPLETE) and transformed (complete) statuses, so the
+        # counts stay correct regardless of which transformation stage the
+        # caller passes in.
+        side = str(order.get("transactionType", "")).upper()
+        if side in ("BUY", "B"):
             total_buy_orders += 1
-        elif order.get("transactionType") == "SELL":
+        elif side in ("SELL", "S"):
             total_sell_orders += 1
 
-        status = order.get("orderStatus")
+        status = str(order.get("orderStatus", "")).upper().replace(" ", "_")
         if status == "COMPLETE":
             total_completed_orders += 1
         elif status in ("OPEN", "PENDING", "TRIGGER_PENDING"):
@@ -104,7 +109,9 @@ def transform_order_data(orders):
                 "product": order.get("product", ""),
                 # TODO(arrow): place returns `orderNo`; order book id field may be `id`.
                 "orderid": order.get("orderNo") or order.get("id", ""),
-                "order_status": _STATUS_MAP.get(order.get("orderStatus"), order.get("orderStatus", "")),
+                "order_status": _STATUS_MAP.get(
+                    order.get("orderStatus"), order.get("orderStatus", "")
+                ),
                 "timestamp": order.get("orderTime") or order.get("requestTime", ""),
             }
         )

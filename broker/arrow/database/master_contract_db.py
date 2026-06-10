@@ -149,8 +149,10 @@ def fetch_index_list(auth_token):
         response = client.get(f"{ROOT_URL}/info/index-list", headers=headers, timeout=30)
         response.raise_for_status()
         payload = response.json()
-        data = payload.get("data", payload) if isinstance(payload, dict) else payload
-        return data or []
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        # Guard the shape: an error/non-standard payload must yield [] here,
+        # not leak a dict into build_index_rows and break the whole download.
+        return data if isinstance(data, list) else []
     except Exception as e:
         logger.error(f"Error fetching Arrow index list: {e}")
         return []

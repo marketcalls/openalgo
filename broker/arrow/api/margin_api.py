@@ -106,7 +106,7 @@ def calculate_single_margin(position_data, auth):
                     "message": payload.get("message", "Failed to calculate margin"),
                 },
             )
-        return response, parse_margin_response([payload.get("data", {})])
+        return response, parse_margin_response([payload.get("data") or {}])
     except Exception as e:
         logger.exception(f"Error calling Arrow margin API: {e}")
         return BrokerResponse(500), {
@@ -139,7 +139,7 @@ def calculate_basket_margin(positions_data, auth):
             return err
 
         if payload.get("status") == "success":
-            return response, parse_basket_margin_response(payload.get("data", {}))
+            return response, parse_basket_margin_response(payload.get("data") or {})
 
         logger.warning(
             f"Arrow basket margin failed ({payload.get('message')}); falling back to per-order sum"
@@ -171,7 +171,7 @@ def _order_margin_sum(positions_data, headers):
                     "message": payload.get("message", "Failed to calculate margin"),
                 },
             )
-        order_data_list.append(payload.get("data", {}))
+        order_data_list.append(payload.get("data") or {})
     return last_response or BrokerResponse(200), parse_margin_response(order_data_list)
 
 
