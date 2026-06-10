@@ -6,27 +6,30 @@
 #   1. GET https://edge.arrow.trade/all          -> full instrument CSV
 #   2. GET https://edge.arrow.trade/info/index-list -> [{name, token}] indices
 #
-# Arrow collapses every index (NSE + BSE) into a single "INDEX" pseudo-exchange.
-# OpenAlgo needs them split into NSE_INDEX / BSE_INDEX, so we classify index
-# rows here (see mapping/exchange.py). The resulting `token` is what quotes,
-# history and the websocket all key off, so getting indices into SymToken with
-# correct tokens is the foundation for index support across the broker.
-#
-# NOTE: every field that depends on the exact (and inconsistently documented)
-# CSV layout is read defensively via _pick() and flagged with TODO(arrow) so
-# live data can confirm the column names/scaling once credentials arrive.
+# The CSV layout and field scaling are verified against the live feed
+# (221k+ rows): ExchSeg drives the exchange mapping, OptionType "XX" marks
+# futures, currency-derivative strikes arrive x100000 and ticks in paise.
+# Index rows (NSEIDX/BSEIDX/MCXIDX) carry display names in `Symbol` and are
+# standardized to the documented OpenAlgo index symbols in mapping/exchange.py.
+# The resulting `token` is what quotes, history and the websocket all key off.
 
 import io
 import os
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from broker.arrow.api.baseurl import INSTRUMENTS_URL, ROOT_URL, get_arrow_headers
-from broker.arrow.mapping.exchange import arrow_exchange_to_oa, classify_index_symbol
-from database.auth_db import get_auth_token
+from broker.arrow.mapping.exchange import (
+    ARROW_EXCHSEG_TO_OA,
+    OA_INDEX_EXCHANGES,
+    classify_index_symbol,
+)
+from database.auth_db import Auth, get_auth_token
+from database.auth_db import db_session as auth_db_session
 from database.engine_factory import create_db_engine
 from extensions import socketio
 from utils.httpx_client import get_httpx_client
@@ -96,21 +99,42 @@ def copy_from_dataframe(df):
 
 # --- download helpers ---------------------------------------------------
 
+
 def _broker_auth_token():
-    """Resolve the stored Arrow JWT for the configured user (same approach as
-    the Zerodha master-contract download)."""
+    """Resolve the stored Arrow JWT.
+
+    Tries LOGIN_USERNAME first (legacy convention shared with Zerodha), then
+    falls back to the single non-revoked arrow row in the Auth table --
+    OpenAlgo is single-user, so there is at most one.
+    """
     login_username = os.getenv("LOGIN_USERNAME")
-    return get_auth_token(login_username)
+    if login_username:
+        token = get_auth_token(login_username)
+        if token:
+            return token
+
+    auth_obj = Auth.query.filter_by(broker="arrow", is_revoked=False).first()
+    if auth_obj:
+        return get_auth_token(auth_obj.name)
+    return None
 
 
 def download_arrow_instruments(auth_token):
     """Download the full Arrow instrument CSV into a DataFrame."""
+    if not auth_token:
+        raise ValueError(
+            "No Arrow auth token available - login to the broker before "
+            "downloading the master contract."
+        )
     client = get_httpx_client()
     headers = get_arrow_headers(auth_token)
     # Generous explicit timeout: the full instrument CSV can be several MB.
     response = client.get(INSTRUMENTS_URL, headers=headers, timeout=120)
     response.raise_for_status()
-    df = pd.read_csv(io.StringIO(response.text))
+    # dtype=str: skip pandas type inference entirely (the CSV has mixed-type
+    # columns like Series/ISIN that would otherwise warn). The vectorized
+    # processing converts numeric columns explicitly.
+    df = pd.read_csv(io.StringIO(response.text), dtype=str)
     # Normalize headers (the docs show inconsistent spacing/casing).
     df.columns = [str(c).strip() for c in df.columns]
     return df
@@ -134,127 +158,111 @@ def fetch_index_list(auth_token):
 
 # --- parsing ------------------------------------------------------------
 
-# Map possible Arrow column names (docs list two variants) to a canonical name.
-_COLUMN_ALIASES = {
-    "exchange": ["Exchange"],
-    "segment": ["Segment"],
-    "exchseg": ["ExchSeg"],
-    "token": ["Token"],
-    "fullname": ["FullName", "CompanyName"],
-    "basesymbol": ["Symbol"],
-    "tradingsymbol": ["TradingSymbol"],
-    "series": ["Series"],
-    "optiontype": ["OptionType"],
-    "underlying": ["Underlying"],
-    "strike": ["StrikePrice"],
-    "expiry": ["Expiry", "ExpiryDate"],
-    "lotsize": ["LotSize"],
-    "ticksize": ["TickSize"],
-}
+# Currency-derivative segments quote with 4-decimal precision; their
+# StrikePrice comes scaled x100000 (USDINR 65.50 -> 6550000) and TickSize in
+# paise (0.25 -> Rs 0.0025). Every other segment sends both unscaled
+# (verified against the live CSV: NFO strike 207.5 == real 207.5, futures
+# carry -0.01/0 placeholders).
+_CD_SEGMENTS = ["NSECD", "BSECD"]
 
-
-def _pick(row, key, default=""):
-    """Read a value from a row by canonical key, trying each documented alias."""
-    for col in _COLUMN_ALIASES.get(key, [key]):
-        if col in row and pd.notna(row[col]):
-            return row[col]
-    return default
-
-
-def _format_expiry(value):
-    """Format an Arrow expiry into OpenAlgo's DD-MMM-YY (e.g. 24APR24)."""
-    if value in (None, "", "0") or pd.isna(value):
-        return ""
-    try:
-        return pd.to_datetime(value).strftime("%d-%b-%y").upper()
-    except Exception:
-        return str(value)
-
-
-def _format_strike(strike):
-    """Strike is sent x100 by Arrow; preserve decimal strikes (187.5)."""
-    try:
-        val = float(strike) / 100.0
-    except (TypeError, ValueError):
-        return 0.0
-    return val
-
-
-def _build_row(row):
-    """Map one Arrow CSV row to a SymToken dict (OpenAlgo schema)."""
-    exchseg = _pick(row, "exchseg")
-    segment = _pick(row, "segment")
-    exchange_raw = _pick(row, "exchange")
-    option_type = str(_pick(row, "optiontype")).upper()
-
-    oa_exchange = arrow_exchange_to_oa(exchseg, segment, exchange_raw)
-
-    base = str(_pick(row, "underlying") or _pick(row, "basesymbol") or "").strip()
-    tradingsymbol = str(_pick(row, "tradingsymbol") or _pick(row, "basesymbol") or "").strip()
-    name = str(_pick(row, "fullname") or base).strip()
-    expiry = _format_expiry(_pick(row, "expiry"))
-    strike = _format_strike(_pick(row, "strike", 0))
-
-    # Instrument type + OpenAlgo symbol construction.
-    # NOTE: OpenAlgo stores indices with instrumenttype "EQ" (verified against
-    # the live symtoken table); the NSE_INDEX/BSE_INDEX exchange is what
-    # distinguishes them. There is NO "INDEX" instrumenttype.
-    if oa_exchange in ("NSE_INDEX", "BSE_INDEX"):
-        instrumenttype = "EQ"
-        oa_symbol, oa_exchange2 = classify_index_symbol(name or tradingsymbol)
-        oa_exchange = oa_exchange2 or oa_exchange
-        symbol = oa_symbol
-    elif option_type in ("CE", "PE"):
-        instrumenttype = option_type
-        strike_str = str(int(strike)) if float(strike) == int(strike) else str(strike)
-        symbol = f"{base}{expiry.replace('-', '')}{strike_str}{option_type}"
-    elif expiry and oa_exchange in ("NFO", "BFO", "MCX", "CDS", "BCD"):
-        # Derivative with an expiry and no CE/PE -> a future.
-        # TODO(arrow): confirm futures are identified by expiry + empty OptionType
-        # (vs a Series/Segment flag like FUTSTK/FUTIDX).
-        instrumenttype = "FUT"
-        symbol = f"{base}{expiry.replace('-', '')}FUT"
-    else:
-        instrumenttype = "EQ"
-        # Equity OpenAlgo symbol is the bare base (Arrow `Symbol`), e.g.
-        # TradingSymbol "RELIANCE-EQ" -> base "RELIANCE".
-        symbol = str(_pick(row, "basesymbol") or tradingsymbol.split("-")[0]).strip()
-
-    # Match the live symtoken convention: for derivatives the `name` column is
-    # the underlying (e.g. "NIFTY"); for equity/index it is the full/company name.
-    if instrumenttype in ("FUT", "CE", "PE"):
-        name = base or name
-
-    try:
-        lotsize = int(float(_pick(row, "lotsize", 0) or 0))
-    except (TypeError, ValueError):
-        lotsize = 0
-    try:
-        # TODO(arrow): confirm whether TickSize is scaled x100 like prices.
-        tick_size = float(_pick(row, "ticksize", 0) or 0)
-    except (TypeError, ValueError):
-        tick_size = 0.0
-
-    return {
-        "symbol": symbol,
-        "brsymbol": tradingsymbol,
-        "name": name,
-        "exchange": oa_exchange,
-        "brexchange": str(exchseg or exchange_raw),
-        "token": str(_pick(row, "token")),
-        "expiry": expiry,
-        "strike": strike,
-        "lotsize": lotsize,
-        "instrumenttype": instrumenttype,
-        "tick_size": tick_size,
-    }
+# OpenAlgo exchanges whose instruments can be futures (used by the
+# expiry-based FUT fallback when OptionType is missing).
+_DERIVATIVE_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "BCD", "NCO"]
 
 
 def process_arrow_csv(df):
-    """Transform the Arrow instrument DataFrame into SymToken rows."""
+    """Transform the Arrow instrument DataFrame into SymToken rows.
+
+    Fully vectorized (mirrors the Zerodha implementation): pandas column
+    operations over the whole frame instead of a per-row Python loop, which
+    keeps the 220k-row master under a couple of seconds.
+    """
     logger.info("Processing Arrow instrument master")
-    records = [_build_row(row) for _, row in df.iterrows()]
-    out = pd.DataFrame.from_records(records)
+
+    exchseg = df["ExchSeg"].fillna("").str.strip().str.upper()
+    exchange = exchseg.map(ARROW_EXCHSEG_TO_OA)
+
+    base = df["Underlying"].fillna(df["Symbol"]).fillna("").str.strip()
+    tradingsymbol = df["TradingSymbol"].fillna(df["Symbol"]).fillna("").str.strip()
+    fullname = df["FullName"].fillna("").str.strip()
+    option_type = df["OptionType"].fillna("").str.strip().str.upper()
+
+    # Expiry "30-Jun-2026" -> "30-JUN-26" (DD-MMM-YY, the platform convention).
+    expiry_dt = pd.to_datetime(df["Expiry"], format="%d-%b-%Y", errors="coerce")
+    expiry = expiry_dt.dt.strftime("%d-%b-%y").str.upper().fillna("")
+    expiry_compact = expiry.str.replace("-", "", regex=False)
+
+    cd_mask = exchseg.isin(_CD_SEGMENTS)
+    strike = pd.to_numeric(df["StrikePrice"], errors="coerce").fillna(0.0)
+    strike = strike.where(~cd_mask, (strike / 100000.0).round(6))
+    # Futures/equity placeholder strikes (-0.01 or 0) -> 0; the `+ 0.0`
+    # normalizes the negative zero clip() leaves behind.
+    strike = strike.clip(lower=0.0) + 0.0
+    tick_size = pd.to_numeric(df["TickSize"], errors="coerce").fillna(0.0)
+    tick_size = tick_size.where(~cd_mask, (tick_size / 100.0).round(6))
+    lotsize = pd.to_numeric(df["LotSize"], errors="coerce").fillna(0).astype(int)
+
+    is_option = option_type.isin(["CE", "PE"])
+    # Futures: OptionType "XX" in the live CSV (TradingSymbol ends in "F",
+    # e.g. BANKNIFTY28JUL26F). The expiry check is a fallback.
+    is_future = ~is_option & (
+        (option_type == "XX") | ((expiry != "") & exchange.isin(_DERIVATIVE_EXCHANGES))
+    )
+    is_deriv = is_option | is_future
+
+    # NOTE: OpenAlgo stores indices with instrumenttype "EQ" (verified against
+    # the live symtoken table); the *_INDEX exchange is what distinguishes
+    # them. There is NO "INDEX" instrumenttype.
+    instrumenttype = pd.Series("EQ", index=df.index)
+    instrumenttype = instrumenttype.mask(is_future, "FUT").mask(is_option, option_type)
+
+    # Strike rendered the way symbols embed it: int when whole, else decimal
+    # (207.5 -> "207.5", 1.025 -> "1.025").
+    whole = strike == strike.astype(int)
+    strike_str = pd.Series(
+        np.where(whole, strike.astype(int).astype(str), strike.astype(str)), index=df.index
+    )
+
+    # Equity symbols: strip the "-EQ" series suffix only ("RELIANCE-EQ" ->
+    # "RELIANCE"); other series keep their suffix ("749AP39-SG"), matching
+    # the Zerodha-built table convention.
+    symbol = tradingsymbol.str.replace(r"-EQ$", "", regex=True)
+    symbol = symbol.mask(is_future, base + expiry_compact + "FUT")
+    symbol = symbol.mask(is_option, base + expiry_compact + strike_str + option_type)
+
+    # `name` is the underlying for derivatives, the full/company name (or the
+    # display name for indices) otherwise.
+    name = fullname.where(fullname != "", base)
+    name = name.mask(is_deriv & (base != ""), base)
+
+    out = pd.DataFrame(
+        {
+            "symbol": symbol,
+            "brsymbol": tradingsymbol,
+            "name": name,
+            "exchange": exchange,
+            "brexchange": exchseg,
+            "token": df["Token"].fillna("").str.strip(),
+            "expiry": expiry,
+            "strike": strike,
+            "lotsize": lotsize,
+            "instrumenttype": instrumenttype,
+            "tick_size": tick_size,
+        }
+    )
+
+    # Index rows carry a display name in `Symbol` ("Nifty 50", "BSE IT",
+    # "CrudeOil"); standardize to the documented OpenAlgo index symbols.
+    # Only ~200 rows, so a Python loop is fine here.
+    idx_mask = out["exchange"].isin(OA_INDEX_EXCHANGES)
+    if idx_mask.any():
+        out.loc[idx_mask, "symbol"] = [
+            classify_index_symbol(display, oa_exchange)[0]
+            for display, oa_exchange in zip(
+                out.loc[idx_mask, "brsymbol"], out.loc[idx_mask, "exchange"], strict=True
+            )
+        ]
+
     # Drop rows that failed to map to a valid OpenAlgo exchange.
     out = out[out["exchange"].notna() & (out["exchange"] != "")]
     return out
@@ -307,7 +315,9 @@ def master_contract_download():
         existing_tokens = set(token_df["token"].astype(str))
         index_rows = build_index_rows(fetch_index_list(auth_token), existing_tokens)
         if index_rows:
-            token_df = pd.concat([token_df, pd.DataFrame.from_records(index_rows)], ignore_index=True)
+            token_df = pd.concat(
+                [token_df, pd.DataFrame.from_records(index_rows)], ignore_index=True
+            )
             logger.info(f"Added {len(index_rows)} index instruments from /info/index-list")
 
         delete_symtoken_table()
@@ -319,13 +329,13 @@ def master_contract_download():
         )
     except Exception as e:
         logger.exception(f"Arrow master contract download failed: {e}")
-        return socketio.emit(
-            "master_contract_download", {"status": "error", "message": str(e)}
-        )
+        return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
     finally:
         # This runs in a background thread (not a Flask request), so the app
-        # teardown won't clean up the scoped session -- release it explicitly.
+        # teardown won't clean up the scoped sessions -- release both the
+        # local one and the auth_db one (used by _broker_auth_token).
         db_session.remove()
+        auth_db_session.remove()
 
 
 def search_symbols(symbol, exchange):
