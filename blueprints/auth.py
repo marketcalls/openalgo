@@ -934,19 +934,29 @@ def get_session_status():
         auth_token = get_auth_token(session.get("user"))
         if auth_token is None:
             # The BROKER token is gone (daily rollover / revocation) but the
-            # APP session is still valid. Do NOT clear the whole session --
-            # that forced a full re-login and pre-empted the broker reconnect
-            # flow (issue #1400). Downgrade to the authenticated-but-broker-
-            # disconnected state instead (same state as a fresh app login
-            # before connecting a broker), which the SPA already routes to
-            # the broker connect page.
-            logger.warning(
+            # APP session is still valid. Do NOT clear or downgrade the
+            # session here: `logged_in` doubles as the app-session flag in
+            # utils/session.is_session_valid(), so popping it makes every
+            # @check_session_validity route (including /auth/dashboard-data)
+            # hard-logout the user before the reconnect UI can render
+            # (issue #1400). Keep the session intact and just flag the state;
+            # /auth/dashboard-data returns BROKER_SESSION_EXPIRED and the
+            # dashboard renders the Reconnect Broker action, while
+            # /auth/broker admits the user for re-authentication.
+            logger.info(
                 f"Session status: broker token invalid for user {session.get('user')} - "
-                "downgrading session to broker-disconnected state"
+                "broker reconnect required"
             )
-            session.pop("logged_in", None)
-            session.pop("broker", None)
-            # Fall through to the standard authenticated/not-logged_in response.
+            return jsonify(
+                {
+                    "status": "success",
+                    "authenticated": True,
+                    "logged_in": True,
+                    "user": session.get("user"),
+                    "broker": session.get("broker"),
+                    "broker_session_expired": True,
+                }
+            ), 200
 
         # Get API key for the user
         api_key = get_api_key_for_tradingview(session.get("user"))
