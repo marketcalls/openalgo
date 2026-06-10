@@ -142,6 +142,11 @@ class WebSocketProxy:
 
             monitor_task = aio.create_task(monitor_shutdown())
 
+            # Periodic stats snapshot for the Flask-side health monitor. The
+            # proxy runs in its own process, so utils/health_monitor.py cannot
+            # read the in-process pools; it falls back to this file (#1301).
+            stats_task = aio.create_task(self._stats_file_writer())
+
             # Handle graceful shutdown
             # Windows doesn't support add_signal_handler, so we'll use a simpler approach
             # Also, when running in a thread on Unix systems, signal handlers can't be set
@@ -202,6 +207,12 @@ class WebSocketProxy:
                 monitor_task.cancel()
                 try:
                     await monitor_task
+                except aio.CancelledError:
+                    pass
+
+                stats_task.cancel()
+                try:
+                    await stats_task
                 except aio.CancelledError:
                     pass
 
@@ -330,6 +341,39 @@ class WebSocketProxy:
             self._cleanup_zmq_sync()
         except Exception:
             pass  # Cannot raise in __del__
+
+    # Seconds between stats-file snapshots for the cross-process health monitor.
+    STATS_FILE_INTERVAL = 10
+
+    async def _stats_file_writer(self):
+        """Periodically write a compact stats snapshot for the Flask process.
+
+        The health monitor (utils/health_monitor.py) used to read the proxy's
+        connection pools in-process; since the proxy moved to its own process
+        that always reads empty, so the Health Monitor page showed no
+        WebSocket details (GitHub issue #1301). This file is its data source
+        now. Written atomically (tmp + os.replace) so readers never see a
+        partial file.
+        """
+        stats_path = os.getenv("WS_PROXY_STATS_FILE", os.path.join("log", "ws_proxy_stats.json"))
+        tmp_path = f"{stats_path}.tmp"
+        while self.running:
+            try:
+                health = self.get_health_stats()
+                snapshot = {
+                    "timestamp": time.time(),
+                    "total_connections": health["broker_adapters"]["active_count"],
+                    "total_symbols": health["subscriptions"]["unique_symbols"],
+                    "clients_connected": health["clients"]["connected_count"],
+                    "brokers": health["broker_adapters"]["brokers"],
+                }
+                with open(tmp_path, "w") as f:
+                    json.dump(snapshot, f)
+                os.replace(tmp_path, stats_path)
+            except Exception as e:
+                # Never let stats writing affect the feed path.
+                logger.debug(f"Stats snapshot write failed: {e}")
+            await aio.sleep(self.STATS_FILE_INTERVAL)
 
     def get_health_stats(self) -> dict:
         """
