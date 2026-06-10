@@ -178,28 +178,44 @@ class ArrowWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(f"Error handling Arrow tick: {e}")
 
     def _normalize(self, tick, symbol, exchange, topic_mode):
-        """Build the OpenAlgo normalized tick. Currently emits LTP (+prev close);
-        OHLC/volume/depth are filled once the quote/full binary offsets are
-        confirmed (see arrow_websocket._parse_packet TODO)."""
+        """Build the OpenAlgo normalized tick (same key set as the Zerodha
+        adapter so the proxy/UI see a consistent shape across brokers)."""
+        ltp = tick.get("ltp", 0)
         data = {
             "symbol": symbol,
             "exchange": exchange,
             "token": str(tick.get("token", "")),
-            "ltp": tick.get("ltp", 0),
-            "last_price": tick.get("ltp", 0),
+            "ltp": ltp,
+            "last_price": ltp,
+            "ltt": tick.get("ltt", tick.get("timestamp")),
             "timestamp": tick.get("timestamp"),
         }
         if "close" in tick:
-            data["prev_close"] = tick["close"]
             data["close"] = tick["close"]
+            data["prev_close"] = tick["close"]
+            if tick["close"]:
+                change = ltp - tick["close"]
+                data["change"] = round(change, 2)
+                data["change_percent"] = round(change / tick["close"] * 100, 2)
 
         if topic_mode in ("QUOTE", "DEPTH"):
-            # Placeholders until quote/full offsets are confirmed.
-            for k in ("open", "high", "low", "volume", "average_price",
-                      "total_buy_quantity", "total_sell_quantity", "oi"):
+            data["volume"] = tick.get("volume", 0)
+            data["last_quantity"] = tick.get("ltq", 0)
+            data["average_price"] = tick.get("average_price", 0)
+            data["total_buy_quantity"] = tick.get("total_buy_quantity", 0)
+            data["total_sell_quantity"] = tick.get("total_sell_quantity", 0)
+            for k in ("open", "high", "low"):
                 if k in tick:
                     data[k] = tick[k]
-        if topic_mode == "DEPTH" and "depth" in tick:
-            data["depth"] = tick["depth"]
+            if "oi" in tick:
+                data["oi"] = tick["oi"]
+                data["open_interest"] = tick["oi"]
+
+        if topic_mode == "DEPTH":
+            if "depth" in tick:
+                data["depth"] = tick["depth"]
+            if "upper_limit" in tick:
+                data["upper_circuit"] = tick["upper_limit"]
+                data["lower_circuit"] = tick["lower_limit"]
 
         return data
