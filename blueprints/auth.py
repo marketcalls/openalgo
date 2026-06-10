@@ -509,7 +509,18 @@ def two_factor_configure():
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_login():
     if session.get("logged_in"):
-        return redirect("/dashboard")
+        # Only bounce to the dashboard when the stored broker token is still
+        # valid. When it is revoked/expired (daily rollover, broker-side
+        # revocation), this page is the canonical re-auth entry point --
+        # unconditionally redirecting away left users stranded with no UI
+        # path to reconnect (issue #1400).
+        from database.auth_db import get_auth_token
+
+        if get_auth_token(session.get("user")):
+            return redirect("/dashboard")
+        logger.info(
+            f"Broker token invalid for {session.get('user')} - allowing re-authentication"
+        )
     if request.method == "GET":
         if "user" not in session:
             return redirect("/login")
@@ -1106,8 +1117,18 @@ def get_dashboard_data():
         AUTH_TOKEN = get_auth_token(login_username)
 
         if AUTH_TOKEN is None:
+            # The APP session is still valid -- it is the BROKER token that is
+            # revoked/expired. The machine-readable code lets the dashboard
+            # point the user at /broker (reconnect) instead of /login, which
+            # would just bounce them back (issue #1400).
             logger.warning(f"No auth token found for user {login_username}")
-            return jsonify({"status": "error", "message": "Session expired"}), 401
+            return jsonify(
+                {
+                    "status": "error",
+                    "code": "BROKER_SESSION_EXPIRED",
+                    "message": "Broker session expired - please reconnect your broker",
+                }
+            ), 401
 
         # Check if in analyze mode
         if get_analyze_mode():
