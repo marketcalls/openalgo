@@ -933,14 +933,20 @@ def get_session_status():
 
         auth_token = get_auth_token(session.get("user"))
         if auth_token is None:
+            # The BROKER token is gone (daily rollover / revocation) but the
+            # APP session is still valid. Do NOT clear the whole session --
+            # that forced a full re-login and pre-empted the broker reconnect
+            # flow (issue #1400). Downgrade to the authenticated-but-broker-
+            # disconnected state instead (same state as a fresh app login
+            # before connecting a broker), which the SPA already routes to
+            # the broker connect page.
             logger.warning(
-                f"Session status: stale session detected for user {session.get('user')} - no auth token"
+                f"Session status: broker token invalid for user {session.get('user')} - "
+                "downgrading session to broker-disconnected state"
             )
-            # Clear the stale session
-            session.clear()
-            return jsonify(
-                {"status": "success", "message": "Session expired", "authenticated": False, "logged_in": False}
-            ), 200
+            session.pop("logged_in", None)
+            session.pop("broker", None)
+            # Fall through to the standard authenticated/not-logged_in response.
 
         # Get API key for the user
         api_key = get_api_key_for_tradingview(session.get("user"))
@@ -1101,7 +1107,16 @@ def get_dashboard_data():
         return jsonify({"status": "error", "message": "Not authenticated"}), 401
 
     if not session.get("logged_in"):
-        return jsonify({"status": "error", "message": "Broker not connected"}), 401
+        # App session valid, broker not connected (fresh login or downgraded
+        # by session-status after a token rollover) -- the right CTA is the
+        # broker reconnect flow, not /login (issue #1400).
+        return jsonify(
+            {
+                "status": "error",
+                "code": "BROKER_SESSION_EXPIRED",
+                "message": "Broker not connected - please connect your broker",
+            }
+        ), 401
 
     login_username = session["user"]
     broker = session.get("broker")
