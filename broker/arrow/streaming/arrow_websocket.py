@@ -53,9 +53,9 @@ class ArrowWebSocket:
     MODE_QUOTE = "quote"
     MODE_FULL = "full"
 
-    # Documented packet sizes (bytes) -> mode.
-    # TODO(arrow): full is documented as 249B (doc 11) but 241B in the SDK
-    # docs (23/24). Confirm the authoritative size against a live packet.
+    # Packet sizes (bytes) -> mode. Full is 249B on the current stream
+    # (8 reserved bytes before the depth block) and 241B on the legacy
+    # layout; the parser handles both (per the official pyarrow-client SDK).
     _SIZE_TO_MODE = {13: MODE_LTP, 17: MODE_LTPC, 93: MODE_QUOTE, 249: MODE_FULL, 241: MODE_FULL}
 
     PING_INTERVAL = 30
@@ -90,7 +90,7 @@ class ArrowWebSocket:
 
         # Subscription state.
         self.subscribed_tokens: set[int] = set()
-        self.mode_map: dict[int, str] = {}          # token -> arrow mode
+        self.mode_map: dict[int, str] = {}  # token -> arrow mode
         self.token_exchange_map: dict[int, str] = {}  # token -> OpenAlgo exchange
         self.pending_subscriptions: deque = deque()
         self._subscription_thread: threading.Thread | None = None
@@ -233,7 +233,7 @@ class ArrowWebSocket:
                 break
 
             delay = min(
-                self.RECONNECT_BASE_DELAY * (1.5 ** self.reconnect_attempts),
+                self.RECONNECT_BASE_DELAY * (1.5**self.reconnect_attempts),
                 self.RECONNECT_MAX_DELAY,
             )
             self.logger.info(f"Reconnecting in {delay:.0f}s (attempt {self.reconnect_attempts})...")
@@ -290,7 +290,9 @@ class ArrowWebSocket:
             batch_tokens = []
             batch_mode = None
             with self.lock:
-                while self.pending_subscriptions and len(batch_tokens) < self.MAX_TOKENS_PER_SUBSCRIBE:
+                while (
+                    self.pending_subscriptions and len(batch_tokens) < self.MAX_TOKENS_PER_SUBSCRIBE
+                ):
                     token, mode = self.pending_subscriptions[0]
                     if batch_mode is None:
                         batch_mode = mode
@@ -461,7 +463,10 @@ class ArrowWebSocket:
                 break
             if not self.running or not self.connected:
                 break
-            if self.last_message_time and (time.time() - self.last_message_time) > self.DATA_TIMEOUT:
+            if (
+                self.last_message_time
+                and (time.time() - self.last_message_time) > self.DATA_TIMEOUT
+            ):
                 self.logger.error("Data stall detected — forcing reconnect")
                 if self.ws:
                     try:
@@ -479,7 +484,7 @@ class ArrowWebSocket:
                 by_mode.setdefault(self.mode_map.get(token, self.MODE_QUOTE), []).append(token)
         for mode, tokens in by_mode.items():
             for i in range(0, len(tokens), self.MAX_TOKENS_PER_SUBSCRIBE):
-                batch = tokens[i:i + self.MAX_TOKENS_PER_SUBSCRIBE]
+                batch = tokens[i : i + self.MAX_TOKENS_PER_SUBSCRIBE]
                 try:
                     self.ws.send(json.dumps({"code": "sub", "mode": mode, mode: batch}))
                     if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
@@ -488,59 +493,119 @@ class ArrowWebSocket:
                     self.logger.error(f"Error re-subscribing batch: {e}")
 
     # --- binary parsing -------------------------------------------------
+    #
+    # Byte layout verified against the official pyarrow-client SDK
+    # (pyarrow_client/sockets.py, MarketDataStream._parse_binary). All fields
+    # are big-endian UNSIGNED integers; prices are in paise (divide by 100).
+    #
+    #   common : token 0:4, ltp 4:8. Bytes 8:13 carry the change flag +
+    #            net-change, which the SDK ignores and recomputes.
+    #   ltpc   : close 13:17  (17-byte packet only -- in larger packets
+    #            13:17 is ltq, see below)
+    #   quote  : ltq 13:17, avg_price 17:21, total_buy_qty 21:29,
+    #            total_sell_qty 29:37, open 37:41, high 41:45, close 45:49,
+    #            low 49:53, volume 53:61, ltt 61:65, time 65:69, oi 69:77,
+    #            oi_day_high 77:85, oi_day_low 85:93
+    #   full   : quote fields + lower_limit 93:97, upper_limit 97:101, then
+    #            10 depth levels x 14B (qty u64, price u32, orders u16)
+    #            starting at 109 (249B packet, 8 reserved bytes) or 101
+    #            (legacy 241B packet). Levels 0-4 are bids, 5-9 asks.
+    #
+    # Hot path: precompiled Structs, ONE unpack per packet region, and no
+    # lock acquisition (dict reads are GIL-atomic) -- this runs per tick.
 
-    @staticmethod
-    def _u32(b, o):
-        return struct.unpack(">I", b[o:o + 4])[0]
-
-    @staticmethod
-    def _i32(b, o):
-        return struct.unpack(">i", b[o:o + 4])[0]
+    _HEADER = struct.Struct(">II")  # token, ltp
+    _LTPC_CLOSE = struct.Struct(">I")  # close @13 (17B packet only)
+    # token ltp [5 skip] ltq avg tbq tsq open high close low volume ltt time
+    # oi oi_day_high oi_day_low  == 93 bytes
+    _QUOTE = struct.Struct(">II5xIIQQIIIIQIIQQQ")
+    _LIMITS = struct.Struct(">II")  # lower, upper @93
+    _DEPTH_LEVEL = struct.Struct(">QIH")  # quantity, price, orders (14B x10)
 
     def _parse_packet(self, data: bytes) -> dict | None:
-        """Parse one big-endian binary packet. Arrow sends ONE packet per
-        message; mode is identified by length. Prices are x100 (paise).
-
-        NOTE: only token + ltp (and ltpc's close) have published byte offsets
-        (doc 11). The quote(93B)/full(249B) field layouts are NOT published, so
-        OHLC/volume/OI/depth are left as TODO until confirmed against a live
-        packet capture. token+ltp still flow for every mode so an LTP feed works
-        immediately, including for NSE_INDEX/BSE_INDEX (token-based).
-        """
+        """Parse one big-endian binary packet (one packet per WS message;
+        mode identified by length)."""
         try:
-            if len(data) < 8:
+            n = len(data)
+            if n < 13:
                 return None
-            mode = self._SIZE_TO_MODE.get(len(data), self.MODE_QUOTE)
+            mode = self._SIZE_TO_MODE.get(n)
+            if mode is None:
+                # Unknown size: degrade to the richest layout we can parse.
+                mode = self.MODE_FULL if n >= 241 else self.MODE_QUOTE if n >= 93 else self.MODE_LTP
 
-            token = self._u32(data, 0)
-            ltp = self._i32(data, 4) / 100.0
+            if n < 93:
+                token, ltp_p = self._HEADER.unpack_from(data, 0)
+                ltp = ltp_p / 100.0
+                tick = {
+                    "token": token,
+                    "mode": mode,
+                    "ltp": ltp,
+                    "last_price": ltp,
+                    "timestamp": int(time.time() * 1000),
+                }
+                if n == 17:
+                    # ltpc: previous close (only in the dedicated 17B packet).
+                    tick["close"] = self._LTPC_CLOSE.unpack_from(data, 13)[0] / 100.0
+            else:
+                (
+                    token,
+                    ltp_p,
+                    ltq,
+                    avg_p,
+                    tbq,
+                    tsq,
+                    open_p,
+                    high_p,
+                    close_p,
+                    low_p,
+                    volume,
+                    ltt,
+                    feed_time,
+                    oi,
+                    oi_day_high,
+                    oi_day_low,
+                ) = self._QUOTE.unpack_from(data, 0)
+                ltp = ltp_p / 100.0
+                tick = {
+                    "token": token,
+                    "mode": mode,
+                    "ltp": ltp,
+                    "last_price": ltp,
+                    "timestamp": feed_time * 1000 if feed_time else int(time.time() * 1000),
+                    "ltq": ltq,
+                    "average_price": avg_p / 100.0,
+                    "total_buy_quantity": tbq,
+                    "total_sell_quantity": tsq,
+                    "open": open_p / 100.0,
+                    "high": high_p / 100.0,
+                    "close": close_p / 100.0,
+                    "low": low_p / 100.0,
+                    "volume": volume,
+                    "oi": oi,
+                    "oi_day_high": oi_day_high,
+                    "oi_day_low": oi_day_low,
+                }
+                if ltt:
+                    tick["ltt"] = ltt * 1000
 
-            tick = {
-                "token": token,
-                "mode": mode,
-                "ltp": ltp,
-                "last_price": ltp,
-                "timestamp": int(time.time() * 1000),
-            }
+                if n >= 241:
+                    lower_p, upper_p = self._LIMITS.unpack_from(data, 93)
+                    tick["lower_limit"] = lower_p / 100.0
+                    tick["upper_limit"] = upper_p / 100.0
+                    depth_offset = 109 if n >= 249 else 101
+                    if n >= depth_offset + 140:
+                        levels = [
+                            {"quantity": q, "price": p / 100.0, "orders": o}
+                            for q, p, o in self._DEPTH_LEVEL.iter_unpack(
+                                data[depth_offset : depth_offset + 140]
+                            )
+                        ]
+                        tick["depth"] = {"buy": levels[:5], "sell": levels[5:]}
 
-            with self.lock:
-                exchange = self.token_exchange_map.get(token)
+            exchange = self.token_exchange_map.get(token)
             if exchange:
                 tick["exchange"] = exchange
-
-            if len(data) >= 17:
-                # ltpc: previous close at bytes 13:17 (doc 11). 8:13 carry the
-                # net-change indicator + absolute change.
-                tick["close"] = self._i32(data, 13) / 100.0
-
-            # TODO(arrow): parse quote (93B) OHLC/volume/avg/OI and full (249B)
-            # 5-level depth + circuit limits once the big-endian offset tables
-            # are confirmed. Field names available from the SDK MarketTick
-            # dataclass (open/high/low/close, volume, avg_price, ltq,
-            # total_buy_quantity, total_sell_quantity, oi, bids[], asks[]).
-            if mode in (self.MODE_QUOTE, self.MODE_FULL):
-                tick["_needs_offset_confirmation"] = True
-
             return tick
         except Exception as e:
             self.logger.error(f"Error parsing packet (len={len(data)}): {e}")
