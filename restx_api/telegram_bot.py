@@ -94,7 +94,9 @@ preferences_model = api.model(
 
 
 def run_async(coro):
-    """Helper to run async coroutine in sync context"""
+    """
+    TODO: Change to Google-style docstring using PEP 257.
+    Helper to run async coroutine in sync context"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -276,6 +278,7 @@ class StopBot(Resource):
 
 def get_webhook_secret():
     """
+    TODO: Change to Google style docstring using PEP 257.
     Get or generate webhook secret for Telegram webhook verification.
     Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
     """
