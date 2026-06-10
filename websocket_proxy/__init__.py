@@ -102,6 +102,9 @@ from broker.wisdom.streaming.wisdom_adapter import WisdomWebSocketAdapter
 # Import the zerodha_adapter
 from broker.zerodha.streaming.zerodha_adapter import ZerodhaWebSocketAdapter
 
+# Import the arrow_adapter
+from broker.arrow.streaming.arrow_adapter import ArrowWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -130,6 +133,7 @@ register_adapter("samco", SamcoWebSocketAdapter)
 register_adapter("pocketful", PocketfulWebSocketAdapter)
 register_adapter("nubra", NubraWebSocketAdapter)
 register_adapter("rmoney", RMoneyWebSocketAdapter)
+register_adapter("arrow", ArrowWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -181,4 +185,5 @@ __all__ = [
     "PocketfulWebSocketAdapter",
     "NubraWebSocketAdapter",
     "RMoneyWebSocketAdapter",
+    "ArrowWebSocketAdapter",
 ]
