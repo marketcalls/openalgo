@@ -41,7 +41,7 @@ import { Input } from '@/components/ui/input'
 import { JsonEditor } from '@/components/ui/json-editor'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -174,6 +174,8 @@ export default function Playground() {
   // Theme store
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
 
   const handleLogout = async () => {
     try {
