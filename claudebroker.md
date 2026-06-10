@@ -31,6 +31,27 @@ Read these first (they define the "common format" you must conform to):
 **Inspect the LIVE `db/openalgo.db` `symtoken` table of a working broker** (e.g.
 connect zerodha once). This is the single most useful reference — it shows the
 exact column values your master contract must reproduce (see §5).
+**Do this BEFORE wiping symtoken with your new broker's data** — the old
+broker's rows are your ground truth for NCO symbol format, MCX_INDEX names,
+expiry formatting and the index symbol set. Once you overwrite the table, that
+reference is gone.
+
+### The broker's official SDK is your second source of truth
+
+When the broker's docs omit literal details (JSON field names, binary byte
+offsets, enum codes, endpoint routes), **download their official Python SDK
+from PyPI and read its source** — it encodes what the server actually accepts:
+
+```bash
+pip download <broker-sdk-package> --no-deps -d /tmp/sdk && cd /tmp/sdk && unzip -o *.whl
+# then read: routes/constants (endpoint paths, enum codes), the request
+# plumbing (json vs form body), and any _parse_*_packet binary parsers
+```
+
+For Arrow this single trick resolved: the websocket binary offsets (docs don't
+publish them), the margin request field names + product enum (C/I/M), the
+basket-margin endpoint shape, and the quote modes/exchange enum. Reading the
+SDK is *minutes*; guessing wrong costs *hours* of cryptic 400s.
 
 ### Reference brokers — pick the closest auth model
 
@@ -97,8 +118,19 @@ Services do `importlib.import_module(f"broker.{broker}.api.<module>")` and call
 | multiquotes | `api.data` | `BrokerData(auth).get_multiquotes(symbols)` (optional) | list |
 | intervals | `api.data` | `BrokerData(auth).timeframe_map` (attribute) | dict |
 | master | `database.master_contract_db` | `master_contract_download()` | emits socketio event |
+| margin | `api.margin_api` | `calculate_margin_api(positions, auth)` | `(response, data)`; `data.data` = `{total_margin_required, span_margin, exposure_margin}` (+ optional `total_charges`) |
 
 `auth` is always the decrypted broker token string (last positional arg).
+
+For margin, **copy `broker/dhan/api/margin_api.py`** — it is the reference
+pattern: route ONE position to the broker's single-order calculator (detailed
+charge breakdown) and 2+ positions to the basket/multi calculator so the
+broker nets spread/hedge benefits (an Arrow NIFTY short straddle priced at
+~207k via basket vs ~337k as a naive per-leg sum — never sum legs yourself if
+a basket endpoint exists). Include Dhan's two guards: a JSON-decode guard
+(non-JSON broker reply → 502) and `_normalise_success_response` (broker sends
+an error payload with HTTP 200 → convert to a 400 response object, because
+`margin_service` trusts HTTP 200).
 
 ---
 
@@ -120,6 +152,19 @@ Services do `importlib.import_module(f"broker.{broker}.api.<module>")` and call
 7. **Master contract auto-downloads** post-login via a background thread
    (`utils/auth_utils.async_master_contract_download` → your
    `master_contract_download()` → `master_contract_cache_hook`).
+
+### NUANCE — literal JSON field names (docs describe, servers validate)
+Broker docs often *describe* auth fields without giving the literal JSON keys,
+and casing matters. Arrow's token exchange requires exactly `appID`, `token`
+(the request token) and `checkSum` (capital S) — sending `requestToken` /
+`checksum` failed every login with "required validation for field token
+failed". Two rules:
+- Find a **verbatim request example** (docs curl block or the official SDK
+  source) before writing the payload. Never infer key spelling from prose.
+- Server error messages name the **server-side validator field**, which may
+  differ from the request key (Arrow's margin API complains about
+  `tradingSymbol` when the request field is actually `symbol`). Don't rename
+  your request field to match the error string — find the real contract.
 
 ### NUANCE — the callback query-param name
 The generic `brlogin.py` `else` branch only reads `request.args.get("code") or
@@ -165,6 +210,15 @@ Runtime modules (`websocket_proxy/server.py`, `utils/env_check.py`,
 `blueprints/broker_credentials.py`, `blueprints/admin.py`) **read `VALID_BROKERS`
 from env** — no edit needed.
 
+### NUANCE — the broker dropdown is EMPTY on feature branches (stale dist)
+Flask serves the pre-built `frontend/dist/`, and CI rebuilds it **only on
+`main`**. On your feature branch the committed dist predates your
+`BrokerSelect.tsx` edit, so the login dropdown filters against a broker list
+that doesn't contain your broker → it renders empty. This is not a backend
+bug: run `cd frontend && npm install && npm run build` locally (the output is
+gitignored — don't commit it; CI produces the canonical dist after merge),
+then hard-refresh the browser.
+
 Env keys: `BROKER_API_KEY`, `BROKER_API_SECRET`, `REDIRECT_URL`
 (`http://127.0.0.1:5000/<broker>/callback` — must EXACTLY match the broker
 portal's registered redirect). XTS brokers also use `BROKER_API_KEY_MARKET` /
@@ -208,6 +262,40 @@ in a `finally:` (`db_session.remove()`) — it runs in a background thread.
 - **NEVER hardcode market timings** in the broker folder. (Day-boundary strings
   like `00:00:00`/`23:59:59` for history `from`/`to` params are fine.)
 
+### NUANCE — download the REAL instrument file before writing the parser
+Code written from the docs alone WILL be wrong. Arrow's docs implied
+`NSE`/`NFO`-style codes and "strike ×100"; the live CSV actually has:
+- exchange-segment codes `NSECM/NSEFO/BSEFO/NSECD/NSECO/MCXFO/NSEIDX/...`
+  (mapping by the documented names dropped **every non-index row**)
+- strikes **unscaled** for equity/index derivatives but **×100000** for
+  currency derivatives, whose ticks arrive in **paise** — scaling is
+  per-segment, not global (cross-check `StrikePrice` against the strike
+  embedded in `TradingSymbol` for one row per segment)
+- futures flagged by `OptionType == "XX"`, not by an empty option-type
+- index rows carrying display names ("Nifty 50") in the `Symbol` column
+So: pull the live file with a stored token FIRST, print
+`df[seg_col].value_counts()` + 3 sample rows per segment, and only then write
+the mapping. Watch for renamed listings too (TATAMOTORS → TMPV post-demerger)
+— a "missing" symbol may simply no longer exist.
+
+### NUANCE — vectorize the processing (iterrows is 45x slower)
+A per-row Python loop (`df.iterrows()` + dict building) took ~45s for Arrow's
+221k rows; the same logic as whole-column pandas ops (mirroring zerodha's
+implementation) takes ~1s. Read the CSV with `dtype=str` (kills mixed-type
+DtypeWarning at the source) and convert numerics explicitly with
+`pd.to_numeric(errors="coerce")`. Beware `-0.0` surviving `clip(lower=0)` —
+add `+ 0.0` to normalize. Verify the vectorized output is **byte-identical**
+to a known-good run before trusting it.
+
+### NUANCE — auth-token resolution in the download thread
+`master_contract_download()` runs in a background thread and several templates
+resolve the user via `os.getenv("LOGIN_USERNAME")` — which is often **unset**,
+yielding a `None` token and the cryptic httpx error "Header value must be str
+or bytes, not <class 'NoneType'>". Resolve via LOGIN_USERNAME first, then fall
+back to the single non-revoked row for your broker in the `Auth` table
+(OpenAlgo is single-user), and raise a clear error if neither exists — never
+let `None` reach a header.
+
 ---
 
 ## 6. Data layer (`BrokerData`) — quotes / depth / history
@@ -244,9 +332,39 @@ If the broker uses one `INDEX` pseudo-exchange, translate OpenAlgo
 `NSE_INDEX`/`BSE_INDEX` → the broker's index exchange on every quote/depth call,
 and to the parent cash exchange for history. Keep a shared `mapping/exchange.py`.
 
-### NUANCE — rate limits (multiquotes & history)
-Respect the broker's per-endpoint limit. Pattern (zerodha/upstox/arrow):
-- `get_multiquotes`: batch (e.g. 500/request) with a delay between batches.
+### NUANCE — the quote API may have its OWN symbol vocabulary for indices
+The symbol stored in `brsymbol` is not necessarily what the quote endpoint
+accepts. Arrow's INDEX quotes accept: the **underlying name** for the 5
+derivative indices (`NIFTY`, `BANKNIFTY`, `FINNIFTY`, `MIDCPNIFTY`,
+`NIFTYNXT50` — their display names are rejected) but the **UPPERCASED display
+name** for everything else (`NIFTY IT`, `INDIA VIX`, `SMLCAP`). Probe a
+handful of each class with a tiny script before assuming. Robust pattern
+(see `broker/arrow/api/data.py` `_quote_index`): try candidates in order
+(OpenAlgo symbol → uppercased brsymbol → raw brsymbol), treat 400 as
+"try next", and **cache the verified name per token** so steady state costs
+one request. The option tools (option chain / IV / OI tracker / max pain /
+GEX) all start from the underlying index LTP — if index quotes fail, every
+options tool fails with it.
+
+### NUANCE — some exchanges may not exist on the quote REST API at all
+Arrow's quote API serves NSE/BSE/NFO/BFO/MCX(as `MCXFO`!)/INDEX — and nothing
+for currency (CDS) or NSE commodities (NCO), under ANY code (confirmed by the
+SDK's Exchange enum having no such members). When that happens: keep a
+`QUOTE_UNSUPPORTED_EXCHANGES` set, fail single quotes fast with a message that
+points to websocket streaming (token-based, exchange-agnostic, still works),
+and **skip those symbols in batch requests** — one unsupported symbol can 400
+the entire batch. Also note the documented exchange code may be wrong even for
+supported exchanges (docs said `MCX`, server wants `MCXFO`) — probe each one.
+
+### NUANCE — rate limits vs per-request caps are TWO different limits
+Don't conflate them. Arrow allows 10 req/sec (rate limit) AND at most **100
+instruments per `/info/quotes` request** (hard server cap: 100 → 200 OK,
+101 → HTTP 500 "unable to get quotes"). Find the cap empirically — binary
+search batch sizes (1/10/50/100/101/150) against the live endpoint — and loop
+any-size symbol sets in cap-sized chunks throttled under the rate limit.
+Pattern (zerodha/upstox/arrow):
+- `get_multiquotes`: chunk at the broker's per-request cap with a delay between
+  chunks (Arrow: 100/request, ~0.15s delay).
 - `get_history`: throttle (small `time.sleep`) between date-chunks; chunk long
   ranges (broker caps the per-request range, often larger for daily).
 The OpenAlgo `/api/v1/history` endpoint itself is rate-limited by
@@ -331,6 +449,34 @@ service calls `map_*` first (mutates in place) then `transform_*`.
 - Binary feeds: confirm framing (one packet per message vs length-prefixed
   multi-packet) and endianness against a LIVE capture before trusting offsets.
 
+### NUANCE — binary offsets: never guess, and know the symptom of a wrong guess
+If the docs don't publish byte offsets, get them from the **official SDK's
+parser source** (see §0). A wrong offset doesn't crash — it produces
+*plausible garbage*: Arrow's draft parser read bytes 13:17 as "close" in every
+packet, but in 93-byte quote packets that field is **last traded quantity**,
+so the UI showed "close ₹0.02" (LTQ=2). Also beware mode-dependent layouts:
+the same offset means different things at different packet sizes (13:17 IS
+close in the 17-byte LTPC packet). The broker may run TWO streams with
+different protocols (Arrow: standard stream = big-endian/token-keyed, HFT
+stream = little-endian/symbol-keyed) — make sure the docs page you're reading
+matches the URL you connect to.
+
+**Test the parser with synthetic packets** before going live: build byte
+buffers with `struct.pack` placing known values at the documented offsets for
+every packet size (ltp/ltpc/quote/full + legacy sizes), and assert each parsed
+field. This catches off-by-N immediately and needs no market hours.
+
+### NUANCE — tick-parsing hot path
+The parser runs per tick; keep it allocation-light: module-level **precompiled
+`struct.Struct`** objects with ONE `unpack_from` per packet region (not 15
+separate `struct.unpack` calls), `iter_unpack` for repeated depth levels, and
+**no lock acquisition per tick** (CPython dict reads are GIL-atomic; lock only
+the writers). Arrow's parser does ~2.3µs per full-depth packet this way.
+Emit the **same normalized key set as the zerodha adapter** (`open/high/low/
+close`, `volume`, `average_price`, `last_quantity`, `total_buy_quantity`,
+`total_sell_quantity`, `oi`, `depth.buy/sell` with `price/quantity/orders`) so
+the proxy/UI see one shape across brokers.
+
 ---
 
 ## 9. HTTP connection pooling & FD hygiene (mandatory)
@@ -345,6 +491,43 @@ service calls `map_*` first (mutates in place) then `transform_*`.
 - After building, run a **focused FD audit** of your change (every DB session,
   socket, WS, ZMQ socket, file, thread): confirm each is closed on success,
   error, and reconnect.
+
+---
+
+## 9.5 The live-hardening pass (where the real bugs are)
+
+Scaffolding from docs gets you ~70%. The remaining 30% — the part that decides
+whether the broker *works* — only falls to **live probing**. Arrow's
+integration had SIX such bugs (auth field names, exchange codes, strike
+scaling, websocket offsets, index quote vocabulary, multiquote cap), and not
+one was visible in the code review. Budget a deliberate hardening pass:
+
+1. **Probe with throwaway scripts, fix, then codify.** Keep a scratch dir
+   OUTSIDE the repo. Pull the stored token once and hit the live endpoint
+   directly with httpx, varying one thing at a time:
+   ```python
+   from database.auth_db import Auth, get_auth_token
+   row = Auth.query.filter_by(broker="<name>", is_revoked=False).first()
+   token = get_auth_token(row.name)   # then httpx.post(...) with candidates
+   ```
+   Probe matrices that pay off: symbol spelling variants × exchange-code
+   variants for one instrument per segment; batch sizes (binary search) for
+   multi-instrument endpoints; one quote per exchange you claim to support.
+2. **Read `log/errors.jsonl` first** when a UI page breaks. Five "different"
+   broken tools (option chain, IV chart, OI tracker, max pain, GEX) were ONE
+   root cause: index quotes 400ing. Fix the deepest shared failure, not the
+   page.
+3. **Don't edit broker files while a background download is running** — the
+   dev server auto-reloads on save and kills in-flight threads (worst case:
+   between `delete_symtoken_table()` and the re-insert). Wait for the
+   `master_contract_status` table to flip to `success`, then edit.
+4. **Verify like-for-like after refactors**: when you rewrite a working path
+   for speed (e.g. vectorizing the master contract), diff the new output
+   against the validated output row-by-row before swapping it in.
+5. **Resolve every `TODO(<name>)` with live evidence, then delete it** —
+   replace each with a comment stating what was verified and how ("verified
+   live: 100 → 200 OK, 101 → 500"). The next person must be able to tell
+   guesses from facts.
 
 ---
 
@@ -374,6 +557,7 @@ history epochs.
 ## 11. Nuance cheat-sheet (the easy-to-miss list)
 
 - [ ] `authenticate_broker` exact name; returns 2-tuple
+- [ ] auth payload uses the broker's LITERAL JSON keys (verbatim curl/SDK, not prose)
 - [ ] callback param spelling (hyphen/camelCase) handled in `brlogin.py`
 - [ ] `place_order_api` sets `response.status`
 - [ ] instrumenttype indices = **EQ** (no INDEX type)
@@ -383,7 +567,10 @@ history epochs.
 - [ ] price de-scaling (paise ×100) in quotes/depth/history
 - [ ] history **daily +5:30**, intraday no shift
 - [ ] NSE_INDEX/BSE_INDEX translated to broker INDEX on quote/depth/history
-- [ ] multiquotes batched + history throttled (broker rate limits)
+- [ ] index quote symbol vocabulary probed live (candidate-fallback + per-token cache if it differs from brsymbol)
+- [ ] quote-unsupported exchanges fail fast AND are skipped in batch requests
+- [ ] multiquotes chunked at the broker's PER-REQUEST cap (found empirically) + throttled under the rate limit; history throttled
+- [ ] margin: single → order calculator, multi-leg → basket calculator (Dhan pattern); never sum legs when a basket endpoint exists
 - [ ] NO hardcoded market timings in broker folder
 - [ ] streaming: sync websocket-client, no thread.join, cleanup_zmq, token refresh on reconnect, keepalive watchdog
 - [ ] all REST via shared pooled httpx client; explicit timeout on big downloads; db_session.remove() in background threads
@@ -438,8 +625,24 @@ history epochs.
 
 ### F. Live test (needs credentials + SEBI static-IP whitelisting)
 - [ ] Login → token stored → master contract downloads → symbols searchable
-- [ ] Quotes / depth / history (intraday + daily) for EQ, FUT, option, and NSE_INDEX/BSE_INDEX
+- [ ] Master contract validated offline BEFORE the in-app run: per-exchange row
+      counts, sample symbols per segment vs `docs/prompt/symbol-format.md`,
+      zero duplicate (symbol, exchange), all common index symbols present
+- [ ] Quotes / depth for EQ, FUT, option on EVERY exchange in `plugin.json`
+      (not just NSE — Arrow's MCX needed a different code and CDS/NCO turned
+      out unsupported) + NSE_INDEX/BSE_INDEX
+- [ ] Multiquotes at realistic size (180+ option symbols — what the GEX tool
+      sends) and mixed exchanges incl. an index
+- [ ] History intraday + daily (epoch convention) for EQ, FUT, index
+- [ ] `/websocket/test` page: LTP, Quote (real OHLC/volume — a wrong close
+      like 0.02 means a binary-offset bug) and Depth incl. indices; reconnect
+      after a forced drop
+- [ ] Options tools end-to-end: `/optionchain`, `/ivchart`, `/oitracker`,
+      `/maxpain`, `/gex` — these exercise quotes + multiquotes + expiry
+      parsing together and fail loudly on any index-quote or batch-cap bug
+- [ ] Margin: single order (vs the docs' example numbers), multi-leg straddle
+      (basket number must be LESS than the per-leg sum), invalid symbol → clean 400
 - [ ] Place / modify / cancel / smart order; orderbook / positions / holdings / funds
-- [ ] WebSocket LTP / Quote / Depth incl. indices; reconnect after a forced drop
-- [ ] Resolve all `TODO(<name>)` markers using observed live responses
+- [ ] Resolve all `TODO(<name>)` markers using observed live responses (then
+      delete them — see §9.5)
 </content>
