@@ -207,6 +207,20 @@ function getMessageTemplates(isCrypto: boolean): CategorizedTemplate[] {
       category: 'broker',
     },
     {
+      key: 'get_subscriptions',
+      label: 'Get Subscriptions',
+      description: "Get requesting client's own active subscriptions",
+      template: { action: 'get_subscriptions' },
+      category: 'broker',
+    },
+    {
+      key: 'get_global_subscriptions',
+      label: 'Get Global Subscriptions',
+      description: 'Get client-wise subscriptions with global summary',
+      template: { action: 'get_global_subscriptions' },
+      category: 'broker',
+    },
+    {
       key: 'ping',
       label: 'Ping',
       description: 'Test connection latency',

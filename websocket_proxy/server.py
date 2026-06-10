@@ -1166,17 +1166,17 @@ class WebSocketProxy:
         by_mode = {}
         by_exchange = {}
 
-        for (symbol, exchange, mode), client_ids in self.subscription_index.items():
+        for (_, exchange, mode), _ in self.subscription_index.items():
             subscriptions_count += 1
             mode_label = MODE_CANONICAL.get(mode, "Quote")
             by_mode[mode_label] = by_mode.get(mode_label, 0) + 1
             by_exchange[exchange] = by_exchange.get(exchange, 0) + 1
 
-        # Per-client detail from self.subscriptions
+        # Per-client detail from self.user_mapping (only active, authenticated clients)
         clients_list = []
-        for cid in sorted(self.subscriptions.keys()):
+        for cid in sorted(self.user_mapping.keys()):
             subs = []
-            for sub_json in self.subscriptions[cid]:
+            for sub_json in self.subscriptions.get(cid, set()):
                 try:
                     sub = json.loads(sub_json)
                     mode_num = sub.get("mode", 2)
