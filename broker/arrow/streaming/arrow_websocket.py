@@ -192,8 +192,11 @@ class ArrowWebSocket:
                     on_error=self._on_ws_error,
                     on_close=self._on_ws_close,
                 )
+                # CERT_REQUIRED: credentials (appID + JWT) ride in the WS URL,
+                # so accepting arbitrary certificates would hand them to any
+                # MITM. Matches the deltaexchange adapter's verification.
                 self.ws.run_forever(
-                    sslopt={"cert_reqs": ssl.CERT_NONE},
+                    sslopt={"cert_reqs": ssl.CERT_REQUIRED},
                     ping_interval=self.PING_INTERVAL,
                     ping_timeout=self.PING_TIMEOUT,
                 )
