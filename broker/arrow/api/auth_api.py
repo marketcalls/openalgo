@@ -42,14 +42,12 @@ def authenticate_broker(request_token):
         checksum_input = f"{app_id}:{app_secret}:{request_token}"
         checksum = hashlib.sha256(checksum_input.encode()).hexdigest()
 
-        # TODO(arrow): confirm exact JSON field names for the authenticate-token
-        # body. Docs describe "checksum, request token, and appID" but do not
-        # publish the literal keys. Adjust requestToken/request-token spelling
-        # once verified against a live response.
+        # Field names per https://docs.arrow.trade/rest-api/authentication:
+        # checkSum (capital S), token (the request token), appID.
         payload = {
             "appID": app_id,
-            "requestToken": request_token,
-            "checksum": checksum,
+            "token": request_token,
+            "checkSum": checksum,
         }
 
         client = get_httpx_client()
@@ -62,13 +60,11 @@ def authenticate_broker(request_token):
 
         response_data = response.json()
 
-        # Arrow envelope: {"status": "success", "data": {...}}.
-        # The JWT is returned under data.token (per the Python SDK, which
-        # exposes login() -> {"name", "token", "userID"}).
-        # TODO(arrow): confirm the JWT key is data.token (vs data.jwt / data.accessToken).
+        # Arrow envelope: {"status": "success", "data": {"name", "token", "userID"}}.
+        # The JWT is returned under data.token (confirmed by the docs).
         if response_data.get("status") == "success":
             data = response_data.get("data", {})
-            access_token = data.get("token") or data.get("jwt") or data.get("accessToken")
+            access_token = data.get("token")
             if access_token:
                 return access_token, None
             return (
