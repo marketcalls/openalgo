@@ -53,6 +53,7 @@ db/backups/
 !symbols.csv
 !all_symbols.csv
 !data/qtyfreeze.csv
+!docs/migration/*.csv
 
 # Environments 
 .env 
