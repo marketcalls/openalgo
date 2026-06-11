@@ -1,7 +1,8 @@
 # Flask → FastAPI Migration Plan & Risk Assessment
 
 **Branch:** `claude/flask-openalgo-migration`
-**Status:** Proposal / Pre-implementation
+**Status:** Proposal / Pre-implementation — **v2** (revised after independent second audit; see §1a)
+**Tracker:** `docs/migration/flask-to-fastapi-migration-tracker.csv` (work items, phases, acceptance criteria)
 **Audience:** Maintainers evaluating whether (and how) to move OpenAlgo's web layer from Flask + Flask-SocketIO + eventlet/Gunicorn to FastAPI + python-socketio + Uvicorn ASGI.
 **Scope of this document:** A grounded, file-referenced assessment of what a migration touches, the risks, and a phased procedure that keeps the UI, API contract, `.env`, logs, Docker, and install/upgrade paths byte-for-byte compatible for end users.
 
@@ -62,7 +63,29 @@ The table classifies every major subsystem by migration impact. "Framework-agnos
 1. **The market-data path is already asyncio.** `websocket_proxy/server.py` uses `asyncio` + `zmq.asyncio` and runs as a **separate process** under Gunicorn/eventlet (`websocket_proxy/app_integration.py`). It does not depend on Flask at all. The migration does **not** touch market-data streaming, ZeroMQ, or broker streaming adapters.
 2. **There are effectively zero server-rendered HTML templates.** The UI is a React SPA served from `frontend/dist/`. The only Jinja usage is a single inline OAuth-consent form. "Managing the UI the same" is therefore a static-file-serving problem, not a templating rewrite.
 
-The dependencies for the target stack are **already in the tree**: `starlette==1.0.1`, `uvicorn==0.44.0`, `sse-starlette==2.4.1`, `httpx==0.28.1`, `pydantic==2.12.5`, `python-socketio==5.16.1` (`pyproject.toml`).
+Most target-stack dependencies are already in the tree: `starlette==1.0.1`, `uvicorn==0.44.0`, `sse-starlette==2.4.1`, `httpx==0.28.1`, `pydantic==2.12.5`, `python-socketio==5.16.1` (`pyproject.toml`). **However, `fastapi` itself is NOT a dependency yet** (verified: absent from `pyproject.toml`, `requirements*.txt`, and `uv.lock`) — it must be added with a pin compatible with the existing `starlette`/`pydantic` pins, and the Flask-Limiter/Flask-WTF replacements (`slowapi`, CSRF library) need explicit version decisions. Tracked as P2-01.
+
+---
+
+## 1a. Second-Audit Validation & Corrections (v2)
+
+An independent static audit challenged several v1 claims. Every claim was re-verified against the working tree. **All eight substantive findings validated**, and the v1 "governing principle" was overstated. Corrections below override anything contradictory elsewhere in this document.
+
+| # | Second-audit claim | Verdict | Evidence |
+| --- | --- | --- | --- |
+| 1 | Hidden Flask coupling exists in services, utils, **broker code**, and database helpers | **VALIDATED** — v1 undercounted | **23 files** outside `blueprints/`/`restx_api/` import Flask: **11 broker files** (`broker/pocketful/api/order_api.py:3` + `funds.py` use `flask.session`; same in wisdom, fivepaisaxts, rmoney, jainamxts, ibulls ×2, indmoney, iifl, compositedge), **9 utils** (`auth_utils.py:8-10` imports `current_app/jsonify/redirect/request/session/url_for`; `httpx_client.py:55` `from flask import g`; plus `session.py`, `ip_helper.py`, `latency_monitor.py`, `logging.py`, `plugin_loader.py`, and the two middleware), **2 services** (`telegram_alert_service.py`, `whatsapp_alert_service.py`), `database/auth_db.py` |
+| 2 | Startup is import-time, not factory-time | **VALIDATED** | `app.py:812` `app = create_app()` at module import, followed by `setup_environment(app)`, background cache restore, scheduler/bot/proxy startup. `gunicorn app:app` relies on import side effects. FastAPI port requires a real **lifecycle owner** + `lifespan` |
+| 3 | Socket.IO is deeply mixed into core logic, not centralized in EventBus | **VALIDATED** — v1's "~18 emit sites, mostly EventBus" was wrong | **44 files** import `extensions.socketio` outside `blueprints/`/`subscribers/` — including **33 broker `database/master_contract_db.py`** (one per broker), 7 services (`orderstatus_service.py:9`, `openposition_service`, `order_router_service`, `historify`, `telegram_bot`, `whatsapp_bot`), `utils/api_analyzer.py`, `utils/auth_utils.py`, `utils/session.py`, `database/master_contract_cache_hook.py:8` |
+| 4 | Session/CSRF/request-context are product logic, not thin glue | **VALIDATED** | `utils/session.py:6` (Flask session + redirect; `check_session_validity` decorator used across **43 blueprint files**); `utils/auth_utils.py:352` `handle_auth_success()` writes `session["logged_in"]` etc. — auth flow logic living in utils |
+| 5 | `fastapi` missing from dependencies | **VALIDATED** | Absent from `pyproject.toml`, `requirements*.txt`, `uv.lock`. v1's "target deps already vendored" was misleading |
+| 6 | Template usage understated — many `render_template` calls | **VALIDATED** (nuanced) | **44 `render_template(` calls across 23 blueprint files**, all referencing templates that don't exist (no `templates/` dir) — dead routes shadowed by React, but **each needs an explicit disposition** (delete / convert to JSON / redirect) during the port; they cannot be silently ignored |
+| 7 | API-key contract unclear: `X-API-KEY` vs body `apikey` | **VALIDATED** | Header `X-API-KEY` is honored **only** by `restx_api/telegram_bot.py` and `whatsapp_bot.py` (plus query-param fallback). **All core trading/data endpoints require `apikey` in the JSON body** (Marshmallow `required=True`). CLAUDE.md's "or in headers" overstates. Migration must preserve **per-endpoint** behavior — neither "fixing" body-only endpoints by adding header support nor dropping the header on bot endpoints |
+| 8 | Safety net too weak — CI runs a small test subset | **VALIDATED** | `.github/workflows/ci.yml:47-49` runs exactly **5 test files** (log location, navigation, python editor, rate limits, logout CSRF). Nothing covers API contracts, SocketIO events, order lifecycle, or startup |
+
+One additional fact surfaced during validation: **the React frontend pins Socket.IO to polling transport** — `transports: ['polling']` in `useSocket.ts:148` (comment: "WebSocket upgrade fails with threading async mode"), `useOrderEventRefresh.ts:75,130`, `ActionCenter.tsx:148`, `WhatsAppIndex.tsx:67`. The ASGI Socket.IO mount **must keep long-polling working** on day one. (Post-migration, ASGI may finally allow enabling the websocket upgrade — treat as an optional improvement, not part of parity.)
+
+### Corrected governing principle
+> The *bulk* of business logic (sandbox engine, flow/historify engines, options analytics, websocket proxy, ZMQ, schedulers, MCP engine) is framework-agnostic and lifts unchanged. **But the boundary is not clean at the edges:** 23 files outside the HTTP shell import Flask (including 11 broker API/mapping files), 44 files import `extensions.socketio` directly (including every broker's master-contract module), and session/auth product logic lives in `utils/`. **A pre-migration hardening phase on Flask (Phase 1) is therefore mandatory, not optional** — decouple these via a request-context abstraction (`contextvars`), a notifier abstraction for events, and a single lifecycle owner *before* introducing FastAPI, so the framework swap itself touches only true shell code.
 
 ---
 
@@ -153,7 +176,7 @@ Current hardening that **must be reproduced exactly**:
 
 ### 3.7 API format (must be byte-identical)
 - Response envelope `{"status": "success"|"error", "data": ..., "message": ...}` must be preserved exactly. Implement a shared response model/helper; **do not** let FastAPI's default validation-error shape (`{"detail": [...]}`) leak — install a custom `RequestValidationError` handler that emits the existing envelope and HTTP codes (400 validation, 403 invalid apikey, 404, 429, 500).
-- API key in JSON body **and** `X-API-KEY` header must both keep working (external platforms can't set headers — see CLAUDE.md).
+- API key handling must be preserved **per endpoint, exactly as-is** (see §1a claim 7): core trading/data endpoints accept `apikey` **in the JSON body only** (Marshmallow `required=True`); only the telegram/whatsapp bot endpoints additionally honor the `X-API-KEY` header and query param. Build a per-endpoint apikey-source matrix in Phase 0 and assert it in contract tests — do not "fix" this asymmetry during the port (external platforms depend on body-key behavior; changing acceptance surface area is a security decision, not a migration side effect).
 - Rate-limit 429 body (`{"status":"error","message":"Rate limit exceeded...","retry_after":60}`, `app.py:552`) must match.
 - **Contract tests are mandatory**: snapshot every `/api/v1/` endpoint's response on Flask, replay on FastAPI, diff. This is the safety net for the whole migration.
 
@@ -162,12 +185,20 @@ Current hardening that **must be reproduced exactly**:
 - `FLASK_DEBUG`, `FLASK_ENV`, `FLASK_HOST_IP`, `FLASK_PORT` should be **kept as aliases** read by the new bootstrap (don't force users to edit `.env` on upgrade). Optionally add `APP_HOST`/`APP_PORT` synonyms but keep the `FLASK_*` names working. Document that `FLASK_DEBUG` now toggles Uvicorn `--reload` and the debug guard.
 - WebSocket (`WEBSOCKET_HOST/PORT`), ZMQ (`ZMQ_HOST/PORT`), `LOG_*`, rate-limit, CORS/CSP/CSRF, MCP OAuth vars — all unchanged.
 
-### 3.9 Log format (unchanged)
-- `utils/logging.py` is pure stdlib and already framework-agnostic. The three handlers (colored console, daily-rotated file, `errors.jsonl`) and `SensitiveDataFilter` are untouched.
-- One detail: the JSON error handler opportunistically reads Flask `request` context (`utils/logging.py:314`). Replace that block with an ASGI-compatible request-context lookup (e.g. a `ContextVar` set by middleware) so `errors.jsonl` keeps capturing method/path/IP. Keep the JSON schema identical.
+### 3.9 Centralized logging & error traceback (must be byte-compatible)
+The logging architecture is a hard parity requirement, not an afterthought — operators and the docs rely on `log/errors.jsonl` as the first debugging stop.
+
+**What lifts unchanged** — `utils/logging.py` is pure stdlib: the three handlers (colored console via `ColoredFormatter`, daily-rotated `log/openalgo_YYYY-MM-DD.log`, always-on `log/errors.jsonl` JSON Lines), `get_logger(__name__)` everywhere, the `logger.exception()` convention (auto-captured tracebacks routed into the JSON error handler), `LOG_LEVEL`/`LOG_TO_FILE`/`LOG_DIR`/`LOG_FORMAT`/`LOG_RETENTION`/`LOG_COLORS`/`FORCE_COLOR` env vars, and the 1000-entry startup truncation. None of this changes.
+
+**What must be actively ported** (this is where v1 was too thin):
+1. **`errors.jsonl` request context** — the JSON handler reads Flask request context opportunistically (`utils/logging.py:314-324`). Replace with the Phase 1 `ContextVar` lookup so every error line keeps its `method`/`path`/`IP` fields with an **identical JSON schema** (assert schema in a Phase 0 test).
+2. **Werkzeug-specific filters become dead code** — `WerkzeugErrorFilter` (`utils/logging.py:75`) and its wiring to the `werkzeug`/`werkzeug._internal`/Flask-internal loggers (`utils/logging.py:424-436`), plus `WebSocketHandshakeFilter` (`:113`), target a server that no longer exists. Retire them and add equivalent noise filters for uvicorn's known non-actionable messages.
+3. **Uvicorn loggers must be captured, not parallel** — uvicorn ships its own `uvicorn.access`/`uvicorn.error` loggers with their own handlers. Left at defaults, access lines **bypass the central handlers entirely** — meaning no `ColoredFormatter`, no file rotation, and critically **no `SensitiveDataFilter`**. Since some endpoints accept `apikey` as a **query parameter** (telegram/whatsapp bot routes, §1a claim 7), an unfiltered access log would write API keys to disk — a security regression. Configure uvicorn with `log_config=None` (or explicit propagation) so all its records flow through the existing root handlers and redaction filter; add a Phase 0 redaction test that requests a URL with `?apikey=...` and asserts it never appears un-redacted in any log output.
+4. **Traceback convention enforcement** — the "always `logger.exception()`, never `traceback.format_exc()`" rule survives unchanged; the new ASGI exception handlers (Phase 2) must call `logger.exception()` before returning the error envelope so `errors.jsonl` captures the same full tracebacks it does today.
 
 ### 3.10 Event-driven architecture
 - The EventBus + subscribers pattern (`subscribers/socketio_subscriber.py`) is framework-agnostic; it just needs a working `emit` handle.
+- The EventBus executor (ThreadPoolExecutor, ~10 workers) lifts unchanged; its startup/shutdown moves into the Phase 1 lifecycle owner so subscriber registration order, delivery semantics, and clean drain-on-shutdown match today's behavior. Domain events (`events/*.py` dataclasses: order, sandbox, alert events) are pure Python and untouched.
 - Event names must stay identical (`order_event`, `analyzer_update`, `cache_loaded`, `force_logout`, `master_contract_download`, `historify_progress`, etc.) — the React client subscribes to these exact strings (`frontend/src/hooks/useSocket.ts`).
 - python-socketio's `emit` is thread-safe from the threadpool when using the ASGI server's async manager; validate emit-from-sync-threadpool works (it does via `socketio.AsyncServer` + `start_background_task` or the sync `Server` mounted appropriately — pick one model and prove it).
 
@@ -212,7 +243,7 @@ The Sandbox finding generalizes to the **entire feature set**. I audited Flow, H
 | **Traffic / Security** | `database/traffic_db.py` (`TrafficLog`/`IPBan`/trackers) | `blueprints/traffic.py`, `security.py` + their teardown handlers; WSGI→ASGI middleware | unchanged |
 | **TradingView / GoCharting / ChartInk adapters** | service layer | `blueprints/tv_json.py`, `gc_json.py` (CSRF-exempt, API-key-in-body) | unchanged |
 
-**The one genuinely shared migration task across all of the above is SocketIO.** ~18 `socketio.emit()` call sites (Historify progress, WhatsApp QR, Action Center, master-contract cache, Telegram mode, analyzer) move from Flask-SocketIO to python-socketio ASGI. **Event names and payloads stay identical** (the React client subscribes to fixed strings), so the UI sees no change. Most already flow through the framework-agnostic EventBus (`utils/event_bus.py` + `subscribers/`), so the rewire is centralized, not scattered.
+**The one genuinely shared migration task across all of the above is SocketIO — and it is bigger than v1 estimated** (corrected in §1a claim 3): **44 files** import `extensions.socketio` directly outside the shell layers, including **all 33 broker `master_contract_db.py` modules**, 7 services, and 3 utils. Order events flow through the framework-agnostic EventBus (`utils/event_bus.py` + `subscribers/`), but master-contract progress, historify jobs, WhatsApp pairing, and order-status emits do **not** — they call `socketio.emit` inline. The fix is the Phase 1 **notifier abstraction**: these modules publish domain events to a notifier interface; a single subscriber owns the actual Socket.IO emit. After that, the framework swap touches one file instead of 44. **Event names and payloads stay identical** (the React client subscribes to fixed strings), so the UI sees no change. The ASGI mount must also keep **long-polling transport** working — the frontend pins `transports: ['polling']` (§1a).
 
 **Two small accuracy notes from the sweep (pre-existing, independent of migration):**
 - Several blueprints (`playground.py:287`, and the dead `render_template` paths) reference Jinja templates that don't exist — vestigial code to drop during the port, not recreate.
@@ -235,22 +266,83 @@ The Sandbox finding generalizes to the **entire feature set**. I audited Flow, H
 - The canonical upgrade path (`git pull` from main → `uv sync` → restart; `install/update.sh`) **must not change** for users. The only difference is the service restarts a Uvicorn process instead of Gunicorn — invisible to the operator running `update.sh`.
 - The `frontend/dist` CI auto-commit flow is unchanged.
 
+### 3.15 Running the application (commands identical, dev and prod)
+- **Dev:** `uv run app.py` keeps working on Windows/Mac/Linux exactly as today. Internally `socketio.run(app, ...)` (`app.py:1011`) becomes `uvicorn.run(...)`, but the operator-visible behavior is preserved: same startup banner (host/port/WebSocket/docs/status block), `FLASK_DEBUG=True` still enables auto-reload, the debug+non-loopback **refusal guard** (`app.py:914-937`) is reproduced, and the access points are unchanged (app on `FLASK_PORT`/5000, WebSocket proxy on 8765, React at `/`).
+- **Prod:** `start.sh`/systemd swap gunicorn→uvicorn (§3.12/§3.13); operators run the same scripts. A side benefit: dev and prod converge on **one runtime** (today dev=threading, prod=eventlet — a real behavioral gap that disappears).
+- **No new commands, no new flags, no `.env` edits** required of any operator at any phase.
+
+### 3.16 Webhook features & security (byte-identical contract)
+External platforms cannot adapt — the webhook surface must be preserved exactly. Verified inventory and auth models:
+
+| Webhook | Route | Auth model | Notes |
+| --- | --- | --- | --- |
+| Strategy (TradingView etc.) | `POST /strategy/webhook/<webhook_id>` (`blueprints/strategy.py:869`) | **UUID4 secret in URL path** (`uuid.uuid4()` at creation, `strategy.py:816`); invalid → 404 `{"error": "Invalid webhook ID"}`, inactive → 400 | Plus intraday **time-window enforcement** (IST entry/exit logic, LONG/SHORT exit detection) — product logic that must port byte-for-byte |
+| ChartInk | `POST /chartink/webhook/...` (`blueprints/chartink.py`) | Same UUID-in-path model | Queue + APScheduler order processing behind it |
+| Flow | `POST /flow/.../webhook` | **Richer:** per-workflow `webhook_token`, `webhook_secret`, `webhook_auth_type` (`blueprints/flow.py:88-91`) | Multiple auth types — enumerate and test each in P0-11 |
+| TradingView JSON / GoCharting | `blueprints/tv_json.py`, `gc_json.py` | `apikey` in JSON body (platforms cannot set headers) | — |
+
+Security properties that must survive the port, in order: **IP-ban middleware still applies** (outermost, before any webhook code), **rate limits** apply, **CSRF-exempt** (these are the canonical exemptions in `app.py:386-408`), error shapes/status codes identical, and webhook IDs/secrets never logged (covered by `SensitiveDataFilter` parity, §3.9). The UUID-in-URL model means webhook URLs are credentials — confirm the traffic logger continues to store paths only where it does today, no expansion of logging surface.
+
+### 3.17 CI pipeline (kept green at every phase, three jobs untouchable)
+The pipeline (`.github/workflows/ci.yml` + `security.yml`) has **9 jobs**: `backend-lint` (ruff check + format), `backend-test` (currently 5 CI-safe files), `frontend-lint`, `frontend-build`, `frontend-test` (+ Playwright e2e), `security-scan` (bandit + pip-audit), `commit-dist` (force-commits built dist to `main`), `docker-build` (Docker Hub push by digest + Kaleido/Chromium smoke test).
+
+- **Untouchable:** `commit-dist`, `frontend-*` jobs — the React build flow is orthogonal to this migration and must not be modified. Docker-build changes only via the Dockerfile CMD swap in Phase 5 (its smoke test must still pass).
+- **Extended:** `backend-test` grows the Phase 0 contract/webhook/logging suites as **required checks**, phase by phase — this is how each phase gate is enforced mechanically rather than by discipline.
+- **Watched:** `backend-lint` (ruff) must pass on all new ASGI code; `security-scan` re-baselines when dependencies change in P2-01/P5-03 (new `fastapi`/`slowapi` pins go through pip-audit).
+
+### 3.18 Operator migration & rollback runbook (the user-facing "migration procedure")
+For the operator running an existing Flask-based instance, the cutover release must look like **any other release**:
+
+1. **Upgrade** — `cd openalgo && git pull && uv sync && restart` (or `install/update.sh`, or `docker pull` + recreate). No `.env` edits, no DB migrations (all 6 databases and `db/historify.duckdb` are untouched by the framework swap), no Node.js needed.
+2. **What the operator may notice** — at most a **one-time forced re-login** if session-cookie compatibility (R4) is resolved as "accept re-login" (decision in P2-06; release notes must say so). Broker re-auth follows the normal daily flow. Nothing else: same ports, same URLs, same API keys, same webhooks, same logs.
+3. **Rollback** — because there are no schema changes, rollback is symmetric: `git checkout <previous-tag> && uv sync && restart` (or redeploy the previous Docker image tag). Databases, `.env`, and webhook URLs all remain valid in both directions. The release that ships the cutover must pin a **known-good rollback tag** in its notes.
+4. **Recommended rollout** — ship the cutover as a major platform version (per the version-bump procedure in CLAUDE.md), hold it in a release-candidate window with the soak/regression evidence from P5-04 attached, and keep the previous minor as the documented rollback for one full token-expiry cycle (≥1 trading day, given the ~3 AM IST token reset).
+
+### 3.19 Login flow & smart master contract download (the trickiest stateful flow — mapped exactly)
+This is the most intricate state machine in the app, it lives partly in `utils/auth_utils.py` (one of the 23 Flask-coupled files, §1a), and it must be reproduced **state-for-state**. Verified behavior:
+
+**The two-step login state machine** (`blueprints/auth.py:253-352`):
+1. **App login** (`POST /auth/login`): username/password via `authenticate_user()`. If the user has TOTP enabled for login, `session["user"]` is **deliberately NOT set** — the username is parked on a transient `session["pending_totp_user"]` + `pending_totp_started_at`, and only `POST /auth/login/totp` consumes it on success (with timeout/failure clearing). **This gate is a security property: an attacker with only the password must not reach broker login.**
+2. **Session-state semantics are subtle and load-bearing:** `session["user"]` alone means *password step done, broker step pending* (GET routing sends this state to `/broker`). Only `session["logged_in"] = True` — set by `handle_auth_success()` (`utils/auth_utils.py:352`) after broker auth — means fully authenticated (routed to `/dashboard`). A migration that collapses these two states into one breaks the flow.
+3. **Broker-session resume — the "second login" behavior:** after password (+TOTP), `_try_resume_broker_session(username)` (`auth.py:317`) checks for a still-valid broker token in the DB (Indian broker tokens live until ~3 AM IST). If found, **broker login is skipped entirely** — the user goes straight to the dashboard, and the attempt is logged with `login_type="resume"` (vs `"password"`). This is why a re-login on an already-authenticated instance (including publicly-hosted ones) presents **only the app login, no broker login**. If no valid token exists → redirect `/broker` → per-broker OAuth/credential flow (`blueprints/brlogin.py`, 30+ broker callbacks) → `handle_auth_success()`.
+4. **Expiry path:** on GET with `logged_in` but an invalid session window, the app calls `revoke_user_tokens()` + `session.clear()` — token revocation coupled to session expiry, not just cookie deletion.
+5. **Single-user model:** `/setup` redirect when no user exists; one user, one broker session per instance (no multi-user paths to port, but the setup-vs-login-vs-broker routing must be exact).
+
+**Smart master contract download** (`utils/auth_utils.py:80-120`, triggered asynchronously by `handle_auth_success`):
+- `should_download_master_contract(broker)` rules, all of which must port unchanged: never downloaded → download; **last download was by a different broker → force fresh** (SymToken table would be stale); downloaded **today after the cutoff → skip and use cache**; downloaded before today's cutoff or on a previous day → fresh download.
+- Cutoffs are **per-broker-class**: Indian brokers 08:00 **IST**; crypto brokers (Delta) 00:00 **UTC** — with explicit timezone normalization of stored timestamps (`get_master_contract_cutoff`, naive-timestamp IST localization).
+- `async_master_contract_download()` runs on a background thread, tracks status transitions in `master_contract_status_db` (`downloading`/`error`/success with duration + per-exchange stats), dynamically imports `broker.{broker}.database.master_contract_db`, and completion fans out to the UI via the `master_contract_download`/`cache_loaded` events (the 33 broker emit sites → notifier abstraction, P1-06) plus strategy restoration via `master_contract_cache_hook`.
+
+**Migration treatment:** the decision logic and status tracking are pure Python and lift unchanged; the session writes and the resume gate are exactly what the Phase 1 session seam (P1-09) must preserve. Phase 0 gains dedicated state-machine tests (P0-12: every login state transition incl. TOTP park/consume/timeout, resume vs fresh-broker-login, expiry revocation; P0-13: smart-download decision matrix incl. cutoff boundaries, broker-change invalidation, IST/UTC handling) so the port is verified against executable truth, not prose.
+
 ---
 
 ## 4. Phased Migration Procedure (strangler-fig)
 
 Each phase is independently shippable and reversible. **Do not merge a phase until its contract tests are green against the Flask baseline.**
 
-**Phase 0 — Safety net (no code change to the app).**
-- Write API contract snapshot tests for all 46 `/api/v1/` namespaces against the running Flask app (record request → exact JSON + status).
-- Establish performance + FD baselines (24h soak).
-- Inventory: grep for `flask_sqlalchemy`/`db.Model`, direct `Flask-Bcrypt`, `from flask import g/request/session` across `database/`, `services/`, `utils/` to find every hidden coupling.
+**Phase 0 — Safety net (no app code change).** CI today runs only 5 test files (§1a claim 8) — this phase builds the net the whole program hangs on.
+- API contract snapshot tests for all 46 `/api/v1/` namespaces (request → exact JSON shape + status code), including validation-error shapes, CSV/file responses, and webhook CSRF exemptions.
+- **Per-endpoint apikey-source matrix** (body vs `X-API-KEY` vs query) asserted in tests (§1a claim 7).
+- Auth/session/CSRF behavior tests (login, TOTP flow, `/auth/csrf-token`, cookie flags, session expiry) and Socket.IO event tests (event names, payloads, **polling transport**).
+- Order-lifecycle contract tests in sandbox mode (place → fill → squareoff → settlement).
+- Startup behavior test (what `import app` does today — guard against lifecycle regressions).
+- Performance + FD baselines (24h soak). Coupling-inventory **CI guard**: a grep gate that fails on *new* `from flask import` / `from extensions import socketio` outside the shell layers, so Phase 1 progress can't regress.
+- **Logging/traceback baseline** (P0-10): `errors.jsonl` schema + redaction tests incl. apikey-in-query in access logs (§3.9). **Webhook security suite** (P0-11): every auth model, error shape, and middleware-order property (§3.16). **Login state-machine suite** (P0-12) and **smart master-contract decision matrix** (P0-13) — see §3.19.
 
-**Phase 1 — Extract the framework-agnostic core (de-risk in place, still on Flask).**
-- Ensure `services/`, `database/`, `utils/httpx_client.py`, `utils/logging.py` have **zero** direct Flask imports in hot paths (replace `g.broker_api_time` with a `ContextVar`; replace `request`-context reads in logging with a `ContextVar`). Ship these on Flask — they're pure refactors and reduce later blast radius.
+**Phase 1 — Pre-migration hardening (decouple in place, still on Flask).** Expanded post-§1a: this is now the largest de-risking phase, and it ships value even if the FastAPI cutover never happens.
+- **Request-context abstraction** (`contextvars`): user, API key, client IP, broker API timing, latency tracking, session metadata. Replace `flask.g` in `utils/httpx_client.py:55`, request-context reads in `utils/logging.py`, `utils/latency_monitor.py`, `utils/ip_helper.py`, and the conditional import in `database/auth_db.py`.
+- **Notifier abstraction for events**: broker/database/service code publishes domain events; one subscriber owns `socketio.emit`. Rewire all **44** direct importers — the 33 broker `master_contract_db.py` modules (mechanical, one pattern), 7 services, `utils/api_analyzer.py`, `database/master_contract_cache_hook.py`.
+- **Remove `flask.session` from broker code** (11 files across 9 brokers — pocketful, wisdom, fivepaisaxts, rmoney, jainamxts, ibulls, indmoney, iifl, compositedge): pass auth/user via function parameters or the context abstraction. Broker modules must be importable with no web framework present.
+- **Extract session/auth product logic**: `utils/session.py` (`check_session_validity`, used by 43 blueprint files) and `utils/auth_utils.py` (`handle_auth_success` session writes) get a thin session-interface seam so the decorator/dependency can be re-targeted without touching the 43 call sites' semantics.
+- **Single lifecycle owner**: move `app.py`'s import-time side effects (`app.py:812` onward — DB init, cache restore, schedulers, bots, analyzer engine, EventBus executor, httpx client, websocket proxy, ngrok) into one startup/shutdown registry module callable from Flask today and FastAPI `lifespan` tomorrow.
+- **Disposition all 44 dead `render_template` calls** (23 files): delete, convert to JSON, or redirect — each explicitly decided, none silently carried over.
+- Decouple `services/telegram_alert_service.py`, `whatsapp_alert_service.py`, `utils/plugin_loader.py` from Flask imports.
+- **Gate:** re-run the full Phase 0 contract suite — must be byte-identical before any FastAPI code is introduced.
 
 **Phase 2 — Stand up a parallel FastAPI app (proof of concept).**
-- New ASGI entrypoint mounting: FastAPI + python-socketio `ASGIApp` + `StaticFiles` for the SPA.
+- **Add `fastapi` to dependencies** (it is not present today — §1a claim 5) with pins compatible with existing `starlette`/`pydantic`; decide and pin `slowapi` + CSRF library.
+- New ASGI entrypoint mounting: FastAPI + python-socketio `ASGIApp` (**long-polling transport verified against the React client**) + `StaticFiles` for the SPA; `lifespan` calls the Phase 1 lifecycle owner.
 - Port middleware: IP-ban (outermost) → traffic logger → CSP → CORS → session. Port CSRF dependency + `/auth/csrf-token`.
 - Migrate **one read-only** namespace first (e.g. `quotes` / `funds`) as `def` routes calling the existing sync service. Run contract tests. This validates auth dependency, envelope, rate limiting, and threadpool DB access end-to-end.
 
@@ -285,6 +377,11 @@ Each phase is independently shippable and reversible. **Do not merge a phase unt
 | R8 | Users assume multi-worker scaling now works | Med | Med | Document: still `-w 1` unless Redis socketio backplane added |
 | R9 | SQLite locking differs under new concurrency on Windows | Low | Med | Cross-platform test matrix (Phase 5) |
 | R10 | Scope creep — "rewrite while we're here" | High | High | Strict "behavior parity only" rule; async work deferred to Phase 6 |
+| R11 | Hidden coupling broader than estimated (validated §1a: 23 Flask-importing files incl. 11 broker; 44 socketio importers incl. 33 brokers) | **Confirmed** | High | Phase 1 hardening is mandatory; CI grep gate prevents regression |
+| R12 | Import-time side effects (`app.py:812`) silently lost in lifespan port — schedulers/bots/proxy not started | Med | **Critical** | Phase 1 lifecycle-owner extraction + Phase 0 startup test |
+| R13 | Socket.IO polling transport breaks on ASGI (frontend pins `transports:['polling']`) | Med | High | Explicit polling-transport test in Phase 0; validate ASGI engineio long-polling in Phase 2 |
+| R14 | Contract tests built on the small existing CI suite give false confidence | High | High | Phase 0 builds dedicated snapshot/contract suites; CI gate per phase |
+| R15 | Per-endpoint apikey-source behavior accidentally "fixed" (header support added/removed) | Med | High | Phase 0 apikey matrix asserted in contract tests |
 
 ---
 
