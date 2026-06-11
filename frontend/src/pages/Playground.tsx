@@ -428,7 +428,7 @@ export default function Playground() {
     setResponseSize(null)
     setResponseHeaders({})
 
-    const startTime = Date.now()
+    let startTime = Date.now()
 
     try {
       const options: RequestInit = {
@@ -467,6 +467,9 @@ export default function Playground() {
         }
       }
 
+      // Restart the clock here so the displayed time covers only the API
+      // request itself, not the CSRF token fetch above.
+      startTime = Date.now()
       const response = await fetch(fetchUrl, options)
       const elapsed = Date.now() - startTime
 
