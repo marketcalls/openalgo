@@ -188,6 +188,36 @@ What **ports** (thin shell only, same effort as any blueprint):
 
 Net: the Sandbox **engine, capital model, margin/leverage, auto-squareoff timing, and isolation from live trading are preserved byte-for-byte.** It is one of the lowest-risk parts of the migration.
 
+### 3.10b Every other feature — engines kept as-is (only HTTP shells port)
+The Sandbox finding generalizes to the **entire feature set**. I audited Flow, Historify, Playground, the ngrok/ZMQ/WebSocket config, the Telegram/WhatsApp bots, MCP, Action Center, the Options Tools suite, monitoring, and the integration webhooks. The pattern is uniform and worth stating as a governing principle for the migration:
+
+> **Governing principle:** business logic lives in `services/` (~70 modules), `database/` (~34 modules), `sandbox/`, `websocket_proxy/`, `mcp/`, and `utils/` — **none of it imports Flask in the hot path.** Flask coupling is confined to the ~49 `blueprints/` (thin HTTP shells), ~18 `socketio.emit` call sites, and a handful of `session.get("user")` reads. The **feature engines are kept byte-for-byte; only the HTTP shell is rewritten**, and the user-visible behavior (routes, JSON, event names, schedules, webhooks) stays identical.
+
+| Feature | Engine / logic (kept as-is) | Thin shell that ports | Config |
+| --- | --- | --- | --- |
+| **Flow (no-code builder)** | `services/flow_executor_service.py`, `flow_price_monitor_service.py`, `flow_scheduler_service.py` (APScheduler), `database/flow_db.py` — pure Python, JSON-stored graphs | `blueprints/flow.py` routes + webhook + `socketio.emit` | env/JSON, unchanged |
+| **Python Strategy Host** | subprocess-isolated strategy runners, `database/strategy_db.py`, shared APScheduler; logs stream over SocketIO | `blueprints/python_strategy.py` routes + log-stream emits | unchanged; **subprocess isolation preserved** |
+| **Historify (DuckDB)** | `services/historify_service.py` (~2,200 lines), `database/historify_db.py` (**pure DuckDB**, no SQLAlchemy/Flask), `historify_scheduler_service.py` (APScheduler) | `blueprints/historify.py` (59 routes) + `historify_progress`/`job_complete` emits | `HISTORIFY_DATABASE_URL`, unchanged |
+| **Playground (API tester)** | `parse_bru_file()` / `load_bruno_endpoints()` (pure parsers) | `blueprints/playground.py` 3 JSON routes; its `render_template("playground.html")` is a **dead path** (no templates dir) — drop it | — |
+| **ngrok** | `utils/ngrok_manager.py` — spawns tunnel via pyngrok, signal/atexit cleanup, **zero Flask coupling** | just the `start_ngrok_tunnel(port)` call moves into `lifespan` | `NGROK_ALLOW`, `NGROK_AUTH_TOKEN`, `HOST_SERVER` via `os.getenv` — unchanged |
+| **ZMQ / WebSocket config** | `websocket_proxy/*`, broker `streaming/*` — all read `ZMQ_HOST/PORT`, `WEBSOCKET_HOST/PORT/URL`, `MAX_SYMBOLS_*` via `os.getenv` (never Flask `app.config`) | nothing — proxy already separate process | `.env`, unchanged |
+| **Telegram bot** | `services/telegram_bot_service.py` (real-OS-thread, python-telegram-bot) | `blueprints/telegram.py` + 1 `app_mode_changed` emit | bot token/db, unchanged |
+| **WhatsApp bot** | `services/whatsapp_bot_service.py` (real-OS-thread) | `blueprints/whatsapp.py` + `whatsapp_qr/paired/status` emits | unchanged |
+| **MCP (HTTP/OAuth)** | `mcp/mcpserver.py` (`FastMCP` engine, pure) — already uses `sse-starlette` | `blueprints/mcp_http.py`, `mcp_oauth.py`, `database/oauth_db.py` | `MCP_*` vars, unchanged |
+| **Action Center** | `services/action_center_service.py`, `database/action_center_db.py`, `order_router_service.py` | `pending_order_created/updated` emits in `orders.py` | unchanged |
+| **Master contract** | `database/master_contract_cache_hook.py` logic | `cache_loaded` / `master_contract_download` emits | unchanged |
+| **Options Tools (/tools, 12 tools)** | `services/iv_chart_service.py`, `oi_tracker_service.py`, `gex_service.py`, `vol_surface_service.py`, `iv_smile_service.py`, `oi_profile_service.py`, `option_chain_service.py`, `custom_straddle_service.py`, `strategy_chart_service.py` — all pure pandas/math | the matching `blueprints/*.py` JSON endpoints | unchanged |
+| **Latency / Health monitoring** | `database/latency_db.py`, `health_db.py`, `utils/health_monitor.py` | `blueprints/latency.py`, `health.py` (+ per-blueprint teardown handlers) | `LATENCY_/HEALTH_DATABASE_URL`, unchanged |
+| **Chartink / Strategy webhooks** | `database/chartink_db.py`, `strategy_db.py`; queue+APScheduler order processing | `blueprints/chartink.py`, `strategy.py` webhooks (CSRF-exempt) | unchanged |
+| **Traffic / Security** | `database/traffic_db.py` (`TrafficLog`/`IPBan`/trackers) | `blueprints/traffic.py`, `security.py` + their teardown handlers; WSGI→ASGI middleware | unchanged |
+| **TradingView / GoCharting / ChartInk adapters** | service layer | `blueprints/tv_json.py`, `gc_json.py` (CSRF-exempt, API-key-in-body) | unchanged |
+
+**The one genuinely shared migration task across all of the above is SocketIO.** ~18 `socketio.emit()` call sites (Historify progress, WhatsApp QR, Action Center, master-contract cache, Telegram mode, analyzer) move from Flask-SocketIO to python-socketio ASGI. **Event names and payloads stay identical** (the React client subscribes to fixed strings), so the UI sees no change. Most already flow through the framework-agnostic EventBus (`utils/event_bus.py` + `subscribers/`), so the rewire is centralized, not scattered.
+
+**Two small accuracy notes from the sweep (pre-existing, independent of migration):**
+- Several blueprints (`playground.py:287`, and the dead `render_template` paths) reference Jinja templates that don't exist — vestigial code to drop during the port, not recreate.
+- `database/auth_db.py` has the only conditional Flask import outside blueprints (`has_request_context`/`request`), used purely to opportunistically attach request context — trivially swapped for a `ContextVar` (already called out in Phase 1).
+
 ### 3.11 ZeroMQ support (untouched)
 - PUB at `base_adapter.py:187` (port 5555, loopback), async SUB at `server.py:110` (`zmq.asyncio`). Lives entirely in the websocket-proxy process. **No migration work.** Verify only that the proxy is still spawned correctly by the new entrypoint (it's started from `app.py` today via `start_websocket_proxy`; that call moves into the FastAPI `lifespan` startup).
 
