@@ -240,6 +240,9 @@ def get_option_chain(
         if not final_expiry:
             return False, {"status": "error", "message": "Expiry date is required."}, 400
 
+        # Normalize to DDMMMYY format: accept "16-JUN-26" (from expiry API) or "16JUN26"
+        final_expiry = final_expiry.upper().replace("-", "")
+
         # Step 2: Determine quote exchange for underlying LTP
         quote_exchange = exchange
         if exchange.upper() in ["NFO", "BFO"]:
