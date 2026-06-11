@@ -1,7 +1,8 @@
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from cachetools import TTLCache
 from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -28,6 +29,16 @@ else:
 latency_session = scoped_session(
     sessionmaker(autocommit=False, autoflush=False, bind=latency_engine)
 )
+
+# Percentiles need raw values in Python (numpy), so those queries are bounded
+# to a recent window — order latency rows are kept forever and an unbounded
+# fetch grows with the install's lifetime. Aggregates (counts/averages/SLA)
+# remain all-time SQL aggregations.
+PERCENTILE_WINDOW_DAYS = 30
+
+# The dashboard polls stats; cache the computed result briefly so polling
+# does not re-scan the table on every request.
+_stats_cache = TTLCache(maxsize=1, ttl=60)
 LatencyBase = declarative_base()
 LatencyBase.query = latency_session.query_property()
 
@@ -113,9 +124,15 @@ class OrderLatency(LatencyBase):
     @staticmethod
     def get_latency_stats():
         """Get latency statistics - optimized with minimal database queries"""
+        cached = _stats_cache.get("stats")
+        if cached is not None:
+            return cached
+
         try:
             import numpy as np
             from sqlalchemy import case, func
+
+            percentile_cutoff = datetime.utcnow() - timedelta(days=PERCENTILE_WINDOW_DAYS)
 
             # OPTIMIZED: Single query for all overall stats using CASE statements
             # This replaces 9 separate queries with 1
@@ -150,14 +167,17 @@ class OrderLatency(LatencyBase):
             sla_150ms = (orders_under_150ms / total_orders * 100) if total_orders else 0
             sla_200ms = (orders_under_200ms / total_orders * 100) if total_orders else 0
 
-            # OPTIMIZED: Single query for percentiles (still need all values for accurate percentiles)
-            # But now we only fetch one column instead of full rows
+            # OPTIMIZED: Single query for percentiles, one column only, bounded
+            # to the recent window so the fetch cannot grow without limit
             p50_total = p90_total = p95_total = p99_total = 0
             if total_orders > 0:
                 total_latencies = [
                     row[0]
                     for row in latency_session.query(OrderLatency.total_latency_ms)
-                    .filter(OrderLatency.total_latency_ms.isnot(None))
+                    .filter(
+                        OrderLatency.total_latency_ms.isnot(None),
+                        OrderLatency.timestamp >= percentile_cutoff,
+                    )
                     .all()
                 ]
 
@@ -199,6 +219,7 @@ class OrderLatency(LatencyBase):
                     .filter(
                         OrderLatency.broker.in_(broker_names),
                         OrderLatency.total_latency_ms.isnot(None),
+                        OrderLatency.timestamp >= percentile_cutoff,
                     )
                     .all()
                 )
@@ -233,7 +254,7 @@ class OrderLatency(LatencyBase):
                     "sla_150ms": broker_sla,
                 }
 
-            return {
+            stats = {
                 "total_orders": total_orders,
                 "failed_orders": failed_orders,
                 "success_rate": ((total_orders - failed_orders) / total_orders * 100)
@@ -251,6 +272,8 @@ class OrderLatency(LatencyBase):
                 "sla_200ms": float(sla_200ms),
                 "broker_stats": broker_stats,
             }
+            _stats_cache["stats"] = stats
+            return stats
         except Exception as e:
             logger.exception(f"Error getting latency stats: {str(e)}")
             return {
