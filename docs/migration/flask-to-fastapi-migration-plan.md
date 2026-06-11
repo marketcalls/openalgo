@@ -185,12 +185,20 @@ Current hardening that **must be reproduced exactly**:
 - `FLASK_DEBUG`, `FLASK_ENV`, `FLASK_HOST_IP`, `FLASK_PORT` should be **kept as aliases** read by the new bootstrap (don't force users to edit `.env` on upgrade). Optionally add `APP_HOST`/`APP_PORT` synonyms but keep the `FLASK_*` names working. Document that `FLASK_DEBUG` now toggles Uvicorn `--reload` and the debug guard.
 - WebSocket (`WEBSOCKET_HOST/PORT`), ZMQ (`ZMQ_HOST/PORT`), `LOG_*`, rate-limit, CORS/CSP/CSRF, MCP OAuth vars — all unchanged.
 
-### 3.9 Log format (unchanged)
-- `utils/logging.py` is pure stdlib and already framework-agnostic. The three handlers (colored console, daily-rotated file, `errors.jsonl`) and `SensitiveDataFilter` are untouched.
-- One detail: the JSON error handler opportunistically reads Flask `request` context (`utils/logging.py:314`). Replace that block with an ASGI-compatible request-context lookup (e.g. a `ContextVar` set by middleware) so `errors.jsonl` keeps capturing method/path/IP. Keep the JSON schema identical.
+### 3.9 Centralized logging & error traceback (must be byte-compatible)
+The logging architecture is a hard parity requirement, not an afterthought — operators and the docs rely on `log/errors.jsonl` as the first debugging stop.
+
+**What lifts unchanged** — `utils/logging.py` is pure stdlib: the three handlers (colored console via `ColoredFormatter`, daily-rotated `log/openalgo_YYYY-MM-DD.log`, always-on `log/errors.jsonl` JSON Lines), `get_logger(__name__)` everywhere, the `logger.exception()` convention (auto-captured tracebacks routed into the JSON error handler), `LOG_LEVEL`/`LOG_TO_FILE`/`LOG_DIR`/`LOG_FORMAT`/`LOG_RETENTION`/`LOG_COLORS`/`FORCE_COLOR` env vars, and the 1000-entry startup truncation. None of this changes.
+
+**What must be actively ported** (this is where v1 was too thin):
+1. **`errors.jsonl` request context** — the JSON handler reads Flask request context opportunistically (`utils/logging.py:314-324`). Replace with the Phase 1 `ContextVar` lookup so every error line keeps its `method`/`path`/`IP` fields with an **identical JSON schema** (assert schema in a Phase 0 test).
+2. **Werkzeug-specific filters become dead code** — `WerkzeugErrorFilter` (`utils/logging.py:75`) and its wiring to the `werkzeug`/`werkzeug._internal`/Flask-internal loggers (`utils/logging.py:424-436`), plus `WebSocketHandshakeFilter` (`:113`), target a server that no longer exists. Retire them and add equivalent noise filters for uvicorn's known non-actionable messages.
+3. **Uvicorn loggers must be captured, not parallel** — uvicorn ships its own `uvicorn.access`/`uvicorn.error` loggers with their own handlers. Left at defaults, access lines **bypass the central handlers entirely** — meaning no `ColoredFormatter`, no file rotation, and critically **no `SensitiveDataFilter`**. Since some endpoints accept `apikey` as a **query parameter** (telegram/whatsapp bot routes, §1a claim 7), an unfiltered access log would write API keys to disk — a security regression. Configure uvicorn with `log_config=None` (or explicit propagation) so all its records flow through the existing root handlers and redaction filter; add a Phase 0 redaction test that requests a URL with `?apikey=...` and asserts it never appears un-redacted in any log output.
+4. **Traceback convention enforcement** — the "always `logger.exception()`, never `traceback.format_exc()`" rule survives unchanged; the new ASGI exception handlers (Phase 2) must call `logger.exception()` before returning the error envelope so `errors.jsonl` captures the same full tracebacks it does today.
 
 ### 3.10 Event-driven architecture
 - The EventBus + subscribers pattern (`subscribers/socketio_subscriber.py`) is framework-agnostic; it just needs a working `emit` handle.
+- The EventBus executor (ThreadPoolExecutor, ~10 workers) lifts unchanged; its startup/shutdown moves into the Phase 1 lifecycle owner so subscriber registration order, delivery semantics, and clean drain-on-shutdown match today's behavior. Domain events (`events/*.py` dataclasses: order, sandbox, alert events) are pure Python and untouched.
 - Event names must stay identical (`order_event`, `analyzer_update`, `cache_loaded`, `force_logout`, `master_contract_download`, `historify_progress`, etc.) — the React client subscribes to these exact strings (`frontend/src/hooks/useSocket.ts`).
 - python-socketio's `emit` is thread-safe from the threadpool when using the ASGI server's async manager; validate emit-from-sync-threadpool works (it does via `socketio.AsyncServer` + `start_background_task` or the sync `Server` mounted appropriately — pick one model and prove it).
 
@@ -258,6 +266,55 @@ The Sandbox finding generalizes to the **entire feature set**. I audited Flow, H
 - The canonical upgrade path (`git pull` from main → `uv sync` → restart; `install/update.sh`) **must not change** for users. The only difference is the service restarts a Uvicorn process instead of Gunicorn — invisible to the operator running `update.sh`.
 - The `frontend/dist` CI auto-commit flow is unchanged.
 
+### 3.15 Running the application (commands identical, dev and prod)
+- **Dev:** `uv run app.py` keeps working on Windows/Mac/Linux exactly as today. Internally `socketio.run(app, ...)` (`app.py:1011`) becomes `uvicorn.run(...)`, but the operator-visible behavior is preserved: same startup banner (host/port/WebSocket/docs/status block), `FLASK_DEBUG=True` still enables auto-reload, the debug+non-loopback **refusal guard** (`app.py:914-937`) is reproduced, and the access points are unchanged (app on `FLASK_PORT`/5000, WebSocket proxy on 8765, React at `/`).
+- **Prod:** `start.sh`/systemd swap gunicorn→uvicorn (§3.12/§3.13); operators run the same scripts. A side benefit: dev and prod converge on **one runtime** (today dev=threading, prod=eventlet — a real behavioral gap that disappears).
+- **No new commands, no new flags, no `.env` edits** required of any operator at any phase.
+
+### 3.16 Webhook features & security (byte-identical contract)
+External platforms cannot adapt — the webhook surface must be preserved exactly. Verified inventory and auth models:
+
+| Webhook | Route | Auth model | Notes |
+| --- | --- | --- | --- |
+| Strategy (TradingView etc.) | `POST /strategy/webhook/<webhook_id>` (`blueprints/strategy.py:869`) | **UUID4 secret in URL path** (`uuid.uuid4()` at creation, `strategy.py:816`); invalid → 404 `{"error": "Invalid webhook ID"}`, inactive → 400 | Plus intraday **time-window enforcement** (IST entry/exit logic, LONG/SHORT exit detection) — product logic that must port byte-for-byte |
+| ChartInk | `POST /chartink/webhook/...` (`blueprints/chartink.py`) | Same UUID-in-path model | Queue + APScheduler order processing behind it |
+| Flow | `POST /flow/.../webhook` | **Richer:** per-workflow `webhook_token`, `webhook_secret`, `webhook_auth_type` (`blueprints/flow.py:88-91`) | Multiple auth types — enumerate and test each in P0-11 |
+| TradingView JSON / GoCharting | `blueprints/tv_json.py`, `gc_json.py` | `apikey` in JSON body (platforms cannot set headers) | — |
+
+Security properties that must survive the port, in order: **IP-ban middleware still applies** (outermost, before any webhook code), **rate limits** apply, **CSRF-exempt** (these are the canonical exemptions in `app.py:386-408`), error shapes/status codes identical, and webhook IDs/secrets never logged (covered by `SensitiveDataFilter` parity, §3.9). The UUID-in-URL model means webhook URLs are credentials — confirm the traffic logger continues to store paths only where it does today, no expansion of logging surface.
+
+### 3.17 CI pipeline (kept green at every phase, three jobs untouchable)
+The pipeline (`.github/workflows/ci.yml` + `security.yml`) has **9 jobs**: `backend-lint` (ruff check + format), `backend-test` (currently 5 CI-safe files), `frontend-lint`, `frontend-build`, `frontend-test` (+ Playwright e2e), `security-scan` (bandit + pip-audit), `commit-dist` (force-commits built dist to `main`), `docker-build` (Docker Hub push by digest + Kaleido/Chromium smoke test).
+
+- **Untouchable:** `commit-dist`, `frontend-*` jobs — the React build flow is orthogonal to this migration and must not be modified. Docker-build changes only via the Dockerfile CMD swap in Phase 5 (its smoke test must still pass).
+- **Extended:** `backend-test` grows the Phase 0 contract/webhook/logging suites as **required checks**, phase by phase — this is how each phase gate is enforced mechanically rather than by discipline.
+- **Watched:** `backend-lint` (ruff) must pass on all new ASGI code; `security-scan` re-baselines when dependencies change in P2-01/P5-03 (new `fastapi`/`slowapi` pins go through pip-audit).
+
+### 3.18 Operator migration & rollback runbook (the user-facing "migration procedure")
+For the operator running an existing Flask-based instance, the cutover release must look like **any other release**:
+
+1. **Upgrade** — `cd openalgo && git pull && uv sync && restart` (or `install/update.sh`, or `docker pull` + recreate). No `.env` edits, no DB migrations (all 6 databases and `db/historify.duckdb` are untouched by the framework swap), no Node.js needed.
+2. **What the operator may notice** — at most a **one-time forced re-login** if session-cookie compatibility (R4) is resolved as "accept re-login" (decision in P2-06; release notes must say so). Broker re-auth follows the normal daily flow. Nothing else: same ports, same URLs, same API keys, same webhooks, same logs.
+3. **Rollback** — because there are no schema changes, rollback is symmetric: `git checkout <previous-tag> && uv sync && restart` (or redeploy the previous Docker image tag). Databases, `.env`, and webhook URLs all remain valid in both directions. The release that ships the cutover must pin a **known-good rollback tag** in its notes.
+4. **Recommended rollout** — ship the cutover as a major platform version (per the version-bump procedure in CLAUDE.md), hold it in a release-candidate window with the soak/regression evidence from P5-04 attached, and keep the previous minor as the documented rollback for one full token-expiry cycle (≥1 trading day, given the ~3 AM IST token reset).
+
+### 3.19 Login flow & smart master contract download (the trickiest stateful flow — mapped exactly)
+This is the most intricate state machine in the app, it lives partly in `utils/auth_utils.py` (one of the 23 Flask-coupled files, §1a), and it must be reproduced **state-for-state**. Verified behavior:
+
+**The two-step login state machine** (`blueprints/auth.py:253-352`):
+1. **App login** (`POST /auth/login`): username/password via `authenticate_user()`. If the user has TOTP enabled for login, `session["user"]` is **deliberately NOT set** — the username is parked on a transient `session["pending_totp_user"]` + `pending_totp_started_at`, and only `POST /auth/login/totp` consumes it on success (with timeout/failure clearing). **This gate is a security property: an attacker with only the password must not reach broker login.**
+2. **Session-state semantics are subtle and load-bearing:** `session["user"]` alone means *password step done, broker step pending* (GET routing sends this state to `/broker`). Only `session["logged_in"] = True` — set by `handle_auth_success()` (`utils/auth_utils.py:352`) after broker auth — means fully authenticated (routed to `/dashboard`). A migration that collapses these two states into one breaks the flow.
+3. **Broker-session resume — the "second login" behavior:** after password (+TOTP), `_try_resume_broker_session(username)` (`auth.py:317`) checks for a still-valid broker token in the DB (Indian broker tokens live until ~3 AM IST). If found, **broker login is skipped entirely** — the user goes straight to the dashboard, and the attempt is logged with `login_type="resume"` (vs `"password"`). This is why a re-login on an already-authenticated instance (including publicly-hosted ones) presents **only the app login, no broker login**. If no valid token exists → redirect `/broker` → per-broker OAuth/credential flow (`blueprints/brlogin.py`, 30+ broker callbacks) → `handle_auth_success()`.
+4. **Expiry path:** on GET with `logged_in` but an invalid session window, the app calls `revoke_user_tokens()` + `session.clear()` — token revocation coupled to session expiry, not just cookie deletion.
+5. **Single-user model:** `/setup` redirect when no user exists; one user, one broker session per instance (no multi-user paths to port, but the setup-vs-login-vs-broker routing must be exact).
+
+**Smart master contract download** (`utils/auth_utils.py:80-120`, triggered asynchronously by `handle_auth_success`):
+- `should_download_master_contract(broker)` rules, all of which must port unchanged: never downloaded → download; **last download was by a different broker → force fresh** (SymToken table would be stale); downloaded **today after the cutoff → skip and use cache**; downloaded before today's cutoff or on a previous day → fresh download.
+- Cutoffs are **per-broker-class**: Indian brokers 08:00 **IST**; crypto brokers (Delta) 00:00 **UTC** — with explicit timezone normalization of stored timestamps (`get_master_contract_cutoff`, naive-timestamp IST localization).
+- `async_master_contract_download()` runs on a background thread, tracks status transitions in `master_contract_status_db` (`downloading`/`error`/success with duration + per-exchange stats), dynamically imports `broker.{broker}.database.master_contract_db`, and completion fans out to the UI via the `master_contract_download`/`cache_loaded` events (the 33 broker emit sites → notifier abstraction, P1-06) plus strategy restoration via `master_contract_cache_hook`.
+
+**Migration treatment:** the decision logic and status tracking are pure Python and lift unchanged; the session writes and the resume gate are exactly what the Phase 1 session seam (P1-09) must preserve. Phase 0 gains dedicated state-machine tests (P0-12: every login state transition incl. TOTP park/consume/timeout, resume vs fresh-broker-login, expiry revocation; P0-13: smart-download decision matrix incl. cutoff boundaries, broker-change invalidation, IST/UTC handling) so the port is verified against executable truth, not prose.
+
 ---
 
 ## 4. Phased Migration Procedure (strangler-fig)
@@ -271,6 +328,7 @@ Each phase is independently shippable and reversible. **Do not merge a phase unt
 - Order-lifecycle contract tests in sandbox mode (place → fill → squareoff → settlement).
 - Startup behavior test (what `import app` does today — guard against lifecycle regressions).
 - Performance + FD baselines (24h soak). Coupling-inventory **CI guard**: a grep gate that fails on *new* `from flask import` / `from extensions import socketio` outside the shell layers, so Phase 1 progress can't regress.
+- **Logging/traceback baseline** (P0-10): `errors.jsonl` schema + redaction tests incl. apikey-in-query in access logs (§3.9). **Webhook security suite** (P0-11): every auth model, error shape, and middleware-order property (§3.16). **Login state-machine suite** (P0-12) and **smart master-contract decision matrix** (P0-13) — see §3.19.
 
 **Phase 1 — Pre-migration hardening (decouple in place, still on Flask).** Expanded post-§1a: this is now the largest de-risking phase, and it ships value even if the FastAPI cutover never happens.
 - **Request-context abstraction** (`contextvars`): user, API key, client IP, broker API timing, latency tracking, session metadata. Replace `flask.g` in `utils/httpx_client.py:55`, request-context reads in `utils/logging.py`, `utils/latency_monitor.py`, `utils/ip_helper.py`, and the conditional import in `database/auth_db.py`.
