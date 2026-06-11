@@ -18,6 +18,10 @@ progress" errors when concurrent requests corrupt the shared cursor state.
 
 For non-SQLite backends (e.g. PostgreSQL) a normal connection pool is used.
 
+SQLite pragmas (WAL journal mode, synchronous=NORMAL) are applied to every
+connection process-wide by the listener in ``database/__init__.py`` — they do
+not need to be set here.
+
 See CLAUDE.md "SQLite Connection Pooling (NullPool)" and the reference
 implementation in ``database/auth_db.py``.
 """
