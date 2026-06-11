@@ -6,7 +6,7 @@
 **Audience:** Maintainers evaluating whether (and how) to move OpenAlgo's web layer from Flask + Flask-SocketIO + eventlet/Gunicorn to FastAPI + python-socketio + Uvicorn ASGI.
 **Scope of this document:** A grounded, file-referenced assessment of what a migration touches, the risks, and a phased procedure that keeps the UI, API contract, `.env`, logs, Docker, and install/upgrade paths byte-for-byte compatible for end users.
 
-> **Bottom line up front.** OpenAlgo is *not* framework-bound at its core — the service layer, broker integrations, databases, logging, ZeroMQ bus, and React UI are all framework-agnostic. The Flask coupling is concentrated in a thin shell: the app factory, routing (blueprints + Flask-RESTX), CSRF/session, middleware, rate limiting, and SocketIO host. **The single highest-risk item is the production runtime model: eventlet + Gunicorn `-w 1`, which is fundamentally incompatible with asyncio.** FastAPI's entire value proposition is async; adopting it means replacing the runtime *and* the realtime host simultaneously. This is a high-effort, high-blast-radius change in a system that places live trading orders. A **strangler-fig / incremental** approach is strongly recommended over a big-bang rewrite.
+> **Bottom line up front.** OpenAlgo's *bulk* business logic — most of the service layer, the sandbox/flow/historify engines, the ZeroMQ bus, the websocket proxy, the MCP engine, and the React UI — is framework-agnostic and lifts unchanged. **But the Flask coupling is NOT a clean thin shell** (this corrects the v1 framing; see §1a for the audit): 23 files outside the HTTP layer import Flask — including **11 broker API/mapping files** that use `flask.session` — and **44 files import `extensions.socketio` directly**, including all 33 broker `master_contract_db.py` modules. Session/auth product logic lives in `utils/`. **Therefore a mandatory pre-migration hardening phase on Flask (Phase 1) — request-context abstraction, a notifier abstraction, a single lifecycle owner, and broker decoupling — must precede any FastAPI code**, so that the framework swap itself touches only true shell code. **The single highest-risk item remains the production runtime model: eventlet + Gunicorn `-w 1`, fundamentally incompatible with asyncio.** FastAPI's value proposition is async; adopting it means replacing the runtime *and* the realtime host simultaneously — high-effort, high-blast-radius, in a system that places live trading orders. A **strangler-fig / incremental** approach with the hardening gate is strongly recommended over a big-bang rewrite.
 
 ---
 
@@ -34,34 +34,34 @@ The table classifies every major subsystem by migration impact. "Framework-agnos
 | Subsystem | Key locations | Flask coupling | Migration impact |
 | --- | --- | --- | --- |
 | **App factory / wiring** | `app.py:132` `create_app()` | High — `Flask(__name__)`, extension init order, blueprint registry | **Rewrite** → FastAPI app + `lifespan` |
-| **Routing — UI/webhooks** | `blueprints/*.py` (49 files) | High — `Blueprint`, `@bp.route` | **Rewrite** → `APIRouter` |
-| **Routing — REST API** | `restx_api/*.py` (49 files, 54 Resources, 46 namespaces) | High — Flask-RESTX `Namespace`/`Resource` | **Rewrite** → FastAPI routers + Pydantic |
+| **Routing — UI/webhooks** | `blueprints/*.py` (48 files) | High — `Blueprint`, `@bp.route` | **Rewrite** → `APIRouter` |
+| **Routing — REST API** | `restx_api/*.py` (49 files, 46 namespace files, 54 Resource classes) | High — Flask-RESTX `Namespace`/`Resource` | **Rewrite** → FastAPI routers + Pydantic |
 | **Request validation** | `restx_api/*schema.py` (Marshmallow) | Medium — Marshmallow | **Port** → Pydantic v2 |
-| **Service layer** | `services/*.py` (68 files) | **None** (pure functions, sync) | **Lift unchanged** |
-| **Broker integrations** | `broker/*/` (33 brokers) | **None** (dynamic `importlib`) | **Lift unchanged** |
-| **Databases** | `database/*.py` (34 modules, 6 DBs) | Low — `g`/teardown only | **Lift**; rewire teardown |
+| **Service layer** | `services/*.py` (68 files) | **Bulk None**, but 2 files import Flask (`telegram_alert_service.py`, `whatsapp_alert_service.py`) + 7 import `extensions.socketio` | **Bulk lifts unchanged after Phase 1 decoupling** (P1-07/P1-12) |
+| **Broker integrations** | `broker/*/` (33 brokers) | **NOT None** — 11 API/mapping files import `flask.session`; all 33 `master_contract_db.py` import `extensions.socketio` | **Lifts after Phase 1 decoupling** (P1-06/P1-08) |
+| **Databases** | `database/*.py` (34 modules, 6 DBs) | Low — `g`/teardown + `auth_db.py` conditional Flask import + `master_contract_cache_hook.py` socketio | **Lift after** `g`/socketio removal (P1-04/P1-07); rewire teardown |
 | **Engine/session factory** | `database/engine_factory.py` (NullPool) | **None** | **Lift unchanged** |
-| **HTTP client** | `utils/httpx_client.py` (sync `httpx.Client`) | Low — `g.broker_api_time` | **Lift**; optionally add async client |
-| **Logging** | `utils/logging.py` (stdlib) | **None** (reads Flask `request` ctx opportunistically) | **Lift unchanged** |
-| **SocketIO (events)** | `extensions.py:6`, `subscribers/socketio_subscriber.py` | High — Flask-SocketIO host | **Re-host** → python-socketio ASGI |
+| **HTTP client** | `utils/httpx_client.py` (sync `httpx.Client`) | Low — `from flask import g` (`:55`) | **Lift after** `g`→ContextVar (P1-02) |
+| **Logging** | `utils/logging.py` (stdlib) | Low — reads Flask `request` ctx opportunistically; Werkzeug-specific filters | **Lift after** ContextVar swap + filter retirement (P1-03/§3.9) |
+| **SocketIO (events)** | `extensions.py:6`, `subscribers/socketio_subscriber.py`, **+44 direct importers** | High — Flask-SocketIO host **and scattered direct `socketio.emit` across core** | **Re-host** → python-socketio ASGI, **after** notifier abstraction collapses 44→1 (P1-05/06/07) |
 | **WebSocket proxy (market data)** | `websocket_proxy/server.py` (asyncio + `zmq.asyncio`) | **None** (separate process/thread, already asyncio) | **Lift unchanged** |
 | **ZeroMQ bus** | `websocket_proxy/base_adapter.py:187` (PUB), `server.py:110` (SUB) | **None** | **Lift unchanged** |
-| **Broker streaming adapters** | `broker/*/streaming/*` | **None** (real OS threads) | **Lift unchanged** |
-| **Schedulers** | `services/*scheduler*.py`, `blueprints/python_strategy.py` (APScheduler) | Low — passed `socketio` | **Lift**; rewire emit handle |
+| **Broker streaming adapters** | `broker/*/streaming/*` | **None** (real OS threads; eventlet escape hatch only) | **Lift unchanged** (simplify eventlet escape in P5-03) |
+| **Schedulers** | `services/*scheduler*.py`, `blueprints/python_strategy.py` (APScheduler) | Low — passed `socketio` | **Lift**; rewire emit via notifier; start via lifecycle owner |
 | **Sandbox engine** | `sandbox/` (11 modules), `services/sandbox_service.py`, `database/sandbox_db.py`, `sandbox/squareoff_thread.py` | **None** (event bus + APScheduler + threads) | **Lift unchanged**; only `blueprints/sandbox.py` shell ports |
 | **Security middleware** | `utils/security_middleware.py` (WSGI) | High — WSGI callable | **Port** → ASGI middleware |
 | **Traffic logger** | `utils/traffic_logger.py` (WSGI) | High — WSGI callable | **Port** → ASGI middleware |
 | **CSP / security headers** | `csp.py:155` (`after_request`) | Medium | **Port** → ASGI middleware |
 | **CSRF** | Flask-WTF `CSRFProtect` (`app.py:145`), `/auth/csrf-token` | High — no FastAPI equivalent | **Replace** → custom/`starlette-csrf` |
-| **Sessions / login** | `flask.session` cookie dict (no Flask-Login despite dep) | High | **Replace** → Starlette session middleware |
+| **Sessions / login** | `flask.session` cookie dict (no Flask-Login despite dep); `utils/session.py`, `utils/auth_utils.py` product logic | High — **session/auth logic in `utils/`, not just glue** | **Replace** → Starlette session middleware behind a session seam (P1-09); see §3.19 |
 | **Rate limiting** | `limiter.py` (Flask-Limiter, in-memory moving-window) | High | **Replace** → SlowAPI |
 | **CORS** | `cors.py` (Flask-CORS) | Medium | **Replace** → `CORSMiddleware` |
 | **React SPA serving** | `blueprints/react_app.py` (index + hashed assets + br/gz negotiation) | Medium | **Port** → `StaticFiles` + custom routes |
-| **Jinja templates** | **Only one** inline `render_template_string` (OAuth consent, `mcp_oauth.py`) | Low | **Port** → 1 Jinja2 template |
+| **Jinja templates** | 1 inline `render_template_string` (OAuth consent, `mcp_oauth.py:641`) + **42 dead `render_template()` calls across 20 blueprint files** (no `templates/` dir) | Low | **Port** the 1 live template; **dispose** the 42 dead calls (P1-11) |
 
 **Two facts that materially de-risk this migration and are worth stating up front:**
 1. **The market-data path is already asyncio.** `websocket_proxy/server.py` uses `asyncio` + `zmq.asyncio` and runs as a **separate process** under Gunicorn/eventlet (`websocket_proxy/app_integration.py`). It does not depend on Flask at all. The migration does **not** touch market-data streaming, ZeroMQ, or broker streaming adapters.
-2. **There are effectively zero server-rendered HTML templates.** The UI is a React SPA served from `frontend/dist/`. The only Jinja usage is a single inline OAuth-consent form. "Managing the UI the same" is therefore a static-file-serving problem, not a templating rewrite.
+2. **There is one live server-rendered template, plus dead ones.** The UI is a React SPA served from `frontend/dist/`. The only **live** Jinja usage is the inline OAuth-consent form (`mcp_oauth.py:641`); the 42 other `render_template()` calls (across 20 blueprints) point at a non-existent `templates/` dir and are dead routes shadowed by React. "Managing the UI the same" is therefore a static-file-serving problem plus a one-template port plus an explicit dead-route disposition — not a templating rewrite.
 
 Most target-stack dependencies are already in the tree: `starlette==1.0.1`, `uvicorn==0.44.0`, `sse-starlette==2.4.1`, `httpx==0.28.1`, `pydantic==2.12.5`, `python-socketio==5.16.1` (`pyproject.toml`). **However, `fastapi` itself is NOT a dependency yet** (verified: absent from `pyproject.toml`, `requirements*.txt`, and `uv.lock`) — it must be added with a pin compatible with the existing `starlette`/`pydantic` pins, and the Flask-Limiter/Flask-WTF replacements (`slowapi`, CSRF library) need explicit version decisions. Tracked as P2-01.
 
@@ -220,9 +220,9 @@ What **ports** (thin shell only, same effort as any blueprint):
 Net: the Sandbox **engine, capital model, margin/leverage, auto-squareoff timing, and isolation from live trading are preserved byte-for-byte.** It is one of the lowest-risk parts of the migration.
 
 ### 3.10b Every other feature — engines kept as-is (only HTTP shells port)
-The Sandbox finding generalizes to the **entire feature set**. I audited Flow, Historify, Playground, the ngrok/ZMQ/WebSocket config, the Telegram/WhatsApp bots, MCP, Action Center, the Options Tools suite, monitoring, and the integration webhooks. The pattern is uniform and worth stating as a governing principle for the migration:
+The Sandbox finding generalizes — with the §1a caveat — to the **entire feature set**. I audited Flow, Historify, Playground, the ngrok/ZMQ/WebSocket config, the Telegram/WhatsApp bots, MCP, Action Center, the Options Tools suite, monitoring, and the integration webhooks.
 
-> **Governing principle:** business logic lives in `services/` (~70 modules), `database/` (~34 modules), `sandbox/`, `websocket_proxy/`, `mcp/`, and `utils/` — **none of it imports Flask in the hot path.** Flask coupling is confined to the ~49 `blueprints/` (thin HTTP shells), ~18 `socketio.emit` call sites, and a handful of `session.get("user")` reads. The **feature engines are kept byte-for-byte; only the HTTP shell is rewritten**, and the user-visible behavior (routes, JSON, event names, schedules, webhooks) stays identical.
+> **Corrected governing principle (supersedes the v1 wording, aligned with §1a):** the *engines* — `sandbox/`, `websocket_proxy/`, `mcp/`, and most of `services/` and `database/` — are framework-agnostic and kept byte-for-byte. **But the boundary is not clean: the edges import Flask.** 23 files outside the HTTP shell import Flask (incl. 11 broker files using `flask.session`), **44 files import `extensions.socketio` directly** (incl. all 33 broker `master_contract_db.py` modules — NOT the ~18 v1 claimed), and session/auth product logic lives in `utils/`. So the per-feature tables below show "engine kept as-is" **on the explicit precondition that Phase 1 hardening first severs those edge imports** (notifier abstraction for the 44 emit sites, `flask.session` removal from broker code, context/session seams). After Phase 1, the user-visible behavior (routes, JSON, event names, schedules, webhooks) stays identical and only the HTTP shell is rewritten.
 
 | Feature | Engine / logic (kept as-is) | Thin shell that ports | Config |
 | --- | --- | --- | --- |
@@ -252,15 +252,18 @@ The Sandbox finding generalizes to the **entire feature set**. I audited Flow, H
 ### 3.11 ZeroMQ support (untouched)
 - PUB at `base_adapter.py:187` (port 5555, loopback), async SUB at `server.py:110` (`zmq.asyncio`). Lives entirely in the websocket-proxy process. **No migration work.** Verify only that the proxy is still spawned correctly by the new entrypoint (it's started from `app.py` today via `start_websocket_proxy`; that call moves into the FastAPI `lifespan` startup).
 
-### 3.12 Docker support (ports & behavior identical)
-- Multi-stage `python:3.12` build, non-root `appuser`, ports **5000** (app) + **8765** (websocket). Keep both.
-- Change: `start.sh` swaps `gunicorn --worker-class eventlet -w 1 ... app:app` → `uvicorn app:asgi_app --host 0.0.0.0 --port ${APP_PORT} --workers 1` (plus `--timeout-keep-alive` and graceful-shutdown tuning to match the current 300s/30s timeouts as closely as ASGI allows).
-- Remove the `uv pip install ... eventlet` line from the Dockerfile.
-- The websocket-proxy subprocess spawn logic simplifies (no eventlet branch) but keep it as a subprocess for isolation.
+### 3.12 Docker support (TCP mode — ports preserved, EXPOSE wording corrected)
+- Multi-stage `python:3.12` build, non-root `appuser`. **Precise port facts:** the `Dockerfile` only `EXPOSE 5000` (single line, verified); port **8765** is published by `docker-compose.yaml:10-11` (`${FLASK_PORT:-5000}:5000` and `${WEBSOCKET_PORT:-8765}:8765`) and the install scripts — **not** by the Dockerfile. Migration keeps this exactly; if a second `EXPOSE 8765` is desired for documentation it's an optional, separate change — do not claim the Dockerfile exposes 8765 today.
+- Change: `start.sh` swaps `gunicorn --worker-class eventlet -w 1 ... app:app` → `uvicorn <asgi target> --host 0.0.0.0 --port ${APP_PORT} --workers 1` (TCP bind), with `--timeout-keep-alive` + graceful-shutdown tuning approximating the current 300s/30s timeouts.
+- **Preserve pre-start migrations:** `start.sh` runs `upgrade/rotate_pepper.py` (`:273`) and `upgrade/migrate_all.py` (`:292-294`) **before** launching the server. The cutover must keep these steps and their ordering (migrations → app start) intact — they are not framework-specific and must not be dropped (P5-01).
+- Remove the `uv pip install ... eventlet` line from the Dockerfile (P5-03). The websocket-proxy subprocess spawn simplifies (no eventlet branch) but stays a subprocess for isolation.
 
-### 3.13 Ubuntu install procedure (commands unchanged for users)
-- `install/install.sh` (systemd), `install-multi.sh`, nginx/SSL variants. The **user-facing commands stay the same**; only the systemd `ExecStart` changes from gunicorn to uvicorn. nginx reverse-proxy config is unaffected (still proxies to `:5000`, still passes WebSocket upgrade to `:8765`).
-- `requirements-nginx.txt` drops `gunicorn`/`eventlet`, keeps the rest; add `uvicorn[standard]` (already pinned).
+### 3.13 Ubuntu install procedure — TWO transport modes, documented separately
+The single-instance Docker/`start.sh` path binds **TCP** (`:5000`), but the Linux systemd + nginx installers proxy to a **Unix domain socket**, not TCP — this distinction was glossed in v1 and matters for the cutover:
+
+- **TCP mode** (Docker, `start.sh`, dev): uvicorn binds `0.0.0.0:${APP_PORT}`. nginx (where present) proxies to `:5000`. Straightforward gunicorn→uvicorn swap.
+- **UDS mode** (systemd + nginx, multi-instance): `install/install-multi.sh:279` and `install/change-domain.sh:106,156` create `openalgo.sock`, and nginx uses `proxy_pass http://unix:$SOCKET_FILE` (`install-multi.sh:536`, `change-domain.sh:585,609`). Gunicorn binds that socket today. **uvicorn must bind the same socket via `--uds $SOCKET_FILE`** so the existing nginx config keeps working untouched; otherwise the nginx `proxy_pass` must change. The migration's systemd `ExecStart` rewrite (P5-02) must explicitly use `--uds` to match, and the WebSocket upgrade to `:8765` (TCP) is unaffected in both modes.
+- `requirements-nginx.txt` drops `gunicorn`/`eventlet`, keeps the rest; `uvicorn[standard]` is already pinned. **User-facing install/upgrade commands stay the same.**
 
 ### 3.14 Update procedure (must remain `git pull` + `uv sync` + restart)
 - The canonical upgrade path (`git pull` from main → `uv sync` → restart; `install/update.sh`) **must not change** for users. The only difference is the service restarts a Uvicorn process instead of Gunicorn — invisible to the operator running `update.sh`.
@@ -294,7 +297,7 @@ The pipeline (`.github/workflows/ci.yml` + `security.yml`) has **9 jobs**: `back
 For the operator running an existing Flask-based instance, the cutover release must look like **any other release**:
 
 1. **Upgrade** — `cd openalgo && git pull && uv sync && restart` (or `install/update.sh`, or `docker pull` + recreate). No `.env` edits, no DB migrations (all 6 databases and `db/historify.duckdb` are untouched by the framework swap), no Node.js needed.
-2. **What the operator may notice** — at most a **one-time forced re-login** if session-cookie compatibility (R4) is resolved as "accept re-login" (decision in P2-06; release notes must say so). Broker re-auth follows the normal daily flow. Nothing else: same ports, same URLs, same API keys, same webhooks, same logs.
+2. **What the operator may notice** — a **one-time forced re-login should be treated as the LIKELY default, not a maybe.** Starlette's `SessionMiddleware` does not use Flask's session serializer, so matching cookie name/flags/`APP_KEY` is **not sufficient** for Starlette to read an existing Flask session cookie — the signing/serialization formats differ. Reading old cookies would require intentionally implementing a Flask-compatible serializer (extra scope + security review). Plan for re-login on upgrade and say so in release notes (decision in P2-06; R4). Broker re-auth follows the normal daily flow. Everything else is unchanged: same ports, URLs, API keys, webhooks, logs.
 3. **Rollback** — because there are no schema changes, rollback is symmetric: `git checkout <previous-tag> && uv sync && restart` (or redeploy the previous Docker image tag). Databases, `.env`, and webhook URLs all remain valid in both directions. The release that ships the cutover must pin a **known-good rollback tag** in its notes.
 4. **Recommended rollout** — ship the cutover as a major platform version (per the version-bump procedure in CLAUDE.md), hold it in a release-candidate window with the soak/regression evidence from P5-04 attached, and keep the previous minor as the documented rollback for one full token-expiry cycle (≥1 trading day, given the ~3 AM IST token reset).
 
@@ -314,6 +317,12 @@ This is the most intricate state machine in the app, it lives partly in `utils/a
 - `async_master_contract_download()` runs on a background thread, tracks status transitions in `master_contract_status_db` (`downloading`/`error`/success with duration + per-exchange stats), dynamically imports `broker.{broker}.database.master_contract_db`, and completion fans out to the UI via the `master_contract_download`/`cache_loaded` events (the 33 broker emit sites → notifier abstraction, P1-06) plus strategy restoration via `master_contract_cache_hook`.
 
 **Migration treatment:** the decision logic and status tracking are pure Python and lift unchanged; the session writes and the resume gate are exactly what the Phase 1 session seam (P1-09) must preserve. Phase 0 gains dedicated state-machine tests (P0-12: every login state transition incl. TOTP park/consume/timeout, resume vs fresh-broker-login, expiry revocation; P0-13: smart-download decision matrix incl. cutoff boundaries, broker-change invalidation, IST/UTC handling) so the port is verified against executable truth, not prose.
+
+### 3.20 DB-readiness gate (startup-ordering parity)
+A subtle but load-bearing behavior: `app.py` installs a `@app.before_request` gate (`wait_for_db_ready`, `app.py:426-440`) that **blocks every non-static request for up to 30s** on a `threading.Event` (`app.db_ready`, set at `app.py:660` once the background DB/scheduler init thread finishes; the main thread also `app.db_ready.wait()`s at `:822`). This prevents requests from hitting half-initialized databases during the async startup window. The FastAPI port must reproduce it: the lifecycle owner (P1-10) owns the `db_ready` event, and an **ASGI middleware/dependency must enforce the same 30s wait-then-proceed gate** on non-static paths — not just rely on `lifespan` completion, because today's design intentionally starts serving (static) while DBs warm up in the background. Tracked under lifecycle/middleware parity (P1-10, P2-05, P4-11) with an explicit assertion in the startup test (P0-07).
+
+### 3.21 FastAPI auto-docs (`/docs`, `/redoc`, `/openapi.json`) — parity decision required
+Flask-RESTX docs are **disabled** today (`restx_api/__init__.py:10` `doc=False`) — there is no public Swagger UI. FastAPI **enables `/docs`, `/redoc`, and `/openapi.json` by default.** Shipping the migration as-is would **add a new public surface** that exposes the full API schema — a security/parity regression for a single-user self-hosted trading app. **Decision: disable them by default** (`FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`) to match current behavior, OR gate them behind authentication if the project deliberately wants docs. This must be a conscious choice in P2-02, asserted by a Phase 0/2 test that `/docs` returns 404 (or 401) unless explicitly enabled. (Native OpenAPI remains available internally for contract tests even with the public routes off.)
 
 ---
 
@@ -387,11 +396,11 @@ Each phase is independently shippable and reversible. **Do not merge a phase unt
 
 ## 6. Go / No-Go Recommendation
 
-**Proceed only if** the goal is long-term maintainability + native async headroom and the team can fund a multi-phase program with full contract-test coverage. The architecture *supports* it cleanly — the core is already decoupled, the market-data path is already asyncio, and the target deps are already vendored.
+**Proceed only if** the goal is long-term maintainability + native async headroom and the team can fund a multi-phase program with full contract-test coverage. The architecture supports it — the *engines* are decoupled and the market-data path is already asyncio — **but the edges are not clean** (§1a: 23 Flask-importing files, 44 socketio importers, session logic in `utils/`), so the pre-migration hardening phase is mandatory, and `fastapi` itself is not yet a dependency.
 
 **Do not proceed** if the immediate goal is "make orders/quotes faster." That is better served by Phase 6-style targeted `httpx.AsyncClient` adoption **inside the existing Flask app** (eventlet already cooperatively schedules I/O), or a standalone FastAPI microservice for one async-heavy surface — neither requires the full runtime cutover.
 
-**Suggested first concrete step:** Execute **Phase 0** (contract tests + baselines + coupling inventory) and **Phase 2** (parallel FastAPI app serving one read-only namespace). These are low-risk, reversible, and will surface the real cost of the realtime + CSRF + session work before any irreversible commitment.
+**Suggested first concrete step:** Execute **Phase 0** (contract/webhook/login/logging tests + baselines + coupling-inventory CI gate) followed by **Phase 1** (the hardening: request-context + notifier abstractions, lifecycle owner, broker decoupling, dead-template disposition). Both ship value on Flask and are fully reversible. **Phase 2 (the first FastAPI code) begins only after the Phase 1 hardening gate (P1-13) is green** — do not stand up the parallel FastAPI app before the edges are decoupled, since its dependencies (P2-* depend on P1-13 in the tracker) assume a clean shell. This sequencing surfaces the real cost of realtime + CSRF + session work without any irreversible commitment.
 
 ---
 
