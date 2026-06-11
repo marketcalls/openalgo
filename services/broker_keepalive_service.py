@@ -106,32 +106,58 @@ def _get_active_broker():
         db_session.remove()
 
 
+def _warm_broker_modules(broker):
+    """Pre-import the broker's order hot-path modules.
+
+    The first live order after a restart otherwise pays the module import
+    cost (order_api, transform_data and their dependency chains) inside the
+    measured order window.
+    """
+    for suffix in ("api.order_api", "mapping.transform_data"):
+        try:
+            importlib.import_module(f"broker.{broker}.{suffix}")
+        except Exception:
+            # Best-effort: a broker without one of these modules just skips it
+            logger.debug(f"Could not pre-import broker.{broker}.{suffix}")
+
+
 def _keepalive_loop():
     from utils.httpx_client import get_httpx_client
 
     base_url = None
+    warmed_broker = None
     unresolved = set()
     last_refresh = 0.0
+    # During app startup the database initializes on a background thread, so
+    # the first broker lookups can fail. Retry quickly for the first minute
+    # so the first ping (and module warm-up) lands right after DB-ready
+    # instead of one full interval later.
+    fast_retry_until = time.monotonic() + 60
 
     while True:
+        sleep_seconds = _PING_INTERVAL
         try:
-            if not _in_market_window():
-                time.sleep(60)
-                continue
-
             now = time.monotonic()
             if base_url is None or now - last_refresh >= _BROKER_REFRESH_SECONDS:
                 last_refresh = now
                 broker = _get_active_broker()
                 base_url = _resolve_base_url(broker)
-                if broker and base_url is None and broker not in unresolved:
-                    unresolved.add(broker)
-                    logger.info(
-                        f"Connection keep-warm idle: broker '{broker}' has no "
-                        f"api/baseurl.py with {' or '.join(_URL_ATTRS)}"
-                    )
+                if broker:
+                    if base_url is None and broker not in unresolved:
+                        unresolved.add(broker)
+                        logger.info(
+                            f"Connection keep-warm idle: broker '{broker}' has no "
+                            f"api/baseurl.py with {' or '.join(_URL_ATTRS)}"
+                        )
+                    if broker != warmed_broker:
+                        _warm_broker_modules(broker)
+                        warmed_broker = broker
 
-            if base_url:
+            if base_url is None:
+                sleep_seconds = 2 if now < fast_retry_until else _PING_INTERVAL
+            elif not _in_market_window():
+                sleep_seconds = 60
+            else:
                 client = get_httpx_client()
                 response = client.head(base_url, timeout=5)
                 logger.debug(f"Keep-warm ping {base_url} -> {response.status_code}")
@@ -141,7 +167,7 @@ def _keepalive_loop():
             # log/errors.jsonl every ping interval.
             logger.debug(f"Keep-warm ping failed: {e}")
 
-        time.sleep(_PING_INTERVAL)
+        time.sleep(sleep_seconds)
 
 
 def start_broker_keepalive():
