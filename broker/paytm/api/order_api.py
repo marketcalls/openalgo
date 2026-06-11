@@ -223,7 +223,7 @@ def get_open_positionss(tradingsymbol, exchange, product, auth):
 
             if security_match and exchange_match and product_match:
                 net_qty = str(position.get("net_qty", position.get("netQty", "0")))
-                logger.info(f"✓ Found matching position for {tradingsymbol}!")
+                logger.debug(f"✓ Found matching position for {tradingsymbol}!")
                 logger.debug(f"Net Quantity: {net_qty}")
                 break
             else:
@@ -429,12 +429,12 @@ def place_smartorder_api(data, auth):
             order_data["action"] = action
             order_data["quantity"] = str(quantity)
 
-            logger.info(f"Placing smart order: {order_data}")
+            logger.debug(f"Placing smart order: {order_data}")
             # Place the order
             res, response, orderid = place_order_api(order_data, auth)
             _invalidate_position_cache(AUTH_TOKEN)
             logger.debug(f"Smart order response: {response}")
-            logger.info(f"Smart order ID: {orderid}")
+            logger.debug(f"Smart order ID: {orderid}")
 
             return res, response, orderid
 
@@ -465,7 +465,7 @@ def close_all_positions(current_api_key, auth):
 
     if positions_response["status"] == "success":
         total_positions = len(positions_response["data"])
-        logger.info(f"Found {total_positions} positions")
+        logger.debug(f"Found {total_positions} positions")
 
         # Loop through each position to close
         for position in positions_response["data"]:
@@ -473,7 +473,7 @@ def close_all_positions(current_api_key, auth):
             net_qty = position.get("net_qty", position.get("netQty", "0"))
             # Skip if net quantity is zero
             if int(net_qty) == 0:
-                logger.info(f"Skipping position with zero quantity: {position.get('security_id')}")
+                logger.debug(f"Skipping position with zero quantity: {position.get('security_id')}")
                 continue
 
             # Determine action based on net quantity
@@ -490,13 +490,13 @@ def close_all_positions(current_api_key, auth):
             # rather than trying to look it up in our database
 
             # Print detailed position info
-            logger.info(
+            logger.debug(
                 f"Processing position: security_id={pos_security_id}, exchange={pos_exchange}, instrument={pos_instrument}, display_name={pos_display_name}, qty={net_qty}, action={action}"
             )
 
             # Skip if no security ID
             if not pos_security_id:
-                logger.info(f"Skipping position due to missing security_id: {position}")
+                logger.debug(f"Skipping position due to missing security_id: {position}")
                 failed_closes += 1
                 continue
 
@@ -531,7 +531,7 @@ def close_all_positions(current_api_key, auth):
                 "source": "M",
             }
 
-            logger.info(f"Placing Order: {order_payload}")
+            logger.debug(f"Placing Order: {order_payload}")
 
             # Place the order directly without transform
             response = get_api_response(
@@ -545,7 +545,7 @@ def close_all_positions(current_api_key, auth):
             logger.debug(f"Response from closing order: {response}")
 
             if response.get("status") == "success":
-                logger.info(
+                logger.debug(
                     f"Successfully closed position for {pos_security_id} ({pos_display_name})"
                 )
                 successful_closes += 1
@@ -577,7 +577,7 @@ def cancel_order(orderid, auth):
     for order in orders_list["data"]:
         if order["order_no"] == orderid:
             if order["status"] == "Pending":
-                logger.info(f"Cancelling order: {orderid}")
+                logger.debug(f"Cancelling order: {orderid}")
                 payload = json.dumps(
                     {
                         "order_no": orderid,
@@ -637,7 +637,7 @@ def modify_order(data, auth):
                     "message": f"Order {orderid} cannot be modified. Current status: {order['status']}",
                 }, 400
 
-            logger.info(f"Modifying order: {orderid}")
+            logger.debug(f"Modifying order: {orderid}")
 
             # Prepare modification payload
             payload = {
@@ -660,7 +660,7 @@ def modify_order(data, auth):
                 "group_id": order["group_id"],
             }
 
-            logger.info(f"Modification payload: {payload}")
+            logger.debug(f"Modification payload: {payload}")
 
             response = get_api_response(
                 endpoint="/orders/v1/modify/regular",
@@ -669,7 +669,7 @@ def modify_order(data, auth):
                 payload=json.dumps(payload),
             )
 
-            logger.info(f"Modification response: {response}")
+            logger.debug(f"Modification response: {response}")
 
             if response.get("status") == "success":
                 return {
@@ -697,7 +697,7 @@ def cancel_all_orders_api(data, auth):
     orders_to_cancel = [
         order for order in order_book_response.get("data", []) if order["status"] in ["Pending"]
     ]
-    logger.info(f"{orders_to_cancel}")
+    logger.debug(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

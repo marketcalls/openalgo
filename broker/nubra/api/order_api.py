@@ -111,7 +111,7 @@ def get_positions(auth):
     Returns list of positions with fields like ref_id, ref_data, quantity, etc.
     """
     response = get_api_response("/portfolio/positions", auth)
-    logger.info(f"Nubra Raw position book response: {response}")
+    logger.debug(f"Nubra Raw position book response: {response}")
     return response
 
 
@@ -242,7 +242,7 @@ def place_order_api(data, auth):
     # Get token (ref_id) for the symbol
     token = get_token(data["symbol"], data["exchange"])
     
-    logger.info(f"Nubra order - Symbol: {data['symbol']}, Exchange: {data['exchange']}, Token: {token}")
+    logger.debug(f"Nubra order - Symbol: {data['symbol']}, Exchange: {data['exchange']}, Token: {token}")
     
     # Transform OpenAlgo data to Nubra format
     nubra_data = transform_data(data, token)
@@ -256,7 +256,7 @@ def place_order_api(data, auth):
     
     payload = json.dumps(nubra_data)
     
-    logger.info(f"Nubra place order payload: {payload}")
+    logger.debug(f"Nubra place order payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -293,7 +293,7 @@ def place_order_api(data, auth):
         response_data = {"error": "Failed to parse response"}
         return response, response_data, None
 
-    logger.info(f"Nubra place order response (status={response.status_code}): {response_data}")
+    logger.debug(f"Nubra place order response (status={response.status_code}): {response_data}")
 
     # Nubra returns 201 (Created) on success with order_id in response
     if response.status_code in [200, 201] and "order_id" in response_data:
@@ -332,8 +332,8 @@ def place_smartorder_api(data, auth):
             get_open_position(symbol, exchange, product, AUTH_TOKEN)
         )
 
-        logger.info(f"position_size : {position_size}")
-        logger.info(f"Open Position : {current_position}")
+        logger.debug(f"position_size : {position_size}")
+        logger.debug(f"Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -343,12 +343,12 @@ def place_smartorder_api(data, auth):
         if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
             action = data["action"]
             quantity = data["quantity"]
-            # logger.info(f"action : {action}")
-            # logger.info(f"Quantity : {quantity}")
+            # logger.debug(f"action : {action}")
+            # logger.debug(f"Quantity : {quantity}")
             res, response, orderid = place_order_api(data, AUTH_TOKEN)
             _invalidate_position_cache(AUTH_TOKEN)
-            # logger.info(f"{res}")
-            # logger.info(f"{response}")
+            # logger.debug(f"{res}")
+            # logger.debug(f"{response}")
 
             return res, response, orderid
 
@@ -379,11 +379,11 @@ def place_smartorder_api(data, auth):
             if position_size > current_position:
                 action = "BUY"
                 quantity = position_size - current_position
-                # logger.info(f"smart buy quantity : {quantity}")
+                # logger.debug(f"smart buy quantity : {quantity}")
             elif position_size < current_position:
                 action = "SELL"
                 quantity = current_position - position_size
-                # logger.info(f"smart sell quantity : {quantity}")
+                # logger.debug(f"smart sell quantity : {quantity}")
 
         if action:
             # Prepare data for placing the order
@@ -391,13 +391,13 @@ def place_smartorder_api(data, auth):
             order_data["action"] = action
             order_data["quantity"] = str(quantity)
 
-            # logger.info(f"{order_data}")
+            # logger.debug(f"{order_data}")
             # Place the order
             res, response, orderid = place_order_api(order_data, auth)
             _invalidate_position_cache(AUTH_TOKEN)
-            # logger.info(f"{res}")
-            logger.info(f"{response}")
-            logger.info(f"{orderid}")
+            # logger.debug(f"{res}")
+            logger.debug(f"{response}")
+            logger.debug(f"{orderid}")
 
             return res, response, orderid
 
@@ -413,7 +413,7 @@ def close_all_positions(current_api_key, auth):
 
     positions_response = get_positions(AUTH_TOKEN)
     
-    logger.info(f"Nubra positions response: {positions_response}")
+    logger.debug(f"Nubra positions response: {positions_response}")
 
     # Handle Nubra's response format - portfolio contains stock_positions, fut_positions, opt_positions
     positions = []
@@ -465,7 +465,7 @@ def close_all_positions(current_api_key, auth):
         if oa_symbol:
             symbol = oa_symbol
         
-        logger.info(f"Closing position - Symbol: {symbol}, Exchange: {exchange}, Qty: {quantity}, Action: {action}")
+        logger.debug(f"Closing position - Symbol: {symbol}, Exchange: {exchange}, Qty: {quantity}, Action: {action}")
 
         # Map product type - Nubra uses 'product' like ORDER_DELIVERY_TYPE_CNC
         product_type = position.get("product", "ORDER_DELIVERY_TYPE_IDAY")
@@ -483,13 +483,13 @@ def close_all_positions(current_api_key, auth):
             "quantity": str(quantity),
         }
 
-        logger.info(f"Close position payload: {place_order_payload}")
+        logger.debug(f"Close position payload: {place_order_payload}")
 
         # Place the order to close the position
         res, response, orderid = place_order_api(place_order_payload, auth)
         positions_closed += 1
 
-        logger.info(f"Close position response: {response}, orderid: {orderid}")
+        logger.debug(f"Close position response: {response}, orderid: {orderid}")
 
         # Rate limit: 10 ops/sec = 100ms gap between requests
         time.sleep(0.1)
@@ -554,7 +554,7 @@ def cancel_order(orderid, auth):
         logger.error(f"Failed to parse cancel order response: {response.text}")
         return {"status": "error", "message": "Failed to parse response"}, response.status_code
 
-    logger.info(f"Nubra cancel order response (status={response.status_code}): {data}")
+    logger.debug(f"Nubra cancel order response (status={response.status_code}): {data}")
 
     # Check if the request was successful
     # Nubra returns {"message": "delete request pushed"} on success
@@ -605,7 +605,7 @@ def modify_order(data, auth):
     }
     payload = json.dumps(transformed_data)
     
-    logger.info(f"Nubra modify order payload: {payload}")
+    logger.debug(f"Nubra modify order payload: {payload}")
 
     # Make the POST request with 429 retry
     response = None
@@ -645,7 +645,7 @@ def modify_order(data, auth):
         logger.error(f"Failed to parse modify order response: {response.text}")
         return {"status": "error", "message": "Failed to parse response"}, response.status_code
 
-    logger.info(f"Nubra modify order response (status={response.status_code}): {response_data}")
+    logger.debug(f"Nubra modify order response (status={response.status_code}): {response_data}")
 
     # Check if the request was successful
     # Nubra returns {"message": "update request pushed"} on success
@@ -673,7 +673,7 @@ def cancel_all_orders_api(data, auth):
     AUTH_TOKEN = auth
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    # logger.info(f"{order_book_response}")
+    # logger.debug(f"{order_book_response}")
     
     # Nubra returns a list directly, or could return error dict
     if isinstance(order_book_response, dict):
@@ -701,7 +701,7 @@ def cancel_all_orders_api(data, auth):
         for order in orders
         if order.get("order_status") in open_statuses
     ]
-    # logger.info(f"{orders_to_cancel}")
+    # logger.debug(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

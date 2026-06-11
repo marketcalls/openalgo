@@ -58,7 +58,7 @@ def get_trade_book(auth):
 
 def get_positions(auth):
     positions = get_api_response("/NorenWClientAPI/PositionBook", auth, method="POST")
-    logger.info(f"PositionBook raw response: {positions}")
+    logger.debug(f"PositionBook raw response: {positions}")
     return positions
 
 
@@ -117,7 +117,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
 
-    logger.info(f"{positions_data}")
+    logger.debug(f"{positions_data}")
 
     net_qty = "0"
 
@@ -125,7 +125,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         isinstance(positions_data, dict) and (positions_data["stat"] == "Not_Ok")
     ):
         # Handle the case where there is no data
-        logger.info("No data available.")
+        logger.debug("No data available.")
         net_qty = "0"
 
     if positions_data and isinstance(positions_data, list):
@@ -156,7 +156,7 @@ def place_order_api(data, auth):
 
     payload = "jData=" + json.dumps(newdata)
 
-    logger.info(f"{payload}")
+    logger.debug(f"{payload}")
 
     # Get the shared httpx client
     client = get_httpx_client()
@@ -167,7 +167,7 @@ def place_order_api(data, auth):
     res.status = res.status_code
     response_data = json.loads(res.text)
 
-    logger.info(f"PlaceOrder Response: {response_data}")
+    logger.debug(f"PlaceOrder Response: {response_data}")
 
     if response_data.get("stat") == "Ok":
         orderid = response_data.get("norenordno")
@@ -198,8 +198,8 @@ def place_smartorder_api(data, auth):
             get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
         )
 
-        logger.info(f"position_size : {position_size}")
-        logger.info(f"Open Position : {current_position}")
+        logger.debug(f"position_size : {position_size}")
+        logger.debug(f"Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -209,12 +209,12 @@ def place_smartorder_api(data, auth):
         if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
             action = data["action"]
             quantity = data["quantity"]
-            # logger.info(f"action : {action}")
-            # logger.info(f"Quantity : {quantity}")
+            # logger.debug(f"action : {action}")
+            # logger.debug(f"Quantity : {quantity}")
             res, response, orderid = place_order_api(data, AUTH_TOKEN)
             _invalidate_position_cache(AUTH_TOKEN)
-            # logger.info(f"{res}")
-            # logger.info(f"{response}")
+            # logger.debug(f"{res}")
+            # logger.debug(f"{response}")
 
             return res, response, orderid
 
@@ -245,11 +245,11 @@ def place_smartorder_api(data, auth):
             if position_size > current_position:
                 action = "BUY"
                 quantity = position_size - current_position
-                # logger.info(f"smart buy quantity : {quantity}")
+                # logger.debug(f"smart buy quantity : {quantity}")
             elif position_size < current_position:
                 action = "SELL"
                 quantity = current_position - position_size
-                # logger.info(f"smart sell quantity : {quantity}")
+                # logger.debug(f"smart sell quantity : {quantity}")
 
         if action:
             # Prepare data for placing the order
@@ -257,13 +257,13 @@ def place_smartorder_api(data, auth):
             order_data["action"] = action
             order_data["quantity"] = str(quantity)
 
-            # logger.info(f"{order_data}")
+            # logger.debug(f"{order_data}")
             # Place the order
             res, response, orderid = place_order_api(order_data, auth)
             _invalidate_position_cache(AUTH_TOKEN)
-            # logger.info(f"{res}")
-            logger.info(f"{response}")
-            logger.info(f"{orderid}")
+            # logger.debug(f"{res}")
+            logger.debug(f"{response}")
+            logger.debug(f"{orderid}")
 
             return res, response, orderid
 
@@ -291,7 +291,7 @@ def close_all_positions(current_api_key, auth):
 
             # get openalgo symbol to send to placeorder function
             symbol = get_symbol(position["token"], position["exch"])
-            logger.info(f"The Symbol is {symbol}")
+            logger.debug(f"The Symbol is {symbol}")
 
             # Prepare the order payload
             place_order_payload = {
@@ -305,14 +305,14 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
 
-            logger.info(f"{place_order_payload}")
+            logger.debug(f"{place_order_payload}")
 
             # Place the order to close the position
             res, response, orderid = place_order_api(place_order_payload, auth)
 
-            # logger.info(f"{res}")
-            # logger.info(f"{response}")
-            # logger.info(f"{orderid}")
+            # logger.debug(f"{res}")
+            # logger.debug(f"{response}")
+            # logger.debug(f"{orderid}")
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -340,7 +340,7 @@ def cancel_order(orderid, auth):
     # Send the request using httpx
     res = client.post(url, content=payload, headers=headers)
     data = json.loads(res.text)
-    logger.info(f"CancelOrder Response: {data}")
+    logger.debug(f"CancelOrder Response: {data}")
 
     # Check if the request was successful
     if data.get("stat") == "Ok":
@@ -368,7 +368,7 @@ def modify_order(data, auth):
         data, token
     )  # You need to implement this function
 
-    logger.info(f"Modify Order Request Data: {transformed_data}")
+    logger.debug(f"Modify Order Request Data: {transformed_data}")
 
     # Set up the request headers
     headers = {
@@ -384,7 +384,7 @@ def modify_order(data, auth):
     res = client.post(url, content=payload, headers=headers)
     response = json.loads(res.text)
 
-    logger.info(f"Modify Order Response: {response}")
+    logger.debug(f"Modify Order Response: {response}")
 
     if response.get("stat") == "Ok":
         return {"status": "success", "orderid": data["orderid"]}, 200
@@ -401,7 +401,7 @@ def cancel_all_orders_api(data, auth):
     AUTH_TOKEN = auth
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    # logger.info(f"{order_book_response}")
+    # logger.debug(f"{order_book_response}")
     if order_book_response is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
@@ -409,7 +409,7 @@ def cancel_all_orders_api(data, auth):
     orders_to_cancel = [
         order for order in order_book_response if order["status"] in ["OPEN", "TRIGGER PENDING"]
     ]
-    # logger.info(f"{orders_to_cancel}")
+    # logger.debug(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

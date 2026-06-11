@@ -264,7 +264,7 @@ def place_order_api(data, auth):
     payload = order_payload if isinstance(order_payload, list) else [order_payload]
     logger.debug(f"IIFL Capital place order payload: {payload}")
     response, response_data = _request("/orders", auth, method="POST", payload=payload)
-    logger.info(f"IIFL Capital place order response status: {response.status_code}")
+    logger.debug(f"IIFL Capital place order response status: {response.status_code}")
     # Raw body may include broker order IDs / account context — debug only.
     logger.debug(f"IIFL Capital place order raw response: {response_data}")
 
