@@ -47,6 +47,7 @@ The table classifies every major subsystem by migration impact. "Framework-agnos
 | **ZeroMQ bus** | `websocket_proxy/base_adapter.py:187` (PUB), `server.py:110` (SUB) | **None** | **Lift unchanged** |
 | **Broker streaming adapters** | `broker/*/streaming/*` | **None** (real OS threads) | **Lift unchanged** |
 | **Schedulers** | `services/*scheduler*.py`, `blueprints/python_strategy.py` (APScheduler) | Low — passed `socketio` | **Lift**; rewire emit handle |
+| **Sandbox engine** | `sandbox/` (11 modules), `services/sandbox_service.py`, `database/sandbox_db.py`, `sandbox/squareoff_thread.py` | **None** (event bus + APScheduler + threads) | **Lift unchanged**; only `blueprints/sandbox.py` shell ports |
 | **Security middleware** | `utils/security_middleware.py` (WSGI) | High — WSGI callable | **Port** → ASGI middleware |
 | **Traffic logger** | `utils/traffic_logger.py` (WSGI) | High — WSGI callable | **Port** → ASGI middleware |
 | **CSP / security headers** | `csp.py:155` (`after_request`) | Medium | **Port** → ASGI middleware |
@@ -169,6 +170,23 @@ Current hardening that **must be reproduced exactly**:
 - The EventBus + subscribers pattern (`subscribers/socketio_subscriber.py`) is framework-agnostic; it just needs a working `emit` handle.
 - Event names must stay identical (`order_event`, `analyzer_update`, `cache_loaded`, `force_logout`, `master_contract_download`, `historify_progress`, etc.) — the React client subscribes to these exact strings (`frontend/src/hooks/useSocket.ts`).
 - python-socketio's `emit` is thread-safe from the threadpool when using the ASGI server's async manager; validate emit-from-sync-threadpool works (it does via `socketio.AsyncServer` + `start_background_task` or the sync `Server` mounted appropriately — pick one model and prove it).
+
+### 3.10a Sandbox engine (kept as-is — lifts unchanged)
+**Short answer: yes, the Sandbox is kept the same.** ~95% of it is framework-agnostic and migrates untouched; only the thin HTTP shell (`blueprints/sandbox.py`) ports like every other blueprint.
+
+What lifts **unchanged**:
+- **The entire `sandbox/` package** (11 modules, ~6,400 lines): `execution_engine.py`, `execution_thread.py`, `websocket_execution_engine.py`, `squareoff_thread.py`, `squareoff_manager.py`, `order_manager.py`, `position_manager.py`, `fund_manager.py`, `holdings_manager.py`, `catch_up_processor.py`. Zero Flask imports, zero eventlet.
+- **`services/sandbox_service.py`** — pure functions returning the same `tuple[bool, dict, int]` as the live trading services; no Flask, no direct `socketio.emit`. It publishes via the framework-agnostic event bus (`bus.publish(SandboxOrderFilledEvent(...))`, `sandbox/execution_engine.py:221`).
+- **`database/sandbox_db.py`** — plain SQLAlchemy `scoped_session` + models for `sandbox.db` (₹1 Cr capital). Only change: its entry in the `teardown_appcontext` session-cleanup list (`app.py:860`) moves to the FastAPI per-request dependency / `lifespan` (same as every other DB module).
+- **Auto-squareoff scheduler** (`sandbox/squareoff_thread.py`) — APScheduler `BackgroundScheduler` with exchange-aligned cron jobs (NSE/BSE 15:15, CDS/BCD 16:45, MCX 23:30, NCDEX 17:00, T+1 @ 00:00 IST). Framework-agnostic; start call moves from `app.py` startup into the FastAPI `lifespan`.
+- **Execution engine threading** (`sandbox/execution_thread.py`) — a daemon `threading.Thread` polling/subscribing for fills; WebSocket-driven via `MarketDataService` with a polling fallback through `services/quotes_service.py`. No eventlet, no Flask — works identically under ASGI.
+- **Sandbox events** (`events/sandbox_events.py`: `SandboxOrderFilledEvent`, `SandboxAutoSquareOffEvent`, `SandboxT1SettlementEvent`) → already decoupled; they reach the UI through the same EventBus → SocketIO subscriber path, which re-hosts on python-socketio with **identical `analyzer_update` event names**.
+
+What **ports** (thin shell only, same effort as any blueprint):
+- `blueprints/sandbox.py` JSON routes (`/sandbox/api/configs`, `/sandbox/update`, `/sandbox/reset`, `/sandbox/squareoff-status`, `/sandbox/mypnl/api/data`, CSV exports) → `APIRouter`; `session.get("user")` → auth dependency; Flask `Response`/CSV → `StreamingResponse`.
+- Note: `blueprints/sandbox.py` still imports `render_template` and calls `render_template("sandbox.html")` (lines 86, 778), **but no `templates/` directory exists** — these are **dead/vestigial paths**; the live `/sandbox` UI is the React SPA. Drop them during the port (don't recreate templates).
+
+Net: the Sandbox **engine, capital model, margin/leverage, auto-squareoff timing, and isolation from live trading are preserved byte-for-byte.** It is one of the lowest-risk parts of the migration.
 
 ### 3.11 ZeroMQ support (untouched)
 - PUB at `base_adapter.py:187` (port 5555, loopback), async SUB at `server.py:110` (`zmq.asyncio`). Lives entirely in the websocket-proxy process. **No migration work.** Verify only that the proxy is still spawned correctly by the new entrypoint (it's started from `app.py` today via `start_websocket_proxy`; that call moves into the FastAPI `lifespan` startup).
