@@ -105,6 +105,7 @@ from database.whatsapp_db import (
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from restx_api import api, api_v1_bp
+from services.broker_keepalive_service import start_broker_keepalive
 from services.telegram_bot_service import telegram_bot_service
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.health_monitor import init_health_monitoring  # Import health monitoring
@@ -411,6 +412,10 @@ def create_app():
 
         # Initialize health monitoring (background daemon thread)
         init_health_monitoring(app)
+
+        # Keep the pooled broker HTTP connection warm during market hours so
+        # orders never pay a fresh TCP+TLS handshake after an idle gap
+        start_broker_keepalive()
 
         # NOTE: Python strategy scheduler is initialized in setup_environment()
         # AFTER database tables are created, to avoid "no such table" errors on fresh install
