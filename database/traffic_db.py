@@ -515,6 +515,42 @@ class InvalidAPIKeyTracker(LogBase):
             return []
 
 
+def purge_old_traffic_logs(days=None):
+    """Delete traffic log entries older than the retention window.
+
+    Without this, logs.db grows unbounded (every request ever made is kept)
+    and the traffic/security dashboards slow down over time. Called once at
+    startup from init_traffic_logging().
+
+    Args:
+        days: Retention in days. Defaults to TRAFFIC_LOG_RETENTION_DAYS
+            env var (30 if unset).
+
+    Returns:
+        Number of rows deleted.
+    """
+    if days is None:
+        days = int(os.getenv("TRAFFIC_LOG_RETENTION_DAYS", "30"))
+
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        deleted = (
+            logs_session.query(TrafficLog)
+            .filter(TrafficLog.timestamp < cutoff)
+            .delete(synchronize_session=False)
+        )
+        logs_session.commit()
+        if deleted:
+            logger.info(f"Purged {deleted} traffic log entries older than {days} days")
+        return deleted
+    except Exception as e:
+        logger.exception(f"Error purging old traffic logs: {e}")
+        logs_session.rollback()
+        return 0
+    finally:
+        logs_session.remove()
+
+
 def init_logs_db():
     """Initialize the logs database"""
     # Extract directory from database URL and create if it doesn't exist
