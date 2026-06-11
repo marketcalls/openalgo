@@ -151,7 +151,9 @@ def place_order_api(data, auth):
     service layer's `res.status == 200` success check works.
     """
     payload = transform_data(data)
-    logger.info(f"Payload for Arrow place_order_api: {payload}")
+    # debug, not info: console writes from the order hot path cost real
+    # milliseconds on Windows terminals; use LOG_LEVEL=DEBUG to see payloads
+    logger.debug(f"Payload for Arrow place_order_api: {payload}")
 
     client = get_httpx_client()
     headers = get_arrow_headers(auth, with_json=True)
@@ -159,7 +161,7 @@ def place_order_api(data, auth):
     response = client.post(
         f"{ROOT_URL}/order/{_ORDER_VARIETY}", headers=headers, json=payload
     )
-    logger.info(f"Arrow raw response: status={response.status_code}, body={response.text}")
+    logger.debug(f"Arrow raw response: status={response.status_code}, body={response.text}")
 
     response_data = response.json()
 
