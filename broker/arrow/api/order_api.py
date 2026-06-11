@@ -103,7 +103,7 @@ def _get_cached_positions(auth):
         now = time.monotonic()
         cached = _position_cache.get(auth)
         if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            logger.info("Position book served from cache")
+            logger.debug("Position book served from cache")
             return cached["data"]
 
     positions_data = get_positions(auth)
@@ -138,7 +138,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 and position.get("product") == product
             ):
                 net_qty = str(position.get("qty", "0"))
-                logger.info(f"Net Quantity {net_qty}")
+                logger.debug(f"Net Quantity {net_qty}")
                 break
 
     return net_qty
@@ -189,7 +189,7 @@ def place_smartorder_api(data, auth):
         product = data.get("product")
 
         if not all([symbol, exchange, product]):
-            logger.info("Missing required parameters in place_smartorder_api")
+            logger.debug("Missing required parameters in place_smartorder_api")
             return res, response_data, orderid
 
         symbol_lock = _get_symbol_lock(symbol, exchange, product)
@@ -200,8 +200,8 @@ def place_smartorder_api(data, auth):
                 get_open_position(symbol, exchange, map_product_type(product), auth)
             )
 
-            logger.info(f"position_size: {position_size}")
-            logger.info(f"Open Position: {current_position}")
+            logger.debug(f"position_size: {position_size}")
+            logger.debug(f"Open Position: {current_position}")
 
             action = None
             quantity = 0
@@ -235,7 +235,7 @@ def place_smartorder_api(data, auth):
                 _invalidate_position_cache(auth)
                 return res, response, orderid
 
-            logger.info("No action required or invalid quantity")
+            logger.debug("No action required or invalid quantity")
             response_data = {
                 "status": "success",
                 "message": "No action needed. Position already matched.",
@@ -275,9 +275,9 @@ def close_all_positions(current_api_key, auth):
             "product": reverse_map_product_type(position["exchange"], position.get("product")),
             "quantity": str(quantity),
         }
-        logger.info(f"Close position payload: {place_order_payload}")
+        logger.debug(f"Close position payload: {place_order_payload}")
         _, api_response, _ = place_order_api(place_order_payload, auth)
-        logger.info(f"Close position response: {api_response}")
+        logger.debug(f"Close position response: {api_response}")
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
@@ -291,7 +291,7 @@ def cancel_order(orderid, auth):
             f"{ROOT_URL}/order/{_ORDER_VARIETY}/{orderid}", headers=headers
         )
         response.raise_for_status()
-        logger.info(f"Arrow cancel order response: {response.text}")
+        logger.debug(f"Arrow cancel order response: {response.text}")
 
         # Cancel returns a plain string ("order cancellation request accepted"),
         # so success is signalled by the 200 status, not a JSON body.
@@ -310,7 +310,7 @@ def cancel_order(orderid, auth):
 def modify_order(data, auth):
     """Modify an order via PATCH /order/regular/{orderid}."""
     payload = transform_modify_order_data(data)
-    logger.info(f"Arrow modify order payload: {payload}")
+    logger.debug(f"Arrow modify order payload: {payload}")
 
     client = get_httpx_client()
     headers = get_arrow_headers(auth, with_json=True)
@@ -321,7 +321,7 @@ def modify_order(data, auth):
         json=payload,
     )
     response_data = response.json()
-    logger.info(f"Arrow modify order response: {response_data}")
+    logger.debug(f"Arrow modify order response: {response_data}")
 
     response.status = response.status_code
 

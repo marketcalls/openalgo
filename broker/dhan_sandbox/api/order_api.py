@@ -223,7 +223,7 @@ def place_order_api(data, auth):
         
     payload = json.dumps(newdata)
 
-    logger.info(
+    logger.debug(
         "Placing order: symbol=%s exchange=%s action=%s qty=%s order_type=%s",
         data.get("symbol"),
         data.get("exchange"),
@@ -285,8 +285,8 @@ def place_smartorder_api(data, auth):
             get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
         )
 
-        logger.info(f"position_size : {position_size}")
-        logger.info(f"Open Position : {current_position}")
+        logger.debug(f"position_size : {position_size}")
+        logger.debug(f"Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -374,7 +374,7 @@ def close_all_positions(current_api_key, auth):
 
             # get openalgo symbol to send to placeorder function
             symbol = get_symbol(position["securityId"], map_exchange(position["exchangeSegment"]))
-            logger.info(f"The Symbol is {symbol}")
+            logger.debug(f"The Symbol is {symbol}")
 
             # Prepare the order payload
             place_order_payload = {
@@ -529,14 +529,14 @@ def cancel_all_orders_api(data, auth):
 
     # Handle error dict responses from the API
     if isinstance(order_book_response, dict) and (order_book_response.get("errorType") or order_book_response.get("status") in ("error", "failed")):
-        logger.info(f"Cannot cancel orders - API error: {order_book_response.get('errorType', 'unknown')}")
+        logger.debug(f"Cannot cancel orders - API error: {order_book_response.get('errorType', 'unknown')}")
         return [], []
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [
         order for order in order_book_response if isinstance(order, dict) and order.get("orderStatus") in ["PENDING", "TRIGGER_PENDING", "TRANSIT"]
     ]
-    logger.info("Orders to cancel: count=%s", len(orders_to_cancel))
+    logger.debug("Orders to cancel: count=%s", len(orders_to_cancel))
     canceled_orders = []
     failed_cancellations = []
 

@@ -58,7 +58,7 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
 def get_order_book(auth):
     """Get order book from DefinedGe API."""
     response = get_api_response("/orders", auth)
-    logger.info(
+    logger.debug(
         f"Order book raw response: {json.dumps(response, indent=2) if response else 'None'}"
     )
     return response
@@ -134,11 +134,11 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
 
-    logger.info("=== GET OPEN POSITION ===")
-    logger.info(f"Looking for: Symbol={tradingsymbol}, Exchange={exchange}, Product={product}")
+    logger.debug("=== GET OPEN POSITION ===")
+    logger.debug(f"Looking for: Symbol={tradingsymbol}, Exchange={exchange}, Product={product}")
 
     positions_data = _get_cached_positions(auth)
-    logger.info(f"Raw positions response: {positions_data}")
+    logger.debug(f"Raw positions response: {positions_data}")
 
     net_qty = "0"
 
@@ -149,26 +149,26 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     if isinstance(positions_data, list):
         # Direct list response
         positions_list = positions_data
-        logger.info(f"Positions data is a direct list with {len(positions_list)} positions")
+        logger.debug(f"Positions data is a direct list with {len(positions_list)} positions")
     elif positions_data and isinstance(positions_data, dict):
         # Check for successful response - Definedge might use different status indicators
         if positions_data.get("stat") == "Ok" or positions_data.get("status") == "SUCCESS":
             # Definedge uses 'positions' key, not 'data'
             positions_list = positions_data.get("positions", positions_data.get("data", []))
-            logger.info(f"Found {len(positions_list)} positions in response")
+            logger.debug(f"Found {len(positions_list)} positions in response")
         elif "positions" in positions_data:
             # Definedge specific: positions key
             positions_list = positions_data["positions"]
-            logger.info(f"Found {len(positions_list)} positions under 'positions' key")
+            logger.debug(f"Found {len(positions_list)} positions under 'positions' key")
         elif "data" in positions_data and positions_data["data"]:
             # Sometimes data is present without explicit success status
             positions_list = positions_data["data"]
-            logger.info(f"Found {len(positions_list)} positions under 'data' key")
+            logger.debug(f"Found {len(positions_list)} positions under 'data' key")
         elif not positions_data.get("stat") and not positions_data.get("status"):
             # Try to use data or positions if present even without status
             positions_list = positions_data.get("positions", positions_data.get("data", []))
             if positions_list:
-                logger.info(f"Using {len(positions_list)} positions despite missing status")
+                logger.debug(f"Using {len(positions_list)} positions despite missing status")
 
     if positions_list:
         for position in positions_list:
@@ -180,7 +180,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
             # Definedge uses 'net_quantity' instead of 'netqty'
             pos_netqty = position.get("net_quantity", position.get("netqty", "0"))
 
-            logger.info(
+            logger.debug(
                 f"Position: Symbol={pos_symbol}, Exchange={pos_exchange}, "
                 f"Product={pos_product}, ProductType={pos_product_type}, NetQty={pos_netqty}"
             )
@@ -194,11 +194,11 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 and position_product == product
             ):
                 net_qty = pos_netqty
-                logger.info(f"MATCH FOUND! Net Quantity: {net_qty}")
+                logger.debug(f"MATCH FOUND! Net Quantity: {net_qty}")
                 break
 
         if net_qty == "0":
-            logger.info(f"No matching position found for {tradingsymbol} with product {product}")
+            logger.debug(f"No matching position found for {tradingsymbol} with product {product}")
     else:
         logger.warning("No positions list available to process")
 
@@ -208,8 +208,8 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 def place_order_api(data, auth):
     """Place an order using the DefinedGe API with shared connection pooling."""
     try:
-        logger.info("=== PLACE ORDER DEFINEDGE CALLED ===")
-        logger.info(f"Input data: {data}")
+        logger.debug("=== PLACE ORDER DEFINEDGE CALLED ===")
+        logger.debug(f"Input data: {data}")
 
         # Parse the auth token
         api_session_key, susertoken, api_token = auth.split(":::")
@@ -224,21 +224,21 @@ def place_order_api(data, auth):
         # Prepare headers
         headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
 
-        logger.info(f"Place order payload being sent to Definedge: {json.dumps(newdata, indent=2)}")
+        logger.debug(f"Place order payload being sent to Definedge: {json.dumps(newdata, indent=2)}")
 
         # Make the API request
         url = "https://integrate.definedgesecurities.com/dart/v1/placeorder"
         response = client.post(url, json=newdata, headers=headers)
 
         # Log the raw response
-        logger.info(f"Definedge API Response Status: {response.status_code}")
-        logger.info(f"Definedge API Response Headers: {dict(response.headers)}")
-        logger.info(f"Definedge API Raw Response Text: {response.text}")
+        logger.debug(f"Definedge API Response Status: {response.status_code}")
+        logger.debug(f"Definedge API Response Headers: {dict(response.headers)}")
+        logger.debug(f"Definedge API Raw Response Text: {response.text}")
 
         # Parse JSON response
         try:
             response_data = response.json()
-            logger.info(f"Definedge API Parsed Response: {json.dumps(response_data, indent=2)}")
+            logger.debug(f"Definedge API Parsed Response: {json.dumps(response_data, indent=2)}")
         except json.JSONDecodeError as je:
             logger.error(f"Failed to parse JSON response: {je}")
             logger.error(f"Raw response text: {response.text}")
@@ -250,8 +250,8 @@ def place_order_api(data, auth):
         # Process the response based on different possible response formats
         if response_data.get("stat") == "Ok" or response_data.get("status") == "SUCCESS":
             orderid = response_data.get("norenordno") or response_data.get("order_id")
-            logger.info(f"Order placed successfully. Order ID: {orderid}")
-            logger.info(f"Full success response: {response_data}")
+            logger.debug(f"Order placed successfully. Order ID: {orderid}")
+            logger.debug(f"Full success response: {response_data}")
         else:
             # Extract error message if present
             error_msg = response_data.get(
@@ -303,7 +303,7 @@ def place_smartorder_api(data, auth):
         product = data.get("product")
 
         if not all([symbol, exchange, product]):
-            logger.info("Missing required parameters in place_smartorder_api")
+            logger.debug("Missing required parameters in place_smartorder_api")
             return res, response_data, orderid
 
         # Per-symbol lock: serialize smart orders per symbol
@@ -315,10 +315,10 @@ def place_smartorder_api(data, auth):
             # Get current open position for the symbol
             current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
 
-            logger.info("=== SMART ORDER EXECUTION ===")
-            logger.info(f"Symbol: {symbol}, Exchange: {exchange}, Product: {product}")
-            logger.info(f"Target position_size: {position_size}")
-            logger.info(f"Current Open Position: {current_position}")
+            logger.debug("=== SMART ORDER EXECUTION ===")
+            logger.debug(f"Symbol: {symbol}, Exchange: {exchange}, Product: {product}")
+            logger.debug(f"Target position_size: {position_size}")
+            logger.debug(f"Current Open Position: {current_position}")
 
             # Determine action based on position_size and current_position
             action = None
@@ -328,39 +328,39 @@ def place_smartorder_api(data, auth):
                 # Square off long position
                 action = "SELL"
                 quantity = abs(current_position)
-                logger.info(f"Squaring off long position: SELL {quantity}")
+                logger.debug(f"Squaring off long position: SELL {quantity}")
             elif position_size == 0 and current_position < 0:
                 # Square off short position
                 action = "BUY"
                 quantity = abs(current_position)
-                logger.info(f"Squaring off short position: BUY {quantity}")
+                logger.debug(f"Squaring off short position: BUY {quantity}")
             elif position_size == 0 and current_position == 0:
                 # No position to square off
-                logger.info("No position to square off (position_size=0, current_position=0)")
+                logger.debug("No position to square off (position_size=0, current_position=0)")
                 response_data = {"status": "success", "message": "No position to square off"}
                 return res, response_data, orderid
             elif position_size == current_position:
                 # Position already matches target
-                logger.info(f"Position already matches target (both are {position_size})")
+                logger.debug(f"Position already matches target (both are {position_size})")
                 response_data = {"status": "success", "message": "Position already at target size"}
                 return res, response_data, orderid
             elif current_position == 0:
                 # Open new position
                 action = "BUY" if position_size > 0 else "SELL"
                 quantity = abs(position_size)
-                logger.info(f"Opening new position: {action} {quantity}")
+                logger.debug(f"Opening new position: {action} {quantity}")
             else:
                 # Adjust existing position
                 if position_size > current_position:
                     action = "BUY"
                     quantity = position_size - current_position
-                    logger.info(
+                    logger.debug(
                         f"Increasing position: BUY {quantity} (from {current_position} to {position_size})"
                     )
                 elif position_size < current_position:
                     action = "SELL"
                     quantity = current_position - position_size
-                    logger.info(
+                    logger.debug(
                         f"Reducing position: SELL {quantity} (from {current_position} to {position_size})"
                     )
 
@@ -370,17 +370,17 @@ def place_smartorder_api(data, auth):
                 order_data["action"] = action
                 order_data["quantity"] = str(quantity)
 
-                logger.info(f"Placing order: {action} {quantity} {symbol}")
+                logger.debug(f"Placing order: {action} {quantity} {symbol}")
 
                 # Place the order
                 res, response, orderid = place_order_api(order_data, auth)
                 _invalidate_position_cache(auth)
-                logger.info(f"Order response: {response}")
-                logger.info(f"Order ID: {orderid}")
+                logger.debug(f"Order response: {response}")
+                logger.debug(f"Order ID: {orderid}")
 
                 return res, response, orderid
             else:
-                logger.info("No action required or invalid quantity")
+                logger.debug("No action required or invalid quantity")
                 response_data = {"status": "success", "message": "No action required"}
                 return res, response_data, orderid
 
@@ -394,14 +394,14 @@ def place_smartorder_api(data, auth):
 def close_all_positions(current_api_key, auth):
     """Close all open positions."""
 
-    logger.info("=== CLOSE ALL POSITIONS DEFINEDGE CALLED ===")
+    logger.debug("=== CLOSE ALL POSITIONS DEFINEDGE CALLED ===")
 
     # Fetch the current open positions
-    logger.info("Fetching current open positions...")
+    logger.debug("Fetching current open positions...")
     positions_response = get_positions(auth)
 
     # Log the raw response for debugging
-    logger.info(
+    logger.debug(
         f"Positions response: {json.dumps(positions_response, indent=2) if positions_response else 'None'}"
     )
 
@@ -430,13 +430,13 @@ def close_all_positions(current_api_key, auth):
     # If the response itself is a list, use it directly
     if isinstance(positions_response, list):
         positions_data = positions_response
-        logger.info("Positions response is a list, using directly")
+        logger.debug("Positions response is a list, using directly")
 
     if not positions_data:
-        logger.info("No positions found in response")
+        logger.debug("No positions found in response")
         return {"message": "No Open Positions Found", "status": "success"}, 200
 
-    logger.info(f"Total positions found: {len(positions_data)}")
+    logger.debug(f"Total positions found: {len(positions_data)}")
 
     # Count positions to be closed
     positions_to_close = []
@@ -457,11 +457,11 @@ def close_all_positions(current_api_key, auth):
             logger.warning(f"Invalid net quantity value: {netqty} for position: {position}")
             continue
 
-    logger.info(f"Positions to close: {len(positions_to_close)}")
-    logger.info(f"Positions skipped (zero quantity): {positions_skipped}")
+    logger.debug(f"Positions to close: {len(positions_to_close)}")
+    logger.debug(f"Positions skipped (zero quantity): {positions_skipped}")
 
     if not positions_to_close:
-        logger.info("No open positions with non-zero quantity found")
+        logger.debug("No open positions with non-zero quantity found")
         return {"message": "No Open Positions Found", "status": "success"}, 200
 
     # Track results
@@ -486,7 +486,7 @@ def close_all_positions(current_api_key, auth):
             exchange = position.get("exchange", "")
             product = position.get("product", position.get("product_type", ""))
 
-            logger.info(
+            logger.debug(
                 f"Closing position: {tradingsymbol} ({exchange}) - Qty: {netqty_int}, Action: {action}"
             )
 
@@ -497,7 +497,7 @@ def close_all_positions(current_api_key, auth):
                 logger.error(f"Failed to get OpenAlgo symbol for {tradingsymbol} on {exchange}")
                 symbol = tradingsymbol  # Use original as fallback
 
-            logger.info(f"OpenAlgo symbol: {symbol}")
+            logger.debug(f"OpenAlgo symbol: {symbol}")
 
             # Prepare the order payload
             place_order_payload = {
@@ -511,7 +511,7 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
 
-            logger.info(f"Square-off order payload: {place_order_payload}")
+            logger.debug(f"Square-off order payload: {place_order_payload}")
 
             # Place the order to close the position
             res, response, orderid = place_order_api(place_order_payload, auth)
@@ -520,7 +520,7 @@ def close_all_positions(current_api_key, auth):
                 closed_positions.append(
                     {"symbol": tradingsymbol, "quantity": quantity, "orderid": orderid}
                 )
-                logger.info(
+                logger.debug(
                     f"Successfully placed square-off order for {tradingsymbol}, Order ID: {orderid}"
                 )
             else:
@@ -536,12 +536,12 @@ def close_all_positions(current_api_key, auth):
             )
 
     # Log summary
-    logger.info("=== CLOSE ALL POSITIONS SUMMARY ===")
-    logger.info(f"Positions closed: {len(closed_positions)}")
-    logger.info(f"Positions failed: {len(failed_positions)}")
+    logger.debug("=== CLOSE ALL POSITIONS SUMMARY ===")
+    logger.debug(f"Positions closed: {len(closed_positions)}")
+    logger.debug(f"Positions failed: {len(failed_positions)}")
 
     if closed_positions:
-        logger.info(f"Closed positions: {[p['symbol'] for p in closed_positions]}")
+        logger.debug(f"Closed positions: {[p['symbol'] for p in closed_positions]}")
     if failed_positions:
         logger.error(f"Failed positions: {failed_positions}")
 
@@ -552,8 +552,8 @@ def close_all_positions(current_api_key, auth):
 def cancel_order(orderid, auth):
     """Cancel an order using the DefinedGe API with shared connection pooling."""
     try:
-        logger.info("=== CANCEL ORDER DEFINEDGE CALLED ===")
-        logger.info(f"Cancel order request for Order ID: {orderid}")
+        logger.debug("=== CANCEL ORDER DEFINEDGE CALLED ===")
+        logger.debug(f"Cancel order request for Order ID: {orderid}")
 
         # Parse the auth token
         api_session_key, susertoken, api_token = auth.split(":::")
@@ -567,20 +567,20 @@ def cancel_order(orderid, auth):
         # According to API docs, cancel is a GET request with orderid in URL
         url = f"https://integrate.definedgesecurities.com/dart/v1/cancel/{orderid}"
 
-        logger.info(f"Making GET request to: {url}")
+        logger.debug(f"Making GET request to: {url}")
 
         # Make the GET request
         response = client.get(url, headers=headers)
 
         # Log the raw response
-        logger.info(f"Definedge Cancel API Response Status: {response.status_code}")
-        logger.info(f"Definedge Cancel API Response Headers: {dict(response.headers)}")
-        logger.info(f"Definedge Cancel API Raw Response Text: {response.text}")
+        logger.debug(f"Definedge Cancel API Response Status: {response.status_code}")
+        logger.debug(f"Definedge Cancel API Response Headers: {dict(response.headers)}")
+        logger.debug(f"Definedge Cancel API Raw Response Text: {response.text}")
 
         # Parse JSON response
         try:
             response_data = response.json()
-            logger.info(
+            logger.debug(
                 f"Definedge Cancel API Parsed Response: {json.dumps(response_data, indent=2)}"
             )
         except json.JSONDecodeError as je:
@@ -594,9 +594,9 @@ def cancel_order(orderid, auth):
         # Check if the request was successful based on response format
         # According to docs: status will be "SUCCESS" or error
         if response_data.get("status") == "SUCCESS":
-            logger.info(f"Order cancelled successfully. Order ID: {orderid}")
+            logger.debug(f"Order cancelled successfully. Order ID: {orderid}")
             if response_data.get("request_time"):
-                logger.info(f"Request time: {response_data['request_time']}")
+                logger.debug(f"Request time: {response_data['request_time']}")
             return {"status": "success", "orderid": response_data.get("order_id", orderid)}, 200
         else:
             # Return an error response
@@ -624,8 +624,8 @@ def cancel_order(orderid, auth):
 
 
 def modify_order(data, auth):
-    logger.info("=== MODIFY ORDER DEFINEDGE CALLED ===")
-    logger.info(f"Raw input data: {data}")
+    logger.debug("=== MODIFY ORDER DEFINEDGE CALLED ===")
+    logger.debug(f"Raw input data: {data}")
 
     # Parse the auth token for DefinedGe
     api_session_key, susertoken, api_token = auth.split(":::")
@@ -639,13 +639,13 @@ def modify_order(data, auth):
 
     transformed_data = transform_modify_order_data(data, token)
 
-    logger.info(f"Transformed data for API: {transformed_data}")
+    logger.debug(f"Transformed data for API: {transformed_data}")
 
     # Set up the request headers
     headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
     payload = json.dumps(transformed_data)
 
-    logger.info(f"Final JSON payload being sent: {payload}")
+    logger.debug(f"Final JSON payload being sent: {payload}")
 
     # Make the request using the shared client
     response = client.post(
@@ -655,8 +655,8 @@ def modify_order(data, auth):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    logger.info(f"API Response Status: {response.status_code}")
-    logger.info(f"API Response Text: {response.text}")
+    logger.debug(f"API Response Status: {response.status_code}")
+    logger.debug(f"API Response Text: {response.text}")
 
     data = json.loads(response.text)
 
@@ -673,11 +673,11 @@ def modify_order(data, auth):
 def cancel_all_orders_api(data, auth):
     """Cancel all open orders."""
 
-    logger.info("=== CANCEL ALL ORDERS DEFINEDGE CALLED ===")
-    logger.info(f"Cancel all orders request with strategy: {data.get('strategy', 'N/A')}")
+    logger.debug("=== CANCEL ALL ORDERS DEFINEDGE CALLED ===")
+    logger.debug(f"Cancel all orders request with strategy: {data.get('strategy', 'N/A')}")
 
     # Get the order book
-    logger.info("Fetching order book to identify open orders...")
+    logger.debug("Fetching order book to identify open orders...")
     order_book_response = get_order_book(auth)
 
     # Check if order book was retrieved successfully
@@ -709,14 +709,14 @@ def cancel_all_orders_api(data, auth):
     # If the response itself is a list, use it directly
     if isinstance(order_book_response, list):
         orders_data = order_book_response
-        logger.info("Order book response is a list, using directly")
+        logger.debug("Order book response is a list, using directly")
 
     if not orders_data:
-        logger.info("No orders found in order book")
-        logger.info("Checked fields: 'data', 'orders', 'orderbook' in response")
+        logger.debug("No orders found in order book")
+        logger.debug("Checked fields: 'data', 'orders', 'orderbook' in response")
         return [], []
 
-    logger.info(f"Total orders in order book: {len(orders_data)}")
+    logger.debug(f"Total orders in order book: {len(orders_data)}")
 
     # Filter orders that are in 'open' or 'trigger_pending' state
     # Definedge may use different status values, so check multiple variations
@@ -728,7 +728,7 @@ def cancel_all_orders_api(data, auth):
         or order.get("order_status", "").upper() in ["OPEN", "PENDING", "TRIGGER_PENDING"]
     ]
 
-    logger.info(f"Found {len(orders_to_cancel)} open orders to cancel")
+    logger.debug(f"Found {len(orders_to_cancel)} open orders to cancel")
 
     if orders_to_cancel:
         logger.debug(
@@ -744,13 +744,13 @@ def cancel_all_orders_api(data, auth):
         orderid = order.get("order_id") or order.get("norenordno") or order.get("orderid")
 
         if orderid:
-            logger.info(f"Attempting to cancel order: {orderid}")
+            logger.debug(f"Attempting to cancel order: {orderid}")
             try:
                 cancel_response, status_code = cancel_order(orderid, auth)
 
                 if status_code == 200:
                     canceled_orders.append(orderid)
-                    logger.info(f"Successfully cancelled order: {orderid}")
+                    logger.debug(f"Successfully cancelled order: {orderid}")
                 else:
                     failed_cancellations.append(orderid)
                     logger.error(
@@ -763,12 +763,12 @@ def cancel_all_orders_api(data, auth):
             logger.warning(f"Order missing ID field: {order}")
 
     # Log summary
-    logger.info("=== CANCEL ALL ORDERS SUMMARY ===")
-    logger.info(f"Total orders cancelled: {len(canceled_orders)}")
-    logger.info(f"Total orders failed: {len(failed_cancellations)}")
+    logger.debug("=== CANCEL ALL ORDERS SUMMARY ===")
+    logger.debug(f"Total orders cancelled: {len(canceled_orders)}")
+    logger.debug(f"Total orders failed: {len(failed_cancellations)}")
 
     if canceled_orders:
-        logger.info(f"Cancelled order IDs: {canceled_orders}")
+        logger.debug(f"Cancelled order IDs: {canceled_orders}")
     if failed_cancellations:
         logger.error(f"Failed order IDs: {failed_cancellations}")
 

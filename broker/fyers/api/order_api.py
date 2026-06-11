@@ -200,7 +200,7 @@ def place_order_api(data, auth):
         # Parse the response
         if response_data.get("s") == "ok":
             orderid = response_data["id"]
-            logger.info(f"Order placed successfully. Order ID: {orderid}")
+            logger.debug(f"Order placed successfully. Order ID: {orderid}")
         elif response_data.get("s") == "error":
             orderid = response_data.get("id")
             if not orderid:
@@ -269,13 +269,13 @@ def place_smartorder_api(data, auth):
 
         elif position_size == current_position:
             if int(data["quantity"]) == 0:
-                logger.info("No open position found. Not placing exit order.")
+                logger.debug("No open position found. Not placing exit order.")
                 response = {
                     "status": "success",
                     "message": "No OpenPosition Found. Not placing Exit order.",
                 }
             else:
-                logger.info("No action needed. Position size matches current position.")
+                logger.debug("No action needed. Position size matches current position.")
                 response = {
                     "status": "success",
                     "message": "No action needed. Position size matches current position",
@@ -493,7 +493,7 @@ def cancel_all_orders_api(data, auth):
     ]
 
     if not orders_to_cancel:
-        logger.info("No open orders to cancel.")
+        logger.debug("No open orders to cancel.")
         return [], []
 
     logger.debug(f"Found {len(orders_to_cancel)} open orders to cancel.")
@@ -509,7 +509,7 @@ def cancel_all_orders_api(data, auth):
 
         cancel_response, status_code = cancel_order(orderid, AUTH_TOKEN)
         if status_code == 200:
-            logger.info(f"Successfully canceled order {orderid}.")
+            logger.debug(f"Successfully canceled order {orderid}.")
             canceled_orders.append(orderid)
         else:
             logger.warning(
