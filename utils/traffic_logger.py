@@ -94,9 +94,13 @@ class TrafficLoggerMiddleware:
 def init_traffic_logging(app):
     """Initialize traffic logging middleware"""
     # Initialize the logs database
-    from database.traffic_db import init_logs_db
+    from database.traffic_db import init_logs_db, purge_old_traffic_logs
 
     init_logs_db()
+
+    # Drop traffic log entries past the retention window so logs.db does not
+    # grow unbounded over the install's lifetime
+    purge_old_traffic_logs()
 
     # Add middleware
     app.wsgi_app = TrafficLoggerMiddleware(app.wsgi_app)
