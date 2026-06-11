@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+from cachetools import TTLCache
 from sqlalchemy import (
     Boolean,
     Column,
@@ -49,6 +50,12 @@ else:
 logs_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=logs_engine))
 LogBase = declarative_base()
 LogBase.query = logs_session.query_property()
+
+# Ban-status cache: SecurityMiddleware checks every request at the WSGI layer,
+# which with NullPool means a fresh SQLite connection per request. Cache the
+# verdict per IP; ban_ip/unban_ip invalidate so enforcement stays immediate
+# (bans are only mutated in-process — single-instance deployment).
+_ip_ban_cache = TTLCache(maxsize=2048, ttl=60)
 
 
 class TrafficLog(LogBase):
@@ -150,25 +157,34 @@ class IPBan(LogBase):
     @staticmethod
     def is_ip_banned(ip_address):
         """Check if an IP is currently banned"""
+        cached = _ip_ban_cache.get(ip_address)
+        if cached is not None:
+            return cached
+
         try:
             ban = IPBan.query.filter_by(ip_address=ip_address).first()
             if not ban:
+                _ip_ban_cache[ip_address] = False
                 return False
 
             # Check permanent ban
             if ban.is_permanent:
+                _ip_ban_cache[ip_address] = True
                 return True
 
             # Check temporary ban expiry
             if ban.expires_at:
                 if datetime.utcnow() < ban.expires_at.replace(tzinfo=None):
+                    _ip_ban_cache[ip_address] = True
                     return True
                 else:
                     # Ban expired, remove it
                     logs_session.delete(ban)
                     logs_session.commit()
+                    _ip_ban_cache[ip_address] = False
                     return False
 
+            _ip_ban_cache[ip_address] = False
             return False
         except Exception as e:
             logger.exception(f"Error checking IP ban status: {e}")
@@ -222,6 +238,7 @@ class IPBan(LogBase):
                 logs_session.add(ban)
 
             logs_session.commit()
+            _ip_ban_cache.pop(ip_address, None)
             logger.info(f"IP {ip_address} banned: {reason}")
             return True
         except Exception as e:
@@ -237,6 +254,7 @@ class IPBan(LogBase):
             if ban:
                 logs_session.delete(ban)
                 logs_session.commit()
+                _ip_ban_cache.pop(ip_address, None)
                 logger.info(f"IP {ip_address} unbanned")
                 return True
             return False
@@ -256,6 +274,7 @@ class IPBan(LogBase):
 
             for ban in expired:
                 logs_session.delete(ban)
+                _ip_ban_cache.pop(ban.ip_address, None)
 
             logs_session.commit()
 
