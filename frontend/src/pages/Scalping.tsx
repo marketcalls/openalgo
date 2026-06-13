@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
+import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
@@ -10,10 +12,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
-import type { OptionChainRow, SelectedLeg } from '@/types/scalping'
+import { useAuthStore } from '@/stores/authStore'
+import type { OptionChainRow, ScalpingAction, ScalpingProduct, SelectedLeg } from '@/types/scalping'
+import { showToast } from '@/utils/toast'
 
 const DEFAULT_STRIKE_COUNT = 10
+const MAX_LOTS = 20
+const BOOK_REFETCH_MS = 1000
 
 function buildLeg(
   row: OptionChainRow | undefined,
@@ -64,10 +80,18 @@ function Ticker({ title, symbol, ltp, changePercent }: TickerProps) {
 }
 
 export default function Scalping() {
+  const apiKey = useAuthStore((s) => s.apiKey)
+  const queryClient = useQueryClient()
+
   const [underlying, setUnderlying] = useState<string>('')
   const [expiry, setExpiry] = useState<string>('')
   const [ceStrike, setCeStrike] = useState<string>('')
   const [peStrike, setPeStrike] = useState<string>('')
+
+  // Order-entry controls
+  const [armed, setArmed] = useState(false)
+  const [lots, setLots] = useState(1)
+  const [product, setProduct] = useState<ScalpingProduct>('MIS')
 
   // Underlyings
   const { data: underlyingsResp } = useQuery({
@@ -133,6 +157,161 @@ export default function Scalping() {
   const ceTick = ceLeg ? marketData.get(`${ceLeg.exchange}:${ceLeg.symbol}`)?.data : undefined
   const peTick = peLeg ? marketData.get(`${peLeg.exchange}:${peLeg.symbol}`)?.data : undefined
 
+  // Books (positions / orders / trades) — auto-refetch for live grids + MTM.
+  const { data: posResp } = useQuery({
+    queryKey: ['scalping', 'positions'],
+    queryFn: () => tradingApi.getPositions(apiKey ?? ''),
+    enabled: !!apiKey,
+    refetchInterval: BOOK_REFETCH_MS,
+  })
+  const { data: ordResp } = useQuery({
+    queryKey: ['scalping', 'orders'],
+    queryFn: () => tradingApi.getOrders(apiKey ?? ''),
+    enabled: !!apiKey,
+    refetchInterval: BOOK_REFETCH_MS,
+  })
+  const { data: trdResp } = useQuery({
+    queryKey: ['scalping', 'trades'],
+    queryFn: () => tradingApi.getTrades(apiKey ?? ''),
+    enabled: !!apiKey,
+    refetchInterval: BOOK_REFETCH_MS,
+  })
+  const positions = posResp?.data ?? []
+  const orders = ordResp?.data?.orders ?? []
+  const trades = trdResp?.data ?? []
+
+  const netQty = positions.reduce((a, p) => a + (p.quantity || 0), 0)
+  const mtm = positions.reduce((a, p) => a + (p.pnl || 0), 0)
+
+  const refreshBooks = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['scalping', 'positions'] })
+    queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
+    queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
+  }, [queryClient])
+
+  // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
+  const stateRef = useRef({ armed, lots, product, ceLeg, peLeg })
+  stateRef.current = { armed, lots, product, ceLeg, peLeg }
+
+  const submitOrder = useCallback(
+    async (leg: SelectedLeg | null, action: ScalpingAction) => {
+      const s = stateRef.current
+      if (!s.armed) {
+        showToast.error('One-Click is disarmed — enable it to trade', 'orders')
+        return
+      }
+      if (!leg) {
+        showToast.error('No strike selected', 'orders')
+        return
+      }
+      if (!leg.lotsize) {
+        showToast.error('Lot size unavailable for this strike', 'orders')
+        return
+      }
+      const quantity = s.lots * leg.lotsize
+      try {
+        const res = await scalpingApi.placeOrder({
+          symbol: leg.symbol,
+          exchange: leg.exchange,
+          action,
+          quantity,
+          product: s.product,
+        })
+        if (res.status === 'success') {
+          showToast.success(
+            `${action} ${leg.optionType} x${s.lots} (${quantity}) → ${res.orderid ?? 'ok'}`,
+            'orders'
+          )
+          refreshBooks()
+        } else {
+          showToast.error(res.message ?? 'Order failed', 'orders')
+        }
+      } catch (e) {
+        showToast.error((e as Error).message, 'orders')
+      }
+    },
+    [refreshBooks]
+  )
+
+  const doCloseAll = useCallback(async () => {
+    try {
+      const res = await scalpingApi.closeAll()
+      if (res.status === 'success') {
+        showToast.success(res.message ?? 'All positions squared off', 'orders')
+      } else {
+        showToast.error(res.message ?? 'Close all failed', 'orders')
+      }
+    } catch (e) {
+      showToast.error((e as Error).message, 'orders')
+    }
+    refreshBooks()
+  }, [refreshBooks])
+
+  const doCancelAll = useCallback(async () => {
+    try {
+      const res = await scalpingApi.cancelAll()
+      if (res.status === 'success') {
+        showToast.success(res.message ?? 'All orders cancelled', 'orders')
+      } else {
+        showToast.error(res.message ?? 'Cancel all failed', 'orders')
+      }
+    } catch (e) {
+      showToast.error((e as Error).message, 'orders')
+    }
+    refreshBooks()
+  }, [refreshBooks])
+
+  // Global keyboard handler: arrows fire orders, F6 close-all, F7 cancel-all.
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.isContentEditable ||
+          t.getAttribute('role') === 'combobox')
+      ) {
+        return
+      }
+      const s = stateRef.current
+      switch (e.key) {
+        case 'ArrowUp':
+          e.preventDefault()
+          submitOrder(s.ceLeg, 'BUY')
+          break
+        case 'ArrowDown':
+          e.preventDefault()
+          submitOrder(s.ceLeg, 'SELL')
+          break
+        case 'ArrowRight':
+          e.preventDefault()
+          submitOrder(s.peLeg, 'BUY')
+          break
+        case 'ArrowLeft':
+          e.preventDefault()
+          submitOrder(s.peLeg, 'SELL')
+          break
+        case 'F6':
+          e.preventDefault()
+          doCloseAll()
+          break
+        case 'F7':
+          e.preventDefault()
+          doCancelAll()
+          break
+        default:
+          break
+      }
+    },
+    [submitOrder, doCloseAll, doCancelAll]
+  )
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleKeyDown])
+
   const wsBadge = isFallbackMode
     ? { label: 'Polling (REST)', variant: 'secondary' as const }
     : isAuthenticated
@@ -145,7 +324,12 @@ export default function Scalping() {
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Scalping Terminal</h1>
-        <Badge variant={wsBadge.variant}>{wsBadge.label}</Badge>
+        <div className="flex items-center gap-3">
+          <Badge variant={armed ? 'destructive' : 'secondary'}>
+            One-Click {armed ? 'ARMED' : 'off'}
+          </Badge>
+          <Badge variant={wsBadge.variant}>{wsBadge.label}</Badge>
+        </div>
       </div>
 
       {/* Selection controls */}
@@ -246,6 +430,223 @@ export default function Scalping() {
           changePercent={peTick?.change_percent}
         />
       </div>
+
+      {/* Order entry */}
+      <Card>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center gap-6">
+            <label className="flex items-center gap-2">
+              <Switch checked={armed} onCheckedChange={setArmed} />
+              <span className="text-sm font-medium">One-Click</span>
+            </label>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Lots</span>
+              <Select value={String(lots)} onValueChange={(v) => setLots(Number(v))}>
+                <SelectTrigger className="w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: MAX_LOTS }, (_, i) => i + 1).map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Product</span>
+              <Select value={product} onValueChange={(v) => setProduct(v as ScalpingProduct)}>
+                <SelectTrigger className="w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="MIS">MIS</SelectItem>
+                  <SelectItem value="NRML">NRML</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="ml-auto flex items-center gap-6 font-mono">
+              <span>
+                Net Qty: <span className="font-semibold">{netQty}</span>
+              </span>
+              <span>
+                MTM:{' '}
+                <span className={`font-semibold ${mtm >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {mtm.toFixed(2)}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Button
+              className="bg-green-600 hover:bg-green-700"
+              onClick={() => submitOrder(ceLeg, 'BUY')}
+            >
+              ↑ Buy Call
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => submitOrder(ceLeg, 'SELL')}
+            >
+              ↓ Sell Call
+            </Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700"
+              onClick={() => submitOrder(peLeg, 'BUY')}
+            >
+              → Buy Put
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => submitOrder(peLeg, 'SELL')}
+            >
+              ← Sell Put
+            </Button>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={doCloseAll}>
+              Close All Positions / F6
+            </Button>
+            <Button variant="outline" onClick={doCancelAll}>
+              Cancel All Orders / F7
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Keys: ↑ Buy Call · ↓ Sell Call · → Buy Put · ← Sell Put · F6 close · F7 cancel
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Books */}
+      <Tabs defaultValue="positions">
+        <TabsList>
+          <TabsTrigger value="positions">Positions</TabsTrigger>
+          <TabsTrigger value="orders">Order Book</TabsTrigger>
+          <TabsTrigger value="trades">Trade Book</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="positions">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Symbol</TableHead>
+                <TableHead>Product</TableHead>
+                <TableHead className="text-right">Qty</TableHead>
+                <TableHead className="text-right">Avg</TableHead>
+                <TableHead className="text-right">LTP</TableHead>
+                <TableHead className="text-right">P&amp;L</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {positions.map((p) => (
+                <TableRow key={`${p.symbol}-${p.product}`}>
+                  <TableCell className="font-mono text-sm">{p.symbol}</TableCell>
+                  <TableCell>{p.product}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{p.quantity}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {p.average_price?.toFixed(2)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {p.ltp?.toFixed(2)}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right font-mono tabular-nums ${
+                      (p.pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'
+                    }`}
+                  >
+                    {p.pnl?.toFixed(2)}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {positions.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    No open positions
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TabsContent>
+
+        <TabsContent value="orders">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Symbol</TableHead>
+                <TableHead>Side</TableHead>
+                <TableHead className="text-right">Qty</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Order ID</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {orders.map((o) => (
+                <TableRow key={o.orderid}>
+                  <TableCell className="font-mono text-sm">{o.symbol}</TableCell>
+                  <TableCell className={o.action === 'BUY' ? 'text-green-600' : 'text-red-600'}>
+                    {o.action}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{o.quantity}</TableCell>
+                  <TableCell>{o.pricetype}</TableCell>
+                  <TableCell>{o.order_status}</TableCell>
+                  <TableCell className="font-mono text-xs">{o.orderid}</TableCell>
+                </TableRow>
+              ))}
+              {orders.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    No orders
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TabsContent>
+
+        <TabsContent value="trades">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Symbol</TableHead>
+                <TableHead>Side</TableHead>
+                <TableHead className="text-right">Qty</TableHead>
+                <TableHead className="text-right">Avg Price</TableHead>
+                <TableHead>Order ID</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {trades.map((t) => (
+                <TableRow key={`${t.orderid}-${t.timestamp}`}>
+                  <TableCell className="font-mono text-sm">{t.symbol}</TableCell>
+                  <TableCell className={t.action === 'BUY' ? 'text-green-600' : 'text-red-600'}>
+                    {t.action}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{t.quantity}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {t.average_price?.toFixed(2)}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{t.orderid}</TableCell>
+                </TableRow>
+              ))}
+              {trades.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-muted-foreground">
+                    No trades
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

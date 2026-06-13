@@ -60,3 +60,17 @@ export interface SelectedLeg {
   lotsize: number
   tickSize: number
 }
+
+export interface ScalpingOrderRequest {
+  symbol: string
+  exchange: string // NFO | BFO
+  action: ScalpingAction
+  quantity: number
+  product: ScalpingProduct
+}
+
+export interface ScalpingOrderResponse {
+  status: string
+  orderid?: string
+  message?: string
+}
