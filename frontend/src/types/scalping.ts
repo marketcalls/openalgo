@@ -67,6 +67,7 @@ export interface ScalpingOrderRequest {
   action: ScalpingAction
   quantity: number
   product: ScalpingProduct
+  lots?: number // sent on manual entry so the lot cap is enforced server-side
 }
 
 export interface ScalpingOrderResponse {
@@ -87,6 +88,7 @@ export interface ScalpingSLState {
   trailing_enabled: boolean
   trailing_step: number | null
   highest_price: number | null
+  lowest_price: number | null
   current_sl: number | null
   is_active: boolean
 }

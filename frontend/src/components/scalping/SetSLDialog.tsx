@@ -66,6 +66,7 @@ export function SetSLDialog({
     if (!leg) return
     const sl = Number(stoploss)
     if (!Number.isFinite(sl) || sl <= 0) return
+    if (quantity <= 0) return
     const step = Number(trailingStep)
     const entry = entryPrice > 0 ? entryPrice : (ltp ?? 0)
     onSave({
@@ -112,6 +113,13 @@ export function SetSLDialog({
               <div className="font-mono">{quantity}</div>
             </div>
           </div>
+
+          {quantity <= 0 && (
+            <p className="text-xs text-red-600">
+              No quantity for this leg yet — open a position (or wait for chain data) before setting
+              a stop-loss.
+            </p>
+          )}
 
           <div className="space-y-1">
             <Label htmlFor="sl-price">Stop-loss price</Label>
@@ -166,7 +174,9 @@ export function SetSLDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave}>Save</Button>
+          <Button onClick={handleSave} disabled={quantity <= 0 || !stoploss}>
+            Save
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

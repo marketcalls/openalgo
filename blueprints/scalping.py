@@ -13,6 +13,8 @@ Order constants (docs/prompt/order-constants.md):
 - Action              : BUY, SELL
 """
 
+import math
+
 from flask import Blueprint, jsonify, request, session
 
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
@@ -36,6 +38,10 @@ SCALPING_STRATEGY = "Scalping"
 VALID_PRODUCTS = {"MIS", "NRML"}  # CNC is equity-only and not used here
 VALID_ACTIONS = {"BUY", "SELL"}
 VALID_LEG_EXCHANGES = {"NFO", "BFO"}
+
+# Safety rails (server-side; the UI also enforces the lot cap).
+MAX_LOTS = 20  # max lots per manual click (matches the UI selector)
+MAX_ORDER_QUANTITY = 100_000  # absolute sanity ceiling to block fat-finger/abuse
 
 # Supported index underlyings for v1, mapped to their index (quote) exchange and
 # F&O (tradable) exchange. Keep this the single source of truth for the dropdown.
@@ -182,6 +188,10 @@ def order():
     except (TypeError, ValueError):
         quantity = 0
 
+    # `lots` is sent on manual entry orders so the lot cap can be enforced
+    # server-side. SL auto-exits omit it (they close a raw position quantity).
+    lots = data.get("lots")
+
     if not symbol:
         return jsonify({"status": "error", "message": "symbol is required"}), 400
     if exchange not in VALID_LEG_EXCHANGES:
@@ -192,6 +202,17 @@ def order():
         return jsonify({"status": "error", "message": f"Invalid product: {product}"}), 400
     if quantity <= 0:
         return jsonify({"status": "error", "message": "quantity must be positive"}), 400
+    if quantity > MAX_ORDER_QUANTITY:
+        return jsonify({"status": "error", "message": "quantity exceeds the safety limit"}), 400
+    if lots is not None:
+        try:
+            lots = int(lots)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "lots must be an integer"}), 400
+        if lots < 1 or lots > MAX_LOTS:
+            return jsonify(
+                {"status": "error", "message": f"lots must be between 1 and {MAX_LOTS}"}
+            ), 400
 
     auth_token, broker, api_key, err, code = _resolve_session_auth()
     if err:
@@ -270,11 +291,42 @@ def upsert_sl():
     if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in VALID_PRODUCTS:
         return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
 
-    data["symbol"] = symbol
-    data["exchange"] = exchange
-    data["product"] = product
+    # Validate the side and coerce/range-check numeric fields so the browser SL
+    # engine can never persist corrupt values (negative qty, NaN/inf prices).
+    side = (data.get("side") or "BUY").strip().upper()
+    if side not in VALID_ACTIONS:
+        return jsonify({"status": "error", "message": f"Invalid side: {side}"}), 400
 
-    result = upsert_sl_state(data)
+    try:
+        quantity = int(data.get("quantity", 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "quantity must be an integer"}), 400
+    if quantity < 0 or quantity > MAX_ORDER_QUANTITY:
+        return jsonify({"status": "error", "message": "quantity out of range"}), 400
+
+    cleaned = {
+        "symbol": symbol,
+        "exchange": exchange,
+        "product": product,
+        "side": side,
+        "quantity": quantity,
+    }
+    for field in ("entry_price", "initial_sl", "trailing_step", "highest_price",
+                  "lowest_price", "current_sl"):
+        if data.get(field) is not None:
+            try:
+                val = float(data[field])
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": f"{field} must be a number"}), 400
+            if not math.isfinite(val) or val < 0:
+                return jsonify({"status": "error", "message": f"{field} out of range"}), 400
+            cleaned[field] = val
+    if "trailing_enabled" in data:
+        cleaned["trailing_enabled"] = bool(data["trailing_enabled"])
+    if "is_active" in data:
+        cleaned["is_active"] = bool(data["is_active"])
+
+    result = upsert_sl_state(cleaned)
     if result is None:
         return jsonify({"status": "error", "message": "Failed to save SL state"}), 500
     return jsonify({"status": "success", "data": result})
@@ -291,8 +343,8 @@ def delete_sl():
     exchange = (data.get("exchange") or "").strip().upper()
     product = (data.get("product") or "").strip().upper()
 
-    if not symbol or not exchange or not product:
-        return jsonify({"status": "error", "message": "symbol/exchange/product required"}), 400
+    if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in VALID_PRODUCTS:
+        return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
 
     deleted = delete_sl_state(symbol, exchange, product)
     return jsonify({"status": "success", "deleted": deleted})

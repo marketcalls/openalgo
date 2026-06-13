@@ -32,6 +32,7 @@ import { showToast } from '@/utils/toast'
 const DEFAULT_STRIKE_COUNT = 10
 const MAX_LOTS = 20
 const BOOK_REFETCH_MS = 1000
+const ORDER_COOLDOWN_MS = 120 // min gap between two order fires (anti double-fire)
 
 function buildLeg(
   row: OptionChainRow | undefined,
@@ -130,10 +131,26 @@ export default function Scalping() {
     }
   }, [chainResp, chain])
 
-  const ceRow = chain.find((r) => String(r.strike) === ceStrike)
-  const peRow = chain.find((r) => String(r.strike) === peStrike)
-  const ceLeg = buildLeg(ceRow, 'ce', foExchange)
-  const peLeg = buildLeg(peRow, 'pe', foExchange)
+  // Stable leg identities (only change when strike/exchange/chain actually change)
+  // so the SL evaluation effect isn't re-triggered by unrelated re-renders.
+  const ceLeg = useMemo(
+    () =>
+      buildLeg(
+        chain.find((r) => String(r.strike) === ceStrike),
+        'ce',
+        foExchange
+      ),
+    [chain, ceStrike, foExchange]
+  )
+  const peLeg = useMemo(
+    () =>
+      buildLeg(
+        chain.find((r) => String(r.strike) === peStrike),
+        'pe',
+        foExchange
+      ),
+    [chain, peStrike, foExchange]
+  )
 
   // Subscribe underlying + both legs to the live feed (Quote mode = ltp + change).
   const symbols = useMemo(() => {
@@ -214,6 +231,9 @@ export default function Scalping() {
   const slDialogQty = slDialogPos
     ? Math.abs(slDialogPos.quantity)
     : lots * (slDialogLeg?.lotsize ?? 0)
+  // Side is derived from the actual open position: a short (qty < 0) stops out
+  // when price RISES, a long when price FALLS — the SL engine needs this right.
+  const slDialogSide: ScalpingAction = slDialogPos && slDialogPos.quantity < 0 ? 'SELL' : 'BUY'
   const slDialogExisting = slDialogLeg
     ? slMap[slKey(slDialogLeg.symbol, slDialogLeg.exchange)]
     : undefined
@@ -224,6 +244,11 @@ export default function Scalping() {
   // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
   const stateRef = useRef({ armed, lots, product, ceLeg, peLeg })
   stateRef.current = { armed, lots, product, ceLeg, peLeg }
+
+  // Min gap between two order fires. Bounds the rate (prevents accidental
+  // double-taps and held-key bursts) while still allowing deliberate fast
+  // scalping. Held-key auto-repeat is additionally filtered via e.repeat below.
+  const lastFireRef = useRef(0)
 
   const submitOrder = useCallback(
     async (leg: SelectedLeg | null, action: ScalpingAction) => {
@@ -240,6 +265,9 @@ export default function Scalping() {
         showToast.error('Lot size unavailable for this strike', 'orders')
         return
       }
+      const now = Date.now()
+      if (now - lastFireRef.current < ORDER_COOLDOWN_MS) return
+      lastFireRef.current = now
       const quantity = s.lots * leg.lotsize
       try {
         const res = await scalpingApi.placeOrder({
@@ -248,6 +276,7 @@ export default function Scalping() {
           action,
           quantity,
           product: s.product,
+          lots: s.lots,
         })
         if (res.status === 'success') {
           showToast.success(
@@ -265,6 +294,10 @@ export default function Scalping() {
     [refreshBooks]
   )
 
+  // Note: close-all / cancel-all (F6/F7) and the trailing-SL auto-exit are
+  // intentionally NOT gated by `armed`. "Armed" guards only NEW risk-increasing
+  // entries; risk-reducing actions (flatten, cancel, stop-loss) must always work
+  // even when one-click is off — disarming must never disable your stops.
   const doCloseAll = useCallback(async () => {
     try {
       const res = await scalpingApi.closeAll()
@@ -296,6 +329,9 @@ export default function Scalping() {
   // Global keyboard handler: arrows fire orders, F6 close-all, F7 cancel-all.
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // Ignore OS key auto-repeat from a held key — otherwise one held arrow
+      // would fire a continuous stream of market orders.
+      if (e.repeat) return
       const t = e.target as HTMLElement | null
       if (
         t &&
@@ -711,7 +747,7 @@ export default function Scalping() {
         }}
         leg={slDialogLeg}
         product={product}
-        side="BUY"
+        side={slDialogSide}
         entryPrice={slDialogEntry}
         quantity={slDialogQty}
         ltp={slDialogTick?.ltp}

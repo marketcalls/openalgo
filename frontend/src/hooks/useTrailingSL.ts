@@ -55,7 +55,7 @@ function fromBackend(s: ScalpingSLState): SLState {
     trailingEnabled: s.trailing_enabled ?? false,
     trailingStep: s.trailing_step ?? 0,
     highestPrice: s.highest_price ?? entry,
-    lowestPrice: entry,
+    lowestPrice: s.lowest_price ?? entry,
     currentSl: s.current_sl ?? s.initial_sl ?? entry,
     active: s.is_active ?? true,
   }
@@ -75,6 +75,7 @@ function toBackend(
     trailing_enabled: s.trailingEnabled,
     trailing_step: s.trailingStep,
     highest_price: s.highestPrice,
+    lowest_price: s.lowestPrice,
     current_sl: s.currentSl,
     is_active: s.active,
   }
@@ -131,7 +132,11 @@ export function useTrailingSL({ ticks, onAfterExit }: UseTrailingSLArgs) {
         }
         setSlMap(restored)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) {
+          showToast.error('Failed to restore active stop-losses — verify manually', 'orders')
+        }
+      })
     return () => {
       cancelled = true
     }
@@ -160,6 +165,9 @@ export function useTrailingSL({ ticks, onAfterExit }: UseTrailingSLArgs) {
       delete next[key]
       return next
     })
+    // Drop bookkeeping for this leg so the refs don't grow across a long session.
+    delete lastPersistRef.current[key]
+    exitingRef.current.delete(key)
     scalpingApi.deleteSL(symbol, exchange, product).catch(() => {})
   }, [])
 
@@ -212,7 +220,11 @@ export function useTrailingSL({ ticks, onAfterExit }: UseTrailingSLArgs) {
       const { next, breached } = evaluateTrail(sl, ltp)
       if (breached) {
         breaches.push({ ...next, active: false })
-      } else if (next.currentSl !== sl.currentSl || next.highestPrice !== sl.highestPrice) {
+      } else if (
+        next.currentSl !== sl.currentSl ||
+        next.highestPrice !== sl.highestPrice ||
+        next.lowestPrice !== sl.lowestPrice
+      ) {
         updates[key] = next
         changed = true
       }
