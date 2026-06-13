@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { tradingApi } from '@/api/trading'
+import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,6 +24,7 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
+import { type SLState, slKey, useTrailingSL } from '@/hooks/useTrailingSL'
 import { useAuthStore } from '@/stores/authStore'
 import type { OptionChainRow, ScalpingAction, ScalpingProduct, SelectedLeg } from '@/types/scalping'
 import { showToast } from '@/utils/toast'
@@ -188,6 +190,36 @@ export default function Scalping() {
     queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
     queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
   }, [queryClient])
+
+  // Browser-driven trailing stop-loss engine (evaluates on each leg LTP tick).
+  const slTicks = useMemo(
+    () => [
+      { leg: ceLeg, ltp: ceTick?.ltp },
+      { leg: peLeg, ltp: peTick?.ltp },
+    ],
+    [ceLeg, peLeg, ceTick?.ltp, peTick?.ltp]
+  )
+  const { slMap, setSL, clearSL } = useTrailingSL({ ticks: slTicks, onAfterExit: refreshBooks })
+
+  // Set-SL dialog targets one leg at a time.
+  const [slDialogLeg, setSlDialogLeg] = useState<SelectedLeg | null>(null)
+  const slDialogOpen = slDialogLeg !== null
+  const slDialogTick = slDialogLeg
+    ? marketData.get(`${slDialogLeg.exchange}:${slDialogLeg.symbol}`)?.data
+    : undefined
+  const slDialogPos = slDialogLeg
+    ? positions.find((p) => p.symbol === slDialogLeg.symbol && p.product === product)
+    : undefined
+  const slDialogEntry = slDialogPos?.average_price ?? slDialogTick?.ltp ?? 0
+  const slDialogQty = slDialogPos
+    ? Math.abs(slDialogPos.quantity)
+    : lots * (slDialogLeg?.lotsize ?? 0)
+  const slDialogExisting = slDialogLeg
+    ? slMap[slKey(slDialogLeg.symbol, slDialogLeg.exchange)]
+    : undefined
+
+  const ceSL = ceLeg ? slMap[slKey(ceLeg.symbol, ceLeg.exchange)] : undefined
+  const peSL = peLeg ? slMap[slKey(peLeg.symbol, peLeg.exchange)] : undefined
 
   // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
   const stateRef = useRef({ armed, lots, product, ceLeg, peLeg })
@@ -509,17 +541,41 @@ export default function Scalping() {
             </Button>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="outline" disabled={!ceLeg} onClick={() => setSlDialogLeg(ceLeg)}>
+              {ceSL ? 'Edit Call SL' : 'Set Call SL'}
+            </Button>
+            <Button variant="outline" disabled={!peLeg} onClick={() => setSlDialogLeg(peLeg)}>
+              {peSL ? 'Edit Put SL' : 'Set Put SL'}
+            </Button>
             <Button variant="outline" onClick={doCloseAll}>
               Close All Positions / F6
             </Button>
             <Button variant="outline" onClick={doCancelAll}>
               Cancel All Orders / F7
             </Button>
-            <span className="text-xs text-muted-foreground">
-              Keys: ↑ Buy Call · ↓ Sell Call · → Buy Put · ← Sell Put · F6 close · F7 cancel
-            </span>
           </div>
+
+          {(ceSL || peSL) && (
+            <div className="flex flex-wrap gap-4 font-mono text-xs">
+              {ceSL && (
+                <span>
+                  CE SL @ <span className="font-semibold">{ceSL.currentSl.toFixed(2)}</span>
+                  {ceSL.trailingEnabled ? ` (trailing ±${ceSL.trailingStep})` : ''}
+                </span>
+              )}
+              {peSL && (
+                <span>
+                  PE SL @ <span className="font-semibold">{peSL.currentSl.toFixed(2)}</span>
+                  {peSL.trailingEnabled ? ` (trailing ±${peSL.trailingStep})` : ''}
+                </span>
+              )}
+            </div>
+          )}
+
+          <span className="text-xs text-muted-foreground">
+            Keys: ↑ Buy Call · ↓ Sell Call · → Buy Put · ← Sell Put · F6 close · F7 cancel
+          </span>
         </CardContent>
       </Card>
 
@@ -647,6 +703,26 @@ export default function Scalping() {
           </Table>
         </TabsContent>
       </Tabs>
+
+      <SetSLDialog
+        open={slDialogOpen}
+        onOpenChange={(o) => {
+          if (!o) setSlDialogLeg(null)
+        }}
+        leg={slDialogLeg}
+        product={product}
+        side="BUY"
+        entryPrice={slDialogEntry}
+        quantity={slDialogQty}
+        ltp={slDialogTick?.ltp}
+        existing={slDialogExisting}
+        onSave={(sl: SLState) => setSL(sl)}
+        onClear={
+          slDialogExisting && slDialogLeg
+            ? () => clearSL(slDialogLeg.symbol, slDialogLeg.exchange, product)
+            : undefined
+        }
+      />
     </div>
   )
 }

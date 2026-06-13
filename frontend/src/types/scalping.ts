@@ -74,3 +74,24 @@ export interface ScalpingOrderResponse {
   orderid?: string
   message?: string
 }
+
+// Stop-loss / trailing-SL state persisted per (symbol, exchange, product) leg.
+export interface ScalpingSLState {
+  symbol: string
+  exchange: string
+  product: ScalpingProduct
+  side: ScalpingAction
+  entry_price: number
+  quantity: number
+  initial_sl: number | null
+  trailing_enabled: boolean
+  trailing_step: number | null
+  highest_price: number | null
+  current_sl: number | null
+  is_active: boolean
+}
+
+export interface SLStatesResponse {
+  status: string
+  data: ScalpingSLState[]
+}
