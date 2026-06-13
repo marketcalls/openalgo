@@ -153,6 +153,36 @@ the constants above and resolve symbols via the option services.
 
 ---
 
+## 6b. Sandbox → Live switch checklist (Phase 3)
+
+The terminal fires **no-confirmation MARKET orders** from a keypress. Validate
+everything in Sandbox/Analyzer first, then switch to live deliberately.
+
+Before turning Analyzer mode OFF (going live):
+
+1. **Confirm you are in Sandbox** while testing: `/analyzer` shows Analyzer ON;
+   orders appear in the sandbox book, not the live broker.
+2. **Broker session is live and IP-whitelisted** (SEBI static-IP mandate, eff.
+   2026-04-01): the OpenAlgo server's IP is registered with the broker, daily
+   token generated (tokens expire ~3:00 AM IST).
+3. **Verify the keymap** on a single 1-lot order each: ↑ Buy Call, ↓ Sell Call,
+   → Buy Put, ← Sell Put — confirm symbol/side/qty in the order book.
+4. **Lot cap** is 20 (UI selector + server-side `MAX_LOTS`); confirm a >20 attempt
+   is rejected. Start live with **lots = 1**.
+5. **Stop-loss sanity**: set a manual SL on a live 1-lot position and confirm it
+   exits at the level; for a SELL leg confirm the stop sits ABOVE entry.
+6. **Feed health**: the status badge reads **Live** (not Polling/Disconnected).
+   A red banner appears if the feed drops — do not trade through it.
+7. **Latency**: the header shows `order NNms` after a fire; confirm it is
+   acceptable on your network before scaling size.
+8. **Flatten path works**: F6 (Close All) and F7 (Cancel All) both act on the
+   live account. These are intentionally NOT gated by the One-Click arm toggle.
+9. **One browser tab** drives trailing SL (Phase 2 is browser-driven) — keep it
+   open and focused while in a position. For unattended safety, wait for the
+   Phase 4 backend trail engine.
+10. Flip Analyzer OFF, **arm One-Click**, trade 1 lot, verify the real fill, then
+    scale.
+
 ## 7. Open items / decisions
 - Confirm SENSEX/BANKEX (BSE, `BFO`) inclusion in v1 or NSE-only first.
 - Confirm lot cap (default 20, matching 1cliq).

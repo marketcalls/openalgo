@@ -95,6 +95,7 @@ export default function Scalping() {
   const [armed, setArmed] = useState(false)
   const [lots, setLots] = useState(1)
   const [product, setProduct] = useState<ScalpingProduct>('MIS')
+  const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
 
   // Underlyings
   const { data: underlyingsResp } = useQuery({
@@ -199,6 +200,9 @@ export default function Scalping() {
   const orders = ordResp?.data?.orders ?? []
   const trades = trdResp?.data ?? []
 
+  // Fill reconciliation: Net Qty / MTM are derived from the broker positionbook
+  // (authoritative, refetched every second) — never an optimistic client-side
+  // tally — so a burst of rapid order fires always reconciles to actual fills.
   const netQty = positions.reduce((a, p) => a + (p.quantity || 0), 0)
   const mtm = positions.reduce((a, p) => a + (p.pnl || 0), 0)
 
@@ -269,6 +273,7 @@ export default function Scalping() {
       if (now - lastFireRef.current < ORDER_COOLDOWN_MS) return
       lastFireRef.current = now
       const quantity = s.lots * leg.lotsize
+      const t0 = performance.now()
       try {
         const res = await scalpingApi.placeOrder({
           symbol: leg.symbol,
@@ -278,9 +283,11 @@ export default function Scalping() {
           product: s.product,
           lots: s.lots,
         })
+        const latency = Math.round(performance.now() - t0)
+        setLastLatencyMs(latency)
         if (res.status === 'success') {
           showToast.success(
-            `${action} ${leg.optionType} x${s.lots} (${quantity}) → ${res.orderid ?? 'ok'}`,
+            `${action} ${leg.optionType} x${s.lots} (${quantity}) → ${res.orderid ?? 'ok'} · ${latency}ms`,
             'orders'
           )
           refreshBooks()
@@ -288,6 +295,7 @@ export default function Scalping() {
           showToast.error(res.message ?? 'Order failed', 'orders')
         }
       } catch (e) {
+        setLastLatencyMs(Math.round(performance.now() - t0))
         showToast.error((e as Error).message, 'orders')
       }
     },
@@ -393,12 +401,27 @@ export default function Scalping() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Scalping Terminal</h1>
         <div className="flex items-center gap-3">
+          {lastLatencyMs != null && (
+            <span className="font-mono text-xs text-muted-foreground">order {lastLatencyMs}ms</span>
+          )}
           <Badge variant={armed ? 'destructive' : 'secondary'}>
             One-Click {armed ? 'ARMED' : 'off'}
           </Badge>
           <Badge variant={wsBadge.variant}>{wsBadge.label}</Badge>
         </div>
       </div>
+
+      {/* Feed-status banner — a stale/lost feed mid-position is dangerous. The
+          shared WebSocket manager auto-resubscribes active legs on reconnect. */}
+      {!isAuthenticated && (
+        <div className="rounded-md border border-red-500/50 bg-red-500/10 px-4 py-2 text-sm text-red-700 dark:text-red-400">
+          {isFallbackMode
+            ? 'Live feed lost — using slower REST polling. Prices may lag; trade with caution.'
+            : isConnected
+              ? 'Reconnecting to the live market-data feed… active legs will resubscribe automatically.'
+              : 'Market-data feed disconnected — prices are stale. Reconnecting…'}
+        </div>
+      )}
 
       {/* Selection controls */}
       <Card>
