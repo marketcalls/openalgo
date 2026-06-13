@@ -10,7 +10,6 @@ persists each active leg's SL config so it survives a page reload — keyed by
 """
 
 import logging
-import os
 
 from sqlalchemy import (
     Boolean,
@@ -20,25 +19,18 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
-    create_engine,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
+
+from database.engine_factory import create_db_engine
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-# Conditionally create engine based on DB type (mirrors flow_db.py)
-if DATABASE_URL and "sqlite" in DATABASE_URL:
-    # SQLite: NullPool prevents connection pool exhaustion / FD accumulation
-    engine = create_engine(
-        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
-    )
-else:
-    engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
+# Canonical engine factory enforces the project-wide pooling policy
+# (SQLite -> NullPool with check_same_thread=False) for FD hygiene.
+engine = create_db_engine()
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -64,6 +56,7 @@ class ScalpingSLState(Base):
     trailing_enabled = Column(Boolean, nullable=False, default=False)
     trailing_step = Column(Float, nullable=True)
     highest_price = Column(Float, nullable=True)  # peak LTP seen since entry (long legs)
+    lowest_price = Column(Float, nullable=True)  # trough LTP seen since entry (short legs)
     current_sl = Column(Float, nullable=True)
 
     is_active = Column(Boolean, nullable=False, default=True)
@@ -76,6 +69,24 @@ def init_db():
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Scalping DB", logger)
+    _migrate_add_columns()
+
+
+def _migrate_add_columns():
+    """Add columns introduced after the table's first release (idempotent)."""
+    try:
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(engine)
+        if "scalping_sl_state" not in inspector.get_table_names():
+            return
+        existing = {c["name"] for c in inspector.get_columns("scalping_sl_state")}
+        if "lowest_price" not in existing:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE scalping_sl_state ADD COLUMN lowest_price FLOAT"))
+            logger.info("Scalping DB: added lowest_price column")
+    except Exception as e:
+        logger.exception(f"Error migrating scalping_sl_state columns: {e}")
 
 
 def _to_dict(row: "ScalpingSLState") -> dict:
@@ -90,6 +101,7 @@ def _to_dict(row: "ScalpingSLState") -> dict:
         "trailing_enabled": row.trailing_enabled,
         "trailing_step": row.trailing_step,
         "highest_price": row.highest_price,
+        "lowest_price": row.lowest_price,
         "current_sl": row.current_sl,
         "is_active": row.is_active,
     }
@@ -123,6 +135,7 @@ def upsert_sl_state(data: dict) -> dict | None:
             "trailing_enabled",
             "trailing_step",
             "highest_price",
+            "lowest_price",
             "current_sl",
             "is_active",
         ):
@@ -144,6 +157,7 @@ def get_active_sl_states() -> list[dict]:
         return [_to_dict(r) for r in rows]
     except Exception as e:
         logger.exception(f"Error fetching scalping SL states: {e}")
+        db_session.rollback()
         return []
 
 
