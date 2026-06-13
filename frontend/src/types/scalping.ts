@@ -1,0 +1,62 @@
+// Types for the /scalping keyboard-driven options scalping terminal.
+// Order constants mirror OpenAlgo (docs/prompt/order-constants.md).
+
+export type OptionType = 'CE' | 'PE'
+export type ScalpingProduct = 'MIS' | 'NRML'
+export type ScalpingAction = 'BUY' | 'SELL'
+
+export interface ScalpingUnderlying {
+  underlying: string
+  index_exchange: string // NSE_INDEX | BSE_INDEX
+  fo_exchange: string // NFO | BFO
+}
+
+export interface UnderlyingsResponse {
+  status: string
+  data: ScalpingUnderlying[]
+}
+
+export interface ExpiryResponse {
+  status: string
+  data: string[] // DDMMMYY, e.g. "28OCT25"
+  message?: string
+}
+
+export interface OptionLeg {
+  symbol: string
+  label: string // ATM, ITM1, OTM2, ...
+  ltp?: number
+  bid?: number
+  ask?: number
+  lotsize?: number | null
+  tick_size?: number | null
+  exists?: boolean
+}
+
+export interface OptionChainRow {
+  strike: number
+  ce: OptionLeg
+  pe: OptionLeg
+}
+
+export interface OptionChainResponse {
+  status: string
+  underlying: string
+  underlying_ltp?: number
+  expiry_date: string
+  atm_strike?: number
+  chain: OptionChainRow[]
+  fo_exchange: string
+  index_exchange: string
+  message?: string
+}
+
+// A selected leg ready for subscription/trading.
+export interface SelectedLeg {
+  symbol: string
+  exchange: string // fo_exchange (NFO | BFO)
+  optionType: OptionType
+  strike: number
+  lotsize: number
+  tickSize: number
+}
