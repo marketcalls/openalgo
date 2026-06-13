@@ -172,6 +172,44 @@ def _resolve_session_auth():
     return auth_token, broker, api_key, None, None
 
 
+def _validate_quantity(symbol: str, exchange: str, quantity: int) -> str | None:
+    """Validate order quantity against the symbol's lot size server-side.
+
+    Enforces the lot cap (MAX_LOTS) regardless of whether the client supplied
+    `lots`, requires the quantity to be a whole number of lots, and rejects
+    quantities above the exchange freeze limit. Returns an error string, or None
+    if the quantity is valid.
+    """
+    from database.symbol import SymToken
+    from database.symbol import db_session as symbol_session
+
+    rec = (
+        symbol_session.query(SymToken)
+        .filter(SymToken.symbol == symbol, SymToken.exchange == exchange)
+        .first()
+    )
+    if not rec or not rec.lotsize or rec.lotsize <= 0:
+        return f"Unknown symbol or lot size unavailable: {symbol}"
+
+    lotsize = rec.lotsize
+    if quantity % lotsize != 0:
+        return f"quantity must be a whole number of lots (lot size {lotsize})"
+    if quantity > MAX_LOTS * lotsize:
+        return f"quantity exceeds the {MAX_LOTS}-lot cap"
+
+    # Exchange single-order freeze limit (best-effort; don't block on lookup error).
+    try:
+        from database.qty_freeze_db import get_freeze_qty_for_option
+
+        freeze = get_freeze_qty_for_option(symbol, exchange)
+        if freeze and freeze > 0 and quantity > freeze:
+            return f"quantity exceeds the exchange freeze limit ({freeze})"
+    except Exception as e:
+        logger.warning(f"Scalping freeze-qty lookup failed for {symbol}: {e}")
+
+    return None
+
+
 @scalping_bp.route("/scalping/api/order", methods=["POST"])
 @check_session_validity
 def order():
@@ -213,6 +251,12 @@ def order():
             return jsonify(
                 {"status": "error", "message": f"lots must be between 1 and {MAX_LOTS}"}
             ), 400
+
+    # Server-side lot-size / lot-cap / freeze validation — enforced even if the
+    # client omits `lots` (closes the direct-call bypass of the lot cap).
+    qty_err = _validate_quantity(symbol, exchange, quantity)
+    if qty_err:
+        return jsonify({"status": "error", "message": qty_err}), 400
 
     auth_token, broker, api_key, err, code = _resolve_session_auth()
     if err:
