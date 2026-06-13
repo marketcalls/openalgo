@@ -15,15 +15,27 @@ Order constants (docs/prompt/order-constants.md):
 
 from flask import Blueprint, jsonify, request, session
 
-from database.auth_db import get_api_key_for_tradingview
+from database.auth_db import get_api_key_for_tradingview, get_auth_token
+from database.settings_db import get_analyze_mode
 from services.expiry_service import get_expiry_dates
 from services.option_chain_service import get_option_chain
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
+# Note: order/close/cancel services are imported lazily inside their routes to
+# avoid a circular import at module load (mirrors blueprints/orders.py).
+
 logger = get_logger(__name__)
 
 scalping_bp = Blueprint("scalping_bp", __name__, url_prefix="/")
+
+# Strategy tag stamped on every scalping order (shown in order/trade books).
+SCALPING_STRATEGY = "Scalping"
+
+# Order constants enforced on the order endpoint.
+VALID_PRODUCTS = {"MIS", "NRML"}  # CNC is equity-only and not used here
+VALID_ACTIONS = {"BUY", "SELL"}
+VALID_LEG_EXCHANGES = {"NFO", "BFO"}
 
 # Supported index underlyings for v1, mapped to their index (quote) exchange and
 # F&O (tradable) exchange. Keep this the single source of truth for the dropdown.
@@ -131,4 +143,105 @@ def strikes():
     # frontend can subscribe and (in Phase 1) place orders with the right exchange.
     response["fo_exchange"] = SUPPORTED_UNDERLYINGS[underlying]["fo_exchange"]
     response["index_exchange"] = index_exchange
+    return jsonify(response), status_code
+
+
+def _resolve_session_auth():
+    """Return (auth_token, broker, api_key, error_response, status_code).
+
+    api_key is only populated in analyze (sandbox) mode, mirroring blueprints/orders.py:
+    in analyze mode services route to the sandbox using the API key; in live mode they
+    use auth_token + broker.
+    """
+    username = session.get("user")
+    if not username:
+        return None, None, None, {"status": "error", "message": "Not authenticated"}, 401
+
+    auth_token = get_auth_token(username)
+    broker = session.get("broker")
+    if not auth_token or not broker:
+        return None, None, None, {"status": "error", "message": "Authentication error"}, 401
+
+    api_key = get_api_key_for_tradingview(username) if get_analyze_mode() else None
+    return auth_token, broker, api_key, None, None
+
+
+@scalping_bp.route("/scalping/api/order", methods=["POST"])
+@check_session_validity
+def order():
+    """Place a single MARKET order for a scalping leg (BUY/SELL CE/PE)."""
+    data = request.get_json(silent=True) or {}
+
+    symbol = (data.get("symbol") or "").strip()
+    exchange = (data.get("exchange") or "").strip().upper()
+    action = (data.get("action") or "").strip().upper()
+    product = (data.get("product") or "MIS").strip().upper()
+
+    try:
+        quantity = int(data.get("quantity", 0))
+    except (TypeError, ValueError):
+        quantity = 0
+
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol is required"}), 400
+    if exchange not in VALID_LEG_EXCHANGES:
+        return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
+    if action not in VALID_ACTIONS:
+        return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
+    if product not in VALID_PRODUCTS:
+        return jsonify({"status": "error", "message": f"Invalid product: {product}"}), 400
+    if quantity <= 0:
+        return jsonify({"status": "error", "message": "quantity must be positive"}), 400
+
+    auth_token, broker, api_key, err, code = _resolve_session_auth()
+    if err:
+        return jsonify(err), code
+
+    from services.place_order_service import place_order
+
+    order_data = {
+        "strategy": SCALPING_STRATEGY,
+        "symbol": symbol,
+        "exchange": exchange,
+        "action": action,
+        "pricetype": "MARKET",
+        "product": product,
+        "quantity": quantity,
+    }
+
+    success, response, status_code = place_order(
+        order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
+    )
+    return jsonify(response), status_code
+
+
+@scalping_bp.route("/scalping/api/close_all", methods=["POST"])
+@check_session_validity
+def close_all():
+    """Square off all open positions (F6)."""
+    auth_token, broker, api_key, err, code = _resolve_session_auth()
+    if err:
+        return jsonify(err), code
+
+    from services.close_position_service import close_position
+
+    success, response, status_code = close_position(
+        position_data={}, api_key=api_key, auth_token=auth_token, broker=broker
+    )
+    return jsonify(response), status_code
+
+
+@scalping_bp.route("/scalping/api/cancel_all", methods=["POST"])
+@check_session_validity
+def cancel_all():
+    """Cancel all open orders (F7)."""
+    auth_token, broker, api_key, err, code = _resolve_session_auth()
+    if err:
+        return jsonify(err), code
+
+    from services.cancel_all_order_service import cancel_all_orders
+
+    success, response, status_code = cancel_all_orders(
+        order_data={}, api_key=api_key, auth_token=auth_token, broker=broker
+    )
     return jsonify(response), status_code
