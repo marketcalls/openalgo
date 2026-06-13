@@ -94,6 +94,7 @@ from database.historify_db import init_database as ensure_historify_tables_exist
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
+from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
@@ -641,6 +642,7 @@ def setup_environment(app):
                 ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
+                ("Scalping DB", ensure_scalping_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
             ]
@@ -864,6 +866,7 @@ def shutdown_database_sessions(exception=None):
         ("database.chart_prefs_db", "db_session"),
         ("database.chartink_db", "db_session"),
         ("database.flow_db", "db_session"),
+        ("database.scalping_db", "db_session"),
         ("database.leverage_db", "db_session"),
         ("database.strategy_portfolio_db", "db_session"),
         ("database.market_calendar_db", "db_session"),

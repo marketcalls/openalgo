@@ -245,3 +245,54 @@ def cancel_all():
         order_data={}, api_key=api_key, auth_token=auth_token, broker=broker
     )
     return jsonify(response), status_code
+
+
+@scalping_bp.route("/scalping/api/sl", methods=["GET"])
+@check_session_validity
+def get_sl_states():
+    """Return active stop-loss states to rehydrate the terminal on load."""
+    from database.scalping_db import get_active_sl_states
+
+    return jsonify({"status": "success", "data": get_active_sl_states()})
+
+
+@scalping_bp.route("/scalping/api/sl", methods=["POST"])
+@check_session_validity
+def upsert_sl():
+    """Create or update the stop-loss config for a (symbol, exchange, product) leg."""
+    from database.scalping_db import upsert_sl_state
+
+    data = request.get_json(silent=True) or {}
+    symbol = (data.get("symbol") or "").strip()
+    exchange = (data.get("exchange") or "").strip().upper()
+    product = (data.get("product") or "").strip().upper()
+
+    if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in VALID_PRODUCTS:
+        return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
+
+    data["symbol"] = symbol
+    data["exchange"] = exchange
+    data["product"] = product
+
+    result = upsert_sl_state(data)
+    if result is None:
+        return jsonify({"status": "error", "message": "Failed to save SL state"}), 500
+    return jsonify({"status": "success", "data": result})
+
+
+@scalping_bp.route("/scalping/api/sl", methods=["DELETE"])
+@check_session_validity
+def delete_sl():
+    """Remove the stop-loss state for a leg (position closed or SL cleared)."""
+    from database.scalping_db import delete_sl_state
+
+    data = request.get_json(silent=True) or {}
+    symbol = (data.get("symbol") or "").strip()
+    exchange = (data.get("exchange") or "").strip().upper()
+    product = (data.get("product") or "").strip().upper()
+
+    if not symbol or not exchange or not product:
+        return jsonify({"status": "error", "message": "symbol/exchange/product required"}), 400
+
+    deleted = delete_sl_state(symbol, exchange, product)
+    return jsonify({"status": "success", "deleted": deleted})

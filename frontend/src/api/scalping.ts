@@ -3,6 +3,8 @@ import type {
   OptionChainResponse,
   ScalpingOrderRequest,
   ScalpingOrderResponse,
+  ScalpingSLState,
+  SLStatesResponse,
   UnderlyingsResponse,
 } from '@/types/scalping'
 import { webClient } from './client'
@@ -45,6 +47,29 @@ export const scalpingApi = {
 
   cancelAll: async (): Promise<ScalpingOrderResponse> => {
     const response = await webClient.post<ScalpingOrderResponse>('/scalping/api/cancel_all', {})
+    return response.data
+  },
+
+  getSLStates: async (): Promise<SLStatesResponse> => {
+    const response = await webClient.get<SLStatesResponse>('/scalping/api/sl')
+    return response.data
+  },
+
+  saveSL: async (
+    sl: Partial<ScalpingSLState> & Pick<ScalpingSLState, 'symbol' | 'exchange' | 'product'>
+  ): Promise<{ status: string; data?: ScalpingSLState; message?: string }> => {
+    const response = await webClient.post('/scalping/api/sl', sl)
+    return response.data
+  },
+
+  deleteSL: async (
+    symbol: string,
+    exchange: string,
+    product: string
+  ): Promise<{ status: string; deleted?: boolean }> => {
+    const response = await webClient.delete('/scalping/api/sl', {
+      data: { symbol, exchange, product },
+    })
     return response.data
   },
 }
