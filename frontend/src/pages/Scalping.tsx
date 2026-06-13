@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
-import { type SLState, slKey, useTrailingSL } from '@/hooks/useTrailingSL'
+import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
 import { useAuthStore } from '@/stores/authStore'
 import type { OptionChainRow, ScalpingAction, ScalpingProduct, SelectedLeg } from '@/types/scalping'
 import { showToast } from '@/utils/toast'
@@ -212,6 +212,16 @@ export default function Scalping() {
     queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
   }, [queryClient])
 
+  // Latest positions for the SL engine to size/direct exits from (avoids stale closure).
+  const positionsRef = useRef(positions)
+  positionsRef.current = positions
+  const resolvePosition = useCallback((symbol: string, exchange: string, prod: string): number => {
+    const p = positionsRef.current.find(
+      (pos) => pos.symbol === symbol && pos.exchange === exchange && pos.product === prod
+    )
+    return p ? p.quantity : 0
+  }, [])
+
   // Browser-driven trailing stop-loss engine (evaluates on each leg LTP tick).
   const slTicks = useMemo(
     () => [
@@ -220,7 +230,11 @@ export default function Scalping() {
     ],
     [ceLeg, peLeg, ceTick?.ltp, peTick?.ltp]
   )
-  const { slMap, setSL, clearSL } = useTrailingSL({ ticks: slTicks, onAfterExit: refreshBooks })
+  const { slMap, setSL, clearSL } = useTrailingSL({
+    ticks: slTicks,
+    onAfterExit: refreshBooks,
+    resolvePosition,
+  })
 
   // Set-SL dialog targets one leg at a time.
   const [slDialogLeg, setSlDialogLeg] = useState<SelectedLeg | null>(null)
@@ -232,18 +246,19 @@ export default function Scalping() {
     ? positions.find((p) => p.symbol === slDialogLeg.symbol && p.product === product)
     : undefined
   const slDialogEntry = slDialogPos?.average_price ?? slDialogTick?.ltp ?? 0
-  const slDialogQty = slDialogPos
-    ? Math.abs(slDialogPos.quantity)
-    : lots * (slDialogLeg?.lotsize ?? 0)
+  // A stop-loss is only meaningful for an actual open position — qty is 0 when
+  // flat, which blocks the dialog's Save (prevents an SL that would open a fresh
+  // naked position on "exit").
+  const slDialogQty = slDialogPos ? Math.abs(slDialogPos.quantity) : 0
   // Side is derived from the actual open position: a short (qty < 0) stops out
   // when price RISES, a long when price FALLS — the SL engine needs this right.
   const slDialogSide: ScalpingAction = slDialogPos && slDialogPos.quantity < 0 ? 'SELL' : 'BUY'
   const slDialogExisting = slDialogLeg
-    ? slMap[slKey(slDialogLeg.symbol, slDialogLeg.exchange)]
+    ? findLegSL(slMap, slDialogLeg.symbol, slDialogLeg.exchange)
     : undefined
 
-  const ceSL = ceLeg ? slMap[slKey(ceLeg.symbol, ceLeg.exchange)] : undefined
-  const peSL = peLeg ? slMap[slKey(peLeg.symbol, peLeg.exchange)] : undefined
+  const ceSL = ceLeg ? findLegSL(slMap, ceLeg.symbol, ceLeg.exchange) : undefined
+  const peSL = peLeg ? findLegSL(slMap, peLeg.symbol, peLeg.exchange) : undefined
 
   // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
   const stateRef = useRef({ armed, lots, product, ceLeg, peLeg })
@@ -560,12 +575,15 @@ export default function Scalping() {
               </Select>
             </div>
 
-            <div className="ml-auto flex items-center gap-6 font-mono">
+            <div
+              className="ml-auto flex items-center gap-6 font-mono"
+              title="Account-wide across all open positions, not just the scalping legs"
+            >
               <span>
-                Net Qty: <span className="font-semibold">{netQty}</span>
+                Net Qty (acct): <span className="font-semibold">{netQty}</span>
               </span>
               <span>
-                MTM:{' '}
+                MTM (acct):{' '}
                 <span className={`font-semibold ${mtm >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {mtm.toFixed(2)}
                 </span>
@@ -607,10 +625,18 @@ export default function Scalping() {
             <Button variant="outline" disabled={!peLeg} onClick={() => setSlDialogLeg(peLeg)}>
               {peSL ? 'Edit Put SL' : 'Set Put SL'}
             </Button>
-            <Button variant="outline" onClick={doCloseAll}>
+            <Button
+              variant="outline"
+              onClick={doCloseAll}
+              title="Squares off ALL open positions in the account, not only the scalping legs"
+            >
               Close All Positions / F6
             </Button>
-            <Button variant="outline" onClick={doCancelAll}>
+            <Button
+              variant="outline"
+              onClick={doCancelAll}
+              title="Cancels ALL open orders in the account"
+            >
               Cancel All Orders / F7
             </Button>
           </div>
@@ -778,7 +804,7 @@ export default function Scalping() {
         onSave={(sl: SLState) => setSL(sl)}
         onClear={
           slDialogExisting && slDialogLeg
-            ? () => clearSL(slDialogLeg.symbol, slDialogLeg.exchange, product)
+            ? () => clearSL(slDialogLeg.symbol, slDialogLeg.exchange, slDialogExisting.product)
             : undefined
         }
       />
