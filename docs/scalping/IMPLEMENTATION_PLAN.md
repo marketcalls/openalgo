@@ -1,8 +1,8 @@
 # Scalping Terminal (`/scalping`) — Implementation Plan
 
-A keyboard-driven, low-latency options scalping terminal for OpenAlgo, modeled on the
-"1cliq" one-click scaling tool. Built as a new surface inside OpenAlgo, reusing the
-existing broker session, WebSocket market-data feed, and service layer.
+A keyboard-driven, low-latency options scalping terminal for OpenAlgo: a one-click
+scaling tool for fast intraday execution. Built as a new surface inside OpenAlgo, reusing
+the existing broker session, WebSocket market-data feed, and service layer.
 
 - **Branch:** `scalping`
 - **Tracker:** `docs/scalping/TRACKER.csv` (update status as phases complete)
@@ -35,7 +35,7 @@ Source: `docs/prompt/order-constants.md`, `docs/prompt/symbol-format.md`.
 | --- | --- | --- |
 | **Exchange (underlying)** | `NSE_INDEX`, `BSE_INDEX` | NIFTY/BANKNIFTY → `NSE_INDEX`; SENSEX/BANKEX → `BSE_INDEX` |
 | **Exchange (legs)** | `NFO`, `BFO` | NSE index options → `NFO`; BSE index options → `BFO` |
-| **Product** | `CNC`, `NRML`, `MIS` | `NRML` (carry) or `MIS` (intraday). **Default `NRML`** (avoids MIS post-15:15 square-off rejections; matches 1cliq "margin"). Shown as "MARGIN" in the position book; `NRML` on the wire. **No `CNC`** (equity only). |
+| **Product** | `CNC`, `NRML`, `MIS` | `NRML` (carry) or `MIS` (intraday). **Default `NRML`** for F&O (avoids MIS post-15:15 square-off rejections), `MIS` for equity. Shown as the raw OpenAlgo code (`NRML`/`MIS`/`CNC`). `CNC` is equity-only. |
 | **Price type** | `MARKET`, `LIMIT`, `SL`, `SL-M` | Entry/exit = `MARKET`. (SL handled in-app via trailing logic, not broker `SL` orders in v1.) |
 | **Action** | `BUY`, `SELL` | both |
 
@@ -64,12 +64,12 @@ the constants above and resolve symbols via the option services.
   option-chain/symbol/expiry services (which take `api_key`).
 
 ### Trailing stop-loss decision
-- **v1 = browser-driven.** The page already receives Mode-1 LTP ticks; it computes the
-  trail level per tick and fires a MARKET exit on breach. Sub-second, matches 1cliq
-  (a browser tool). Trade-off: closing the tab stops the trail — surfaced via a prominent
-  "trailing active in this tab" indicator.
-- **v2 (optional, later) = backend safety-net** engine consuming the ZeroMQ tick bus
-  (`:5555`), so the SL survives a dead browser. Must respect eventlet single-worker rules.
+- **v1 = browser-driven (superseded).** The page computed the trail per LTP tick and fired
+  a MARKET exit on breach. Trade-off: closing the tab stopped the trail.
+- **v2 (shipped) = server-side engine.** `services/scalping_risk_monitor_service.py`
+  consumes the live WebSocket feed and fires freeze-safe exits independent of the browser
+  (event-driven, eventlet single-worker safe). The browser hook is now config + display
+  only. See `PRD.md` §4.
 
 ### Trade mode
 - Build & validate in **Sandbox / Analyzer mode first** (no real-money market orders while
@@ -185,5 +185,5 @@ Before turning Analyzer mode OFF (going live):
 
 ## 7. Open items / decisions
 - Confirm SENSEX/BANKEX (BSE, `BFO`) inclusion in v1 or NSE-only first.
-- Confirm lot cap (default 20, matching 1cliq).
+- Confirm lot cap (default 20).
 - v2 backend trail engine: in scope now or deferred.

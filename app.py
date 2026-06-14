@@ -686,6 +686,17 @@ def setup_environment(app):
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
 
+            try:
+                # Server-side scalping SL / target / trailing-stop engine. Runs
+                # browser-independently so stops keep working after the user
+                # leaves /scalping or closes the tab. Idles when no SL is set.
+                from services.scalping_risk_monitor_service import start_scalping_risk_monitor
+
+                start_scalping_risk_monitor()
+                logger.debug("Scalping risk monitor initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Scalping risk monitor: {e}")
+
             # Auto-reconnect the WhatsApp bot if a paired session is persisted.
             # Without this, every server restart would leave is_ready()=False
             # and every /notify call would 409 "pair first" — even though the

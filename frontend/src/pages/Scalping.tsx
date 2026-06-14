@@ -62,6 +62,19 @@ const DEFAULT_UNDERLYING: Record<string, string> = {
 
 const isEquityExchange = (e: ScalpingExchange) => e === 'NSE' || e === 'BSE'
 
+// Keep the Order/Trade books to TODAY only. Broker/sandbox books are already
+// session-scoped server-side; this is a belt-and-suspenders guard so a stale or
+// multi-day book can never show prior-day rows. Timestamps come through as
+// "YYYY-MM-DD HH:MM:SS" (IST); unknown/unparseable formats are kept (not hidden).
+const isTodayTs = (ts?: string): boolean => {
+  if (!ts) return true
+  const todayKey = new Date().toLocaleDateString('en-CA') // local YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(ts)) return ts.slice(0, 10) === todayKey
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return true
+  return d.toLocaleDateString('en-CA') === todayKey
+}
+
 // Order/position events that should refresh the books (event-driven, no polling).
 const BOOK_EVENTS = [
   'order_event',
@@ -218,6 +231,7 @@ export default function Scalping() {
   // Derivative underlying (default per exchange, searchable). Equity uses `instrument`.
   const [underlying, setUnderlying] = useState<string>(DEFAULT_UNDERLYING.NFO)
   const [underlyingQuery, setUnderlyingQuery] = useState('')
+  const [underlyingOpen, setUnderlyingOpen] = useState(false)
   const [expiry, setExpiry] = useState<string>('')
   const [ceStrike, setCeStrike] = useState<string>('')
   const [peStrike, setPeStrike] = useState<string>('')
@@ -269,7 +283,6 @@ export default function Scalping() {
   }, [exchange])
 
   // Default product per instrument class (MIS equity, NRML derivatives).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: run only on class change
   useEffect(() => {
     setProduct(isEquityExch ? 'MIS' : 'NRML')
   }, [isEquityExch])
@@ -282,20 +295,22 @@ export default function Scalping() {
   })
   const equityResults = eqSearchResp?.data ?? []
 
-  // Derivative underlying search (distinct names) for Options + Futures.
-  const { data: undSearchResp } = useQuery({
-    queryKey: ['scalping', 'undsearch', exchange, underlyingQuery],
-    queryFn: () => scalpingApi.search(exchange, underlyingQuery),
-    enabled: !isEquityExch && underlyingQuery.trim().length >= 2,
+  // All F&O underlyings for the exchange/segment (indices first), like
+  // /search/token. Fetched once per exchange+segment and filtered client-side,
+  // so the dropdown lists every underlying instead of requiring a search.
+  const undInstrumentType = segment === 'FUTURES' ? 'futures' : 'options'
+  const { data: allUndResp } = useQuery({
+    queryKey: ['scalping', 'allunderlyings', exchange, undInstrumentType],
+    queryFn: () => scalpingApi.getAllUnderlyings(exchange, undInstrumentType),
+    enabled: !isEquityExch,
+    staleTime: 5 * 60 * 1000, // master contracts change at most daily
   })
+  const allUnderlyings = allUndResp?.data ?? []
   const underlyingMatches = useMemo(() => {
-    const seen = new Set<string>()
-    for (const r of undSearchResp?.data ?? []) {
-      const nm = (r.name || '').toUpperCase()
-      if (nm) seen.add(nm)
-    }
-    return [...seen].slice(0, 25)
-  }, [undSearchResp])
+    const q = underlyingQuery.trim().toUpperCase()
+    const list = q ? allUnderlyings.filter((u) => u.toUpperCase().includes(q)) : allUnderlyings
+    return list.slice(0, 200)
+  }, [allUnderlyings, underlyingQuery])
 
   // Options expiry for the derivative underlying.
   const { data: expiryResp } = useQuery({
@@ -329,6 +344,17 @@ export default function Scalping() {
     enabled: !isEquityExch && segment === 'FUTURES' && !!underlying,
   })
   const futContracts = futResp?.data ?? []
+
+  // Default the futures contract to the nearest expiry when the list loads (and
+  // keep a valid selection across underlying/exchange changes), so the Futures
+  // panel shows a contract immediately instead of waiting for a manual pick.
+  useEffect(() => {
+    if (isEquityExch || segment !== 'FUTURES' || futContracts.length === 0) return
+    const stillValid = instrument && futContracts.some((c) => c.symbol === instrument.symbol)
+    if (stillValid) return
+    const c = futContracts[0] // nearest expiry (backend returns ascending)
+    setInstrument({ symbol: c.symbol, exchange, lotsize: c.lotsize, name: underlying })
+  }, [futContracts, isEquityExch, segment, instrument, exchange, underlying])
 
   // Default the CE/PE strike to ATM when the chain loads — but preserve a valid
   // manual selection (only reset to ATM if the current pick isn't in this chain,
@@ -378,27 +404,34 @@ export default function Scalping() {
     [instrument]
   )
 
-  // Books (positions / orders / trades). Event-driven — fetched once, then
-  // refreshed on broker order events (useOrderEventRefresh below). No polling.
+  // Books (positions / orders / trades). Fully event-driven (no polling):
+  // prices/MTM stream over the WebSocket feed, and these fetches refresh on broker
+  // order events (useOrderEventRefresh below) — including the server-side risk
+  // monitor's auto-exits, which emit order events. refetchOnWindowFocus is an
+  // event (tab focus), not an interval. The query key includes appMode so toggling
+  // Analyze/Live re-fetches the corresponding (sandbox vs live) positions/books.
   const { data: posResp } = useQuery({
-    queryKey: ['scalping', 'positions'],
+    queryKey: ['scalping', 'positions', appMode],
     queryFn: () => tradingApi.getPositions(apiKey ?? ''),
     enabled: !!apiKey,
+    refetchOnWindowFocus: true,
   })
   const { data: ordResp } = useQuery({
-    queryKey: ['scalping', 'orders'],
+    queryKey: ['scalping', 'orders', appMode],
     queryFn: () => tradingApi.getOrders(apiKey ?? ''),
     enabled: !!apiKey,
+    refetchOnWindowFocus: true,
   })
   const { data: trdResp } = useQuery({
-    queryKey: ['scalping', 'trades'],
+    queryKey: ['scalping', 'trades', appMode],
     queryFn: () => tradingApi.getTrades(apiKey ?? ''),
     enabled: !!apiKey,
+    refetchOnWindowFocus: true,
   })
   // The scalping list: instruments this terminal has traded (scopes the book to
   // the scalping strategy, since broker positions carry no strategy tag).
   const { data: trackedResp } = useQuery({
-    queryKey: ['scalping', 'tracked'],
+    queryKey: ['scalping', 'tracked', appMode],
     queryFn: () => scalpingApi.getTracked(),
   })
   const positions = posResp?.data ?? []
@@ -408,18 +441,22 @@ export default function Scalping() {
     () => new Set((trackedResp?.data ?? []).map((t) => `${t.exchange}:${t.symbol}:${t.product}`)),
     [trackedResp]
   )
-  // Order Book / Trade Book scoped to the scalping list (only this terminal's orders).
+  // Order Book / Trade Book scoped to the scalping list AND to today only.
   const scopedOrders = useMemo(
     () =>
-      orders.filter((o) =>
-        trackedKeys.has(`${o.exchange}:${o.symbol}:${(o.product || '').toUpperCase()}`)
+      orders.filter(
+        (o) =>
+          isTodayTs(o.timestamp) &&
+          trackedKeys.has(`${o.exchange}:${o.symbol}:${(o.product || '').toUpperCase()}`)
       ),
     [orders, trackedKeys]
   )
   const scopedTrades = useMemo(
     () =>
-      trades.filter((t) =>
-        trackedKeys.has(`${t.exchange}:${t.symbol}:${(t.product || '').toUpperCase()}`)
+      trades.filter(
+        (t) =>
+          isTodayTs(t.timestamp) &&
+          trackedKeys.has(`${t.exchange}:${t.symbol}:${(t.product || '').toUpperCase()}`)
       ),
     [trades, trackedKeys]
   )
@@ -499,25 +536,13 @@ export default function Scalping() {
     tgtUnit: predefTgtUnit,
   }
 
-  // Latest positions for the SL engine to size/direct exits from (avoids stale closure).
-  const positionsRef = useRef(positions)
-  positionsRef.current = positions
-  const resolvePosition = useCallback((symbol: string, exchange: string, prod: string): number => {
-    const p = positionsRef.current.find(
-      (pos) => pos.symbol === symbol && pos.exchange === exchange && pos.product === prod
-    )
-    return p ? p.quantity : 0
-  }, [])
+  // SL / target / trailing config + display. The engine that watches ticks and
+  // fires exits runs SERVER-SIDE (services/scalping_risk_monitor_service.py) so
+  // stops keep working after you leave /scalping or close the browser. This hook
+  // only persists the config and reflects the server's live updates/auto-clears.
+  const { slMap, setSL, clearSL } = useTrailingSL(appMode)
 
-  // Browser-driven trailing stop-loss engine. It subscribes the live feed for
-  // every active SL itself (so restored/background SLs are monitored), and sizes
-  // exits from the live position.
-  const { slMap, setSL, clearSL } = useTrailingSL({
-    onAfterExit: refreshBooks,
-    resolvePosition,
-  })
-
-  // Position book: derived 1cliq-style rows from positions + today's trades + SL,
+  // Position book: derived rows from positions + today's trades + SL,
   // with realtime LTP from the live feed (recomputes on each tick).
   const positionRows = useMemo(
     () => buildPositionRows(positions, trades, slMap, liveLtp, trackedKeys),
@@ -764,6 +789,19 @@ export default function Scalping() {
       // Ignore OS key auto-repeat from a held key — otherwise one held arrow
       // would fire a continuous stream of market orders.
       if (e.repeat) return
+      // Risk-reducing safety actions fire regardless of focus (even while typing
+      // in a field) — flatten/cancel must always work. Note: on macOS, F6/F7 may
+      // be intercepted as hardware media keys; the on-screen buttons always work.
+      if (e.key === 'F6') {
+        e.preventDefault()
+        doCloseAll()
+        return
+      }
+      if (e.key === 'F7') {
+        e.preventDefault()
+        doCancelAll()
+        return
+      }
       const t = e.target as HTMLElement | null
       if (
         t &&
@@ -948,20 +986,29 @@ export default function Scalping() {
             <div className="relative space-y-1">
               <label className="text-sm text-muted-foreground">Underlying</label>
               <Input
-                value={underlyingQuery !== '' ? underlyingQuery : underlying}
-                placeholder="Search e.g. NIFTY / CRUDEOIL"
+                value={underlyingOpen ? underlyingQuery : underlying}
+                placeholder="Select or search e.g. NIFTY / CRUDEOIL"
+                onFocus={() => {
+                  setUnderlyingQuery('')
+                  setUnderlyingOpen(true)
+                }}
                 onChange={(e) => setUnderlyingQuery(e.target.value)}
+                onBlur={() => window.setTimeout(() => setUnderlyingOpen(false), 150)}
               />
-              {underlyingQuery.trim().length >= 2 && underlyingMatches.length > 0 && (
-                <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover shadow-md">
+              {underlyingOpen && underlyingMatches.length > 0 && (
+                <div className="absolute z-10 mt-1 max-h-72 w-full overflow-auto rounded-md border bg-popover shadow-md">
                   {underlyingMatches.map((nm) => (
                     <button
                       type="button"
                       key={nm}
-                      className="block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted"
+                      className={`block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted ${
+                        nm === underlying ? 'bg-muted' : ''
+                      }`}
+                      onMouseDown={(ev) => ev.preventDefault()}
                       onClick={() => {
                         setUnderlying(nm)
                         setUnderlyingQuery('')
+                        setUnderlyingOpen(false)
                         setExpiry('')
                         setCeStrike('')
                         setPeStrike('')
@@ -1180,9 +1227,11 @@ export default function Scalping() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="MIS">Intraday</SelectItem>
-                  {segment !== 'EQUITY' && <SelectItem value="NRML">Margin</SelectItem>}
-                  {segment === 'EQUITY' && <SelectItem value="CNC">Delivery</SelectItem>}
+                  {/* Raw OpenAlgo product codes (docs/prompt/order-constants.md):
+                      MIS / NRML / CNC — not Intraday/Margin/Delivery. */}
+                  <SelectItem value="MIS">MIS</SelectItem>
+                  {segment !== 'EQUITY' && <SelectItem value="NRML">NRML</SelectItem>}
+                  {segment === 'EQUITY' && <SelectItem value="CNC">CNC</SelectItem>}
                 </SelectContent>
               </Select>
             </div>
@@ -1371,7 +1420,9 @@ export default function Scalping() {
                   <TableHead className="text-right">Net Qty</TableHead>
                   <TableHead className="text-right">LTP</TableHead>
                   <TableHead className="text-right">SL</TableHead>
-                  <TableHead>SL</TableHead>
+                  <TableHead className="text-right">TP</TableHead>
+                  <TableHead className="text-right">TSL</TableHead>
+                  <TableHead>Risk</TableHead>
                   <TableHead className="text-right">R. P&amp;L</TableHead>
                   <TableHead className="text-right">UR. P&amp;L</TableHead>
                   <TableHead className="text-right">P&amp;L</TableHead>
@@ -1410,6 +1461,12 @@ export default function Scalping() {
                       <TableCell className="text-right font-mono tabular-nums">
                         {r.sl != null ? r.sl.toFixed(2) : '-'}
                       </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.target != null ? r.target.toFixed(2) : '-'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.trailingStep != null ? `±${r.trailingStep}` : '-'}
+                      </TableCell>
                       <TableCell>
                         {open ? (
                           <Button
@@ -1424,7 +1481,7 @@ export default function Scalping() {
                               })
                             }
                           >
-                            {r.sl != null ? 'Edit' : 'Set'}
+                            {r.sl != null || r.target != null ? 'Edit' : 'Set'}
                           </Button>
                         ) : (
                           '-'
@@ -1474,7 +1531,7 @@ export default function Scalping() {
                 })}
                 {positionRows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={16} className="text-center text-muted-foreground">
+                    <TableCell colSpan={18} className="text-center text-muted-foreground">
                       No positions or trades today
                     </TableCell>
                   </TableRow>

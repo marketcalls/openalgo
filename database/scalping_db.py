@@ -49,6 +49,10 @@ class ScalpingSLState(Base):
     product = Column(String(10), nullable=False)  # MIS | NRML
     side = Column(String(4), nullable=False, default="BUY")  # BUY | SELL
 
+    # Trading mode this SL belongs to: "analyze" (sandbox) or "live". Segregates
+    # sandbox SLs from live SLs so the monitor never acts across modes.
+    mode = Column(String(10), nullable=False, default="analyze")
+
     entry_price = Column(Float, nullable=False, default=0.0)
     quantity = Column(Integer, nullable=False, default=0)
 
@@ -82,6 +86,8 @@ class ScalpingTrackedSymbol(Base):
     symbol = Column(String(60), nullable=False)
     exchange = Column(String(10), nullable=False)
     product = Column(String(10), nullable=False)
+    # Trading mode the instrument was traded in: "analyze" (sandbox) or "live".
+    mode = Column(String(10), nullable=False, default="analyze")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -110,8 +116,26 @@ def _migrate_add_columns():
             if "target" not in existing:
                 conn.execute(text("ALTER TABLE scalping_sl_state ADD COLUMN target FLOAT"))
                 logger.info("Scalping DB: added target column")
+            if "mode" not in existing:
+                # Existing rows default to 'analyze' (conservative: the live
+                # monitor will not auto-act on pre-existing/ambiguous SLs).
+                conn.execute(
+                    text("ALTER TABLE scalping_sl_state ADD COLUMN mode VARCHAR(10) "
+                         "NOT NULL DEFAULT 'analyze'")
+                )
+                logger.info("Scalping DB: added mode column to scalping_sl_state")
+
+        if "scalping_tracked_symbol" in inspector.get_table_names():
+            tracked_cols = {c["name"] for c in inspector.get_columns("scalping_tracked_symbol")}
+            if "mode" not in tracked_cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("ALTER TABLE scalping_tracked_symbol ADD COLUMN mode VARCHAR(10) "
+                             "NOT NULL DEFAULT 'analyze'")
+                    )
+                logger.info("Scalping DB: added mode column to scalping_tracked_symbol")
     except Exception as e:
-        logger.exception(f"Error migrating scalping_sl_state columns: {e}")
+        logger.exception(f"Error migrating scalping columns: {e}")
 
 
 def _to_dict(row: "ScalpingSLState") -> dict:
@@ -119,6 +143,7 @@ def _to_dict(row: "ScalpingSLState") -> dict:
         "symbol": row.symbol,
         "exchange": row.exchange,
         "product": row.product,
+        "mode": row.mode,
         "side": row.side,
         "entry_price": row.entry_price,
         "quantity": row.quantity,
@@ -154,6 +179,7 @@ def upsert_sl_state(data: dict) -> dict | None:
             db_session.add(row)
 
         for field in (
+            "mode",
             "side",
             "entry_price",
             "quantity",
@@ -177,11 +203,16 @@ def upsert_sl_state(data: dict) -> dict | None:
         return None
 
 
-def get_active_sl_states() -> list[dict]:
-    """Return all active SL states for rehydrating the UI on load."""
+def get_active_sl_states(mode: str | None = None) -> list[dict]:
+    """Return active SL states, optionally scoped to a trading mode.
+
+    Pass mode="analyze" or "live" to segregate sandbox SLs from live SLs.
+    """
     try:
-        rows = db_session.query(ScalpingSLState).filter_by(is_active=True).all()
-        return [_to_dict(r) for r in rows]
+        q = db_session.query(ScalpingSLState).filter_by(is_active=True)
+        if mode is not None:
+            q = q.filter_by(mode=mode)
+        return [_to_dict(r) for r in q.all()]
     except Exception as e:
         logger.exception(f"Error fetching scalping SL states: {e}")
         db_session.rollback()
@@ -204,8 +235,13 @@ def delete_sl_state(symbol: str, exchange: str, product: str) -> bool:
         return False
 
 
-def track_symbol(symbol: str, exchange: str, product: str) -> bool:
-    """Record a (symbol, exchange, product) as part of the scalping list (idempotent)."""
+def track_symbol(symbol: str, exchange: str, product: str, mode: str = "analyze") -> bool:
+    """Record a (symbol, exchange, product) as part of the scalping list (idempotent).
+
+    The row carries the trading mode it was traded in so the list, books and
+    Close-All segregate sandbox from live. The unique key stays (symbol, exchange,
+    product); re-trading the same leg in a different mode updates its mode tag.
+    """
     try:
         exists = (
             db_session.query(ScalpingTrackedSymbol)
@@ -214,9 +250,13 @@ def track_symbol(symbol: str, exchange: str, product: str) -> bool:
         )
         if exists is None:
             db_session.add(
-                ScalpingTrackedSymbol(symbol=symbol, exchange=exchange, product=product)
+                ScalpingTrackedSymbol(
+                    symbol=symbol, exchange=exchange, product=product, mode=mode
+                )
             )
-            db_session.commit()
+        elif exists.mode != mode:
+            exists.mode = mode
+        db_session.commit()
         return True
     except Exception as e:
         logger.exception(f"Error tracking scalping symbol: {e}")
@@ -224,12 +264,15 @@ def track_symbol(symbol: str, exchange: str, product: str) -> bool:
         return False
 
 
-def get_tracked_symbols() -> list[dict]:
-    """Return the scalping list (symbols the terminal has traded)."""
+def get_tracked_symbols(mode: str | None = None) -> list[dict]:
+    """Return the scalping list, optionally scoped to a trading mode."""
     try:
-        rows = db_session.query(ScalpingTrackedSymbol).all()
+        q = db_session.query(ScalpingTrackedSymbol)
+        if mode is not None:
+            q = q.filter_by(mode=mode)
         return [
-            {"symbol": r.symbol, "exchange": r.exchange, "product": r.product} for r in rows
+            {"symbol": r.symbol, "exchange": r.exchange, "product": r.product, "mode": r.mode}
+            for r in q.all()
         ]
     except Exception as e:
         logger.exception(f"Error fetching scalping tracked symbols: {e}")
@@ -237,10 +280,13 @@ def get_tracked_symbols() -> list[dict]:
         return []
 
 
-def clear_tracked_symbols() -> bool:
-    """Clear the scalping list (e.g. on a session/day reset)."""
+def clear_tracked_symbols(mode: str | None = None) -> bool:
+    """Clear the scalping list, optionally only for one trading mode."""
     try:
-        db_session.query(ScalpingTrackedSymbol).delete()
+        q = db_session.query(ScalpingTrackedSymbol)
+        if mode is not None:
+            q = q.filter_by(mode=mode)
+        q.delete()
         db_session.commit()
         return True
     except Exception as e:

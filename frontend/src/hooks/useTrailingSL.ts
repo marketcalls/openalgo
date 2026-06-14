@@ -1,28 +1,28 @@
 /**
- * useTrailingSL — browser-driven stop-loss / trailing-SL engine for the scalping terminal.
+ * useTrailingSL — stop-loss / target / trailing-SL CONFIG + DISPLAY for the scalping terminal.
  *
- * Evaluates each tracked leg's SL on every LTP tick:
- *  - trail only RAISES the stop, never lowers it
- *  - trailing does not start until price is >= MIN_TRAIL_PROFIT above entry (1cliq rule)
- *  - on breach, fires a risk-reducing MARKET exit sized to the CURRENT open position
- *    (not a stale saved quantity), and only clears the SL once the exit succeeds
+ * The actual engine that watches ticks, trails the stop, and fires exits now runs
+ * SERVER-SIDE (services/scalping_risk_monitor_service.py) so it keeps working even
+ * after the user navigates away from /scalping or closes the browser. This hook is
+ * therefore deliberately NOT an executor — it only:
+ *  - loads the active SL states for display (position book SL/TP/TSL columns), and
+ *    polls them so server-side trailing updates + auto-clears are reflected live;
+ *  - persists SL config (setSL) / clears it (clearSL) to the backend, which the
+ *    server monitor then enforces.
  *
- * The engine subscribes to the live feed for EVERY active SL itself, so a stop-loss
- * restored on reload (or for a leg that isn't the currently-selected CE/PE) is still
- * monitored — "state survives reload" is a real safety guarantee, not cosmetic.
- *
- * SL config is persisted to the backend (database/scalping_db.py) so it survives reload.
- * Long legs (side BUY) trail with the stop below price; short legs (SELL) mirror it.
+ * This split removes the double-exit risk of having both a browser engine and a
+ * server engine firing. `evaluateTrail` is kept exported (unit tests + the server
+ * port mirror its logic). Long legs (BUY) trail with the stop below price; short
+ * legs (SELL) mirror it.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import type { ScalpingAction, ScalpingProduct, ScalpingSLState } from '@/types/scalping'
 import { showToast } from '@/utils/toast'
-import { useMarketData } from './useMarketData'
+import { useOrderEventRefresh } from './useOrderEventRefresh'
 
 const MIN_TRAIL_PROFIT = 1 // don't trail until >= 1 rupee in profit
 const PERSIST_THROTTLE_MS = 2000
-const EXIT_RETRY_COOLDOWN_MS = 2000 // throttle retries when an SL exit keeps failing
 
 export interface SLState {
   symbol: string
@@ -140,55 +140,21 @@ export function evaluateTrail(
   }
 }
 
-interface UseTrailingSLArgs {
-  onAfterExit?: () => void
-  // Returns the CURRENT signed net position quantity for a leg (0 if flat).
-  // The SL exit is sized and directed from this, never from the saved quantity.
-  resolvePosition?: (symbol: string, exchange: string, product: string) => number
-}
-
-export function useTrailingSL({ onAfterExit, resolvePosition }: UseTrailingSLArgs) {
+// `reloadSignal` (e.g. the app's Analyze/Live mode) re-loads the SL states when
+// it changes, so the displayed SLs match the active trading mode.
+export function useTrailingSL(reloadSignal?: unknown) {
   const [slMap, setSlMap] = useState<Record<string, SLState>>({})
-  const slMapRef = useRef(slMap)
-  slMapRef.current = slMap
   const lastPersistRef = useRef<Record<string, number>>({})
-  const lastExitAttemptRef = useRef<Record<string, number>>({})
-  const exitingRef = useRef<Set<string>>(new Set())
-  const resolvePositionRef = useRef(resolvePosition)
-  resolvePositionRef.current = resolvePosition
-  const onAfterExitRef = useRef(onAfterExit)
-  onAfterExitRef.current = onAfterExit
 
-  // Subscribe the live feed for EVERY active SL (deduped), independent of which
-  // CE/PE leg is selected, so restored/background SLs keep getting ticks.
-  const slSymbols = useMemo(() => {
-    const seen = new Set<string>()
-    const list: Array<{ symbol: string; exchange: string }> = []
-    for (const sl of Object.values(slMap)) {
-      if (!sl.active) continue
-      const k = `${sl.exchange}:${sl.symbol}`
-      if (seen.has(k)) continue
-      seen.add(k)
-      list.push({ symbol: sl.symbol, exchange: sl.exchange })
-    }
-    return list
-  }, [slMap])
-
-  const { data: slMarketData } = useMarketData({
-    symbols: slSymbols,
-    mode: 'LTP',
-    enabled: slSymbols.length > 0,
-  })
-  const slMarketDataRef = useRef(slMarketData)
-  slMarketDataRef.current = slMarketData
-
-  // Restore persisted SL config on mount.
-  useEffect(() => {
-    let cancelled = false
+  const warnedRef = useRef(false)
+  // Load active SL states for display. Fully event-driven — refreshed when the
+  // server-side risk monitor pushes a 'scalping_sl_update' (trail/clear) or on
+  // any order event (e.g. the monitor's auto-exit). No polling interval.
+  const loadStates = useCallback(() => {
     scalpingApi
       .getSLStates()
       .then((resp) => {
-        if (cancelled || resp.status !== 'success') return
+        if (resp.status !== 'success') return
         const restored: Record<string, SLState> = {}
         for (const s of resp.data) {
           restored[slKey(s.symbol, s.exchange, s.product)] = fromBackend(s)
@@ -196,14 +162,24 @@ export function useTrailingSL({ onAfterExit, resolvePosition }: UseTrailingSLArg
         setSlMap(restored)
       })
       .catch(() => {
-        if (!cancelled) {
-          showToast.error('Failed to restore active stop-losses — verify manually', 'orders')
+        if (!warnedRef.current) {
+          warnedRef.current = true
+          showToast.error('Failed to load active stop-losses — verify manually', 'orders')
         }
       })
-    return () => {
-      cancelled = true
-    }
   }, [])
+
+  // Reload on mount and whenever the reload signal (trading mode) changes.
+  // reloadSignal is a deliberate re-run trigger (not used inside the effect).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadSignal is an intentional refresh trigger
+  useEffect(() => {
+    loadStates()
+  }, [loadStates, reloadSignal])
+
+  useOrderEventRefresh(loadStates, {
+    events: ['scalping_sl_update', 'order_event', 'analyzer_update', 'close_position_event'],
+    delay: 200,
+  })
 
   const persist = useCallback((sl: SLState, force = false) => {
     const key = slKey(sl.symbol, sl.exchange, sl.product)
@@ -213,6 +189,8 @@ export function useTrailingSL({ onAfterExit, resolvePosition }: UseTrailingSLArg
     scalpingApi.saveSL(toBackend(sl)).catch(() => {})
   }, [])
 
+  // Save SL config. The server-side monitor enforces it on the next poll; we
+  // also reflect it locally immediately for a responsive UI.
   const setSL = useCallback(
     (sl: SLState) => {
       setSlMap((prev) => ({ ...prev, [slKey(sl.symbol, sl.exchange, sl.product)]: sl }))
@@ -228,109 +206,9 @@ export function useTrailingSL({ onAfterExit, resolvePosition }: UseTrailingSLArg
       delete next[key]
       return next
     })
-    // Drop bookkeeping for this leg so the refs don't grow across a long session.
     delete lastPersistRef.current[key]
-    delete lastExitAttemptRef.current[key]
-    exitingRef.current.delete(key)
     scalpingApi.deleteSL(symbol, exchange, product).catch(() => {})
   }, [])
-
-  const exitLeg = useCallback(
-    async (sl: SLState) => {
-      const key = slKey(sl.symbol, sl.exchange, sl.product)
-      if (exitingRef.current.has(key)) return
-      // Throttle retries so a persistently-failing exit doesn't hammer the broker.
-      const now = Date.now()
-      if (now - (lastExitAttemptRef.current[key] ?? 0) < EXIT_RETRY_COOLDOWN_MS) return
-      lastExitAttemptRef.current[key] = now
-      exitingRef.current.add(key)
-      try {
-        // Size + direction from the CURRENT live position, not the saved quantity.
-        const liveQty =
-          resolvePositionRef.current?.(sl.symbol, sl.exchange, sl.product) ?? sl.quantity
-        if (!liveQty) {
-          // Already flat — nothing to close. Clear the now-stale SL silently.
-          clearSL(sl.symbol, sl.exchange, sl.product)
-          return
-        }
-        const action: ScalpingAction = liveQty > 0 ? 'SELL' : 'BUY'
-        const qty = Math.abs(liveQty)
-        // Risk-reducing exit endpoint — bypasses the entry lot cap and freeze-splits,
-        // so a position scaled beyond 20 lots can always be flattened.
-        const res = await scalpingApi.closeLeg({
-          symbol: sl.symbol,
-          exchange: sl.exchange,
-          action,
-          quantity: qty,
-          product: sl.product,
-        })
-        if (res.status === 'success') {
-          showToast.success(`Auto-exit (SL/Target) ${sl.symbol} — ${action} ${qty}`, 'orders')
-          clearSL(sl.symbol, sl.exchange, sl.product) // clear ONLY on a confirmed exit
-        } else {
-          // Keep the SL active so the next tick retries — the position is still open.
-          showToast.error(
-            `SL EXIT FAILED for ${sl.symbol} — position still OPEN & unprotected. Retrying…`,
-            'orders'
-          )
-        }
-      } catch (e) {
-        showToast.error(
-          `SL exit error for ${sl.symbol} — position still OPEN. Retrying… (${(e as Error).message})`,
-          'orders'
-        )
-      } finally {
-        exitingRef.current.delete(key)
-        onAfterExitRef.current?.()
-      }
-    },
-    [clearSL]
-  )
-
-  // Re-run evaluation whenever any active SL's LTP changes.
-  const tickSignal = slSymbols
-    .map(
-      (s) =>
-        `${s.exchange}:${s.symbol}:${slMarketData.get(`${s.exchange}:${s.symbol}`)?.data?.ltp ?? ''}`
-    )
-    .join('|')
-
-  useEffect(() => {
-    let changed = false
-    const updates: Record<string, SLState> = {}
-    const breaches: SLState[] = []
-
-    for (const sl of Object.values(slMapRef.current)) {
-      if (!sl.active) continue
-      const ltp = slMarketDataRef.current.get(`${sl.exchange}:${sl.symbol}`)?.data?.ltp
-      if (ltp == null) continue
-      const key = slKey(sl.symbol, sl.exchange, sl.product)
-      const { next, breached } = evaluateTrail(sl, ltp)
-      if (breached) {
-        breaches.push({ ...next, active: false })
-      } else if (
-        next.currentSl !== sl.currentSl ||
-        next.highestPrice !== sl.highestPrice ||
-        next.lowestPrice !== sl.lowestPrice
-      ) {
-        updates[key] = next
-        changed = true
-      }
-    }
-
-    if (changed) {
-      setSlMap((prev) => {
-        const merged = { ...prev }
-        for (const [k, v] of Object.entries(updates)) {
-          if (merged[k]?.active) merged[k] = v
-        }
-        return merged
-      })
-      for (const v of Object.values(updates)) persist(v)
-    }
-    for (const b of breaches) exitLeg(b)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tickSignal])
 
   return { slMap, setSL, clearSL }
 }

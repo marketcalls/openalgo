@@ -87,6 +87,25 @@ def _underlying_quote(underlying: str, fo_exchange: str):
     return None, None  # MCX/CDS underlying is the current-month future (set separately)
 
 
+def _current_mode() -> str:
+    """Trading mode for segregating scalping state: 'analyze' (sandbox) or 'live'."""
+    return "analyze" if get_analyze_mode() else "live"
+
+
+def _notify_risk_monitor():
+    """Tell the server-side risk monitor an SL was saved/deleted (event-driven sync).
+
+    Lazily imported to avoid a circular import at module load. Never raises into
+    the request path — a monitor hiccup must not fail the SL save itself.
+    """
+    try:
+        from services.scalping_risk_monitor_service import notify_sl_changed
+
+        notify_sl_changed()
+    except Exception as e:
+        logger.debug(f"Risk monitor notify skipped: {e}")
+
+
 def _get_api_key():
     """Resolve the current user's OpenAlgo API key from session."""
     username = session.get("user")
@@ -113,6 +132,38 @@ def underlyings():
         for name, cfg in SUPPORTED_UNDERLYINGS.items()
     ]
     return jsonify({"status": "success", "data": data})
+
+
+@scalping_bp.route("/scalping/api/all_underlyings", methods=["GET"])
+@check_session_validity
+def all_underlyings():
+    """Return every F&O underlying available for an exchange (indices first).
+
+    Backs the Underlying dropdown, mirroring /search/token. Options mode returns
+    options-bearing underlyings; Futures mode also includes futures-only
+    underlyings (e.g. MCX commodities like NATURALGASMINI). MCX/CDS always
+    include futures-backed names since their options reference the future.
+    """
+    exchange = (request.args.get("exchange", "NFO").strip() or "NFO").upper()
+    instrumenttype = (request.args.get("instrumenttype", "options").strip() or "options").lower()
+    include_futures = instrumenttype == "futures" or exchange in ("MCX", "CDS")
+
+    try:
+        from database.token_db_enhanced import get_distinct_underlyings_cached
+
+        names = get_distinct_underlyings_cached(exchange=exchange, include_futures=include_futures)
+    except Exception as e:  # noqa: BLE001 - degrade gracefully if cache/db unavailable
+        logger.exception(f"Error fetching underlyings for {exchange}: {e}")
+        names = []
+
+    # Drop exchange test symbols (e.g. 011NSETEST, 021BSETEST).
+    names = [u for u in names if "NSETEST" not in u and "BSETEST" not in u]
+
+    # Indices at the top, then the rest alphabetically (matches the search/token UX).
+    index_names = _NSE_INDEX_UNDERLYINGS | _BSE_INDEX_UNDERLYINGS
+    indices = sorted(u for u in names if u in index_names)
+    rest = sorted(u for u in names if u not in index_names)
+    return jsonify({"status": "success", "data": indices + rest})
 
 
 @scalping_bp.route("/scalping/api/expiry", methods=["GET"])
@@ -506,7 +557,7 @@ def order():
     if success:
         from database.scalping_db import track_symbol
 
-        track_symbol(symbol, exchange, product)
+        track_symbol(symbol, exchange, product, mode=_current_mode())
     return jsonify(response), status_code
 
 
@@ -637,7 +688,7 @@ def close_all():
 
     from database.scalping_db import get_tracked_symbols
 
-    tracked = get_tracked_symbols()
+    tracked = get_tracked_symbols(mode=_current_mode())
     if not tracked:
         return jsonify({"status": "success", "message": "No scalping positions to close", "results": []})
 
@@ -701,7 +752,7 @@ def tracked():
     """Return the scalping list (instruments the terminal has traded) for scoping."""
     from database.scalping_db import get_tracked_symbols
 
-    return jsonify({"status": "success", "data": get_tracked_symbols()})
+    return jsonify({"status": "success", "data": get_tracked_symbols(mode=_current_mode())})
 
 
 @scalping_bp.route("/scalping/api/tracked", methods=["DELETE"])
@@ -710,7 +761,7 @@ def reset_tracked():
     """Clear the scalping list (e.g. session/day reset)."""
     from database.scalping_db import clear_tracked_symbols
 
-    return jsonify({"status": "success", "cleared": clear_tracked_symbols()})
+    return jsonify({"status": "success", "cleared": clear_tracked_symbols(mode=_current_mode())})
 
 
 @scalping_bp.route("/scalping/api/sl", methods=["GET"])
@@ -719,7 +770,7 @@ def get_sl_states():
     """Return active stop-loss states to rehydrate the terminal on load."""
     from database.scalping_db import get_active_sl_states
 
-    return jsonify({"status": "success", "data": get_active_sl_states()})
+    return jsonify({"status": "success", "data": get_active_sl_states(mode=_current_mode())})
 
 
 @scalping_bp.route("/scalping/api/sl", methods=["POST"])
@@ -753,6 +804,7 @@ def upsert_sl():
         "symbol": symbol,
         "exchange": exchange,
         "product": product,
+        "mode": _current_mode(),  # segregate sandbox vs live SLs
         "side": side,
         "quantity": quantity,
     }
@@ -774,6 +826,7 @@ def upsert_sl():
     result = upsert_sl_state(cleaned)
     if result is None:
         return jsonify({"status": "error", "message": "Failed to save SL state"}), 500
+    _notify_risk_monitor()
     return jsonify({"status": "success", "data": result})
 
 
@@ -792,4 +845,5 @@ def delete_sl():
         return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
 
     deleted = delete_sl_state(symbol, exchange, product)
+    _notify_risk_monitor()
     return jsonify({"status": "success", "deleted": deleted})
