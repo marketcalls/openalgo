@@ -56,7 +56,9 @@ export interface OptionChainResponse {
   atm_strike?: number
   chain: OptionChainRow[]
   fo_exchange: string
-  index_exchange: string
+  index_exchange?: string
+  underlying_symbol?: string | null
+  underlying_exchange?: string | null
   message?: string
 }
 
