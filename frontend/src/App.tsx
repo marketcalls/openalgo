@@ -57,6 +57,7 @@ const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 const Tools = lazy(() => import('@/pages/Tools'))
 const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
+const Scalping = lazy(() => import('@/pages/Scalping'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
 const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
@@ -191,6 +192,7 @@ function App() {
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/tools" element={<Tools />} />
+                <Route path="/scalping" element={<Scalping />} />
                 <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />
