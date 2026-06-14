@@ -41,7 +41,11 @@ class ScalpingSLState(Base):
     """One row per active leg whose stop-loss is being tracked by the terminal."""
 
     __tablename__ = "scalping_sl_state"
-    __table_args__ = (UniqueConstraint("symbol", "exchange", "product", name="uq_scalping_sl_leg"),)
+    # Mode is part of the key so the SAME leg can hold an independent SL in analyze
+    # (sandbox) and live mode without one overwriting/blocking the other.
+    __table_args__ = (
+        UniqueConstraint("symbol", "exchange", "product", "mode", name="uq_scalping_sl_leg"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(60), nullable=False)
@@ -78,8 +82,10 @@ class ScalpingTrackedSymbol(Base):
     """
 
     __tablename__ = "scalping_tracked_symbol"
+    # Mode is part of the key so analyze (sandbox) and live lists are truly
+    # segregated for the same instrument leg.
     __table_args__ = (
-        UniqueConstraint("symbol", "exchange", "product", name="uq_scalping_tracked"),
+        UniqueConstraint("symbol", "exchange", "product", "mode", name="uq_scalping_tracked"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -98,6 +104,50 @@ def init_db():
 
     init_db_with_logging(Base, engine, "Scalping DB", logger)
     _migrate_add_columns()
+    _migrate_mode_unique(ScalpingSLState, "scalping_sl_state")
+    _migrate_mode_unique(ScalpingTrackedSymbol, "scalping_tracked_symbol")
+
+
+def _migrate_mode_unique(model, table_name: str):
+    """Recreate a table so its UNIQUE constraint includes `mode` (analyze/live).
+
+    SQLite can't ALTER a constraint, so for DBs created before mode-scoping we
+    rename the old table, create the new one (with the mode-inclusive unique
+    constraint from the model), copy the rows over, and drop the old. Idempotent:
+    skips when the unique constraint already covers `mode`. Rows are preserved
+    (the old (symbol,exchange,product) uniqueness guarantees no collisions).
+    """
+    try:
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(engine)
+        if table_name not in inspector.get_table_names():
+            return
+        uniques = inspector.get_unique_constraints(table_name)
+        if any("mode" in (uc.get("column_names") or []) for uc in uniques):
+            return  # already mode-scoped
+
+        cols = [c["name"] for c in inspector.get_columns(table_name)]
+        model_cols = {c.name for c in model.__table__.columns}
+        common = [c for c in cols if c in model_cols]
+
+        # Read rows into memory, DROP the old table (which also drops its indexes,
+        # avoiding index-name collisions when the new table recreates them), create
+        # the new table with the mode-inclusive UNIQUE, then re-insert the rows.
+        with engine.begin() as conn:
+            rows = [dict(r._mapping) for r in conn.execute(text(f"SELECT {', '.join(common)} FROM {table_name}"))]
+            conn.execute(text(f"DROP TABLE {table_name}"))
+        model.__table__.create(engine)
+        if rows:
+            with engine.begin() as conn:
+                conn.execute(model.__table__.insert(), rows)
+        logger.info(
+            "Scalping DB: %s recreated with mode-scoped unique constraint (%d rows preserved)",
+            table_name,
+            len(rows),
+        )
+    except Exception as e:
+        logger.exception(f"Error migrating {table_name} to mode-scoped uniqueness: {e}")
 
 
 def _migrate_add_columns():
@@ -159,7 +209,7 @@ def _to_dict(row: "ScalpingSLState") -> dict:
 
 
 def upsert_sl_state(data: dict) -> dict | None:
-    """Create or update the SL state for a (symbol, exchange, product) leg."""
+    """Create or update the SL state for a (symbol, exchange, product, mode) leg."""
     try:
         symbol = data["symbol"]
         exchange = data["exchange"]
@@ -167,15 +217,16 @@ def upsert_sl_state(data: dict) -> dict | None:
     except KeyError as e:
         logger.error(f"upsert_sl_state missing key: {e}")
         return None
+    mode = data.get("mode") or "analyze"
 
     try:
         row = (
             db_session.query(ScalpingSLState)
-            .filter_by(symbol=symbol, exchange=exchange, product=product)
+            .filter_by(symbol=symbol, exchange=exchange, product=product, mode=mode)
             .first()
         )
         if row is None:
-            row = ScalpingSLState(symbol=symbol, exchange=exchange, product=product)
+            row = ScalpingSLState(symbol=symbol, exchange=exchange, product=product, mode=mode)
             db_session.add(row)
 
         for field in (
@@ -219,14 +270,16 @@ def get_active_sl_states(mode: str | None = None) -> list[dict]:
         return []
 
 
-def delete_sl_state(symbol: str, exchange: str, product: str) -> bool:
-    """Remove the SL state for a leg (called when the position is closed/cleared)."""
+def delete_sl_state(symbol: str, exchange: str, product: str, mode: str | None = None) -> bool:
+    """Remove the SL state for a leg. Scoped to `mode` when given (so clearing a
+    sandbox SL never removes the live SL for the same leg, and vice-versa)."""
     try:
-        deleted = (
-            db_session.query(ScalpingSLState)
-            .filter_by(symbol=symbol, exchange=exchange, product=product)
-            .delete()
+        q = db_session.query(ScalpingSLState).filter_by(
+            symbol=symbol, exchange=exchange, product=product
         )
+        if mode is not None:
+            q = q.filter_by(mode=mode)
+        deleted = q.delete()
         db_session.commit()
         return deleted > 0
     except Exception as e:
@@ -236,16 +289,15 @@ def delete_sl_state(symbol: str, exchange: str, product: str) -> bool:
 
 
 def track_symbol(symbol: str, exchange: str, product: str, mode: str = "analyze") -> bool:
-    """Record a (symbol, exchange, product) as part of the scalping list (idempotent).
+    """Record a (symbol, exchange, product, mode) as part of the scalping list.
 
-    The row carries the trading mode it was traded in so the list, books and
-    Close-All segregate sandbox from live. The unique key stays (symbol, exchange,
-    product); re-trading the same leg in a different mode updates its mode tag.
+    The trading mode is part of the key so analyze (sandbox) and live lists are
+    truly segregated — the same leg can appear independently in both. Idempotent.
     """
     try:
         exists = (
             db_session.query(ScalpingTrackedSymbol)
-            .filter_by(symbol=symbol, exchange=exchange, product=product)
+            .filter_by(symbol=symbol, exchange=exchange, product=product, mode=mode)
             .first()
         )
         if exists is None:
@@ -254,9 +306,7 @@ def track_symbol(symbol: str, exchange: str, product: str, mode: str = "analyze"
                     symbol=symbol, exchange=exchange, product=product, mode=mode
                 )
             )
-        elif exists.mode != mode:
-            exists.mode = mode
-        db_session.commit()
+            db_session.commit()
         return True
     except Exception as e:
         logger.exception(f"Error tracking scalping symbol: {e}")

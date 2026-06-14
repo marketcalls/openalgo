@@ -691,7 +691,13 @@ def close_all():
     from services.positionbook_service import get_positionbook
 
     ok, posresp, _pc = get_positionbook(api_key=api_key, auth_token=auth_token, broker=broker)
-    positions = (posresp.get("data") or []) if ok and isinstance(posresp, dict) else []
+    if not ok or not isinstance(posresp, dict):
+        # Do NOT report success when we can't read positions — they may still be open.
+        msg = posresp.get("message") if isinstance(posresp, dict) else "positionbook unavailable"
+        return jsonify(
+            {"status": "error", "message": f"Could not fetch positions to close: {msg}"}
+        ), 502
+    positions = posresp.get("data") or []
     posmap = {}
     for p in positions:
         key = (p.get("symbol"), (p.get("exchange") or "").upper(), (p.get("product") or "").upper())
@@ -780,7 +786,9 @@ def upsert_sl():
     exchange = (data.get("exchange") or "").strip().upper()
     product = (data.get("product") or "").strip().upper()
 
-    if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in VALID_PRODUCTS:
+    # Product must be valid FOR THIS EXCHANGE (e.g. reject CNC on NFO/BFO/MCX/CDS) so
+    # we never persist an SL leg the freeze-safe exit can't actually place.
+    if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in _allowed_products(exchange):
         return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
 
     # Validate the side and coerce/range-check numeric fields so the browser SL
@@ -840,6 +848,6 @@ def delete_sl():
     if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in VALID_PRODUCTS:
         return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
 
-    deleted = delete_sl_state(symbol, exchange, product)
+    deleted = delete_sl_state(symbol, exchange, product, mode=_current_mode())
     _notify_risk_monitor()
     return jsonify({"status": "success", "deleted": deleted})

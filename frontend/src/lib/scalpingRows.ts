@@ -96,14 +96,18 @@ export function buildPositionRows(
     let side: 'BUY' | 'SELL' | '-' = '-'
     let avgPrice = 0
     let unrealizedPnl = 0
+    // Use the BROKER position average for open positions (authoritative for
+    // carried-over / partially-closed legs). Today's trade VWAP (buyAvg/sellAvg)
+    // is only a fallback when the broker avg is missing — using it for unrealized
+    // P&L would misprice positions opened on a prior day or partially closed today.
     if (netQty > 0) {
       side = 'BUY'
-      avgPrice = buyAvg
-      unrealizedPnl = (ltp - buyAvg) * netQty
+      avgPrice = rec.posAvg && rec.posAvg > 0 ? rec.posAvg : buyAvg
+      unrealizedPnl = (ltp - avgPrice) * netQty
     } else if (netQty < 0) {
       side = 'SELL'
-      avgPrice = sellAvg
-      unrealizedPnl = (sellAvg - ltp) * Math.abs(netQty)
+      avgPrice = rec.posAvg && rec.posAvg > 0 ? rec.posAvg : sellAvg
+      unrealizedPnl = (avgPrice - ltp) * Math.abs(netQty)
     }
 
     const sl = findLegSL(slMap, rec.symbol, rec.exchange, rec.product as ScalpingProduct)
