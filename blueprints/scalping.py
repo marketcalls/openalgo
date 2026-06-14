@@ -367,7 +367,7 @@ def close_leg():
         return jsonify(err), code
 
     # Equity (NSE/BSE) trades in whole shares — no lot-multiple / freeze handling.
-    freeze = 0
+    split_chunk = 0  # max whole-lot quantity per order (0 => no chunking)
     if _is_derivative(exchange):
         # Whole-lot validation only (NO entry lot cap — this is risk-reducing).
         from database.symbol import SymToken
@@ -390,6 +390,7 @@ def close_leg():
         # necessarily a whole number of lots (e.g. NIFTY freeze 1800, lot size 65 =>
         # 27.69 lots), and every order must be a whole-lot multiple — so the usable
         # per-order cap is floor(freeze / lotsize) * lotsize (27 lots = 1755).
+        freeze = 0
         try:
             from database.qty_freeze_db import get_freeze_qty_for_option
 
@@ -398,8 +399,14 @@ def close_leg():
         except Exception as e:
             logger.warning(f"Scalping close_leg freeze lookup failed for {symbol}: {e}")
 
-    if freeze and quantity > freeze:
-        # Split into whole-lot, freeze-sized chunks so the exchange accepts each order.
+        # If the freeze limit is unknown (non-NFO default, or cache not loaded), we
+        # MUST NOT send the whole position as one order — it can exceed the real
+        # exchange freeze. Fall back to a conservative whole-lot chunk so an exit is
+        # always split into safe pieces.
+        split_chunk = freeze if freeze > 0 else MAX_LOTS * lotsize
+
+    if split_chunk and quantity > split_chunk:
+        # Split into whole-lot chunks so no single order exceeds the freeze limit.
         from services.split_order_service import split_order
 
         split_data = {
@@ -408,7 +415,7 @@ def close_leg():
             "exchange": exchange,
             "action": action,
             "quantity": quantity,
-            "splitsize": freeze,
+            "splitsize": split_chunk,
             "pricetype": "MARKET",
             "product": product,
         }
