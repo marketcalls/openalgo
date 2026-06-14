@@ -28,6 +28,11 @@ Understanding the symbol format is **essential** for placing orders correctly. I
 │  Format: [Symbol][DD][MMM][YY][Strike][CE/PE]                               │
 │  Example: NIFTY30JAN2521500CE, BANKNIFTY27FEB2548000PE                     │
 │                                                                              │
+│  CRYPTO                                                                      │
+│  ──────                                                                      │
+│  Exchange: CRYPTO                                                            │
+│  Examples: BTCUSDFUT, BTC28FEB2580000CE, ETH28FEB252500PE                  │
+│                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -160,6 +165,16 @@ Where:
 | Crude Oil 6500 Call, 17th Feb 2025 | `CRUDEOIL17FEB256500CE` |
 | Gold 62000 Put, 5th Feb 2025 | `GOLD05FEB2562000PE` |
 
+#### Crypto Options (Delta Exchange)
+
+Delta Exchange instruments use OpenAlgo's broker-agnostic `CRYPTO` exchange code. Option symbols follow the same canonical format as other OpenAlgo options.
+
+| Description | OpenAlgo Symbol | Delta-native symbol |
+|-------------|-----------------|---------------------|
+| BTC 80000 Call, 28th Feb 2025 | `BTC28FEB2580000CE` | `C-BTC-80000-280225` |
+| BTC 80000 Put, 28th Feb 2025 | `BTC28FEB2580000PE` | `P-BTC-80000-280225` |
+| ETH 2500 Put, 28th Feb 2025 | `ETH28FEB252500PE` | `P-ETH-2500-280225` |
+
 ### Usage
 
 ```json
@@ -204,6 +219,12 @@ OpenAlgo uses standardized exchange codes to identify trading venues.
 |----------|------|-------------|
 | Multi Commodity Exchange | `MCX` | Commodities trading |
 | NSE Commodities | `NCO` | NSE commodity futures and options (currently Zerodha only) |
+
+### Crypto Derivatives
+
+| Exchange | Code | Description |
+|----------|------|-------------|
+| Delta Exchange | `CRYPTO` | Crypto futures, perpetual futures, spot, and options through the Delta Exchange plugin |
 
 ### Index Symbols
 
@@ -377,6 +398,36 @@ OpenAlgo has rolled out a **standardized index symbol set across all supported b
 }
 ```
 
+### Crypto Perpetual Futures Order
+
+```json
+{
+  "apikey": "your-api-key",
+  "strategy": "CryptoStrategy",
+  "symbol": "BTCUSDFUT",
+  "exchange": "CRYPTO",
+  "action": "BUY",
+  "quantity": "1",
+  "pricetype": "MARKET",
+  "product": "NRML"
+}
+```
+
+### Crypto Options Order
+
+```json
+{
+  "apikey": "your-api-key",
+  "strategy": "CryptoOptionsStrategy",
+  "symbol": "BTC28FEB2580000CE",
+  "exchange": "CRYPTO",
+  "action": "BUY",
+  "quantity": "1",
+  "pricetype": "MARKET",
+  "product": "NRML"
+}
+```
+
 ## Multi-Leg Options Strategies
 
 ### Bull Call Spread
@@ -503,6 +554,13 @@ POST /api/v1/search
 ✅ "SBIN"          (uppercase - correct)
 ```
 
+### Mistake 5: Using Delta-Native Symbols Directly
+
+```
+❌ C-BTC-80000-280225 with exchange: "CRYPTO"  (Delta-native option symbol)
+✅ BTC28FEB2580000CE with exchange: "CRYPTO"   (OpenAlgo canonical symbol)
+```
+
 ## Troubleshooting
 
 | Error | Cause | Solution |
@@ -525,6 +583,8 @@ POST /api/v1/search
 │  Future        [Symbol][DD][MMM][YY]FUT    NIFTY30JAN25FUT                  │
 │  Call Option   [Symbol][DD][MMM][YY][Strike]CE   NIFTY30JAN2521500CE       │
 │  Put Option    [Symbol][DD][MMM][YY][Strike]PE   NIFTY30JAN2521000PE       │
+│  Crypto Perp   [Symbol]USDFUT              BTCUSDFUT                       │
+│  Crypto Option [Symbol][DD][MMM][YY][Strike]CE/PE BTC28FEB2580000CE        │
 │                                                                              │
 │  EXCHANGE CODES                                                             │
 │  ──────────────                                                             │
@@ -532,6 +592,7 @@ POST /api/v1/search
 │  BSE     = BSE Equity           BFO = BSE F&O                              │
 │  CDS     = NSE Currency         BCD = BSE Currency                         │
 │  MCX     = Commodities                                                      │
+│  CRYPTO  = Crypto derivatives                                               │
 │  NSE_INDEX / BSE_INDEX = Index values                                       │
 │                                                                              │
 │  PRODUCT CODES                                                              │
