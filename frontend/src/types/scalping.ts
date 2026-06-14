@@ -97,3 +97,25 @@ export interface SLStatesResponse {
   status: string
   data: ScalpingSLState[]
 }
+
+// Derived per-(symbol, exchange, product) row for the 1cliq-style position book.
+// Combines the current open position, today's buy/sell trades, realized +
+// unrealized P&L, and the active SL. Rows with netQty 0 still appear if there
+// were trades today (realized P&L must stay visible until session reset).
+export interface ScalpingPositionRow {
+  symbol: string
+  exchange: string
+  product: ScalpingProduct
+  side: 'BUY' | 'SELL' | '-'
+  netQty: number
+  ltp: number
+  sl: number | null
+  realizedPnl: number
+  unrealizedPnl: number
+  totalPnl: number
+  avgPrice: number
+  buyQty: number
+  buyAvg: number
+  sellQty: number
+  sellAvg: number
+}

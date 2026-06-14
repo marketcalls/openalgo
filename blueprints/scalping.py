@@ -155,9 +155,9 @@ def strikes():
 def _resolve_session_auth():
     """Return (auth_token, broker, api_key, error_response, status_code).
 
-    api_key is only populated in analyze (sandbox) mode, mirroring blueprints/orders.py:
-    in analyze mode services route to the sandbox using the API key; in live mode they
-    use auth_token + broker.
+    In analyze (sandbox) mode the services route to the sandbox using the API key,
+    so a live broker token is NOT required — only the API key. In live mode the
+    broker auth_token + broker name are required.
     """
     username = session.get("user")
     if not username:
@@ -165,11 +165,21 @@ def _resolve_session_auth():
 
     auth_token = get_auth_token(username)
     broker = session.get("broker")
+
+    if get_analyze_mode():
+        api_key = get_api_key_for_tradingview(username)
+        if not api_key:
+            return (
+                None, None, None,
+                {"status": "error", "message": "API key required for analyzer mode (generate at /apikey)"},
+                401,
+            )
+        # auth_token/broker are optional in analyzer mode (sandbox routes via api_key).
+        return auth_token, broker, api_key, None, None
+
     if not auth_token or not broker:
         return None, None, None, {"status": "error", "message": "Authentication error"}, 401
-
-    api_key = get_api_key_for_tradingview(username) if get_analyze_mode() else None
-    return auth_token, broker, api_key, None, None
+    return auth_token, broker, None, None, None
 
 
 def _validate_quantity(symbol: str, exchange: str, quantity: int) -> str | None:
@@ -274,6 +284,106 @@ def order():
         "quantity": quantity,
     }
 
+    success, response, status_code = place_order(
+        order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
+    )
+    return jsonify(response), status_code
+
+
+@scalping_bp.route("/scalping/api/close_leg", methods=["POST"])
+@check_session_validity
+def close_leg():
+    """Risk-reducing single-leg exit (used by the trailing-SL engine).
+
+    Unlike /order, this does NOT apply the entry lot cap — a stop-loss must be able
+    to flatten a position of any size. It still requires whole-lot quantities and
+    splits into exchange-freeze-sized chunks when the quantity exceeds the freeze
+    limit (a single market order above freeze is rejected by the exchange).
+    """
+    data = request.get_json(silent=True) or {}
+    symbol = (data.get("symbol") or "").strip()
+    exchange = (data.get("exchange") or "").strip().upper()
+    action = (data.get("action") or "").strip().upper()
+    product = (data.get("product") or "NRML").strip().upper()
+
+    try:
+        quantity = int(data.get("quantity", 0))
+    except (TypeError, ValueError):
+        quantity = 0
+
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol is required"}), 400
+    if exchange not in VALID_LEG_EXCHANGES:
+        return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
+    if action not in VALID_ACTIONS:
+        return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
+    if product not in VALID_PRODUCTS:
+        return jsonify({"status": "error", "message": f"Invalid product: {product}"}), 400
+    if quantity <= 0:
+        return jsonify({"status": "error", "message": "quantity must be positive"}), 400
+    if quantity > MAX_ORDER_QUANTITY:
+        return jsonify({"status": "error", "message": "quantity exceeds the safety limit"}), 400
+
+    # Whole-lot validation only (NO entry lot cap — this is risk-reducing).
+    from database.symbol import SymToken
+    from database.symbol import db_session as symbol_session
+
+    rec = (
+        symbol_session.query(SymToken)
+        .filter(SymToken.symbol == symbol, SymToken.exchange == exchange)
+        .first()
+    )
+    if not rec or not rec.lotsize or rec.lotsize <= 0:
+        return jsonify({"status": "error", "message": f"Unknown symbol: {symbol}"}), 400
+    lotsize = rec.lotsize
+    if quantity % lotsize != 0:
+        return jsonify(
+            {"status": "error", "message": f"quantity must be a whole number of lots ({lotsize})"}
+        ), 400
+
+    auth_token, broker, api_key, err, code = _resolve_session_auth()
+    if err:
+        return jsonify(err), code
+
+    # Determine the exchange freeze limit (single-order cap). 0/None => no limit.
+    freeze = 0
+    try:
+        from database.qty_freeze_db import get_freeze_qty_for_option
+
+        freeze = get_freeze_qty_for_option(symbol, exchange) or 0
+    except Exception as e:
+        logger.warning(f"Scalping close_leg freeze lookup failed for {symbol}: {e}")
+
+    if freeze and quantity > freeze:
+        # Split into freeze-sized chunks so the exchange accepts each order.
+        from services.split_order_service import split_order
+
+        split_data = {
+            "strategy": SCALPING_STRATEGY,
+            "symbol": symbol,
+            "exchange": exchange,
+            "action": action,
+            "quantity": quantity,
+            "splitsize": freeze,
+            "pricetype": "MARKET",
+            "product": product,
+        }
+        success, response, status_code = split_order(
+            split_data=split_data, api_key=api_key, auth_token=auth_token, broker=broker
+        )
+        return jsonify(response), status_code
+
+    from services.place_order_service import place_order
+
+    order_data = {
+        "strategy": SCALPING_STRATEGY,
+        "symbol": symbol,
+        "exchange": exchange,
+        "action": action,
+        "pricetype": "MARKET",
+        "product": product,
+        "quantity": quantity,
+    }
     success, response, status_code = place_order(
         order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
     )

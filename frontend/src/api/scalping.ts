@@ -40,6 +40,13 @@ export const scalpingApi = {
     return response.data
   },
 
+  // Risk-reducing single-leg exit (trailing-SL). Bypasses the entry lot cap and
+  // splits oversized exits on the server, so a >20-lot position can always flatten.
+  closeLeg: async (req: ScalpingOrderRequest): Promise<ScalpingOrderResponse> => {
+    const response = await webClient.post<ScalpingOrderResponse>('/scalping/api/close_leg', req)
+    return response.data
+  },
+
   closeAll: async (): Promise<ScalpingOrderResponse> => {
     const response = await webClient.post<ScalpingOrderResponse>('/scalping/api/close_all', {})
     return response.data

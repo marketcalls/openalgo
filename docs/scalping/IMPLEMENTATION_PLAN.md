@@ -35,7 +35,7 @@ Source: `docs/prompt/order-constants.md`, `docs/prompt/symbol-format.md`.
 | --- | --- | --- |
 | **Exchange (underlying)** | `NSE_INDEX`, `BSE_INDEX` | NIFTY/BANKNIFTY → `NSE_INDEX`; SENSEX/BANKEX → `BSE_INDEX` |
 | **Exchange (legs)** | `NFO`, `BFO` | NSE index options → `NFO`; BSE index options → `BFO` |
-| **Product** | `CNC`, `NRML`, `MIS` | `NRML` (carry) or `MIS` (intraday). Default `MIS`. **No `CNC`** (equity only). |
+| **Product** | `CNC`, `NRML`, `MIS` | `NRML` (carry) or `MIS` (intraday). **Default `NRML`** (avoids MIS post-15:15 square-off rejections; matches 1cliq "margin"). Shown as "MARGIN" in the position book; `NRML` on the wire. **No `CNC`** (equity only). |
 | **Price type** | `MARKET`, `LIMIT`, `SL`, `SL-M` | Entry/exit = `MARKET`. (SL handled in-app via trailing logic, not broker `SL` orders in v1.) |
 | **Action** | `BUY`, `SELL` | both |
 

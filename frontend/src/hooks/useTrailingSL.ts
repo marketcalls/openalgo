@@ -4,21 +4,21 @@
  * Evaluates each tracked leg's SL on every LTP tick:
  *  - trail only RAISES the stop, never lowers it
  *  - trailing does not start until price is >= MIN_TRAIL_PROFIT above entry (1cliq rule)
- *  - on breach, fires a MARKET exit sized to the CURRENT open position (not a stale
- *    saved quantity), and only clears the SL once the exit actually succeeds
+ *  - on breach, fires a risk-reducing MARKET exit sized to the CURRENT open position
+ *    (not a stale saved quantity), and only clears the SL once the exit succeeds
+ *
+ * The engine subscribes to the live feed for EVERY active SL itself, so a stop-loss
+ * restored on reload (or for a leg that isn't the currently-selected CE/PE) is still
+ * monitored — "state survives reload" is a real safety guarantee, not cosmetic.
  *
  * SL config is persisted to the backend (database/scalping_db.py) so it survives reload.
  * Long legs (side BUY) trail with the stop below price; short legs (SELL) mirror it.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
-import type {
-  ScalpingAction,
-  ScalpingProduct,
-  ScalpingSLState,
-  SelectedLeg,
-} from '@/types/scalping'
+import type { ScalpingAction, ScalpingProduct, ScalpingSLState } from '@/types/scalping'
 import { showToast } from '@/utils/toast'
+import { useMarketData } from './useMarketData'
 
 const MIN_TRAIL_PROFIT = 1 // don't trail until >= 1 rupee in profit
 const PERSIST_THROTTLE_MS = 2000
@@ -46,15 +46,15 @@ export function slKey(symbol: string, exchange: string, product: string): string
   return `${exchange}:${symbol}:${product}`
 }
 
-// Find the active SL for a leg regardless of product (a leg normally has one).
+// Find the active SL for a specific leg + product (matches the DB scoping, so an
+// MIS and an NRML SL on the same strike are never confused).
 export function findLegSL(
   slMap: Record<string, SLState>,
   symbol: string,
-  exchange: string
+  exchange: string,
+  product: string
 ): SLState | undefined {
-  return Object.values(slMap).find(
-    (s) => s.symbol === symbol && s.exchange === exchange && s.active
-  )
+  return slMap[slKey(symbol, exchange, product)]
 }
 
 function fromBackend(s: ScalpingSLState): SLState {
@@ -123,14 +123,13 @@ export function evaluateTrail(sl: SLState, ltp: number): { next: SLState; breach
 }
 
 interface UseTrailingSLArgs {
-  ticks: Array<{ leg: SelectedLeg | null; ltp: number | undefined }>
   onAfterExit?: () => void
   // Returns the CURRENT signed net position quantity for a leg (0 if flat).
   // The SL exit is sized and directed from this, never from the saved quantity.
   resolvePosition?: (symbol: string, exchange: string, product: string) => number
 }
 
-export function useTrailingSL({ ticks, onAfterExit, resolvePosition }: UseTrailingSLArgs) {
+export function useTrailingSL({ onAfterExit, resolvePosition }: UseTrailingSLArgs) {
   const [slMap, setSlMap] = useState<Record<string, SLState>>({})
   const slMapRef = useRef(slMap)
   slMapRef.current = slMap
@@ -141,6 +140,29 @@ export function useTrailingSL({ ticks, onAfterExit, resolvePosition }: UseTraili
   resolvePositionRef.current = resolvePosition
   const onAfterExitRef = useRef(onAfterExit)
   onAfterExitRef.current = onAfterExit
+
+  // Subscribe the live feed for EVERY active SL (deduped), independent of which
+  // CE/PE leg is selected, so restored/background SLs keep getting ticks.
+  const slSymbols = useMemo(() => {
+    const seen = new Set<string>()
+    const list: Array<{ symbol: string; exchange: string }> = []
+    for (const sl of Object.values(slMap)) {
+      if (!sl.active) continue
+      const k = `${sl.exchange}:${sl.symbol}`
+      if (seen.has(k)) continue
+      seen.add(k)
+      list.push({ symbol: sl.symbol, exchange: sl.exchange })
+    }
+    return list
+  }, [slMap])
+
+  const { data: slMarketData } = useMarketData({
+    symbols: slSymbols,
+    mode: 'LTP',
+    enabled: slSymbols.length > 0,
+  })
+  const slMarketDataRef = useRef(slMarketData)
+  slMarketDataRef.current = slMarketData
 
   // Restore persisted SL config on mount.
   useEffect(() => {
@@ -215,7 +237,9 @@ export function useTrailingSL({ ticks, onAfterExit, resolvePosition }: UseTraili
         }
         const action: ScalpingAction = liveQty > 0 ? 'SELL' : 'BUY'
         const qty = Math.abs(liveQty)
-        const res = await scalpingApi.placeOrder({
+        // Risk-reducing exit endpoint — bypasses the entry lot cap and freeze-splits,
+        // so a position scaled beyond 20 lots can always be flattened.
+        const res = await scalpingApi.closeLeg({
           symbol: sl.symbol,
           exchange: sl.exchange,
           action,
@@ -245,9 +269,12 @@ export function useTrailingSL({ ticks, onAfterExit, resolvePosition }: UseTraili
     [clearSL]
   )
 
-  // Tick signal: re-run evaluation whenever any tracked leg's LTP changes.
-  const tickSignal = ticks
-    .map((t) => `${t.leg?.exchange}:${t.leg?.symbol}:${t.ltp ?? ''}`)
+  // Re-run evaluation whenever any active SL's LTP changes.
+  const tickSignal = slSymbols
+    .map(
+      (s) =>
+        `${s.exchange}:${s.symbol}:${slMarketData.get(`${s.exchange}:${s.symbol}`)?.data?.ltp ?? ''}`
+    )
     .join('|')
 
   useEffect(() => {
@@ -255,23 +282,21 @@ export function useTrailingSL({ ticks, onAfterExit, resolvePosition }: UseTraili
     const updates: Record<string, SLState> = {}
     const breaches: SLState[] = []
 
-    for (const { leg, ltp } of ticks) {
-      if (!leg || ltp == null) continue
-      // Match any active SL for this leg's symbol+exchange (across products).
-      for (const sl of Object.values(slMapRef.current)) {
-        if (sl.symbol !== leg.symbol || sl.exchange !== leg.exchange || !sl.active) continue
-        const key = slKey(sl.symbol, sl.exchange, sl.product)
-        const { next, breached } = evaluateTrail(sl, ltp)
-        if (breached) {
-          breaches.push({ ...next, active: false })
-        } else if (
-          next.currentSl !== sl.currentSl ||
-          next.highestPrice !== sl.highestPrice ||
-          next.lowestPrice !== sl.lowestPrice
-        ) {
-          updates[key] = next
-          changed = true
-        }
+    for (const sl of Object.values(slMapRef.current)) {
+      if (!sl.active) continue
+      const ltp = slMarketDataRef.current.get(`${sl.exchange}:${sl.symbol}`)?.data?.ltp
+      if (ltp == null) continue
+      const key = slKey(sl.symbol, sl.exchange, sl.product)
+      const { next, breached } = evaluateTrail(sl, ltp)
+      if (breached) {
+        breaches.push({ ...next, active: false })
+      } else if (
+        next.currentSl !== sl.currentSl ||
+        next.highestPrice !== sl.highestPrice ||
+        next.lowestPrice !== sl.lowestPrice
+      ) {
+        updates[key] = next
+        changed = true
       }
     }
 
