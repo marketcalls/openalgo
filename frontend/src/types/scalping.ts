@@ -92,6 +92,7 @@ export interface ScalpingSLState {
   symbol: string
   exchange: string
   product: ScalpingProduct
+  mode?: string // 'analyze' (sandbox) | 'live' — server-stamped; segregates SLs
   side: ScalpingAction
   entry_price: number
   quantity: number
@@ -110,7 +111,7 @@ export interface SLStatesResponse {
   data: ScalpingSLState[]
 }
 
-// Derived per-(symbol, exchange, product) row for the 1cliq-style position book.
+// Derived per-(symbol, exchange, product) row for the position book.
 // Combines the current open position, today's buy/sell trades, realized +
 // unrealized P&L, and the active SL. Rows with netQty 0 still appear if there
 // were trades today (realized P&L must stay visible until session reset).
@@ -122,6 +123,8 @@ export interface ScalpingPositionRow {
   netQty: number
   ltp: number
   sl: number | null
+  target: number | null // take-profit price (null = none)
+  trailingStep: number | null // trailing step when TSL enabled (null = off)
   realizedPnl: number
   unrealizedPnl: number
   totalPnl: number

@@ -52,11 +52,42 @@ Instrument under test: **NIFTY** ATM CE/PE and the nearest **NIFTY FUT** on NFO
   Close-All / books stay scoped to the scalping strategy.
 - `cancel_all_orders` succeeds.
 
+## Server-side SL / Target / Trailing-SL engine (event-driven, browser-independent)
+The SL/TP/TSL engine now runs **server-side** in
+`services/scalping_risk_monitor_service.py`, so stops keep working even after the
+user leaves /scalping or closes the browser. It is **fully event-driven (zero
+polling)**:
+- prices arrive as live ticks from the WebSocket proxy
+  (`services/websocket_client.py`, LTP mode) — each tick drives one evaluation;
+- the watched-symbol set changes only when an SL is saved/deleted (the `/sl`
+  endpoints call `notify_sl_changed()` → `sync()`), never on a timer;
+- trailing updates / auto-clears are pushed to the browser via a SocketIO
+  `scalping_sl_update` event; the React side listens for it (and order events)
+  instead of polling.
+
+On breach it fires the same freeze-safe `_reducing_exit` proven above, sized to
+the CURRENT live position, and clears the SL only on a confirmed exit. The
+browser `useTrailingSL` hook is now config + display only (no executor), so there
+is exactly one engine and no double-exit.
+
+### Tests (`test/test_scalping_risk_monitor.py`) — 20/20 PASS
+- `evaluate_trail` decision core: SL, Target, and Trailing triggers for **both
+  long (BUY) and short (SELL)** legs — breach boundaries, hold-cases, trailing
+  raises/lowers only in your favour, trailing doesn't start until in profit, and
+  a trailed stop then breaching.
+- Event-driven `_on_tick`: a breaching tick dispatches an exit; a non-breaching
+  tick does not; a trailing tick updates in-memory state + persists; ticks for
+  unwatched symbols and zero/missing LTP are ignored.
+
+### Live sandbox validation (2026-06-14)
+End-to-end against the live sandbox: flatten → BUY 1 lot (→65) → target-breach
+tick through the real `_on_tick` → exit worker → **flat (0)**, SL state cleared
+from DB + memory. This surfaced and fixed a real bug: in analyze/sandbox mode the
+monitor must pass the **api_key only** (not `auth_token`+`broker`) or
+positionbook/place_order take the live-broker path and the sandbox position reads
+as flat — silently clearing the SL without exiting.
+
 ## Not covered by this backend harness (validated separately)
-- **Browser SL / Trailing-SL / Target engine** (`useTrailingSL`) runs in the
-  React app on live WebSocket ticks; validated via the pure `evaluateTrail` logic
-  + production build. It calls the same `close_leg` exit path proven above, so a
-  triggered SL/Target uses a validated, freeze-safe exit.
 - **UI interaction** (keyboard fire, dropdowns, OHLC bar) — requires a browser
   session; covered by `npm run build` + biome, pending a manual click-through.
 

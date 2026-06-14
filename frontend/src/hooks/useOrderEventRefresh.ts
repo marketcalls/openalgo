@@ -10,6 +10,8 @@ export type OrderEventType =
   | 'close_position_event'
   | 'cancel_order_event'
   | 'modify_order_event'
+  // Pushed by the server-side scalping risk monitor when it trails/clears an SL.
+  | 'scalping_sl_update'
 
 /**
  * Configuration options for useOrderEventRefresh hook

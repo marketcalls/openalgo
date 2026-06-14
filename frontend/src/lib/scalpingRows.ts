@@ -1,5 +1,5 @@
 /**
- * Build the 1cliq-style position book for the scalping terminal.
+ * Build the position book for the scalping terminal.
  *
  * Combines, per (symbol, exchange, product):
  *  - today's BUY/SELL trades (qty + weighted avg)  -> realized P&L, buy/sell cols
@@ -111,6 +111,8 @@ export function buildPositionRows(
       netQty,
       ltp,
       sl: sl ? sl.currentSl : null,
+      target: sl && sl.target > 0 ? sl.target : null,
+      trailingStep: sl?.trailingEnabled && sl.trailingStep > 0 ? sl.trailingStep : null,
       realizedPnl,
       unrealizedPnl,
       totalPnl: realizedPnl + unrealizedPnl,

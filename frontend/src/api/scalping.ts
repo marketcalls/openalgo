@@ -18,6 +18,17 @@ export const scalpingApi = {
     return response.data
   },
 
+  // All F&O underlyings for an exchange (indices first), like /search/token.
+  getAllUnderlyings: async (
+    exchange: string,
+    instrumenttype: 'options' | 'futures' = 'options'
+  ): Promise<{ status: string; data: string[] }> => {
+    const response = await webClient.get('/scalping/api/all_underlyings', {
+      params: { exchange, instrumenttype },
+    })
+    return response.data
+  },
+
   getExpiry: async (
     underlying: string,
     exchange: string,

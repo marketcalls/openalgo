@@ -1,6 +1,6 @@
 /**
  * SetSLDialog — configure a leg's stop-loss and optional auto-trailing.
- * Mirrors the 1cliq "Set SL" dialog: initial stop-loss + trailing step + enable toggle.
+ * Configure a leg's stop-loss: initial stop-loss + trailing step + enable toggle + target.
  */
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -109,7 +109,7 @@ export function SetSLDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Set Stop-Loss — {leg?.symbol ?? ''}</DialogTitle>
+          <DialogTitle>SL · Target · Trailing — {leg?.symbol ?? ''}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
