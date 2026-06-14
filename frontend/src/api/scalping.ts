@@ -4,6 +4,7 @@ import type {
   ScalpingOrderRequest,
   ScalpingOrderResponse,
   ScalpingSLState,
+  SearchInstrument,
   SLStatesResponse,
   UnderlyingsResponse,
 } from '@/types/scalping'
@@ -20,6 +21,16 @@ export const scalpingApi = {
   getExpiry: async (underlying: string): Promise<ExpiryResponse> => {
     const response = await webClient.get<ExpiryResponse>('/scalping/api/expiry', {
       params: { underlying },
+    })
+    return response.data
+  },
+
+  search: async (
+    exchange: string,
+    query: string
+  ): Promise<{ status: string; data: SearchInstrument[] }> => {
+    const response = await webClient.get('/scalping/api/search', {
+      params: { exchange, query },
     })
     return response.data
   },

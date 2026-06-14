@@ -6,6 +6,7 @@ import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -35,6 +36,8 @@ import type {
   ScalpingAction,
   ScalpingPositionRow,
   ScalpingProduct,
+  SearchInstrument,
+  Segment,
   SelectedLeg,
 } from '@/types/scalping'
 import { showToast } from '@/utils/toast'
@@ -194,10 +197,20 @@ export default function Scalping() {
   const appMode = useThemeStore((s) => s.appMode) // 'live' | 'analyzer'
   const queryClient = useQueryClient()
 
+  // Segment & exchange. OPTIONS = dual-leg (CE/PE); FUTURES/EQUITY = single instrument.
+  const [exchange, setExchange] = useState<'NSE' | 'BSE'>('NSE')
+  const [segment, setSegment] = useState<Segment>('OPTIONS')
+  const isSingle = segment !== 'OPTIONS'
+
   const [underlying, setUnderlying] = useState<string>('')
   const [expiry, setExpiry] = useState<string>('')
   const [ceStrike, setCeStrike] = useState<string>('')
   const [peStrike, setPeStrike] = useState<string>('')
+
+  // Single-instrument (equity/futures) selection via search-as-you-type.
+  const [searchQuery, setSearchQuery] = useState('')
+  const [instrument, setInstrument] = useState<SearchInstrument | null>(null)
+  const [equityShares, setEquityShares] = useState(1)
 
   // Order-entry controls. The One-Click arm state is captured/persisted across reloads.
   const [armed, setArmed] = useState<boolean>(loadArmed)
@@ -213,12 +226,34 @@ export default function Scalping() {
     }
   }, [armed])
 
-  // Underlyings
+  // Segment/exchange change: pick a sensible default product and reset the
+  // single-instrument selection (equity is MIS-only; derivatives default NRML).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on segment/exchange change
+  useEffect(() => {
+    setProduct(segment === 'EQUITY' ? 'MIS' : 'NRML')
+    setInstrument(null)
+    setSearchQuery('')
+  }, [segment, exchange])
+
+  // Exchange the single-instrument search runs on: equity on NSE/BSE, futures on
+  // the matching F&O exchange (NFO/BFO).
+  const searchExchange = segment === 'EQUITY' ? exchange : exchange === 'NSE' ? 'NFO' : 'BFO'
+  const { data: searchResp } = useQuery({
+    queryKey: ['scalping', 'search', searchExchange, searchQuery, segment],
+    queryFn: () => scalpingApi.search(searchExchange, searchQuery),
+    enabled: isSingle && searchQuery.trim().length >= 2,
+  })
+  const searchResults = (searchResp?.data ?? []).filter((r) =>
+    segment === 'FUTURES' ? r.symbol.endsWith('FUT') : !r.symbol.endsWith('FUT')
+  )
+
+  // Underlyings (options), filtered to the selected exchange's index family.
   const { data: underlyingsResp } = useQuery({
     queryKey: ['scalping', 'underlyings'],
     queryFn: () => scalpingApi.getUnderlyings(),
   })
-  const underlyings = underlyingsResp?.data ?? []
+  const indexFamily = exchange === 'NSE' ? 'NSE_INDEX' : 'BSE_INDEX'
+  const underlyings = (underlyingsResp?.data ?? []).filter((u) => u.index_exchange === indexFamily)
   const underlyingCfg = underlyings.find((u) => u.underlying === underlying)
 
   // Expiry (depends on underlying)
@@ -286,6 +321,22 @@ export default function Scalping() {
     [chain, peStrike, foExchange]
   )
 
+  // Single instrument (equity/futures) as a leg the order/SL infra can consume.
+  const singleLeg: SelectedLeg | null = useMemo(
+    () =>
+      instrument
+        ? {
+            symbol: instrument.symbol,
+            exchange: instrument.exchange,
+            optionType: 'CE', // unused for non-options; kept for the shared leg shape
+            strike: 0,
+            lotsize: instrument.lotsize || 1,
+            tickSize: 0,
+          }
+        : null,
+    [instrument]
+  )
+
   // Books (positions / orders / trades). Event-driven — fetched once, then
   // refreshed on broker order events (useOrderEventRefresh below). No polling.
   const { data: posResp } = useQuery({
@@ -341,10 +392,11 @@ export default function Scalping() {
     if (underlying && indexExchange) add(underlying, indexExchange)
     if (ceLeg) add(ceLeg.symbol, ceLeg.exchange)
     if (peLeg) add(peLeg.symbol, peLeg.exchange)
+    if (singleLeg) add(singleLeg.symbol, singleLeg.exchange)
     for (const p of positions) add(p.symbol, p.exchange)
     for (const t of trades) add(t.symbol, t.exchange)
     return list
-  }, [underlying, indexExchange, ceLeg, peLeg, positions, trades])
+  }, [underlying, indexExchange, ceLeg, peLeg, singleLeg, positions, trades])
 
   const {
     data: marketData,
@@ -360,6 +412,9 @@ export default function Scalping() {
   const underlyingTick = marketData.get(`${indexExchange}:${underlying}`)?.data
   const ceTick = ceLeg ? marketData.get(`${ceLeg.exchange}:${ceLeg.symbol}`)?.data : undefined
   const peTick = peLeg ? marketData.get(`${peLeg.exchange}:${peLeg.symbol}`)?.data : undefined
+  const singleTick = singleLeg
+    ? marketData.get(`${singleLeg.exchange}:${singleLeg.symbol}`)?.data
+    : undefined
 
   // Realtime LTP resolver for the position book (live WS, falls back to REST ltp).
   const liveLtp = useCallback(
@@ -442,8 +497,28 @@ export default function Scalping() {
   }
 
   // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
-  const stateRef = useRef({ armed, lots, product, ceLeg, peLeg, appMode })
-  stateRef.current = { armed, lots, product, ceLeg, peLeg, appMode }
+  const stateRef = useRef({
+    armed,
+    lots,
+    product,
+    ceLeg,
+    peLeg,
+    singleLeg,
+    appMode,
+    segment,
+    equityShares,
+  })
+  stateRef.current = {
+    armed,
+    lots,
+    product,
+    ceLeg,
+    peLeg,
+    singleLeg,
+    appMode,
+    segment,
+    equityShares,
+  }
 
   // Min gap between two order fires. Bounds the rate (prevents accidental
   // double-taps and held-key bursts) while still allowing deliberate fast
@@ -458,17 +533,24 @@ export default function Scalping() {
         return
       }
       if (!leg) {
-        showToast.error('No strike selected', 'orders')
+        showToast.error('No instrument selected', 'orders')
         return
       }
       if (!leg.lotsize) {
-        showToast.error('Lot size unavailable for this strike', 'orders')
+        showToast.error('Lot/contract size unavailable for this instrument', 'orders')
         return
       }
       const now = Date.now()
       if (now - lastFireRef.current < ORDER_COOLDOWN_MS) return
       lastFireRef.current = now
-      const quantity = s.lots * leg.lotsize
+      // Equity trades in whole shares (no lots); derivatives in lots * lot size.
+      const isEquity = s.segment === 'EQUITY'
+      const quantity = isEquity ? s.equityShares : s.lots * leg.lotsize
+      const sentLots = isEquity ? undefined : s.lots
+      if (quantity <= 0) {
+        showToast.error('Quantity must be positive', 'orders')
+        return
+      }
       const t0 = performance.now()
       // Order placement notifications (success AND broker/sandbox rejection) are
       // shown ONCE by the global SocketProvider — order_event in live mode,
@@ -482,7 +564,7 @@ export default function Scalping() {
           action,
           quantity,
           product: s.product,
-          lots: s.lots,
+          lots: sentLots,
         })
         setLastLatencyMs(Math.round(performance.now() - t0))
         if (res.status === 'success') {
@@ -575,6 +657,31 @@ export default function Scalping() {
         return
       }
       const s = stateRef.current
+      // Single-instrument (equity/futures): ↑/→ Buy, ↓/← Sell on the one instrument.
+      if (s.segment !== 'OPTIONS') {
+        switch (e.key) {
+          case 'ArrowUp':
+          case 'ArrowRight':
+            e.preventDefault()
+            submitOrder(s.singleLeg, 'BUY')
+            return
+          case 'ArrowDown':
+          case 'ArrowLeft':
+            e.preventDefault()
+            submitOrder(s.singleLeg, 'SELL')
+            return
+          case 'F6':
+            e.preventDefault()
+            doCloseAll()
+            return
+          case 'F7':
+            e.preventDefault()
+            doCancelAll()
+            return
+          default:
+            return
+        }
+      }
       switch (e.key) {
         case 'ArrowUp':
           e.preventDefault()
@@ -651,112 +758,194 @@ export default function Scalping() {
       <Card>
         <CardContent className="grid grid-cols-1 gap-4 pt-6 md:grid-cols-4">
           <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">Underlying</label>
-            <Select
-              value={underlying}
-              onValueChange={(v) => {
-                setUnderlying(v)
-                setExpiry('')
-                setCeStrike('')
-                setPeStrike('')
-              }}
-            >
+            <label className="text-sm text-muted-foreground">Exchange</label>
+            <Select value={exchange} onValueChange={(v) => setExchange(v as 'NSE' | 'BSE')}>
               <SelectTrigger>
-                <SelectValue placeholder="Select underlying" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {underlyings.map((u) => (
-                  <SelectItem key={u.underlying} value={u.underlying}>
-                    {u.underlying}
-                  </SelectItem>
-                ))}
+                <SelectItem value="NSE">NSE</SelectItem>
+                <SelectItem value="BSE">BSE</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">Expiry</label>
-            <Select value={expiry} onValueChange={setExpiry} disabled={!underlying}>
+            <label className="text-sm text-muted-foreground">Segment</label>
+            <Select value={segment} onValueChange={(v) => setSegment(v as Segment)}>
               <SelectTrigger>
-                <SelectValue placeholder="Select expiry" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {expiries.map((e) => (
-                  <SelectItem key={e} value={e}>
-                    {e}
-                  </SelectItem>
-                ))}
+                <SelectItem value="OPTIONS">Options</SelectItem>
+                <SelectItem value="FUTURES">Futures</SelectItem>
+                <SelectItem value="EQUITY">Equity</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">Call Strike</label>
-            <Select value={ceStrike} onValueChange={setCeStrike} disabled={chain.length === 0}>
-              <SelectTrigger>
-                <SelectValue placeholder="CE strike" />
-              </SelectTrigger>
-              <SelectContent>
-                {chain.map((r) => (
-                  <SelectItem key={`ce-${r.strike}`} value={String(r.strike)}>
-                    {r.strike} {r.ce.label ? `(${r.ce.label})` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {!isSingle && (
+            <>
+              <div className="space-y-1">
+                <label className="text-sm text-muted-foreground">Underlying</label>
+                <Select
+                  value={underlying}
+                  onValueChange={(v) => {
+                    setUnderlying(v)
+                    setExpiry('')
+                    setCeStrike('')
+                    setPeStrike('')
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select underlying" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {underlyings.map((u) => (
+                      <SelectItem key={u.underlying} value={u.underlying}>
+                        {u.underlying}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-          <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">Put Strike</label>
-            <Select value={peStrike} onValueChange={setPeStrike} disabled={chain.length === 0}>
-              <SelectTrigger>
-                <SelectValue placeholder="PE strike" />
-              </SelectTrigger>
-              <SelectContent>
-                {chain.map((r) => (
-                  <SelectItem key={`pe-${r.strike}`} value={String(r.strike)}>
-                    {r.strike} {r.pe.label ? `(${r.pe.label})` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+              <div className="space-y-1">
+                <label className="text-sm text-muted-foreground">Expiry</label>
+                <Select value={expiry} onValueChange={setExpiry} disabled={!underlying}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select expiry" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {expiries.map((e) => (
+                      <SelectItem key={e} value={e}>
+                        {e}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-sm text-muted-foreground">Call Strike</label>
+                <Select value={ceStrike} onValueChange={setCeStrike} disabled={chain.length === 0}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="CE strike" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {chain.map((r) => (
+                      <SelectItem key={`ce-${r.strike}`} value={String(r.strike)}>
+                        {r.strike} {r.ce.label ? `(${r.ce.label})` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-sm text-muted-foreground">Put Strike</label>
+                <Select value={peStrike} onValueChange={setPeStrike} disabled={chain.length === 0}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="PE strike" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {chain.map((r) => (
+                      <SelectItem key={`pe-${r.strike}`} value={String(r.strike)}>
+                        {r.strike} {r.pe.label ? `(${r.pe.label})` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
+          {isSingle && (
+            <div className="relative space-y-1 md:col-span-2">
+              <label className="text-sm text-muted-foreground">
+                {segment === 'EQUITY' ? 'Equity Symbol' : 'Futures Contract'}
+              </label>
+              <Input
+                value={instrument ? instrument.symbol : searchQuery}
+                placeholder={
+                  segment === 'EQUITY' ? 'Search e.g. RELIANCE' : 'Search e.g. NIFTY FUT'
+                }
+                onChange={(e) => {
+                  setInstrument(null)
+                  setSearchQuery(e.target.value)
+                }}
+              />
+              {!instrument && searchResults.length > 0 && (
+                <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover shadow-md">
+                  {searchResults.slice(0, 25).map((r) => (
+                    <button
+                      type="button"
+                      key={`${r.exchange}:${r.symbol}`}
+                      className="block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted"
+                      onClick={() => {
+                        setInstrument(r)
+                        setSearchQuery('')
+                      }}
+                    >
+                      {r.symbol}
+                      {r.name ? <span className="text-muted-foreground"> · {r.name}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {/* Live tickers */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <Ticker
-          title="Call (CE)"
-          symbol={ceLeg?.symbol}
-          ltp={ceTick?.ltp}
-          change={ceTick?.change}
-          changePercent={ceTick?.change_percent}
-          open={ceTick?.open}
-          high={ceTick?.high}
-          low={ceTick?.low}
-        />
-        <Ticker
-          title={underlying || 'Underlying'}
-          symbol={underlying}
-          ltp={underlyingTick?.ltp}
-          change={underlyingTick?.change}
-          changePercent={underlyingTick?.change_percent}
-          open={underlyingTick?.open}
-          high={underlyingTick?.high}
-          low={underlyingTick?.low}
-        />
-        <Ticker
-          title="Put (PE)"
-          symbol={peLeg?.symbol}
-          ltp={peTick?.ltp}
-          change={peTick?.change}
-          changePercent={peTick?.change_percent}
-          open={peTick?.open}
-          high={peTick?.high}
-          low={peTick?.low}
-        />
-      </div>
+      {isSingle ? (
+        <div className="grid grid-cols-1 gap-4">
+          <Ticker
+            title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
+            symbol={singleLeg?.symbol}
+            ltp={singleTick?.ltp}
+            change={singleTick?.change}
+            changePercent={singleTick?.change_percent}
+            open={singleTick?.open}
+            high={singleTick?.high}
+            low={singleTick?.low}
+          />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <Ticker
+            title="Call (CE)"
+            symbol={ceLeg?.symbol}
+            ltp={ceTick?.ltp}
+            change={ceTick?.change}
+            changePercent={ceTick?.change_percent}
+            open={ceTick?.open}
+            high={ceTick?.high}
+            low={ceTick?.low}
+          />
+          <Ticker
+            title={underlying || 'Underlying'}
+            symbol={underlying}
+            ltp={underlyingTick?.ltp}
+            change={underlyingTick?.change}
+            changePercent={underlyingTick?.change_percent}
+            open={underlyingTick?.open}
+            high={underlyingTick?.high}
+            low={underlyingTick?.low}
+          />
+          <Ticker
+            title="Put (PE)"
+            symbol={peLeg?.symbol}
+            ltp={peTick?.ltp}
+            change={peTick?.change}
+            changePercent={peTick?.change_percent}
+            open={peTick?.open}
+            high={peTick?.high}
+            low={peTick?.low}
+          />
+        </div>
+      )}
 
       {/* Order entry */}
       <Card>
@@ -767,21 +956,35 @@ export default function Scalping() {
               <span className="text-sm font-medium">One-Click</span>
             </label>
 
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Lots</span>
-              <Select value={String(lots)} onValueChange={(v) => setLots(Number(v))}>
-                <SelectTrigger className="w-20">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Array.from({ length: MAX_LOTS }, (_, i) => i + 1).map((n) => (
-                    <SelectItem key={n} value={String(n)}>
-                      {n}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {segment === 'EQUITY' ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Qty</span>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  value={equityShares}
+                  onChange={(e) => setEquityShares(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-24"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Lots</span>
+                <Select value={String(lots)} onValueChange={(v) => setLots(Number(v))}>
+                  <SelectTrigger className="w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: MAX_LOTS }, (_, i) => i + 1).map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Product</span>
@@ -791,7 +994,7 @@ export default function Scalping() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="MIS">MIS</SelectItem>
-                  <SelectItem value="NRML">NRML</SelectItem>
+                  {segment !== 'EQUITY' && <SelectItem value="NRML">NRML</SelectItem>}
                 </SelectContent>
               </Select>
             </div>
@@ -812,75 +1015,85 @@ export default function Scalping() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Button
-              className="bg-green-600 hover:bg-green-700"
-              onClick={() => submitOrder(ceLeg, 'BUY')}
-            >
-              ↑ Buy Call
-            </Button>
-            <Button
-              className="bg-red-600 hover:bg-red-700"
-              onClick={() => submitOrder(ceLeg, 'SELL')}
-            >
-              ↓ Sell Call
-            </Button>
-            <Button
-              className="bg-green-600 hover:bg-green-700"
-              onClick={() => submitOrder(peLeg, 'BUY')}
-            >
-              → Buy Put
-            </Button>
-            <Button
-              className="bg-red-600 hover:bg-red-700"
-              onClick={() => submitOrder(peLeg, 'SELL')}
-            >
-              ← Sell Put
-            </Button>
-          </div>
+          {isSingle ? (
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                disabled={!singleLeg}
+                onClick={() => submitOrder(singleLeg, 'BUY')}
+              >
+                ↑ Buy {segment === 'EQUITY' ? 'Stock' : ''}
+              </Button>
+              <Button
+                className="bg-red-600 hover:bg-red-700"
+                disabled={!singleLeg}
+                onClick={() => submitOrder(singleLeg, 'SELL')}
+              >
+                ↓ Sell {segment === 'EQUITY' ? 'Stock' : ''}
+              </Button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                onClick={() => submitOrder(ceLeg, 'BUY')}
+              >
+                ↑ Buy Call
+              </Button>
+              <Button
+                className="bg-red-600 hover:bg-red-700"
+                onClick={() => submitOrder(ceLeg, 'SELL')}
+              >
+                ↓ Sell Call
+              </Button>
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                onClick={() => submitOrder(peLeg, 'BUY')}
+              >
+                → Buy Put
+              </Button>
+              <Button
+                className="bg-red-600 hover:bg-red-700"
+                onClick={() => submitOrder(peLeg, 'SELL')}
+              >
+                ← Sell Put
+              </Button>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="outline" disabled={!ceLeg} onClick={() => openLegSL(ceLeg)}>
-              {ceSL ? 'Edit Call SL' : 'Set Call SL'}
-            </Button>
-            <Button variant="outline" disabled={!peLeg} onClick={() => openLegSL(peLeg)}>
-              {peSL ? 'Edit Put SL' : 'Set Put SL'}
-            </Button>
+            {isSingle ? (
+              <Button variant="outline" disabled={!singleLeg} onClick={() => openLegSL(singleLeg)}>
+                {singleLeg && findLegSL(slMap, singleLeg.symbol, singleLeg.exchange, product)
+                  ? 'Edit SL'
+                  : 'Set SL'}
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" disabled={!ceLeg} onClick={() => openLegSL(ceLeg)}>
+                  {ceSL ? 'Edit Call SL' : 'Set Call SL'}
+                </Button>
+                <Button variant="outline" disabled={!peLeg} onClick={() => openLegSL(peLeg)}>
+                  {peSL ? 'Edit Put SL' : 'Set Put SL'}
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               onClick={doCloseAll}
-              title="Squares off ALL open positions in the account, not only the scalping legs"
+              title="Closes only the scalping strategy's positions (freeze-safe), not the whole account"
             >
               Close All Positions / F6
             </Button>
-            <Button
-              variant="outline"
-              onClick={doCancelAll}
-              title="Cancels ALL open orders in the account"
-            >
+            <Button variant="outline" onClick={doCancelAll} title="Cancels all open orders">
               Cancel All Orders / F7
             </Button>
           </div>
 
-          {(ceSL || peSL) && (
-            <div className="flex flex-wrap gap-4 font-mono text-xs">
-              {ceSL && (
-                <span>
-                  CE SL @ <span className="font-semibold">{ceSL.currentSl.toFixed(2)}</span>
-                  {ceSL.trailingEnabled ? ` (trailing ±${ceSL.trailingStep})` : ''}
-                </span>
-              )}
-              {peSL && (
-                <span>
-                  PE SL @ <span className="font-semibold">{peSL.currentSl.toFixed(2)}</span>
-                  {peSL.trailingEnabled ? ` (trailing ±${peSL.trailingStep})` : ''}
-                </span>
-              )}
-            </div>
-          )}
-
           <span className="text-xs text-muted-foreground">
-            Keys: ↑ Buy Call · ↓ Sell Call · → Buy Put · ← Sell Put · F6 close · F7 cancel
+            {isSingle
+              ? 'Keys: ↑/→ Buy · ↓/← Sell · F6 close · F7 cancel'
+              : 'Keys: ↑ Buy Call · ↓ Sell Call · → Buy Put · ← Sell Put · F6 close · F7 cancel'}
           </span>
         </CardContent>
       </Card>
