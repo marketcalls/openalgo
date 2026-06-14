@@ -37,6 +37,7 @@ export interface SLState {
   highestPrice: number
   lowestPrice: number
   currentSl: number
+  target: number // take-profit price (0 = no target)
   active: boolean
 }
 
@@ -72,6 +73,7 @@ function fromBackend(s: ScalpingSLState): SLState {
     highestPrice: s.highest_price ?? entry,
     lowestPrice: s.lowest_price ?? entry,
     currentSl: s.current_sl ?? s.initial_sl ?? entry,
+    target: s.target ?? 0,
     active: s.is_active ?? true,
   }
 }
@@ -92,6 +94,7 @@ function toBackend(
     highest_price: s.highestPrice,
     lowest_price: s.lowestPrice,
     current_sl: s.currentSl,
+    target: s.target,
     is_active: s.active,
   }
 }
@@ -101,7 +104,10 @@ function toBackend(
  * rises; for a short (SELL) leg it sits above price and only falls.
  * Returns the updated state and whether the stop was breached by this tick.
  */
-export function evaluateTrail(sl: SLState, ltp: number): { next: SLState; breached: boolean } {
+export function evaluateTrail(
+  sl: SLState,
+  ltp: number
+): { next: SLState; breached: boolean; reason: 'sl' | 'target' | null } {
   if (sl.side === 'SELL') {
     const lowest = Math.min(sl.lowestPrice ?? sl.entry, ltp)
     let currentSl = sl.currentSl
@@ -109,7 +115,13 @@ export function evaluateTrail(sl: SLState, ltp: number): { next: SLState; breach
       const candidate = lowest + sl.trailingStep
       if (candidate < currentSl) currentSl = candidate
     }
-    return { next: { ...sl, lowestPrice: lowest, currentSl }, breached: ltp >= currentSl }
+    const slHit = ltp >= currentSl // short: stop sits ABOVE price
+    const targetHit = sl.target > 0 && ltp <= sl.target // short: target BELOW price
+    return {
+      next: { ...sl, lowestPrice: lowest, currentSl },
+      breached: slHit || targetHit,
+      reason: slHit ? 'sl' : targetHit ? 'target' : null,
+    }
   }
 
   // Long leg (BUY)
@@ -119,7 +131,13 @@ export function evaluateTrail(sl: SLState, ltp: number): { next: SLState; breach
     const candidate = highest - sl.trailingStep
     if (candidate > currentSl) currentSl = candidate
   }
-  return { next: { ...sl, highestPrice: highest, currentSl }, breached: ltp <= currentSl }
+  const slHit = ltp <= currentSl // long: stop sits BELOW price
+  const targetHit = sl.target > 0 && ltp >= sl.target // long: target ABOVE price
+  return {
+    next: { ...sl, highestPrice: highest, currentSl },
+    breached: slHit || targetHit,
+    reason: slHit ? 'sl' : targetHit ? 'target' : null,
+  }
 }
 
 interface UseTrailingSLArgs {
@@ -247,7 +265,7 @@ export function useTrailingSL({ onAfterExit, resolvePosition }: UseTrailingSLArg
           product: sl.product,
         })
         if (res.status === 'success') {
-          showToast.success(`SL hit — exited ${sl.symbol} (${action} ${qty})`, 'orders')
+          showToast.success(`Auto-exit (SL/Target) ${sl.symbol} — ${action} ${qty}`, 'orders')
           clearSL(sl.symbol, sl.exchange, sl.product) // clear ONLY on a confirmed exit
         } else {
           // Keep the SL active so the next tick retries — the position is still open.
