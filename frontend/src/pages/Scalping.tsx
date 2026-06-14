@@ -113,6 +113,21 @@ export default function Scalping() {
   })
   const expiries = expiryResp?.data ?? []
 
+  // Default selection on load: NIFTY → nearest (current-week) expiry → ATM strikes.
+  // ATM is applied once the chain loads (effect further below).
+  useEffect(() => {
+    if (!underlying && underlyings.length > 0) {
+      const hasNifty = underlyings.some((u) => u.underlying === 'NIFTY')
+      setUnderlying(hasNifty ? 'NIFTY' : underlyings[0].underlying)
+    }
+  }, [underlyings, underlying])
+
+  useEffect(() => {
+    if (underlying && !expiry && expiries.length > 0) {
+      setExpiry(expiries[0]) // nearest future expiry (service returns ascending)
+    }
+  }, [expiries, underlying, expiry])
+
   // Strikes / chain (depends on underlying + expiry)
   const { data: chainResp } = useQuery({
     queryKey: ['scalping', 'strikes', underlying, expiry],
@@ -123,13 +138,15 @@ export default function Scalping() {
   const foExchange = chainResp?.fo_exchange ?? underlyingCfg?.fo_exchange ?? ''
   const indexExchange = chainResp?.index_exchange ?? underlyingCfg?.index_exchange ?? ''
 
-  // Default the CE/PE strike to ATM once the chain loads.
+  // Default the CE/PE strike to ATM when the chain loads — but preserve a valid
+  // manual selection (only reset to ATM if the current pick isn't in this chain,
+  // e.g. on first load or after the expiry/underlying changed).
   useEffect(() => {
-    if (chainResp?.atm_strike != null && chain.length > 0) {
-      const atm = String(chainResp.atm_strike)
-      setCeStrike(atm)
-      setPeStrike(atm)
-    }
+    if (chainResp?.atm_strike == null || chain.length === 0) return
+    const atm = String(chainResp.atm_strike)
+    const strikes = new Set(chain.map((r) => String(r.strike)))
+    setCeStrike((prev) => (prev && strikes.has(prev) ? prev : atm))
+    setPeStrike((prev) => (prev && strikes.has(prev) ? prev : atm))
   }, [chainResp, chain])
 
   // Stable leg identities (only change when strike/exchange/chain actually change)
