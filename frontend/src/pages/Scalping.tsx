@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
 import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
 import type { OptionChainRow, ScalpingAction, ScalpingProduct, SelectedLeg } from '@/types/scalping'
 import { showToast } from '@/utils/toast'
 
@@ -33,6 +34,13 @@ const DEFAULT_STRIKE_COUNT = 10
 const MAX_LOTS = 20
 const BOOK_REFETCH_MS = 1000
 const ORDER_COOLDOWN_MS = 120 // min gap between two order fires (anti double-fire)
+
+// Pull the trader-friendly reason out of an API error (e.g. the broker/sandbox
+// rejection message), falling back to the axios/network message.
+function apiErrorMessage(e: unknown): string {
+  const err = e as { response?: { data?: { message?: string } }; message?: string }
+  return err.response?.data?.message || err.message || 'Order failed'
+}
 
 function buildLeg(
   row: OptionChainRow | undefined,
@@ -84,6 +92,7 @@ function Ticker({ title, symbol, ltp, changePercent }: TickerProps) {
 
 export default function Scalping() {
   const apiKey = useAuthStore((s) => s.apiKey)
+  const appMode = useThemeStore((s) => s.appMode) // 'live' | 'analyzer'
   const queryClient = useQueryClient()
 
   const [underlying, setUnderlying] = useState<string>('')
@@ -278,8 +287,8 @@ export default function Scalping() {
   const peSL = peLeg ? findLegSL(slMap, peLeg.symbol, peLeg.exchange) : undefined
 
   // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
-  const stateRef = useRef({ armed, lots, product, ceLeg, peLeg })
-  stateRef.current = { armed, lots, product, ceLeg, peLeg }
+  const stateRef = useRef({ armed, lots, product, ceLeg, peLeg, appMode })
+  stateRef.current = { armed, lots, product, ceLeg, peLeg, appMode }
 
   // Min gap between two order fires. Bounds the rate (prevents accidental
   // double-taps and held-key bursts) while still allowing deliberate fast
@@ -306,6 +315,11 @@ export default function Scalping() {
       lastFireRef.current = now
       const quantity = s.lots * leg.lotsize
       const t0 = performance.now()
+      // Order placement notifications (success AND broker/sandbox rejection) are
+      // shown ONCE by the global SocketProvider — order_event in live mode,
+      // analyzer_update in analyzer mode. We don't toast success here (latency is
+      // in the header). We only toast an error in LIVE mode, where the backend
+      // emits no socket event on failure, or on a transport error (no response).
       try {
         const res = await scalpingApi.placeOrder({
           symbol: leg.symbol,
@@ -315,20 +329,16 @@ export default function Scalping() {
           product: s.product,
           lots: s.lots,
         })
-        const latency = Math.round(performance.now() - t0)
-        setLastLatencyMs(latency)
+        setLastLatencyMs(Math.round(performance.now() - t0))
         if (res.status === 'success') {
-          showToast.success(
-            `${action} ${leg.optionType} x${s.lots} (${quantity}) → ${res.orderid ?? 'ok'} · ${latency}ms`,
-            'orders'
-          )
           refreshBooks()
-        } else {
+        } else if (s.appMode === 'live') {
           showToast.error(res.message ?? 'Order failed', 'orders')
         }
       } catch (e) {
         setLastLatencyMs(Math.round(performance.now() - t0))
-        showToast.error((e as Error).message, 'orders')
+        const handledGlobally = s.appMode === 'analyzer' && !!(e as { response?: unknown }).response
+        if (!handledGlobally) showToast.error(apiErrorMessage(e), 'orders')
       }
     },
     [refreshBooks]
@@ -338,33 +348,35 @@ export default function Scalping() {
   // intentionally NOT gated by `armed`. "Armed" guards only NEW risk-increasing
   // entries; risk-reducing actions (flatten, cancel, stop-loss) must always work
   // even when one-click is off — disarming must never disable your stops.
+  // Success/rejection toasts for close-all and cancel-all are shown globally by
+  // SocketProvider (close_position_event / cancel_order_event / analyzer_update).
+  // We only surface an error here when the global handler won't (live mode or a
+  // transport error), to avoid duplicate notifications.
   const doCloseAll = useCallback(async () => {
     try {
       const res = await scalpingApi.closeAll()
-      if (res.status === 'success') {
-        showToast.success(res.message ?? 'All positions squared off', 'orders')
-      } else {
+      if (res.status !== 'success' && appMode === 'live') {
         showToast.error(res.message ?? 'Close all failed', 'orders')
       }
     } catch (e) {
-      showToast.error((e as Error).message, 'orders')
+      const handledGlobally = appMode === 'analyzer' && !!(e as { response?: unknown }).response
+      if (!handledGlobally) showToast.error(apiErrorMessage(e), 'orders')
     }
     refreshBooks()
-  }, [refreshBooks])
+  }, [refreshBooks, appMode])
 
   const doCancelAll = useCallback(async () => {
     try {
       const res = await scalpingApi.cancelAll()
-      if (res.status === 'success') {
-        showToast.success(res.message ?? 'All orders cancelled', 'orders')
-      } else {
+      if (res.status !== 'success' && appMode === 'live') {
         showToast.error(res.message ?? 'Cancel all failed', 'orders')
       }
     } catch (e) {
-      showToast.error((e as Error).message, 'orders')
+      const handledGlobally = appMode === 'analyzer' && !!(e as { response?: unknown }).response
+      if (!handledGlobally) showToast.error(apiErrorMessage(e), 'orders')
     }
     refreshBooks()
-  }, [refreshBooks])
+  }, [refreshBooks, appMode])
 
   // Global keyboard handler: arrows fire orders, F6 close-all, F7 cancel-all.
   const handleKeyDown = useCallback(
