@@ -112,14 +112,17 @@ def _migrate_mode_unique(model, table_name: str):
     """Recreate a table so its UNIQUE constraint includes `mode` (analyze/live).
 
     SQLite can't ALTER a constraint, so for DBs created before mode-scoping we
-    rename the old table, create the new one (with the mode-inclusive unique
-    constraint from the model), copy the rows over, and drop the old. Idempotent:
-    skips when the unique constraint already covers `mode`. Rows are preserved
-    (the old (symbol,exchange,product) uniqueness guarantees no collisions).
+    recreate the table. Idempotent: skips when the unique constraint already covers
+    `mode`. DATA-SAFE: the DROP, CREATE and re-INSERT all run inside a SINGLE
+    transaction (SQLite DDL is transactional), so any mid-migration failure rolls
+    back and leaves the original table + rows intact. Rows are also held in memory
+    as a recovery fallback. Doing the DROP before CREATE inside the txn also avoids
+    index/constraint name collisions.
     """
-    try:
-        from sqlalchemy import inspect, text
+    from sqlalchemy import inspect, text
+    from sqlalchemy.schema import CreateIndex, CreateTable
 
+    try:
         inspector = inspect(engine)
         if table_name not in inspector.get_table_names():
             return
@@ -130,16 +133,28 @@ def _migrate_mode_unique(model, table_name: str):
         cols = [c["name"] for c in inspector.get_columns(table_name)]
         model_cols = {c.name for c in model.__table__.columns}
         common = [c for c in cols if c in model_cols]
+        collist = ", ".join(common)
+    except Exception as e:
+        logger.exception(f"Error inspecting {table_name} for mode migration: {e}")
+        return
 
-        # Read rows into memory, DROP the old table (which also drops its indexes,
-        # avoiding index-name collisions when the new table recreates them), create
-        # the new table with the mode-inclusive UNIQUE, then re-insert the rows.
+    # Read all rows into memory FIRST — survives even a catastrophic failure below.
+    try:
+        with engine.connect() as conn:
+            rows = [dict(r._mapping) for r in conn.execute(text(f"SELECT {collist} FROM {table_name}"))]
+    except Exception as e:
+        logger.exception(f"Error reading {table_name} before mode migration: {e}")
+        return
+
+    # Atomic recreate: DROP + CREATE (+ indexes) + INSERT in ONE transaction. On any
+    # error the whole transaction rolls back and the original table is untouched.
+    try:
         with engine.begin() as conn:
-            rows = [dict(r._mapping) for r in conn.execute(text(f"SELECT {', '.join(common)} FROM {table_name}"))]
             conn.execute(text(f"DROP TABLE {table_name}"))
-        model.__table__.create(engine)
-        if rows:
-            with engine.begin() as conn:
+            conn.execute(CreateTable(model.__table__))
+            for index in model.__table__.indexes:
+                conn.execute(CreateIndex(index))
+            if rows:
                 conn.execute(model.__table__.insert(), rows)
         logger.info(
             "Scalping DB: %s recreated with mode-scoped unique constraint (%d rows preserved)",
@@ -148,6 +163,18 @@ def _migrate_mode_unique(model, table_name: str):
         )
     except Exception as e:
         logger.exception(f"Error migrating {table_name} to mode-scoped uniqueness: {e}")
+        # Recovery: ensure the table exists and the in-memory rows are restored.
+        try:
+            model.__table__.create(engine, checkfirst=True)
+            if rows:
+                with engine.begin() as conn:
+                    existing = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
+                    if not existing:
+                        conn.execute(model.__table__.insert(), rows)
+                        logger.warning("Scalping DB: %s restored %d rows after failed migration",
+                                       table_name, len(rows))
+        except Exception as re:
+            logger.exception(f"Recovery for {table_name} failed: {re}")
 
 
 def _migrate_add_columns():
