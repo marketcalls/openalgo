@@ -35,9 +35,23 @@ scalping_bp = Blueprint("scalping_bp", __name__, url_prefix="/")
 SCALPING_STRATEGY = "Scalping"
 
 # Order constants enforced on the order endpoint.
-VALID_PRODUCTS = {"MIS", "NRML"}  # CNC is equity-only and not used here
 VALID_ACTIONS = {"BUY", "SELL"}
-VALID_LEG_EXCHANGES = {"NFO", "BFO"}
+VALID_LEG_EXCHANGES = {"NFO", "BFO"}  # derivatives (options/futures): lot rules apply
+VALID_EQUITY_EXCHANGES = {"NSE", "BSE"}  # equity: traded in shares, no lot rules
+VALID_ORDER_EXCHANGES = VALID_LEG_EXCHANGES | VALID_EQUITY_EXCHANGES
+# Products allowed per instrument class.
+DERIVATIVE_PRODUCTS = {"MIS", "NRML"}
+EQUITY_PRODUCTS = {"MIS", "CNC"}
+VALID_PRODUCTS = DERIVATIVE_PRODUCTS | EQUITY_PRODUCTS
+
+
+def _is_derivative(exchange: str) -> bool:
+    return exchange in VALID_LEG_EXCHANGES
+
+
+def _allowed_products(exchange: str) -> set[str]:
+    return DERIVATIVE_PRODUCTS if _is_derivative(exchange) else EQUITY_PRODUCTS
+
 
 # Safety rails (server-side; the UI also enforces the lot cap).
 MAX_LOTS = 20  # max lots per manual click (matches the UI selector)
@@ -152,6 +166,29 @@ def strikes():
     return jsonify(response), status_code
 
 
+@scalping_bp.route("/scalping/api/search", methods=["GET"])
+@check_session_validity
+def search():
+    """Search instruments on an exchange (equity on NSE/BSE, futures on NFO/BFO)."""
+    exchange = (request.args.get("exchange") or "").strip().upper()
+    query = (request.args.get("query") or "").strip()
+    if exchange not in VALID_ORDER_EXCHANGES:
+        return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
+    if len(query) < 2:
+        return jsonify({"status": "success", "data": []})
+
+    api_key = _get_api_key()
+    if not api_key:
+        return jsonify(
+            {"status": "error", "message": "API key not configured. Generate one at /apikey"}
+        ), 401
+
+    from services.search_service import search_symbols
+
+    success, response, status_code = search_symbols(query=query, exchange=exchange, api_key=api_key)
+    return jsonify(response), status_code
+
+
 def _resolve_session_auth():
     """Return (auth_token, broker, api_key, error_response, status_code).
 
@@ -242,31 +279,32 @@ def order():
 
     if not symbol:
         return jsonify({"status": "error", "message": "symbol is required"}), 400
-    if exchange not in VALID_LEG_EXCHANGES:
+    if exchange not in VALID_ORDER_EXCHANGES:
         return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
     if action not in VALID_ACTIONS:
         return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
-    if product not in VALID_PRODUCTS:
-        return jsonify({"status": "error", "message": f"Invalid product: {product}"}), 400
+    if product not in _allowed_products(exchange):
+        return jsonify({"status": "error", "message": f"Invalid product for {exchange}: {product}"}), 400
     if quantity <= 0:
         return jsonify({"status": "error", "message": "quantity must be positive"}), 400
     if quantity > MAX_ORDER_QUANTITY:
         return jsonify({"status": "error", "message": "quantity exceeds the safety limit"}), 400
-    if lots is not None:
-        try:
-            lots = int(lots)
-        except (TypeError, ValueError):
-            return jsonify({"status": "error", "message": "lots must be an integer"}), 400
-        if lots < 1 or lots > MAX_LOTS:
-            return jsonify(
-                {"status": "error", "message": f"lots must be between 1 and {MAX_LOTS}"}
-            ), 400
 
-    # Server-side lot-size / lot-cap / freeze validation — enforced even if the
-    # client omits `lots` (closes the direct-call bypass of the lot cap).
-    qty_err = _validate_quantity(symbol, exchange, quantity)
-    if qty_err:
-        return jsonify({"status": "error", "message": qty_err}), 400
+    if _is_derivative(exchange):
+        # Derivatives trade in lots: enforce the lot cap + lot-size multiple + freeze.
+        if lots is not None:
+            try:
+                lots = int(lots)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "lots must be an integer"}), 400
+            if lots < 1 or lots > MAX_LOTS:
+                return jsonify(
+                    {"status": "error", "message": f"lots must be between 1 and {MAX_LOTS}"}
+                ), 400
+        qty_err = _validate_quantity(symbol, exchange, quantity)
+        if qty_err:
+            return jsonify({"status": "error", "message": qty_err}), 400
+    # Equity (NSE/BSE) trades in whole shares; quantity bounds above are sufficient.
 
     auth_token, broker, api_key, err, code = _resolve_session_auth()
     if err:
@@ -313,49 +351,55 @@ def close_leg():
 
     if not symbol:
         return jsonify({"status": "error", "message": "symbol is required"}), 400
-    if exchange not in VALID_LEG_EXCHANGES:
+    if exchange not in VALID_ORDER_EXCHANGES:
         return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
     if action not in VALID_ACTIONS:
         return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
-    if product not in VALID_PRODUCTS:
-        return jsonify({"status": "error", "message": f"Invalid product: {product}"}), 400
+    if product not in _allowed_products(exchange):
+        return jsonify({"status": "error", "message": f"Invalid product for {exchange}: {product}"}), 400
     if quantity <= 0:
         return jsonify({"status": "error", "message": "quantity must be positive"}), 400
     if quantity > MAX_ORDER_QUANTITY:
         return jsonify({"status": "error", "message": "quantity exceeds the safety limit"}), 400
 
-    # Whole-lot validation only (NO entry lot cap — this is risk-reducing).
-    from database.symbol import SymToken
-    from database.symbol import db_session as symbol_session
-
-    rec = (
-        symbol_session.query(SymToken)
-        .filter(SymToken.symbol == symbol, SymToken.exchange == exchange)
-        .first()
-    )
-    if not rec or not rec.lotsize or rec.lotsize <= 0:
-        return jsonify({"status": "error", "message": f"Unknown symbol: {symbol}"}), 400
-    lotsize = rec.lotsize
-    if quantity % lotsize != 0:
-        return jsonify(
-            {"status": "error", "message": f"quantity must be a whole number of lots ({lotsize})"}
-        ), 400
-
     auth_token, broker, api_key, err, code = _resolve_session_auth()
     if err:
         return jsonify(err), code
 
-    # Determine the exchange freeze limit (single-order cap). 0/None => no limit.
+    # Equity (NSE/BSE) trades in whole shares — no lot-multiple / freeze handling.
     freeze = 0
-    try:
-        from database.qty_freeze_db import get_freeze_qty_for_option
+    if _is_derivative(exchange):
+        # Whole-lot validation only (NO entry lot cap — this is risk-reducing).
+        from database.symbol import SymToken
+        from database.symbol import db_session as symbol_session
 
-        freeze = get_freeze_qty_for_option(symbol, exchange) or 0
-    except Exception as e:
-        logger.warning(f"Scalping close_leg freeze lookup failed for {symbol}: {e}")
+        rec = (
+            symbol_session.query(SymToken)
+            .filter(SymToken.symbol == symbol, SymToken.exchange == exchange)
+            .first()
+        )
+        if not rec or not rec.lotsize or rec.lotsize <= 0:
+            return jsonify({"status": "error", "message": f"Unknown symbol: {symbol}"}), 400
+        lotsize = rec.lotsize
+        if quantity % lotsize != 0:
+            return jsonify(
+                {"status": "error", "message": f"quantity must be a whole number of lots ({lotsize})"}
+            ), 400
+
+        # Exchange freeze limit (single-order cap). The raw freeze quantity is not
+        # necessarily a whole number of lots (e.g. NIFTY freeze 1800, lot size 65 =>
+        # 27.69 lots), and every order must be a whole-lot multiple — so the usable
+        # per-order cap is floor(freeze / lotsize) * lotsize (27 lots = 1755).
+        try:
+            from database.qty_freeze_db import get_freeze_qty_for_option
+
+            raw_freeze = get_freeze_qty_for_option(symbol, exchange) or 0
+            freeze = (raw_freeze // lotsize) * lotsize if raw_freeze else 0
+        except Exception as e:
+            logger.warning(f"Scalping close_leg freeze lookup failed for {symbol}: {e}")
 
     if freeze and quantity > freeze:
-        # Split into freeze-sized chunks so the exchange accepts each order.
+        # Split into whole-lot, freeze-sized chunks so the exchange accepts each order.
         from services.split_order_service import split_order
 
         split_data = {
