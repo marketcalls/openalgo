@@ -24,16 +24,56 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
+import { buildPositionRows } from '@/lib/scalpingRows'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
-import type { OptionChainRow, ScalpingAction, ScalpingProduct, SelectedLeg } from '@/types/scalping'
+import type {
+  OptionChainRow,
+  OptionType,
+  ScalpingAction,
+  ScalpingPositionRow,
+  ScalpingProduct,
+  SelectedLeg,
+} from '@/types/scalping'
 import { showToast } from '@/utils/toast'
 
 const DEFAULT_STRIKE_COUNT = 10
 const MAX_LOTS = 20
-const BOOK_REFETCH_MS = 1000
 const ORDER_COOLDOWN_MS = 120 // min gap between two order fires (anti double-fire)
+const ARMED_STORAGE_KEY = 'scalping.armed'
+
+// Order/position events that should refresh the books (event-driven, no polling).
+const BOOK_EVENTS = [
+  'order_event',
+  'analyzer_update',
+  'close_position_event',
+  'cancel_order_event',
+  'modify_order_event',
+] as const
+
+// Which leg/product the Set-SL dialog is editing.
+interface SLTarget {
+  symbol: string
+  exchange: string
+  product: ScalpingProduct
+  optionType: OptionType
+}
+
+// Display label for product (OpenAlgo value stays MIS/NRML on the wire).
+function productLabel(p: string): string {
+  return p === 'NRML' ? 'MARGIN' : p
+}
+
+// Read the persisted One-Click arm state (captured across reloads).
+function loadArmed(): boolean {
+  try {
+    return localStorage.getItem(ARMED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 // Pull the trader-friendly reason out of an API error (e.g. the broker/sandbox
 // rejection message), falling back to the axios/network message.
@@ -100,11 +140,19 @@ export default function Scalping() {
   const [ceStrike, setCeStrike] = useState<string>('')
   const [peStrike, setPeStrike] = useState<string>('')
 
-  // Order-entry controls
-  const [armed, setArmed] = useState(false)
+  // Order-entry controls. The One-Click arm state is captured/persisted across reloads.
+  const [armed, setArmed] = useState<boolean>(loadArmed)
   const [lots, setLots] = useState(1)
   const [product, setProduct] = useState<ScalpingProduct>('NRML')
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ARMED_STORAGE_KEY, armed ? '1' : '0')
+    } catch {
+      // ignore storage failures (private mode, etc.)
+    }
+  }, [armed])
 
   // Underlyings
   const { data: underlyingsResp } = useQuery({
@@ -179,14 +227,54 @@ export default function Scalping() {
     [chain, peStrike, foExchange]
   )
 
-  // Subscribe underlying + both legs to the live feed (Quote mode = ltp + change).
+  // Books (positions / orders / trades). Event-driven — fetched once, then
+  // refreshed on broker order events (useOrderEventRefresh below). No polling.
+  const { data: posResp } = useQuery({
+    queryKey: ['scalping', 'positions'],
+    queryFn: () => tradingApi.getPositions(apiKey ?? ''),
+    enabled: !!apiKey,
+  })
+  const { data: ordResp } = useQuery({
+    queryKey: ['scalping', 'orders'],
+    queryFn: () => tradingApi.getOrders(apiKey ?? ''),
+    enabled: !!apiKey,
+  })
+  const { data: trdResp } = useQuery({
+    queryKey: ['scalping', 'trades'],
+    queryFn: () => tradingApi.getTrades(apiKey ?? ''),
+    enabled: !!apiKey,
+  })
+  const positions = posResp?.data ?? []
+  const orders = ordResp?.data?.orders ?? []
+  const trades = trdResp?.data ?? []
+
+  const refreshBooks = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['scalping', 'positions'] })
+    queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
+    queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
+  }, [queryClient])
+
+  // Refresh the books on order/position events instead of polling.
+  useOrderEventRefresh(refreshBooks, { events: [...BOOK_EVENTS] })
+
+  // Subscribe the live feed for underlying (Quote, for %chg), CE/PE legs, AND
+  // every symbol in the position book — so book LTP and P&L update in realtime.
   const symbols = useMemo(() => {
+    const seen = new Set<string>()
     const list: Array<{ symbol: string; exchange: string }> = []
-    if (underlying && indexExchange) list.push({ symbol: underlying, exchange: indexExchange })
-    if (ceLeg) list.push({ symbol: ceLeg.symbol, exchange: ceLeg.exchange })
-    if (peLeg) list.push({ symbol: peLeg.symbol, exchange: peLeg.exchange })
+    const add = (symbol: string, exchange: string) => {
+      const k = `${exchange}:${symbol}`
+      if (!symbol || !exchange || seen.has(k)) return
+      seen.add(k)
+      list.push({ symbol, exchange })
+    }
+    if (underlying && indexExchange) add(underlying, indexExchange)
+    if (ceLeg) add(ceLeg.symbol, ceLeg.exchange)
+    if (peLeg) add(peLeg.symbol, peLeg.exchange)
+    for (const p of positions) add(p.symbol, p.exchange)
+    for (const t of trades) add(t.symbol, t.exchange)
     return list
-  }, [underlying, indexExchange, ceLeg, peLeg])
+  }, [underlying, indexExchange, ceLeg, peLeg, positions, trades])
 
   const {
     data: marketData,
@@ -203,40 +291,12 @@ export default function Scalping() {
   const ceTick = ceLeg ? marketData.get(`${ceLeg.exchange}:${ceLeg.symbol}`)?.data : undefined
   const peTick = peLeg ? marketData.get(`${peLeg.exchange}:${peLeg.symbol}`)?.data : undefined
 
-  // Books (positions / orders / trades) — auto-refetch for live grids + MTM.
-  const { data: posResp } = useQuery({
-    queryKey: ['scalping', 'positions'],
-    queryFn: () => tradingApi.getPositions(apiKey ?? ''),
-    enabled: !!apiKey,
-    refetchInterval: BOOK_REFETCH_MS,
-  })
-  const { data: ordResp } = useQuery({
-    queryKey: ['scalping', 'orders'],
-    queryFn: () => tradingApi.getOrders(apiKey ?? ''),
-    enabled: !!apiKey,
-    refetchInterval: BOOK_REFETCH_MS,
-  })
-  const { data: trdResp } = useQuery({
-    queryKey: ['scalping', 'trades'],
-    queryFn: () => tradingApi.getTrades(apiKey ?? ''),
-    enabled: !!apiKey,
-    refetchInterval: BOOK_REFETCH_MS,
-  })
-  const positions = posResp?.data ?? []
-  const orders = ordResp?.data?.orders ?? []
-  const trades = trdResp?.data ?? []
-
-  // Fill reconciliation: Net Qty / MTM are derived from the broker positionbook
-  // (authoritative, refetched every second) — never an optimistic client-side
-  // tally — so a burst of rapid order fires always reconciles to actual fills.
-  const netQty = positions.reduce((a, p) => a + (p.quantity || 0), 0)
-  const mtm = positions.reduce((a, p) => a + (p.pnl || 0), 0)
-
-  const refreshBooks = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['scalping', 'positions'] })
-    queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
-    queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
-  }, [queryClient])
+  // Realtime LTP resolver for the position book (live WS, falls back to REST ltp).
+  const liveLtp = useCallback(
+    (symbol: string, exchange: string): number | undefined =>
+      marketData.get(`${exchange}:${symbol}`)?.data?.ltp,
+    [marketData]
+  )
 
   // Latest positions for the SL engine to size/direct exits from (avoids stale closure).
   const positionsRef = useRef(positions)
@@ -248,28 +308,38 @@ export default function Scalping() {
     return p ? p.quantity : 0
   }, [])
 
-  // Browser-driven trailing stop-loss engine (evaluates on each leg LTP tick).
-  const slTicks = useMemo(
-    () => [
-      { leg: ceLeg, ltp: ceTick?.ltp },
-      { leg: peLeg, ltp: peTick?.ltp },
-    ],
-    [ceLeg, peLeg, ceTick?.ltp, peTick?.ltp]
-  )
+  // Browser-driven trailing stop-loss engine. It subscribes the live feed for
+  // every active SL itself (so restored/background SLs are monitored), and sizes
+  // exits from the live position.
   const { slMap, setSL, clearSL } = useTrailingSL({
-    ticks: slTicks,
     onAfterExit: refreshBooks,
     resolvePosition,
   })
 
-  // Set-SL dialog targets one leg at a time.
-  const [slDialogLeg, setSlDialogLeg] = useState<SelectedLeg | null>(null)
-  const slDialogOpen = slDialogLeg !== null
-  const slDialogTick = slDialogLeg
-    ? marketData.get(`${slDialogLeg.exchange}:${slDialogLeg.symbol}`)?.data
+  // Position book: derived 1cliq-style rows from positions + today's trades + SL,
+  // with realtime LTP from the live feed (recomputes on each tick).
+  const positionRows = useMemo(
+    () => buildPositionRows(positions, trades, slMap, liveLtp),
+    [positions, trades, slMap, liveLtp]
+  )
+  // Summary reflects the displayed rows (scalping book), not raw account totals.
+  const netQty = positionRows.reduce((a, r) => a + r.netQty, 0)
+  const mtm = positionRows.reduce((a, r) => a + r.totalPnl, 0)
+
+  // Set-SL dialog targets one (symbol, exchange, product) leg at a time. The
+  // product is carried on the target so a per-row SL edits the correct MIS/NRML SL.
+  const [slDialogTarget, setSlDialogTarget] = useState<SLTarget | null>(null)
+  const slDialogOpen = slDialogTarget !== null
+  const slDialogTick = slDialogTarget
+    ? marketData.get(`${slDialogTarget.exchange}:${slDialogTarget.symbol}`)?.data
     : undefined
-  const slDialogPos = slDialogLeg
-    ? positions.find((p) => p.symbol === slDialogLeg.symbol && p.product === product)
+  const slDialogPos = slDialogTarget
+    ? positions.find(
+        (p) =>
+          p.symbol === slDialogTarget.symbol &&
+          p.exchange === slDialogTarget.exchange &&
+          p.product === slDialogTarget.product
+      )
     : undefined
   const slDialogEntry = slDialogPos?.average_price ?? slDialogTick?.ltp ?? 0
   // A stop-loss is only meaningful for an actual open position — qty is 0 when
@@ -279,12 +349,27 @@ export default function Scalping() {
   // Side is derived from the actual open position: a short (qty < 0) stops out
   // when price RISES, a long when price FALLS — the SL engine needs this right.
   const slDialogSide: ScalpingAction = slDialogPos && slDialogPos.quantity < 0 ? 'SELL' : 'BUY'
-  const slDialogExisting = slDialogLeg
-    ? findLegSL(slMap, slDialogLeg.symbol, slDialogLeg.exchange)
+  const slDialogLeg: SelectedLeg | null = slDialogTarget
+    ? {
+        symbol: slDialogTarget.symbol,
+        exchange: slDialogTarget.exchange,
+        optionType: slDialogTarget.optionType,
+        strike: 0,
+        lotsize: 0,
+        tickSize: 0,
+      }
+    : null
+  const slDialogExisting = slDialogTarget
+    ? findLegSL(slMap, slDialogTarget.symbol, slDialogTarget.exchange, slDialogTarget.product)
     : undefined
 
-  const ceSL = ceLeg ? findLegSL(slMap, ceLeg.symbol, ceLeg.exchange) : undefined
-  const peSL = peLeg ? findLegSL(slMap, peLeg.symbol, peLeg.exchange) : undefined
+  const ceSL = ceLeg ? findLegSL(slMap, ceLeg.symbol, ceLeg.exchange, product) : undefined
+  const peSL = peLeg ? findLegSL(slMap, peLeg.symbol, peLeg.exchange, product) : undefined
+
+  // Open the SL dialog for a selected CE/PE leg (uses the current product selector).
+  const openLegSL = (leg: SelectedLeg | null) => {
+    if (leg) setSlDialogTarget({ ...leg, product })
+  }
 
   // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
   const stateRef = useRef({ armed, lots, product, ceLeg, peLeg, appMode })
@@ -377,6 +462,31 @@ export default function Scalping() {
     }
     refreshBooks()
   }, [refreshBooks, appMode])
+
+  // Close a single position-book row (risk-reducing, opposite side, live net qty).
+  const doCloseRow = useCallback(
+    async (row: ScalpingPositionRow) => {
+      if (row.netQty === 0) return
+      const action: ScalpingAction = row.netQty > 0 ? 'SELL' : 'BUY'
+      try {
+        const res = await scalpingApi.closeLeg({
+          symbol: row.symbol,
+          exchange: row.exchange,
+          action,
+          quantity: Math.abs(row.netQty),
+          product: row.product,
+        })
+        if (res.status !== 'success' && appMode === 'live') {
+          showToast.error(res.message ?? 'Close failed', 'orders')
+        }
+      } catch (e) {
+        const handledGlobally = appMode === 'analyzer' && !!(e as { response?: unknown }).response
+        if (!handledGlobally) showToast.error(apiErrorMessage(e), 'orders')
+      }
+      refreshBooks()
+    },
+    [refreshBooks, appMode]
+  )
 
   // Global keyboard handler: arrows fire orders, F6 close-all, F7 cancel-all.
   const handleKeyDown = useCallback(
@@ -606,13 +716,13 @@ export default function Scalping() {
 
             <div
               className="ml-auto flex items-center gap-6 font-mono"
-              title="Account-wide across all open positions, not just the scalping legs"
+              title="Sum across the position-book rows below (open + today's closed trades)"
             >
               <span>
-                Net Qty (acct): <span className="font-semibold">{netQty}</span>
+                Net Qty: <span className="font-semibold">{netQty}</span>
               </span>
               <span>
-                MTM (acct):{' '}
+                MTM:{' '}
                 <span className={`font-semibold ${mtm >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {mtm.toFixed(2)}
                 </span>
@@ -648,10 +758,10 @@ export default function Scalping() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="outline" disabled={!ceLeg} onClick={() => setSlDialogLeg(ceLeg)}>
+            <Button variant="outline" disabled={!ceLeg} onClick={() => openLegSL(ceLeg)}>
               {ceSL ? 'Edit Call SL' : 'Set Call SL'}
             </Button>
-            <Button variant="outline" disabled={!peLeg} onClick={() => setSlDialogLeg(peLeg)}>
+            <Button variant="outline" disabled={!peLeg} onClick={() => openLegSL(peLeg)}>
               {peSL ? 'Edit Put SL' : 'Set Put SL'}
             </Button>
             <Button
@@ -702,47 +812,127 @@ export default function Scalping() {
         </TabsList>
 
         <TabsContent value="positions">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Symbol</TableHead>
-                <TableHead>Product</TableHead>
-                <TableHead className="text-right">Qty</TableHead>
-                <TableHead className="text-right">Avg</TableHead>
-                <TableHead className="text-right">LTP</TableHead>
-                <TableHead className="text-right">P&amp;L</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {positions.map((p) => (
-                <TableRow key={`${p.symbol}-${p.product}`}>
-                  <TableCell className="font-mono text-sm">{p.symbol}</TableCell>
-                  <TableCell>{p.product}</TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">{p.quantity}</TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">
-                    {p.average_price?.toFixed(2)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">
-                    {p.ltp?.toFixed(2)}
-                  </TableCell>
-                  <TableCell
-                    className={`text-right font-mono tabular-nums ${
-                      (p.pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'
-                    }`}
-                  >
-                    {p.pnl?.toFixed(2)}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {positions.length === 0 && (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No open positions
-                  </TableCell>
+                  <TableHead>Symbol</TableHead>
+                  <TableHead>Product</TableHead>
+                  <TableHead>Side</TableHead>
+                  <TableHead className="text-right">Net Qty</TableHead>
+                  <TableHead className="text-right">LTP</TableHead>
+                  <TableHead className="text-right">SL</TableHead>
+                  <TableHead>SL</TableHead>
+                  <TableHead className="text-right">R. P&amp;L</TableHead>
+                  <TableHead className="text-right">UR. P&amp;L</TableHead>
+                  <TableHead className="text-right">P&amp;L</TableHead>
+                  <TableHead>Action</TableHead>
+                  <TableHead className="text-right">Avg Price</TableHead>
+                  <TableHead className="text-right">Buy Qty</TableHead>
+                  <TableHead className="text-right">Buy Price</TableHead>
+                  <TableHead className="text-right">Sell Price</TableHead>
+                  <TableHead className="text-right">Sell Qty</TableHead>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {positionRows.map((r) => {
+                  const open = r.netQty !== 0
+                  return (
+                    <TableRow key={`${r.exchange}:${r.symbol}:${r.product}`}>
+                      <TableCell className="font-mono text-sm">{r.symbol}</TableCell>
+                      <TableCell>{productLabel(r.product)}</TableCell>
+                      <TableCell
+                        className={
+                          r.side === 'BUY'
+                            ? 'text-green-600'
+                            : r.side === 'SELL'
+                              ? 'text-red-600'
+                              : 'text-muted-foreground'
+                        }
+                      >
+                        {r.side}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.netQty}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.ltp ? r.ltp.toFixed(2) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.sl != null ? r.sl.toFixed(2) : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {open ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setSlDialogTarget({
+                                symbol: r.symbol,
+                                exchange: r.exchange,
+                                product: r.product,
+                                optionType: r.symbol.endsWith('PE') ? 'PE' : 'CE',
+                              })
+                            }
+                          >
+                            {r.sl != null ? 'Edit' : 'Set'}
+                          </Button>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell
+                        className={`text-right font-mono tabular-nums ${r.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                      >
+                        {r.realizedPnl.toFixed(2)}
+                      </TableCell>
+                      <TableCell
+                        className={`text-right font-mono tabular-nums ${r.unrealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                      >
+                        {r.unrealizedPnl.toFixed(2)}
+                      </TableCell>
+                      <TableCell
+                        className={`text-right font-mono tabular-nums font-semibold ${r.totalPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                      >
+                        {r.totalPnl.toFixed(2)}
+                      </TableCell>
+                      <TableCell>
+                        {open ? (
+                          <Button variant="outline" size="sm" onClick={() => doCloseRow(r)}>
+                            Close
+                          </Button>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.avgPrice ? r.avgPrice.toFixed(2) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.buyQty}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.buyAvg ? r.buyAvg.toFixed(2) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.sellAvg ? r.sellAvg.toFixed(2) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {r.sellQty}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+                {positionRows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={16} className="text-center text-muted-foreground">
+                      No positions or trades today
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </TabsContent>
 
         <TabsContent value="orders">
@@ -821,7 +1011,7 @@ export default function Scalping() {
       <SetSLDialog
         open={slDialogOpen}
         onOpenChange={(o) => {
-          if (!o) setSlDialogLeg(null)
+          if (!o) setSlDialogTarget(null)
         }}
         leg={slDialogLeg}
         product={product}
@@ -832,8 +1022,9 @@ export default function Scalping() {
         existing={slDialogExisting}
         onSave={(sl: SLState) => setSL(sl)}
         onClear={
-          slDialogExisting && slDialogLeg
-            ? () => clearSL(slDialogLeg.symbol, slDialogLeg.exchange, slDialogExisting.product)
+          slDialogExisting && slDialogTarget
+            ? () =>
+                clearSL(slDialogTarget.symbol, slDialogTarget.exchange, slDialogExisting.product)
             : undefined
         }
       />

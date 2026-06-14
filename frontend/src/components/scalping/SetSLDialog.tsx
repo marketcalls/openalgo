@@ -62,11 +62,24 @@ export function SetSLDialog({
     }
   }, [open, existing])
 
+  // Reference price for validating stop direction: prefer live LTP, else entry.
+  const slNum = Number(stoploss)
+  const refPrice = ltp != null && ltp > 0 ? ltp : entryPrice
+  let directionError = ''
+  if (Number.isFinite(slNum) && slNum > 0 && refPrice > 0) {
+    if (side === 'BUY' && slNum >= refPrice) {
+      directionError = `Long (BUY): stop-loss must be below ${refPrice.toFixed(2)}`
+    } else if (side === 'SELL' && slNum <= refPrice) {
+      directionError = `Short (SELL): stop-loss must be above ${refPrice.toFixed(2)}`
+    }
+  }
+
   const handleSave = () => {
     if (!leg) return
     const sl = Number(stoploss)
     if (!Number.isFinite(sl) || sl <= 0) return
     if (quantity <= 0) return
+    if (directionError) return // wrong-side stop would exit immediately
     const step = Number(trailingStep)
     const entry = entryPrice > 0 ? entryPrice : (ltp ?? 0)
     onSave({
@@ -131,6 +144,7 @@ export function SetSLDialog({
               onChange={(e) => setStoploss(e.target.value)}
               placeholder="e.g. 270"
             />
+            {directionError && <p className="text-xs text-red-600">{directionError}</p>}
           </div>
 
           <label className="flex items-center gap-2">
@@ -174,7 +188,7 @@ export function SetSLDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={quantity <= 0 || !stoploss}>
+          <Button onClick={handleSave} disabled={quantity <= 0 || !stoploss || !!directionError}>
             Save
           </Button>
         </DialogFooter>
