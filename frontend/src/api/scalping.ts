@@ -57,6 +57,19 @@ export const scalpingApi = {
     return response.data
   },
 
+  getTracked: async (): Promise<{
+    status: string
+    data: Array<{ symbol: string; exchange: string; product: string }>
+  }> => {
+    const response = await webClient.get('/scalping/api/tracked')
+    return response.data
+  },
+
+  resetTracked: async (): Promise<{ status: string; cleared?: boolean }> => {
+    const response = await webClient.delete('/scalping/api/tracked')
+    return response.data
+  },
+
   getSLStates: async (): Promise<SLStatesResponse> => {
     const response = await webClient.get<SLStatesResponse>('/scalping/api/sl')
     return response.data

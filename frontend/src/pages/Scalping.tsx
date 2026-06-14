@@ -303,14 +303,25 @@ export default function Scalping() {
     queryFn: () => tradingApi.getTrades(apiKey ?? ''),
     enabled: !!apiKey,
   })
+  // The scalping list: instruments this terminal has traded (scopes the book to
+  // the scalping strategy, since broker positions carry no strategy tag).
+  const { data: trackedResp } = useQuery({
+    queryKey: ['scalping', 'tracked'],
+    queryFn: () => scalpingApi.getTracked(),
+  })
   const positions = posResp?.data ?? []
   const orders = ordResp?.data?.orders ?? []
   const trades = trdResp?.data ?? []
+  const trackedKeys = useMemo(
+    () => new Set((trackedResp?.data ?? []).map((t) => `${t.exchange}:${t.symbol}:${t.product}`)),
+    [trackedResp]
+  )
 
   const refreshBooks = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['scalping', 'positions'] })
     queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
     queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
+    queryClient.invalidateQueries({ queryKey: ['scalping', 'tracked'] })
   }, [queryClient])
 
   // Refresh the books on order/position events instead of polling.
@@ -378,8 +389,8 @@ export default function Scalping() {
   // Position book: derived 1cliq-style rows from positions + today's trades + SL,
   // with realtime LTP from the live feed (recomputes on each tick).
   const positionRows = useMemo(
-    () => buildPositionRows(positions, trades, slMap, liveLtp),
-    [positions, trades, slMap, liveLtp]
+    () => buildPositionRows(positions, trades, slMap, liveLtp, trackedKeys),
+    [positions, trades, slMap, liveLtp, trackedKeys]
   )
   // Summary reflects the displayed rows (scalping book), not raw account totals.
   const netQty = positionRows.reduce((a, r) => a + r.netQty, 0)

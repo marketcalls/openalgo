@@ -64,8 +64,29 @@ class ScalpingSLState(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class ScalpingTrackedSymbol(Base):
+    """Instruments the scalping terminal has traded (its 'scalping list').
+
+    Broker positions carry no OpenAlgo strategy tag, so the terminal records every
+    (symbol, exchange, product) it trades here. This is how Close-All / the position
+    book are scoped to the scalping strategy instead of the whole account.
+    """
+
+    __tablename__ = "scalping_tracked_symbol"
+    __table_args__ = (
+        UniqueConstraint("symbol", "exchange", "product", name="uq_scalping_tracked"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(60), nullable=False)
+    exchange = Column(String(10), nullable=False)
+    product = Column(String(10), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 def init_db():
-    """Create the scalping SL table if it doesn't exist."""
+    """Create the scalping tables if they don't exist."""
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Scalping DB", logger)
@@ -173,5 +194,50 @@ def delete_sl_state(symbol: str, exchange: str, product: str) -> bool:
         return deleted > 0
     except Exception as e:
         logger.exception(f"Error deleting scalping SL state: {e}")
+        db_session.rollback()
+        return False
+
+
+def track_symbol(symbol: str, exchange: str, product: str) -> bool:
+    """Record a (symbol, exchange, product) as part of the scalping list (idempotent)."""
+    try:
+        exists = (
+            db_session.query(ScalpingTrackedSymbol)
+            .filter_by(symbol=symbol, exchange=exchange, product=product)
+            .first()
+        )
+        if exists is None:
+            db_session.add(
+                ScalpingTrackedSymbol(symbol=symbol, exchange=exchange, product=product)
+            )
+            db_session.commit()
+        return True
+    except Exception as e:
+        logger.exception(f"Error tracking scalping symbol: {e}")
+        db_session.rollback()
+        return False
+
+
+def get_tracked_symbols() -> list[dict]:
+    """Return the scalping list (symbols the terminal has traded)."""
+    try:
+        rows = db_session.query(ScalpingTrackedSymbol).all()
+        return [
+            {"symbol": r.symbol, "exchange": r.exchange, "product": r.product} for r in rows
+        ]
+    except Exception as e:
+        logger.exception(f"Error fetching scalping tracked symbols: {e}")
+        db_session.rollback()
+        return []
+
+
+def clear_tracked_symbols() -> bool:
+    """Clear the scalping list (e.g. on a session/day reset)."""
+    try:
+        db_session.query(ScalpingTrackedSymbol).delete()
+        db_session.commit()
+        return True
+    except Exception as e:
+        logger.exception(f"Error clearing scalping tracked symbols: {e}")
         db_session.rollback()
         return False
