@@ -77,12 +77,31 @@ export function SetSLDialog({
     }
   }
 
+  // Target must be on the PROFIT side, or it would trigger an immediate exit.
+  const tgtNum = Number(targetPrice)
+  let targetError = ''
+  if (Number.isFinite(tgtNum) && tgtNum > 0 && refPrice > 0) {
+    if (side === 'BUY' && tgtNum <= refPrice) {
+      targetError = `Long (BUY): target must be above ${refPrice.toFixed(2)}`
+    } else if (side === 'SELL' && tgtNum >= refPrice) {
+      targetError = `Short (SELL): target must be below ${refPrice.toFixed(2)}`
+    }
+  }
+
+  // Trailing enabled with a non-positive step would appear active but never move.
+  const stepNum = Number(trailingStep)
+  const trailingError =
+    trailingEnabled && !(Number.isFinite(stepNum) && stepNum > 0)
+      ? 'Trailing step must be greater than 0'
+      : ''
+
   const handleSave = () => {
     if (!leg) return
     const sl = Number(stoploss)
     if (!Number.isFinite(sl) || sl <= 0) return
     if (quantity <= 0) return
-    if (directionError) return // wrong-side stop would exit immediately
+    // Block wrong-side stop/target (immediate exit) and an inert trailing config.
+    if (directionError || targetError || trailingError) return
     const step = Number(trailingStep)
     const tgt = Number(targetPrice)
     const entry = entryPrice > 0 ? entryPrice : (ltp ?? 0)
@@ -174,6 +193,7 @@ export function SetSLDialog({
               <p className="text-xs text-muted-foreground">
                 Trailing starts only once price is ≥1 in profit; the stop only moves in your favor.
               </p>
+              {trailingError && <p className="text-xs text-red-600">{trailingError}</p>}
             </div>
           )}
 
@@ -187,6 +207,7 @@ export function SetSLDialog({
               onChange={(e) => setTargetPrice(e.target.value)}
               placeholder={side === 'BUY' ? 'above entry' : 'below entry'}
             />
+            {targetError && <p className="text-xs text-red-600">{targetError}</p>}
           </div>
         </div>
 
@@ -205,7 +226,12 @@ export function SetSLDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={quantity <= 0 || !stoploss || !!directionError}>
+          <Button
+            onClick={handleSave}
+            disabled={
+              quantity <= 0 || !stoploss || !!directionError || !!targetError || !!trailingError
+            }
+          >
             Save
           </Button>
         </DialogFooter>

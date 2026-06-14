@@ -1703,7 +1703,7 @@ export default function Scalping() {
           if (!o) setSlDialogTarget(null)
         }}
         leg={slDialogLeg}
-        product={product}
+        product={slDialogTarget?.product ?? product}
         side={slDialogSide}
         entryPrice={slDialogEntry}
         quantity={slDialogQty}

@@ -396,8 +396,9 @@ class ScalpingRiskMonitor:
                 return
             exit_api_key, auth_token, broker = auth
             net_qty = self._live_net_qty(symbol, exchange, product, exit_api_key, auth_token, broker)
+            mode = state.get("mode")
             if net_qty == 0:
-                self._clear_state(key, symbol, exchange, product)
+                self._clear_state(key, symbol, exchange, product, mode)
                 logger.info("Scalping SL for %s already flat — cleared", symbol)
                 return
 
@@ -409,7 +410,7 @@ class ScalpingRiskMonitor:
                 symbol, exchange, product, action, qty, auth_token, broker, exit_api_key
             )
             if ok:
-                self._clear_state(key, symbol, exchange, product)
+                self._clear_state(key, symbol, exchange, product, mode)
                 logger.info(
                     "Scalping auto-exit (%s) %s %s %d @~%.2f",
                     reason or "sl",
@@ -429,11 +430,13 @@ class ScalpingRiskMonitor:
             self._exit_inflight.discard(key)
             self._remove_sessions()
 
-    def _clear_state(self, key: str, symbol: str, exchange: str, product: str) -> None:
+    def _clear_state(
+        self, key: str, symbol: str, exchange: str, product: str, mode: str | None = None
+    ) -> None:
         from database.scalping_db import delete_sl_state
 
         try:
-            delete_sl_state(symbol, exchange, product)
+            delete_sl_state(symbol, exchange, product, mode=mode)
         finally:
             self._remove_session("database.scalping_db")
         with self._lock:
