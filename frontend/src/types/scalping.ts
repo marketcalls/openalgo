@@ -2,8 +2,17 @@
 // Order constants mirror OpenAlgo (docs/prompt/order-constants.md).
 
 export type OptionType = 'CE' | 'PE'
-export type ScalpingProduct = 'MIS' | 'NRML'
+export type ScalpingProduct = 'MIS' | 'NRML' | 'CNC'
 export type ScalpingAction = 'BUY' | 'SELL'
+export type Segment = 'OPTIONS' | 'FUTURES' | 'EQUITY'
+
+// A single tradable instrument (equity share or futures contract) from search.
+export interface SearchInstrument {
+  symbol: string
+  exchange: string
+  lotsize: number
+  name?: string
+}
 
 export interface ScalpingUnderlying {
   underlying: string
