@@ -81,8 +81,13 @@ export function buildPositionRows(
     }
     const buyAvg = rec.buyQty > 0 ? rec.buyValue / rec.buyQty : 0
     const sellAvg = rec.sellQty > 0 ? rec.sellValue / rec.sellQty : 0
-    // Prefer the broker net qty (handles carry-over); fall back to today's trades.
-    const netQty = rec.posQty != null ? rec.posQty : rec.buyQty - rec.sellQty
+    // The broker positionbook is authoritative for net qty. Open positions ALWAYS
+    // appear in it; a closed position is DROPPED from it (posQty undefined) and must
+    // read as flat (0). Deriving net from today's trade imbalance (buyQty - sellQty)
+    // would show a PHANTOM open position after a close/F6 when the day's trades are
+    // unbalanced (e.g. a carried-over position squared off today) — even though
+    // /positions correctly shows flat. So trust the positionbook: absent => 0.
+    const netQty = rec.posQty ?? 0
     const ltp = liveLtp?.(rec.symbol, rec.exchange) ?? rec.ltp ?? 0
 
     const realizedQty = Math.min(rec.buyQty, rec.sellQty)
