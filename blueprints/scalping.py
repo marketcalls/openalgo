@@ -36,7 +36,9 @@ SCALPING_STRATEGY = "Scalping"
 
 # Order constants enforced on the order endpoint.
 VALID_ACTIONS = {"BUY", "SELL"}
-VALID_LEG_EXCHANGES = {"NFO", "BFO"}  # derivatives (options/futures): lot rules apply
+# Derivatives (options/futures): lot rules apply. NFO/BFO (index+stock F&O),
+# MCX (commodity), CDS (currency).
+VALID_LEG_EXCHANGES = {"NFO", "BFO", "MCX", "CDS"}
 VALID_EQUITY_EXCHANGES = {"NSE", "BSE"}  # equity: traded in shares, no lot rules
 VALID_ORDER_EXCHANGES = VALID_LEG_EXCHANGES | VALID_EQUITY_EXCHANGES
 # Products allowed per instrument class.
