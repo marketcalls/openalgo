@@ -224,6 +224,21 @@ class TestModeSegregation:
         self.mon._on_tick(_tick("NIFTY25JUN2623600CE", "NFO", 94.0))
         assert len(fired) == 1
 
+    def test_exit_worker_skips_when_mode_changed_since_detection(self, monkeypatch):
+        # Detection->exit race: if the global mode flipped to live but the SL is an
+        # analyze SL, the exit worker must skip BEFORE routing (no wrong-mode exit,
+        # no clearing) — guards the cubic stale-mode finding.
+        monkeypatch.setattr(self.mon, "_mode", lambda: "live")
+        reached = []
+        monkeypatch.setattr(self.mon, "_resolve_auth", lambda: reached.append("auth"))
+        self.mon._exit_worker(
+            mod._slkey("X", "NFO", "NRML"),
+            {"symbol": "X", "exchange": "NFO", "product": "NRML", "mode": "analyze"},
+            "sl",
+            100.0,
+        )
+        assert reached == []  # returned before resolving auth / placing any exit
+
     def test_request_sync_is_non_blocking(self, monkeypatch):
         # sync() does blocking WS calls; request_sync() must return immediately and
         # run sync() on a background worker (so /sl requests never hang ~12s).

@@ -39,7 +39,6 @@ logger = get_logger(__name__)
 MIN_TRAIL_PROFIT = 1.0  # don't trail until >= 1 in profit (matches the UI engine)
 PERSIST_THROTTLE_SEC = 1.5  # rate-limit trailing-SL writes (latest value, bounds restart staleness)
 EMIT_THROTTLE_SEC = 1.0  # debounce browser SL-update pushes
-MODE_CACHE_SEC = 5.0  # cache analyze/live mode lookup so _on_tick doesn't hit the DB per tick
 EXIT_RETRY_COOLDOWN_SEC = 3.0  # throttle retries for a leg whose exit keeps failing
 SUBSCRIBE_MODE = "LTP"
 
@@ -128,7 +127,6 @@ class ScalpingRiskMonitor:
         self._last_exit_attempt: dict[str, float] = {}
         self._last_persist: dict[str, float] = {}
         self._last_emit: dict[str, float] = {}
-        self._mode_cache: tuple[str | None, float] | None = None
         # Background sync coalescing — sync() does blocking WS subscribe calls (up to
         # ~12s for the proxy ack), so it must NEVER run on a request thread.
         # request_sync() schedules it on a single daemon worker and coalesces repeats.
@@ -396,6 +394,22 @@ class ScalpingRiskMonitor:
         exchange = state["exchange"]
         product = state["product"]
         try:
+            # Guard the detection->exit race: only act if the GLOBAL mode still matches
+            # this SL's mode. Exit routing (place_order/positionbook) follows the live
+            # get_analyze_mode(); if the user toggled analyze/live since detection, this
+            # SL now belongs to the other mode — skip (don't clear) so we never act on,
+            # or wrongly clear, the wrong mode's position. It'll be re-evaluated on a
+            # tick once the mode matches again.
+            sl_mode = state.get("mode")
+            cur_mode = self._mode()
+            if sl_mode and cur_mode is not None and sl_mode != cur_mode:
+                logger.info(
+                    "Scalping auto-exit for %s skipped — mode changed (SL=%s, current=%s)",
+                    symbol,
+                    sl_mode,
+                    cur_mode,
+                )
+                return
             auth = self._resolve_auth()
             if auth is None:
                 logger.error(
@@ -519,25 +533,22 @@ class ScalpingRiskMonitor:
     def _mode(self) -> str | None:
         """Current trading mode ('analyze'/'live') for segregating SLs.
 
-        Cached for MODE_CACHE_SEC so the per-tick check in _on_tick doesn't hit the
-        DB (+ a scoped-session remove) on every market tick. Returns None if it
-        can't be determined; callers then degrade safely (no mode filtering — the
-        exit worker's position check still protects).
+        NOT cached here on purpose: get_analyze_mode() is already TTL-cached AND
+        invalidated on toggle (set_analyze_mode), so it's both cheap and fresh. A
+        local cache would create a window where breach detection (cached mode) and
+        exit routing (live get_analyze_mode) disagree right after a toggle — which
+        could clear/act on the wrong mode's SL and drop protection. Returns None if
+        undeterminable; callers then degrade safely (the exit worker's live-position
+        check + the per-exit mode guard still protect).
         """
-        now = time.monotonic()
-        cached = self._mode_cache
-        if cached is not None and now - cached[1] < MODE_CACHE_SEC:
-            return cached[0]
         try:
             from database.settings_db import get_analyze_mode
 
-            value = "analyze" if get_analyze_mode() else "live"
+            return "analyze" if get_analyze_mode() else "live"
         except Exception:
-            value = None
+            return None
         finally:
             self._remove_session("database.settings_db")
-        self._mode_cache = (value, now)
-        return value
 
     def _resolve_api_key(self) -> str | None:
         from database.auth_db import get_api_key_for_tradingview
