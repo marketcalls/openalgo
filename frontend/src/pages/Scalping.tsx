@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
-import { tradingApi } from '@/api/trading'
+import { type QuotesData, tradingApi } from '@/api/trading'
 import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -83,6 +83,19 @@ const BOOK_EVENTS = [
   'cancel_order_event',
   'modify_order_event',
 ] as const
+
+// A WebSocket tick considered stale after this -> fall back to MultiQuotes.
+const TICK_STALE_MS = 5000
+
+// Normalized ticker view merged from the WS feed or the MultiQuotes fallback.
+interface TickView {
+  ltp?: number
+  change?: number
+  change_percent?: number
+  open?: number
+  high?: number
+  low?: number
+}
 
 // Which leg/product the Set-SL dialog is editing.
 interface SLTarget {
@@ -502,18 +515,88 @@ export default function Scalping() {
     enabled: symbols.length > 0,
   })
 
-  const underlyingTick = marketData.get(`${underlyingExch}:${underlyingSym}`)?.data
-  const ceTick = ceLeg ? marketData.get(`${ceLeg.exchange}:${ceLeg.symbol}`)?.data : undefined
-  const peTick = peLeg ? marketData.get(`${peLeg.exchange}:${peLeg.symbol}`)?.data : undefined
-  const singleTick = singleLeg
-    ? marketData.get(`${singleLeg.exchange}:${singleLeg.symbol}`)?.data
-    : undefined
+  // After-hours MultiQuotes fallback (mirrors /positions' useLivePrice): when the
+  // WebSocket feed is idle (market closed), poll the REST multiquotes every 30s so
+  // the tickers AND the position book keep fresh LTP/OHLC/MTM. The WS feed stays the
+  // live source during market hours; this only kicks in when ticks go stale.
+  const symbolsKey = useMemo(
+    () => symbols.map((s) => `${s.exchange}:${s.symbol}`).join(','),
+    [symbols]
+  )
+  const [mqMap, setMqMap] = useState<Map<string, QuotesData>>(new Map())
+  // biome-ignore lint/correctness/useExhaustiveDependencies: symbolsKey tracks symbols content
+  useEffect(() => {
+    if (!apiKey || symbols.length === 0) return
+    let cancelled = false
+    const fetchMq = () => {
+      if (document.hidden) return // visibility-aware (don't poll a hidden tab)
+      tradingApi
+        .getMultiQuotes(apiKey, symbols)
+        .then((resp) => {
+          if (cancelled || resp.status !== 'success' || !resp.results) return
+          const next = new Map<string, QuotesData>()
+          for (const r of resp.results) {
+            if (r.data) next.set(`${r.exchange}:${r.symbol}`, r.data)
+          }
+          setMqMap(next)
+        })
+        .catch(() => {})
+    }
+    fetchMq()
+    const id = window.setInterval(fetchMq, 30_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [apiKey, symbolsKey])
 
-  // Realtime LTP resolver for the position book (live WS, falls back to REST ltp).
+  // Merged tick, FIELD BY FIELD (avoids flicker). For each field, prefer a FRESH
+  // WebSocket value when it actually exists, else MultiQuotes, else the last WS
+  // snapshot. This matters because the WS Quote tick omits change/change_percent
+  // (and high/low for the index), while MultiQuotes provides them — returning the
+  // WS source wholesale would blank those fields on every tick and flicker.
+  const getTick = useCallback(
+    (symbol: string, exchange: string): TickView | undefined => {
+      const key = `${exchange}:${symbol}`
+      const entry = marketData.get(key)
+      const ws = entry?.data as TickView | undefined
+      const mq = mqMap.get(key)
+      if (!ws && !mq) return undefined
+      const wsFresh =
+        ws?.ltp != null &&
+        entry?.lastUpdate != null &&
+        Date.now() - entry.lastUpdate < TICK_STALE_MS
+      // Prefer a fresh WS value only when present; otherwise MultiQuotes; otherwise WS snapshot.
+      const pick = (wsVal?: number, mqVal?: number) =>
+        wsFresh && wsVal != null ? wsVal : (mqVal ?? wsVal)
+      const ltp = pick(ws?.ltp, mq?.ltp)
+      const prev = mq?.prev_close || 0
+      const mqChange = prev && ltp != null ? ltp - prev : undefined
+      const mqChangePct = prev && ltp != null ? ((ltp - prev) / prev) * 100 : undefined
+      return {
+        ltp,
+        open: pick(ws?.open, mq?.open),
+        high: pick(ws?.high, mq?.high),
+        low: pick(ws?.low, mq?.low),
+        change: wsFresh && ws?.change != null ? ws.change : (mqChange ?? ws?.change),
+        change_percent:
+          wsFresh && ws?.change_percent != null
+            ? ws.change_percent
+            : (mqChangePct ?? ws?.change_percent),
+      }
+    },
+    [marketData, mqMap]
+  )
+
+  const underlyingTick = getTick(underlyingSym, underlyingExch)
+  const ceTick = ceLeg ? getTick(ceLeg.symbol, ceLeg.exchange) : undefined
+  const peTick = peLeg ? getTick(peLeg.symbol, peLeg.exchange) : undefined
+  const singleTick = singleLeg ? getTick(singleLeg.symbol, singleLeg.exchange) : undefined
+
+  // Realtime LTP resolver for the position book (live WS, MultiQuotes after hours).
   const liveLtp = useCallback(
-    (symbol: string, exchange: string): number | undefined =>
-      marketData.get(`${exchange}:${symbol}`)?.data?.ltp,
-    [marketData]
+    (symbol: string, exchange: string): number | undefined => getTick(symbol, exchange)?.ltp,
+    [getTick]
   )
 
   // Latest live data + predefined config for the (stable) order handler.
@@ -557,7 +640,7 @@ export default function Scalping() {
   const [slDialogTarget, setSlDialogTarget] = useState<SLTarget | null>(null)
   const slDialogOpen = slDialogTarget !== null
   const slDialogTick = slDialogTarget
-    ? marketData.get(`${slDialogTarget.exchange}:${slDialogTarget.symbol}`)?.data
+    ? getTick(slDialogTarget.symbol, slDialogTarget.exchange)
     : undefined
   const slDialogPos = slDialogTarget
     ? positions.find(
