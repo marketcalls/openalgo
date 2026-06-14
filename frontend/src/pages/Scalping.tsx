@@ -48,22 +48,19 @@ const MAX_LOTS = 20
 const ORDER_COOLDOWN_MS = 120 // min gap between two order fires (anti double-fire)
 const ARMED_STORAGE_KEY = 'scalping.armed'
 
-type ScalpingExchange = 'NSE' | 'BSE' | 'MCX' | 'CDS'
+// NSE/BSE = equity; NFO/BFO/MCX/CDS = derivatives (options + futures).
+type ScalpingExchange = 'NSE' | 'BSE' | 'NFO' | 'BFO' | 'MCX' | 'CDS'
+const EXCHANGES: ScalpingExchange[] = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS']
 
-// Search exchange for single-instrument segments (equity vs derivatives per exchange).
-function searchExchangeFor(exchange: ScalpingExchange, segment: Segment): string {
-  if (segment === 'EQUITY') return exchange // NSE | BSE
-  if (exchange === 'NSE') return 'NFO'
-  if (exchange === 'BSE') return 'BFO'
-  return exchange // MCX | CDS trade options/futures on their own exchange
+// Default underlying per F&O exchange (user can change via search).
+const DEFAULT_UNDERLYING: Record<string, string> = {
+  NFO: 'NIFTY',
+  BFO: 'SENSEX',
+  MCX: 'CRUDEOIL',
+  CDS: 'USDINR',
 }
 
-// Product display label (OpenAlgo value stays MIS/NRML/CNC on the wire).
-function productDisplay(p: string): string {
-  if (p === 'MIS') return 'Intraday'
-  if (p === 'NRML') return 'Margin'
-  return p
-}
+const isEquityExchange = (e: ScalpingExchange) => e === 'NSE' || e === 'BSE'
 
 // Order/position events that should refresh the books (event-driven, no polling).
 const BOOK_EVENTS = [
@@ -80,11 +77,6 @@ interface SLTarget {
   exchange: string
   product: ScalpingProduct
   optionType: OptionType
-}
-
-// Display label for product (OpenAlgo value stays MIS/NRML on the wire).
-function productLabel(p: string): string {
-  return p === 'NRML' ? 'MARGIN' : p
 }
 
 // Read the persisted One-Click arm state (captured across reloads).
@@ -215,25 +207,25 @@ export default function Scalping() {
   const appMode = useThemeStore((s) => s.appMode) // 'live' | 'analyzer'
   const queryClient = useQueryClient()
 
-  // Segment & exchange. Index OPTIONS (NSE/BSE) = dual-leg (CE/PE); everything
-  // else (Futures, Equity, and MCX/CDS options) = single instrument via search.
-  const [exchange, setExchange] = useState<ScalpingExchange>('NSE')
+  // Exchange / segment. NSE/BSE = Equity; NFO/BFO/MCX/CDS = derivatives with
+  // Options (dual-leg CE/PE) or Futures (single instrument). Default = NFO.
+  const [exchange, setExchange] = useState<ScalpingExchange>('NFO')
   const [segment, setSegment] = useState<Segment>('OPTIONS')
-  const equityAllowed = exchange === 'NSE' || exchange === 'BSE'
-  const optionsIndexMode = segment === 'OPTIONS' && equityAllowed
-  const isSingle = !optionsIndexMode
+  const isEquityExch = isEquityExchange(exchange)
+  const optionsMode = !isEquityExch && segment === 'OPTIONS' // dual-leg CE/PE
+  const isSingle = !optionsMode // equity + futures use a single instrument
 
-  const [underlying, setUnderlying] = useState<string>('')
+  // Derivative underlying (default per exchange, searchable). Equity uses `instrument`.
+  const [underlying, setUnderlying] = useState<string>(DEFAULT_UNDERLYING.NFO)
+  const [underlyingQuery, setUnderlyingQuery] = useState('')
   const [expiry, setExpiry] = useState<string>('')
   const [ceStrike, setCeStrike] = useState<string>('')
   const [peStrike, setPeStrike] = useState<string>('')
 
-  // Single-instrument (equity/futures) selection via search-as-you-type.
+  // Single-instrument selection (equity symbol search, or chosen futures contract).
   const [searchQuery, setSearchQuery] = useState('')
   const [instrument, setInstrument] = useState<SearchInstrument | null>(null)
   const [equityShares, setEquityShares] = useState(1)
-  // Futures: chosen underlying, so the user can switch expiry (the framed contract).
-  const [futUnderlying, setFutUnderlying] = useState('')
 
   // Order-entry controls. The One-Click arm state is captured/persisted across reloads.
   const [armed, setArmed] = useState<boolean>(loadArmed)
@@ -258,89 +250,85 @@ export default function Scalping() {
     }
   }, [armed])
 
-  // Segment/exchange change: pick a sensible default product, force Futures when
-  // Equity isn't available (MCX/CDS), and reset the single-instrument selection.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on segment/exchange change
+  // Exchange change: equity → EQUITY segment; F&O → keep Options/Futures (default
+  // Options) + default underlying. Reset transient selections.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run only on exchange change
   useEffect(() => {
-    if (segment === 'EQUITY' && !equityAllowed) {
-      setSegment('FUTURES')
-      return
+    if (isEquityExch) {
+      setSegment('EQUITY')
+    } else {
+      setSegment((s) => (s === 'OPTIONS' || s === 'FUTURES' ? s : 'OPTIONS'))
+      setUnderlying(DEFAULT_UNDERLYING[exchange] || '')
     }
-    setProduct(segment === 'EQUITY' ? 'MIS' : 'NRML')
     setInstrument(null)
     setSearchQuery('')
-    setFutUnderlying('')
-  }, [segment, exchange])
+    setUnderlyingQuery('')
+    setExpiry('')
+    setCeStrike('')
+    setPeStrike('')
+  }, [exchange])
 
-  const searchExchange = searchExchangeFor(exchange, segment)
-  const { data: searchResp } = useQuery({
-    queryKey: ['scalping', 'search', searchExchange, searchQuery, segment],
-    queryFn: () => scalpingApi.search(searchExchange, searchQuery),
-    enabled: isSingle && searchQuery.trim().length >= 2,
+  // Default product per instrument class (MIS equity, NRML derivatives).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run only on class change
+  useEffect(() => {
+    setProduct(isEquityExch ? 'MIS' : 'NRML')
+  }, [isEquityExch])
+
+  // Equity symbol search (NSE/BSE).
+  const { data: eqSearchResp } = useQuery({
+    queryKey: ['scalping', 'eqsearch', exchange, searchQuery],
+    queryFn: () => scalpingApi.search(exchange, searchQuery),
+    enabled: isEquityExch && searchQuery.trim().length >= 2,
   })
-  // Equity / MCX-CDS-option search results (exclude FUT for non-futures segments).
-  const searchResults = (searchResp?.data ?? []).filter((r) => !r.symbol.endsWith('FUT'))
-  // Futures: distinct underlyings from the search (user picks underlying, then expiry).
-  const futUnderlyingOptions = useMemo(() => {
-    if (segment !== 'FUTURES') return [] as string[]
+  const equityResults = eqSearchResp?.data ?? []
+
+  // Derivative underlying search (distinct names) for Options + Futures.
+  const { data: undSearchResp } = useQuery({
+    queryKey: ['scalping', 'undsearch', exchange, underlyingQuery],
+    queryFn: () => scalpingApi.search(exchange, underlyingQuery),
+    enabled: !isEquityExch && underlyingQuery.trim().length >= 2,
+  })
+  const underlyingMatches = useMemo(() => {
     const seen = new Set<string>()
-    for (const r of searchResp?.data ?? []) {
-      if (!r.symbol.endsWith('FUT')) continue
-      const nm = (r.name || '').toUpperCase() || r.symbol
-      seen.add(nm)
+    for (const r of undSearchResp?.data ?? []) {
+      const nm = (r.name || '').toUpperCase()
+      if (nm) seen.add(nm)
     }
-    return [...seen]
-  }, [searchResp, segment])
+    return [...seen].slice(0, 25)
+  }, [undSearchResp])
 
-  // Futures contracts (per expiry) for the chosen underlying.
-  const { data: futResp } = useQuery({
-    queryKey: ['scalping', 'futures', futUnderlying, searchExchange],
-    queryFn: () => scalpingApi.futures(futUnderlying, searchExchange),
-    enabled: segment === 'FUTURES' && !!futUnderlying,
-  })
-  const futContracts = futResp?.data ?? []
-
-  // Underlyings (options), filtered to the selected exchange's index family.
-  const { data: underlyingsResp } = useQuery({
-    queryKey: ['scalping', 'underlyings'],
-    queryFn: () => scalpingApi.getUnderlyings(),
-  })
-  const indexFamily = exchange === 'NSE' ? 'NSE_INDEX' : 'BSE_INDEX'
-  const underlyings = (underlyingsResp?.data ?? []).filter((u) => u.index_exchange === indexFamily)
-  const underlyingCfg = underlyings.find((u) => u.underlying === underlying)
-
-  // Expiry (depends on underlying)
+  // Options expiry for the derivative underlying.
   const { data: expiryResp } = useQuery({
-    queryKey: ['scalping', 'expiry', underlying],
-    queryFn: () => scalpingApi.getExpiry(underlying),
-    enabled: !!underlying,
+    queryKey: ['scalping', 'expiry', exchange, underlying],
+    queryFn: () => scalpingApi.getExpiry(underlying, exchange, 'options'),
+    enabled: optionsMode && !!underlying,
   })
   const expiries = expiryResp?.data ?? []
-
-  // Default selection on load: NIFTY → nearest (current-week) expiry → ATM strikes.
-  // ATM is applied once the chain loads (effect further below).
   useEffect(() => {
-    if (!underlying && underlyings.length > 0) {
-      const hasNifty = underlyings.some((u) => u.underlying === 'NIFTY')
-      setUnderlying(hasNifty ? 'NIFTY' : underlyings[0].underlying)
+    if (optionsMode && underlying && !expiry && expiries.length > 0) {
+      setExpiry(expiries[0]) // nearest expiry
     }
-  }, [underlyings, underlying])
+  }, [expiries, underlying, expiry, optionsMode])
 
-  useEffect(() => {
-    if (underlying && !expiry && expiries.length > 0) {
-      setExpiry(expiries[0]) // nearest future expiry (service returns ascending)
-    }
-  }, [expiries, underlying, expiry])
-
-  // Strikes / chain (depends on underlying + expiry)
+  // Option chain (depends on underlying + expiry).
   const { data: chainResp } = useQuery({
-    queryKey: ['scalping', 'strikes', underlying, expiry],
-    queryFn: () => scalpingApi.getStrikes(underlying, expiry, DEFAULT_STRIKE_COUNT),
-    enabled: !!underlying && !!expiry,
+    queryKey: ['scalping', 'strikes', exchange, underlying, expiry],
+    queryFn: () => scalpingApi.getStrikes(underlying, exchange, expiry, DEFAULT_STRIKE_COUNT),
+    enabled: optionsMode && !!underlying && !!expiry,
   })
   const chain = useMemo(() => chainResp?.chain ?? [], [chainResp])
-  const foExchange = chainResp?.fo_exchange ?? underlyingCfg?.fo_exchange ?? ''
-  const indexExchange = chainResp?.index_exchange ?? underlyingCfg?.index_exchange ?? ''
+  const foExchange = chainResp?.fo_exchange ?? exchange
+  // Underlying ticker subscription target (index/stock spot, or the future for MCX/CDS).
+  const underlyingSym = chainResp?.underlying_symbol ?? underlying
+  const underlyingExch = chainResp?.underlying_exchange ?? exchange
+
+  // Futures contracts (per expiry) for the derivative underlying.
+  const { data: futResp } = useQuery({
+    queryKey: ['scalping', 'futures', exchange, underlying],
+    queryFn: () => scalpingApi.futures(underlying, exchange),
+    enabled: !isEquityExch && segment === 'FUTURES' && !!underlying,
+  })
+  const futContracts = futResp?.data ?? []
 
   // Default the CE/PE strike to ATM when the chain loads — but preserve a valid
   // manual selection (only reset to ATM if the current pick isn't in this chain,
@@ -457,14 +445,14 @@ export default function Scalping() {
       seen.add(k)
       list.push({ symbol, exchange })
     }
-    if (underlying && indexExchange) add(underlying, indexExchange)
+    if (optionsMode && underlyingSym && underlyingExch) add(underlyingSym, underlyingExch)
     if (ceLeg) add(ceLeg.symbol, ceLeg.exchange)
     if (peLeg) add(peLeg.symbol, peLeg.exchange)
     if (singleLeg) add(singleLeg.symbol, singleLeg.exchange)
     for (const p of positions) add(p.symbol, p.exchange)
     for (const t of trades) add(t.symbol, t.exchange)
     return list
-  }, [underlying, indexExchange, ceLeg, peLeg, singleLeg, positions, trades])
+  }, [optionsMode, underlyingSym, underlyingExch, ceLeg, peLeg, singleLeg, positions, trades])
 
   const {
     data: marketData,
@@ -477,7 +465,7 @@ export default function Scalping() {
     enabled: symbols.length > 0,
   })
 
-  const underlyingTick = marketData.get(`${indexExchange}:${underlying}`)?.data
+  const underlyingTick = marketData.get(`${underlyingExch}:${underlyingSym}`)?.data
   const ceTick = ceLeg ? marketData.get(`${ceLeg.exchange}:${ceLeg.symbol}`)?.data : undefined
   const peTick = peLeg ? marketData.get(`${peLeg.exchange}:${peLeg.symbol}`)?.data : undefined
   const singleTick = singleLeg
@@ -886,7 +874,7 @@ export default function Scalping() {
 
       {/* Selection controls */}
       <Card>
-        <CardContent className="grid grid-cols-1 gap-4 pt-6 md:grid-cols-4">
+        <CardContent className="grid grid-cols-1 gap-4 pt-6 md:grid-cols-6">
           <div className="space-y-1">
             <label className="text-sm text-muted-foreground">Exchange</label>
             <Select value={exchange} onValueChange={(v) => setExchange(v as ScalpingExchange)}>
@@ -894,10 +882,11 @@ export default function Scalping() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="NSE">NSE</SelectItem>
-                <SelectItem value="BSE">BSE</SelectItem>
-                <SelectItem value="MCX">MCX</SelectItem>
-                <SelectItem value="CDS">CDS</SelectItem>
+                {EXCHANGES.map((x) => (
+                  <SelectItem key={x} value={x}>
+                    {x}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -909,39 +898,87 @@ export default function Scalping() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="OPTIONS">Options</SelectItem>
-                <SelectItem value="FUTURES">Futures</SelectItem>
-                {equityAllowed && <SelectItem value="EQUITY">Equity</SelectItem>}
+                {isEquityExch ? (
+                  <SelectItem value="EQUITY">Equity</SelectItem>
+                ) : (
+                  <>
+                    <SelectItem value="OPTIONS">Options</SelectItem>
+                    <SelectItem value="FUTURES">Futures</SelectItem>
+                  </>
+                )}
               </SelectContent>
             </Select>
           </div>
 
-          {!isSingle && (
-            <>
-              <div className="space-y-1">
-                <label className="text-sm text-muted-foreground">Underlying</label>
-                <Select
-                  value={underlying}
-                  onValueChange={(v) => {
-                    setUnderlying(v)
-                    setExpiry('')
-                    setCeStrike('')
-                    setPeStrike('')
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select underlying" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {underlyings.map((u) => (
-                      <SelectItem key={u.underlying} value={u.underlying}>
-                        {u.underlying}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+          {/* Equity (NSE/BSE): symbol search */}
+          {isEquityExch && (
+            <div className="relative space-y-1 md:col-span-2">
+              <label className="text-sm text-muted-foreground">Symbol</label>
+              <Input
+                value={instrument ? instrument.symbol : searchQuery}
+                placeholder="Search e.g. RELIANCE"
+                onChange={(e) => {
+                  setInstrument(null)
+                  setSearchQuery(e.target.value)
+                }}
+              />
+              {!instrument && equityResults.length > 0 && (
+                <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover shadow-md">
+                  {equityResults.slice(0, 25).map((r) => (
+                    <button
+                      type="button"
+                      key={`${r.exchange}:${r.symbol}`}
+                      className="block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted"
+                      onClick={() => {
+                        setInstrument(r)
+                        setSearchQuery('')
+                      }}
+                    >
+                      {r.symbol}
+                      {r.name ? <span className="text-muted-foreground"> · {r.name}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
+          {/* Derivatives (NFO/BFO/MCX/CDS): underlying search shared by options + futures */}
+          {!isEquityExch && (
+            <div className="relative space-y-1">
+              <label className="text-sm text-muted-foreground">Underlying</label>
+              <Input
+                value={underlyingQuery !== '' ? underlyingQuery : underlying}
+                placeholder="Search e.g. NIFTY / CRUDEOIL"
+                onChange={(e) => setUnderlyingQuery(e.target.value)}
+              />
+              {underlyingQuery.trim().length >= 2 && underlyingMatches.length > 0 && (
+                <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover shadow-md">
+                  {underlyingMatches.map((nm) => (
+                    <button
+                      type="button"
+                      key={nm}
+                      className="block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted"
+                      onClick={() => {
+                        setUnderlying(nm)
+                        setUnderlyingQuery('')
+                        setExpiry('')
+                        setCeStrike('')
+                        setPeStrike('')
+                        setInstrument(null)
+                      }}
+                    >
+                      {nm}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Options: expiry + CE/PE strikes (dual-leg) */}
+          {optionsMode && (
+            <>
               <div className="space-y-1">
                 <label className="text-sm text-muted-foreground">Expiry</label>
                 <Select value={expiry} onValueChange={setExpiry} disabled={!underlying}>
@@ -992,104 +1029,37 @@ export default function Scalping() {
             </>
           )}
 
-          {/* Equity / MCX-CDS option: single symbol search */}
-          {isSingle && segment !== 'FUTURES' && (
-            <div className="relative space-y-1 md:col-span-2">
-              <label className="text-sm text-muted-foreground">
-                {segment === 'EQUITY' ? 'Equity Symbol' : 'Option Symbol'}
-              </label>
-              <Input
-                value={instrument ? instrument.symbol : searchQuery}
-                placeholder={segment === 'EQUITY' ? 'Search e.g. RELIANCE' : 'Search option symbol'}
-                onChange={(e) => {
-                  setInstrument(null)
-                  setSearchQuery(e.target.value)
+          {/* Futures: expiry dropdown → framed FUT symbol */}
+          {!isEquityExch && segment === 'FUTURES' && (
+            <div className="space-y-1">
+              <label className="text-sm text-muted-foreground">Expiry</label>
+              <Select
+                value={instrument?.symbol ?? ''}
+                disabled={!underlying || futContracts.length === 0}
+                onValueChange={(sym) => {
+                  const c = futContracts.find((x) => x.symbol === sym)
+                  if (c) {
+                    setInstrument({
+                      symbol: c.symbol,
+                      exchange,
+                      lotsize: c.lotsize,
+                      name: underlying,
+                    })
+                  }
                 }}
-              />
-              {!instrument && searchResults.length > 0 && (
-                <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover shadow-md">
-                  {searchResults.slice(0, 25).map((r) => (
-                    <button
-                      type="button"
-                      key={`${r.exchange}:${r.symbol}`}
-                      className="block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted"
-                      onClick={() => {
-                        setInstrument(r)
-                        setSearchQuery('')
-                      }}
-                    >
-                      {r.symbol}
-                      {r.name ? <span className="text-muted-foreground"> · {r.name}</span> : null}
-                    </button>
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select expiry" />
+                </SelectTrigger>
+                <SelectContent>
+                  {futContracts.map((c) => (
+                    <SelectItem key={c.symbol} value={c.symbol}>
+                      {c.expiry}
+                    </SelectItem>
                   ))}
-                </div>
-              )}
+                </SelectContent>
+              </Select>
             </div>
-          )}
-
-          {/* Futures: pick underlying (search) then expiry → framed FUT symbol */}
-          {segment === 'FUTURES' && (
-            <>
-              <div className="relative space-y-1">
-                <label className="text-sm text-muted-foreground">Underlying</label>
-                <Input
-                  value={futUnderlying || searchQuery}
-                  placeholder="Search e.g. NIFTY / CRUDEOIL / USDINR"
-                  onChange={(e) => {
-                    setFutUnderlying('')
-                    setInstrument(null)
-                    setSearchQuery(e.target.value)
-                  }}
-                />
-                {!futUnderlying && futUnderlyingOptions.length > 0 && (
-                  <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover shadow-md">
-                    {futUnderlyingOptions.slice(0, 25).map((nm) => (
-                      <button
-                        type="button"
-                        key={nm}
-                        className="block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted"
-                        onClick={() => {
-                          setFutUnderlying(nm)
-                          setSearchQuery('')
-                        }}
-                      >
-                        {nm}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-sm text-muted-foreground">Expiry</label>
-                <Select
-                  value={instrument?.symbol ?? ''}
-                  disabled={!futUnderlying || futContracts.length === 0}
-                  onValueChange={(sym) => {
-                    const c = futContracts.find((x) => x.symbol === sym)
-                    if (c) {
-                      setInstrument({
-                        symbol: c.symbol,
-                        exchange: searchExchange,
-                        lotsize: c.lotsize,
-                        name: futUnderlying,
-                      })
-                    }
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select expiry" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {futContracts.map((c) => (
-                      <SelectItem key={c.symbol} value={c.symbol}>
-                        {c.expiry}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </>
           )}
         </CardContent>
       </Card>
@@ -1207,7 +1177,7 @@ export default function Scalping() {
               <span className="text-sm text-muted-foreground">Product Type</span>
               <Select value={product} onValueChange={(v) => setProduct(v as ScalpingProduct)}>
                 <SelectTrigger className="w-28">
-                  <SelectValue>{productDisplay(product)}</SelectValue>
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="MIS">Intraday</SelectItem>
@@ -1419,7 +1389,7 @@ export default function Scalping() {
                   return (
                     <TableRow key={`${r.exchange}:${r.symbol}:${r.product}`}>
                       <TableCell className="font-mono text-sm">{r.symbol}</TableCell>
-                      <TableCell>{productLabel(r.product)}</TableCell>
+                      <TableCell>{r.product}</TableCell>
                       <TableCell
                         className={
                           r.side === 'BUY'

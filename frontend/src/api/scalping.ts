@@ -18,9 +18,13 @@ export const scalpingApi = {
     return response.data
   },
 
-  getExpiry: async (underlying: string): Promise<ExpiryResponse> => {
+  getExpiry: async (
+    underlying: string,
+    exchange: string,
+    instrumenttype: 'options' | 'futures' = 'options'
+  ): Promise<ExpiryResponse> => {
     const response = await webClient.get<ExpiryResponse>('/scalping/api/expiry', {
-      params: { underlying },
+      params: { underlying, exchange, instrumenttype },
     })
     return response.data
   },
@@ -50,11 +54,12 @@ export const scalpingApi = {
 
   getStrikes: async (
     underlying: string,
+    exchange: string,
     expiry: string,
     strikeCount = 10
   ): Promise<OptionChainResponse> => {
     const response = await webClient.get<OptionChainResponse>('/scalping/api/strikes', {
-      params: { underlying, expiry, strike_count: strikeCount },
+      params: { underlying, exchange, expiry, strike_count: strikeCount },
     })
     return response.data
   },
