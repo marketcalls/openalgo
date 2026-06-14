@@ -59,12 +59,23 @@ export function useOrderEventRefresh(
 
   const socketRef = useRef<Socket | null>(null)
   const refreshFnRef = useRef(refreshFn)
+  const eventsRef = useRef(events)
+  eventsRef.current = events
 
   // Keep refresh function reference up to date
   useEffect(() => {
     refreshFnRef.current = refreshFn
   }, [refreshFn])
 
+  // Depend on a STABLE key, not the array identity. Callers almost always pass an
+  // inline array (new reference every render); keying the effect on the array
+  // identity tore down and recreated the Socket.IO connection on every render,
+  // churning server-side connections/threads and degrading the whole app. Keying
+  // on the event *contents* means we connect once and only reconnect when the set
+  // actually changes.
+  const eventsKey = events.join('|')
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events read via ref; eventsKey tracks content
   useEffect(() => {
     if (!enabled) return
 
@@ -73,32 +84,29 @@ export function useOrderEventRefresh(
     const host = window.location.hostname
     const port = window.location.port
 
-    socketRef.current = io(`${protocol}//${host}:${port}`, {
+    const socket = io(`${protocol}//${host}:${port}`, {
       transports: ['polling'],
       upgrade: false,
     })
+    socketRef.current = socket
 
-    const socket = socketRef.current
-
-    // Create handler for each event type
     const handleEvent = () => {
       // Delay slightly to allow server to process the event
       setTimeout(() => refreshFnRef.current(), delay)
     }
 
-    // Register listeners for all specified events
-    events.forEach((event) => {
+    const subscribed = eventsRef.current
+    subscribed.forEach((event) => {
       socket.on(event, handleEvent)
     })
 
-    // Cleanup on unmount
     return () => {
-      events.forEach((event) => {
+      subscribed.forEach((event) => {
         socket.off(event, handleEvent)
       })
       socket.disconnect()
     }
-  }, [events, delay, enabled])
+  }, [eventsKey, delay, enabled])
 }
 
 /**

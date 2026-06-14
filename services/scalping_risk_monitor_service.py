@@ -533,14 +533,15 @@ class ScalpingRiskMonitor:
             self._remove_session("database.user_db")
 
     def _resolve_auth(self):
-        """Resolve (exit_api_key, auth_token, broker) for positionbook + exits.
+        """Resolve (api_key, auth_token, broker) for positionbook + exits.
 
-        Analyze (sandbox) mode passes the api_key ONLY (sandbox routes via api_key;
-        passing auth_token+broker would read the live book). Live mode uses
-        auth_token + broker. Returns None if auth can't be resolved.
+        Pass the api_key ONLY (auth_token/broker None) and let the service layer
+        route by mode — sandbox in analyze mode, live otherwise. Required because
+        place_order validates a mandatory `apikey` regardless of auth path, and
+        get_positionbook routes by param presence (auth_token+broker would force
+        the live book and hide sandbox positions). Returns None if no api_key.
         """
-        from database.auth_db import get_api_key_for_tradingview, get_auth_token_broker
-        from database.settings_db import get_analyze_mode
+        from database.auth_db import get_api_key_for_tradingview
         from database.user_db import find_user_by_username
 
         try:
@@ -550,16 +551,7 @@ class ScalpingRiskMonitor:
             api_key = get_api_key_for_tradingview(user.username)
             if not api_key:
                 return None
-            if get_analyze_mode():
-                return api_key, None, None  # sandbox: api_key ONLY
-            auth_token, broker = (None, None)
-            try:
-                auth_token, broker = get_auth_token_broker(api_key)
-            except Exception:
-                pass
-            if not auth_token or not broker:
-                return None
-            return None, auth_token, broker
+            return api_key, None, None
         finally:
             self._remove_session("database.user_db")
 

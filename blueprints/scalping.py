@@ -17,7 +17,7 @@ import math
 
 from flask import Blueprint, jsonify, request, session
 
-from database.auth_db import get_api_key_for_tradingview, get_auth_token
+from database.auth_db import get_api_key_for_tradingview
 from database.settings_db import get_analyze_mode
 from services.expiry_service import get_expiry_dates
 from services.option_chain_service import get_option_chain
@@ -419,31 +419,27 @@ def futures():
 def _resolve_session_auth():
     """Return (auth_token, broker, api_key, error_response, status_code).
 
-    In analyze (sandbox) mode the services route to the sandbox using the API key,
-    so a live broker token is NOT required — only the API key. In live mode the
-    broker auth_token + broker name are required.
+    Resolves the api_key ONLY (auth_token/broker always None) and lets the service
+    layer route by mode: api_key alone → sandbox in analyze mode, live broker
+    otherwise — the same path the REST API and React dashboard use. We deliberately
+    do NOT pass auth_token + broker because:
+      - place_order requires `apikey` for validation regardless of auth path, so
+        omitting it (live mode) caused "Missing mandatory field(s): apikey";
+      - get_positionbook routes by param presence, so passing auth_token + broker
+        in analyze mode would read the LIVE book and miss sandbox positions.
     """
     username = session.get("user")
     if not username:
         return None, None, None, {"status": "error", "message": "Not authenticated"}, 401
 
-    auth_token = get_auth_token(username)
-    broker = session.get("broker")
-
-    if get_analyze_mode():
-        api_key = get_api_key_for_tradingview(username)
-        if not api_key:
-            return (
-                None, None, None,
-                {"status": "error", "message": "API key required for analyzer mode (generate at /apikey)"},
-                401,
-            )
-        # auth_token/broker are optional in analyzer mode (sandbox routes via api_key).
-        return auth_token, broker, api_key, None, None
-
-    if not auth_token or not broker:
-        return None, None, None, {"status": "error", "message": "Authentication error"}, 401
-    return auth_token, broker, None, None, None
+    api_key = get_api_key_for_tradingview(username)
+    if not api_key:
+        return (
+            None, None, None,
+            {"status": "error", "message": "API key required. Generate one at /apikey"},
+            401,
+        )
+    return None, None, api_key, None, None
 
 
 def _validate_quantity(symbol: str, exchange: str, quantity: int) -> str | None:
