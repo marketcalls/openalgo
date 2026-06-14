@@ -325,19 +325,93 @@ def order():
     success, response, status_code = place_order(
         order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
     )
+    # Record this instrument in the scalping list so Close-All / the position book
+    # stay scoped to the scalping strategy (broker positions carry no strategy tag).
+    if success:
+        from database.scalping_db import track_symbol
+
+        track_symbol(symbol, exchange, product)
     return jsonify(response), status_code
+
+
+def _reducing_exit(symbol, exchange, product, action, quantity, auth_token, broker, api_key):
+    """Freeze-safe, whole-lot risk-reducing exit. Returns (success, response, code).
+
+    Bypasses the entry lot cap (a stop-loss / close must flatten any size), requires
+    whole-lot quantities for derivatives, and splits into freeze-sized whole-lot
+    chunks so no single order exceeds the exchange freeze limit. Used by both
+    close_leg (single) and close_all (per scalping position).
+    """
+    split_chunk = 0  # max whole-lot quantity per order (0 => no chunking)
+    if _is_derivative(exchange):
+        from database.symbol import SymToken
+        from database.symbol import db_session as symbol_session
+
+        rec = (
+            symbol_session.query(SymToken)
+            .filter(SymToken.symbol == symbol, SymToken.exchange == exchange)
+            .first()
+        )
+        if not rec or not rec.lotsize or rec.lotsize <= 0:
+            return False, {"status": "error", "message": f"Unknown symbol: {symbol}"}, 400
+        lotsize = rec.lotsize
+        if quantity % lotsize != 0:
+            return (
+                False,
+                {"status": "error", "message": f"quantity must be a whole number of lots ({lotsize})"},
+                400,
+            )
+
+        # Whole-lot freeze cap: floor(freeze / lotsize) * lotsize (NIFTY 1800/65 =>
+        # 27 lots = 1755). Unknown freeze (non-NFO default / cache empty) falls back
+        # to a conservative MAX_LOTS-lot chunk so exits never exceed the real freeze.
+        freeze = 0
+        try:
+            from database.qty_freeze_db import get_freeze_qty_for_option
+
+            raw_freeze = get_freeze_qty_for_option(symbol, exchange) or 0
+            freeze = (raw_freeze // lotsize) * lotsize if raw_freeze else 0
+        except Exception as e:
+            logger.warning(f"Scalping exit freeze lookup failed for {symbol}: {e}")
+        split_chunk = freeze if freeze > 0 else MAX_LOTS * lotsize
+
+    if split_chunk and quantity > split_chunk:
+        from services.split_order_service import split_order
+
+        split_data = {
+            "strategy": SCALPING_STRATEGY,
+            "symbol": symbol,
+            "exchange": exchange,
+            "action": action,
+            "quantity": quantity,
+            "splitsize": split_chunk,
+            "pricetype": "MARKET",
+            "product": product,
+        }
+        return split_order(
+            split_data=split_data, api_key=api_key, auth_token=auth_token, broker=broker
+        )
+
+    from services.place_order_service import place_order
+
+    order_data = {
+        "strategy": SCALPING_STRATEGY,
+        "symbol": symbol,
+        "exchange": exchange,
+        "action": action,
+        "pricetype": "MARKET",
+        "product": product,
+        "quantity": quantity,
+    }
+    return place_order(
+        order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
+    )
 
 
 @scalping_bp.route("/scalping/api/close_leg", methods=["POST"])
 @check_session_validity
 def close_leg():
-    """Risk-reducing single-leg exit (used by the trailing-SL engine).
-
-    Unlike /order, this does NOT apply the entry lot cap — a stop-loss must be able
-    to flatten a position of any size. It still requires whole-lot quantities and
-    splits into exchange-freeze-sized chunks when the quantity exceeds the freeze
-    limit (a single market order above freeze is rejected by the exchange).
-    """
+    """Risk-reducing single-leg exit (used by the trailing-SL engine + per-row Close)."""
     data = request.get_json(silent=True) or {}
     symbol = (data.get("symbol") or "").strip()
     exchange = (data.get("exchange") or "").strip().upper()
@@ -366,77 +440,8 @@ def close_leg():
     if err:
         return jsonify(err), code
 
-    # Equity (NSE/BSE) trades in whole shares — no lot-multiple / freeze handling.
-    split_chunk = 0  # max whole-lot quantity per order (0 => no chunking)
-    if _is_derivative(exchange):
-        # Whole-lot validation only (NO entry lot cap — this is risk-reducing).
-        from database.symbol import SymToken
-        from database.symbol import db_session as symbol_session
-
-        rec = (
-            symbol_session.query(SymToken)
-            .filter(SymToken.symbol == symbol, SymToken.exchange == exchange)
-            .first()
-        )
-        if not rec or not rec.lotsize or rec.lotsize <= 0:
-            return jsonify({"status": "error", "message": f"Unknown symbol: {symbol}"}), 400
-        lotsize = rec.lotsize
-        if quantity % lotsize != 0:
-            return jsonify(
-                {"status": "error", "message": f"quantity must be a whole number of lots ({lotsize})"}
-            ), 400
-
-        # Exchange freeze limit (single-order cap). The raw freeze quantity is not
-        # necessarily a whole number of lots (e.g. NIFTY freeze 1800, lot size 65 =>
-        # 27.69 lots), and every order must be a whole-lot multiple — so the usable
-        # per-order cap is floor(freeze / lotsize) * lotsize (27 lots = 1755).
-        freeze = 0
-        try:
-            from database.qty_freeze_db import get_freeze_qty_for_option
-
-            raw_freeze = get_freeze_qty_for_option(symbol, exchange) or 0
-            freeze = (raw_freeze // lotsize) * lotsize if raw_freeze else 0
-        except Exception as e:
-            logger.warning(f"Scalping close_leg freeze lookup failed for {symbol}: {e}")
-
-        # If the freeze limit is unknown (non-NFO default, or cache not loaded), we
-        # MUST NOT send the whole position as one order — it can exceed the real
-        # exchange freeze. Fall back to a conservative whole-lot chunk so an exit is
-        # always split into safe pieces.
-        split_chunk = freeze if freeze > 0 else MAX_LOTS * lotsize
-
-    if split_chunk and quantity > split_chunk:
-        # Split into whole-lot chunks so no single order exceeds the freeze limit.
-        from services.split_order_service import split_order
-
-        split_data = {
-            "strategy": SCALPING_STRATEGY,
-            "symbol": symbol,
-            "exchange": exchange,
-            "action": action,
-            "quantity": quantity,
-            "splitsize": split_chunk,
-            "pricetype": "MARKET",
-            "product": product,
-        }
-        success, response, status_code = split_order(
-            split_data=split_data, api_key=api_key, auth_token=auth_token, broker=broker
-        )
-        return jsonify(response), status_code
-
-    from services.place_order_service import place_order
-
-    order_data = {
-        "strategy": SCALPING_STRATEGY,
-        "symbol": symbol,
-        "exchange": exchange,
-        "action": action,
-        "pricetype": "MARKET",
-        "product": product,
-        "quantity": quantity,
-    }
-    success, response, status_code = place_order(
-        order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
+    success, response, status_code = _reducing_exit(
+        symbol, exchange, product, action, quantity, auth_token, broker, api_key
     )
     return jsonify(response), status_code
 
@@ -444,17 +449,58 @@ def close_leg():
 @scalping_bp.route("/scalping/api/close_all", methods=["POST"])
 @check_session_validity
 def close_all():
-    """Square off all open positions (F6)."""
+    """Close only the SCALPING strategy's open positions (F6), each freeze-safe.
+
+    Scoped to instruments the scalping terminal has traded (the scalping list),
+    NOT the whole account — and routed through the freeze-safe exit so large
+    positions are split, unlike the shared close_position square-off.
+    """
     auth_token, broker, api_key, err, code = _resolve_session_auth()
     if err:
         return jsonify(err), code
 
-    from services.close_position_service import close_position
+    from database.scalping_db import get_tracked_symbols
 
-    success, response, status_code = close_position(
-        position_data={}, api_key=api_key, auth_token=auth_token, broker=broker
+    tracked = get_tracked_symbols()
+    if not tracked:
+        return jsonify({"status": "success", "message": "No scalping positions to close", "results": []})
+
+    from services.positionbook_service import get_positionbook
+
+    ok, posresp, _pc = get_positionbook(api_key=api_key, auth_token=auth_token, broker=broker)
+    positions = (posresp.get("data") or []) if ok and isinstance(posresp, dict) else []
+    posmap = {}
+    for p in positions:
+        key = (p.get("symbol"), (p.get("exchange") or "").upper(), (p.get("product") or "").upper())
+        try:
+            posmap[key] = int(float(p.get("quantity") or 0))
+        except (TypeError, ValueError):
+            posmap[key] = 0
+
+    results = []
+    closed = 0
+    for t in tracked:
+        netqty = posmap.get((t["symbol"], t["exchange"].upper(), t["product"].upper()), 0)
+        if netqty == 0:
+            continue  # flat — nothing to close (kept in the list for realized P&L)
+        exit_action = "SELL" if netqty > 0 else "BUY"
+        ok2, resp2, _c = _reducing_exit(
+            t["symbol"], t["exchange"], t["product"], exit_action, abs(netqty),
+            auth_token, broker, api_key,
+        )
+        results.append(
+            {
+                "symbol": t["symbol"],
+                "status": "success" if ok2 else "error",
+                "message": resp2.get("message") if isinstance(resp2, dict) else None,
+            }
+        )
+        if ok2:
+            closed += 1
+
+    return jsonify(
+        {"status": "success", "message": f"Closed {closed} scalping position(s)", "results": results}
     )
-    return jsonify(response), status_code
 
 
 @scalping_bp.route("/scalping/api/cancel_all", methods=["POST"])
@@ -471,6 +517,24 @@ def cancel_all():
         order_data={}, api_key=api_key, auth_token=auth_token, broker=broker
     )
     return jsonify(response), status_code
+
+
+@scalping_bp.route("/scalping/api/tracked", methods=["GET"])
+@check_session_validity
+def tracked():
+    """Return the scalping list (instruments the terminal has traded) for scoping."""
+    from database.scalping_db import get_tracked_symbols
+
+    return jsonify({"status": "success", "data": get_tracked_symbols()})
+
+
+@scalping_bp.route("/scalping/api/tracked", methods=["DELETE"])
+@check_session_validity
+def reset_tracked():
+    """Clear the scalping list (e.g. session/day reset)."""
+    from database.scalping_db import clear_tracked_symbols
+
+    return jsonify({"status": "success", "cleared": clear_tracked_symbols()})
 
 
 @scalping_bp.route("/scalping/api/sl", methods=["GET"])

@@ -33,7 +33,10 @@ export function buildPositionRows(
   positions: Position[],
   trades: Trade[],
   slMap: Record<string, SLState>,
-  liveLtp?: (symbol: string, exchange: string) => number | undefined
+  liveLtp?: (symbol: string, exchange: string) => number | undefined,
+  // When provided, only instruments in the scalping list (exchange:symbol:product)
+  // are included — scopes the book to the scalping strategy, not the whole account.
+  trackedKeys?: Set<string>
 ): ScalpingPositionRow[] {
   const map = new Map<string, Agg>()
 
@@ -73,6 +76,9 @@ export function buildPositionRows(
 
   const rows: ScalpingPositionRow[] = []
   for (const rec of map.values()) {
+    if (trackedKeys && !trackedKeys.has(keyOf(rec.symbol, rec.exchange, rec.product))) {
+      continue // not part of the scalping list — exclude account-wide positions
+    }
     const buyAvg = rec.buyQty > 0 ? rec.buyValue / rec.buyQty : 0
     const sellAvg = rec.sellQty > 0 ? rec.sellValue / rec.sellQty : 0
     // Prefer the broker net qty (handles carry-over); fall back to today's trades.
