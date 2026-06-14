@@ -1849,7 +1849,7 @@ requires-dist = [
     { name = "tzlocal", specifier = "==5.3.1" },
     { name = "urllib3", specifier = "==2.7.0" },
     { name = "uvicorn", specifier = "==0.44.0" },
-    { name = "wars", specifier = "==0.1.3" },
+    { name = "wars", specifier = "==0.1.4" },
     { name = "wcwidth", specifier = "==0.6.0" },
     { name = "websocket-client", specifier = "==1.9.0" },
     { name = "websockets", specifier = "==15.0.1" },
@@ -3205,17 +3205,17 @@ wheels = [
 
 [[package]]
 name = "wars"
-version = "0.1.3"
+version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "qrcode", extra = ["pil"] },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/9c/c801518ec5b3edd5695601cccaac9eabcd4d702f111839072da2c4e97b3e/wars-0.1.3-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:31b261f52a8df71a3888f0c600bf577e195035ebcb2f2ab3cdf933de2d7520a1", size = 6485955, upload-time = "2026-05-17T02:13:11.852Z" },
-    { url = "https://files.pythonhosted.org/packages/a1/dc/28ddb0ccff13f34864ebbf57bacf3a703f03171f8628b44ce219ecc320e2/wars-0.1.3-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:bf5f827106b9ca575e910eaf9542d95ffc8429ab14eb7f419e4409aeb0ceba56", size = 6082421, upload-time = "2026-05-17T02:13:14.284Z" },
-    { url = "https://files.pythonhosted.org/packages/44/01/024d3898c6bc6c895f243e900fe431bbe5bbffa4a0e401bc3d75be279f77/wars-0.1.3-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:aba35e9331bc0644ea535e0e2a99f169d8fce467680ccde89fa0823f79dfc44a", size = 6222786, upload-time = "2026-05-17T02:13:16.321Z" },
-    { url = "https://files.pythonhosted.org/packages/53/6a/18852e5159004246b00f836b3481e2a028aba50e02d6c3f71b63b746ede6/wars-0.1.3-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3fd4a40822a301f727b620c2e59ef04c86e65b6d36a80c446e6a0718244a112a", size = 6743583, upload-time = "2026-05-17T02:13:18.599Z" },
-    { url = "https://files.pythonhosted.org/packages/78/cb/d0820994018014527f048b8f321d3064dd1c0a261e4f257ed9ff136b4810/wars-0.1.3-cp38-abi3-win_amd64.whl", hash = "sha256:612d5bdf5a0d934d064ae4c0d8c549dbd065afac6a039f816a5a5d6fb7f122bd", size = 7015317, upload-time = "2026-05-17T02:13:20.5Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/4b/18b40e2ab13318c42f560f21d73d0759c1dea7a18b29ec7efabe644b2408/wars-0.1.4-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6269e23f26005a6325787f2cbd301fcc8e22da024d768b6856978690636ff340", size = 6181615, upload-time = "2026-06-14T17:45:54.87Z" },
+    { url = "https://files.pythonhosted.org/packages/03/ad/01be49827393520185734a669f627f8924bbac9dff111102dae40d69d3d8/wars-0.1.4-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:570e41aebd6777f70df38d2fb98ea38ac26664dc34ccb949b21a4efd207986aa", size = 5790476, upload-time = "2026-06-14T17:45:57.04Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/9d/21ce3ad24b8429d107d12ca9f02ebafd0353f38023e8e8458c76824e2709/wars-0.1.4-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a5d0de216e17ff18486626b977e15425d9218cfd0ba2caeb28ea3a5d59818648", size = 5912616, upload-time = "2026-06-14T17:45:59.244Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/e6/62a29d50a6c518f309ef0e4c185adc5c3bfaae6d5ebbc5e67f25cac2251e/wars-0.1.4-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:6a10d382f3ba818234a03ea7baaced87bcefee07379465baccff459c14c228a1", size = 6430810, upload-time = "2026-06-14T17:46:01.707Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/6c/974993ccc855fb1032b10a1029c249cc4a77d276cc9df544c0c812ac3b6b/wars-0.1.4-cp38-abi3-win_amd64.whl", hash = "sha256:02a2ecd1df3d6ec56d929939344d1e4513faccc06385b05bf1ce11fbe0f79779", size = 6745831, upload-time = "2026-06-14T17:46:03.415Z" },
 ]
 
 [[package]]

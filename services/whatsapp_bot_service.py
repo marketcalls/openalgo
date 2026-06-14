@@ -829,32 +829,34 @@ class WhatsAppBotService:
         for jid in recipients:
             try:
                 if jid == self._SELF_MARKER:
-                    # Self-send. Per wars docs, `send("text")` (single-arg)
-                    # routes to the paired device's own number without
-                    # needing us to know the JID. Media-to-self isn't
-                    # supported in wars 0.1 single-arg form, so we require
-                    # an explicit JID for that case — captured lazily from
-                    # incoming is_from_me messages and surfaced after the
-                    # first round-trip.
+                    # Self-send. PREFER the captured owner JID (reliable): sending
+                    # explicitly to own_jid lands in the "Message Yourself" chat.
+                    # The single-arg wars.send("text") "route to owner" form does
+                    # NOT reliably deliver in wars 0.1.3 (it returns without error
+                    # but nothing arrives), so we only use it as a last-resort
+                    # fallback when own_jid hasn't been captured yet.
+                    cfg_jid = get_bot_config().get("own_jid")
                     if media_kwargs:
-                        cfg_jid = get_bot_config().get("own_jid")
                         if not cfg_jid:
                             raise RuntimeError(
                                 "Self-send with media needs the owner JID. "
                                 "Send any /command from your phone first so "
                                 "we can capture it, then retry."
                             )
-                        self._wa.send(cfg_jid, **media_kwargs)
+                        ret = self._wa.send(cfg_jid, **media_kwargs)
                         if document and (text or caption):
                             self._wa.send(cfg_jid, text or caption)
+                    elif cfg_jid:
+                        ret = self._wa.send(cfg_jid, text or "")  # explicit owner JID
                     else:
-                        self._wa.send(text or "")  # single-arg → owner
+                        ret = self._wa.send(text or "")  # single-arg fallback
                 elif media_kwargs:
-                    self._wa.send(jid, **media_kwargs)
+                    ret = self._wa.send(jid, **media_kwargs)
                     if document and (text or caption):
                         self._wa.send(jid, text or caption)
                 else:
-                    self._wa.send(jid, text or "")
+                    ret = self._wa.send(jid, text or "")
+                logger.info("WhatsApp send to %s -> %r", jid, ret)
                 report["sent"].append(jid)
             except Exception as e:
                 logger.exception("WhatsApp send to %s failed", jid)
@@ -899,6 +901,15 @@ class WhatsAppBotService:
             except Exception:
                 logger.exception("WhatsApp message handler crashed")
 
+        @wa.on_disconnect
+        def _on_disconnect() -> None:
+            logger.warning("WhatsApp wars on_disconnect fired")
+            with self._lock:
+                self._is_running = False
+            self._emit(
+                "whatsapp_status", {"is_running": False, "is_paired": self.is_paired}
+            )
+
     def _maybe_capture_own_jid(self, sender_jid: str) -> None:
         """Persist sender_jid as the device's own JID + own_phone if we
         don't have one yet. Idempotent — once set we never overwrite."""
@@ -907,7 +918,6 @@ class WhatsAppBotService:
         cfg = get_bot_config()
         if cfg.get("own_jid"):
             return
-        from database.whatsapp_db import save_session_blob  # local to avoid cycle
         # We don't want to re-encrypt the blob — there's no API for
         # "update identity only". Cheapest path: a tiny dedicated DB helper.
         from database.whatsapp_db import _persist_owner_identity  # noqa: E501
@@ -921,15 +931,6 @@ class WhatsAppBotService:
             logger.info("WhatsApp: captured own_jid=%s lazily", sender_jid)
         except Exception:
             logger.exception("Failed to persist own_jid")
-
-        @wa.on_disconnect
-        def _on_disconnect() -> None:
-            logger.warning("WhatsApp wars on_disconnect fired")
-            with self._lock:
-                self._is_running = False
-            self._emit(
-                "whatsapp_status", {"is_running": False, "is_paired": self.is_paired}
-            )
 
     def _dispatch_command(self, wa, msg, text: str) -> None:
         """Parse `/cmd arg1 arg2 ...` and route to the matching handler.
