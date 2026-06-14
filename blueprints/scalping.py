@@ -191,6 +191,51 @@ def search():
     return jsonify(response), status_code
 
 
+@scalping_bp.route("/scalping/api/futures", methods=["GET"])
+@check_session_validity
+def futures():
+    """Return the futures contracts for an underlying on a derivative exchange.
+
+    Lets the UI offer a per-expiry futures picker (underlying + expiry -> the framed
+    FUT symbol) for any exchange (NFO/BFO/MCX/CDS).
+    """
+    underlying = (request.args.get("underlying") or "").strip().upper()
+    exchange = (request.args.get("exchange") or "").strip().upper()
+    if not underlying:
+        return jsonify({"status": "error", "message": "underlying is required"}), 400
+    if exchange not in VALID_LEG_EXCHANGES:
+        return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
+
+    from datetime import datetime
+
+    from database.symbol import SymToken
+    from database.symbol import db_session as symbol_session
+
+    rows = (
+        symbol_session.query(SymToken)
+        .filter(
+            SymToken.exchange == exchange,
+            SymToken.name == underlying,
+            SymToken.instrumenttype == "FUT",
+        )
+        .all()
+    )
+
+    def parse_expiry(s: str):
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d%b%y"):
+            try:
+                return datetime.strptime((s or "").upper(), fmt)
+            except ValueError:
+                continue
+        return datetime.max
+
+    contracts = sorted(
+        ({"symbol": r.symbol, "expiry": r.expiry, "lotsize": r.lotsize} for r in rows),
+        key=lambda c: parse_expiry(c["expiry"]),
+    )
+    return jsonify({"status": "success", "data": contracts})
+
+
 def _resolve_session_auth():
     """Return (auth_token, broker, api_key, error_response, status_code).
 

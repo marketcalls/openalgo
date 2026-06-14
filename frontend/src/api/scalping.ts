@@ -35,6 +35,19 @@ export const scalpingApi = {
     return response.data
   },
 
+  futures: async (
+    underlying: string,
+    exchange: string
+  ): Promise<{
+    status: string
+    data: Array<{ symbol: string; expiry: string; lotsize: number }>
+  }> => {
+    const response = await webClient.get('/scalping/api/futures', {
+      params: { underlying, exchange },
+    })
+    return response.data
+  },
+
   getStrikes: async (
     underlying: string,
     expiry: string,

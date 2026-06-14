@@ -232,6 +232,8 @@ export default function Scalping() {
   const [searchQuery, setSearchQuery] = useState('')
   const [instrument, setInstrument] = useState<SearchInstrument | null>(null)
   const [equityShares, setEquityShares] = useState(1)
+  // Futures: chosen underlying, so the user can switch expiry (the framed contract).
+  const [futUnderlying, setFutUnderlying] = useState('')
 
   // Order-entry controls. The One-Click arm state is captured/persisted across reloads.
   const [armed, setArmed] = useState<boolean>(loadArmed)
@@ -267,6 +269,7 @@ export default function Scalping() {
     setProduct(segment === 'EQUITY' ? 'MIS' : 'NRML')
     setInstrument(null)
     setSearchQuery('')
+    setFutUnderlying('')
   }, [segment, exchange])
 
   const searchExchange = searchExchangeFor(exchange, segment)
@@ -275,9 +278,27 @@ export default function Scalping() {
     queryFn: () => scalpingApi.search(searchExchange, searchQuery),
     enabled: isSingle && searchQuery.trim().length >= 2,
   })
-  const searchResults = (searchResp?.data ?? []).filter((r) =>
-    segment === 'FUTURES' ? r.symbol.endsWith('FUT') : !r.symbol.endsWith('FUT')
-  )
+  // Equity / MCX-CDS-option search results (exclude FUT for non-futures segments).
+  const searchResults = (searchResp?.data ?? []).filter((r) => !r.symbol.endsWith('FUT'))
+  // Futures: distinct underlyings from the search (user picks underlying, then expiry).
+  const futUnderlyingOptions = useMemo(() => {
+    if (segment !== 'FUTURES') return [] as string[]
+    const seen = new Set<string>()
+    for (const r of searchResp?.data ?? []) {
+      if (!r.symbol.endsWith('FUT')) continue
+      const nm = (r.name || '').toUpperCase() || r.symbol
+      seen.add(nm)
+    }
+    return [...seen]
+  }, [searchResp, segment])
+
+  // Futures contracts (per expiry) for the chosen underlying.
+  const { data: futResp } = useQuery({
+    queryKey: ['scalping', 'futures', futUnderlying, searchExchange],
+    queryFn: () => scalpingApi.futures(futUnderlying, searchExchange),
+    enabled: segment === 'FUTURES' && !!futUnderlying,
+  })
+  const futContracts = futResp?.data ?? []
 
   // Underlyings (options), filtered to the selected exchange's index family.
   const { data: underlyingsResp } = useQuery({
@@ -971,16 +992,15 @@ export default function Scalping() {
             </>
           )}
 
-          {isSingle && (
+          {/* Equity / MCX-CDS option: single symbol search */}
+          {isSingle && segment !== 'FUTURES' && (
             <div className="relative space-y-1 md:col-span-2">
               <label className="text-sm text-muted-foreground">
-                {segment === 'EQUITY' ? 'Equity Symbol' : 'Futures Contract'}
+                {segment === 'EQUITY' ? 'Equity Symbol' : 'Option Symbol'}
               </label>
               <Input
                 value={instrument ? instrument.symbol : searchQuery}
-                placeholder={
-                  segment === 'EQUITY' ? 'Search e.g. RELIANCE' : 'Search e.g. NIFTY FUT'
-                }
+                placeholder={segment === 'EQUITY' ? 'Search e.g. RELIANCE' : 'Search option symbol'}
                 onChange={(e) => {
                   setInstrument(null)
                   setSearchQuery(e.target.value)
@@ -1005,6 +1025,71 @@ export default function Scalping() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Futures: pick underlying (search) then expiry → framed FUT symbol */}
+          {segment === 'FUTURES' && (
+            <>
+              <div className="relative space-y-1">
+                <label className="text-sm text-muted-foreground">Underlying</label>
+                <Input
+                  value={futUnderlying || searchQuery}
+                  placeholder="Search e.g. NIFTY / CRUDEOIL / USDINR"
+                  onChange={(e) => {
+                    setFutUnderlying('')
+                    setInstrument(null)
+                    setSearchQuery(e.target.value)
+                  }}
+                />
+                {!futUnderlying && futUnderlyingOptions.length > 0 && (
+                  <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover shadow-md">
+                    {futUnderlyingOptions.slice(0, 25).map((nm) => (
+                      <button
+                        type="button"
+                        key={nm}
+                        className="block w-full px-3 py-1.5 text-left font-mono text-sm hover:bg-muted"
+                        onClick={() => {
+                          setFutUnderlying(nm)
+                          setSearchQuery('')
+                        }}
+                      >
+                        {nm}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-sm text-muted-foreground">Expiry</label>
+                <Select
+                  value={instrument?.symbol ?? ''}
+                  disabled={!futUnderlying || futContracts.length === 0}
+                  onValueChange={(sym) => {
+                    const c = futContracts.find((x) => x.symbol === sym)
+                    if (c) {
+                      setInstrument({
+                        symbol: c.symbol,
+                        exchange: searchExchange,
+                        lotsize: c.lotsize,
+                        name: futUnderlying,
+                      })
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select expiry" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {futContracts.map((c) => (
+                      <SelectItem key={c.symbol} value={c.symbol}>
+                        {c.expiry}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
