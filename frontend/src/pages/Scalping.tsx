@@ -104,11 +104,61 @@ interface TickerProps {
   title: string
   symbol?: string
   ltp?: number
+  change?: number
   changePercent?: number
+  open?: number
+  high?: number
+  low?: number
 }
 
-function Ticker({ title, symbol, ltp, changePercent }: TickerProps) {
-  const isUp = (changePercent ?? 0) >= 0
+const pctInRange = (v: number, low: number, high: number) =>
+  high > low ? Math.min(100, Math.max(0, ((v - low) / (high - low)) * 100)) : 50
+
+// Horizontal Low→High range bar with markers for Open (○) and current LTP (▼).
+function RangeBar({
+  ltp,
+  open,
+  high,
+  low,
+}: {
+  ltp?: number
+  open?: number
+  high?: number
+  low?: number
+}) {
+  if (ltp == null || high == null || low == null || high <= low) {
+    return <div className="my-3 h-px w-full bg-border" />
+  }
+  const ltpPct = pctInRange(ltp, low, high)
+  const openPct = open != null ? pctInRange(open, low, high) : null
+  return (
+    <div className="my-1">
+      <div className="flex justify-between font-mono text-[11px] text-muted-foreground">
+        <span>L: {low.toFixed(2)}</span>
+        <span>{high.toFixed(2)} :H</span>
+      </div>
+      <div className="relative my-2 h-1 rounded bg-muted">
+        {openPct != null && (
+          <span
+            className="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 h-2.5 w-2.5 rounded-full border-2 border-muted-foreground bg-background"
+            style={{ left: `${openPct}%` }}
+            title={`Open ${open?.toFixed(2)}`}
+          />
+        )}
+        <span
+          className="-translate-x-1/2 -top-1 absolute text-[10px] text-foreground"
+          style={{ left: `${ltpPct}%` }}
+          title={`LTP ${ltp.toFixed(2)}`}
+        >
+          ▲
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function Ticker({ title, symbol, ltp, change, changePercent, open, high, low }: TickerProps) {
+  const isUp = (changePercent ?? change ?? 0) >= 0
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -116,13 +166,22 @@ function Ticker({ title, symbol, ltp, changePercent }: TickerProps) {
       </CardHeader>
       <CardContent>
         <div className="font-mono text-xs text-muted-foreground">{symbol ?? '—'}</div>
-        <div className="font-mono text-2xl font-semibold tabular-nums">
-          {ltp != null ? ltp.toFixed(2) : '—'}
+        <RangeBar ltp={ltp} open={open} high={high} low={low} />
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-2xl font-semibold tabular-nums">
+            {ltp != null ? ltp.toFixed(2) : '—'}
+          </span>
+          {(change != null || changePercent != null) && (
+            <span className={`font-mono text-sm ${isUp ? 'text-green-600' : 'text-red-600'}`}>
+              {isUp ? '+' : ''}
+              {change != null ? change.toFixed(2) : ''}
+              {changePercent != null ? ` (${changePercent.toFixed(2)}%)` : ''}
+            </span>
+          )}
         </div>
-        {changePercent != null && (
-          <div className={`font-mono text-sm ${isUp ? 'text-green-600' : 'text-red-600'}`}>
-            {isUp ? '+' : ''}
-            {changePercent.toFixed(2)}%
+        {open != null && (
+          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+            O {open.toFixed(2)}
           </div>
         )}
       </CardContent>
@@ -660,19 +719,31 @@ export default function Scalping() {
           title="Call (CE)"
           symbol={ceLeg?.symbol}
           ltp={ceTick?.ltp}
+          change={ceTick?.change}
           changePercent={ceTick?.change_percent}
+          open={ceTick?.open}
+          high={ceTick?.high}
+          low={ceTick?.low}
         />
         <Ticker
           title={underlying || 'Underlying'}
           symbol={underlying}
           ltp={underlyingTick?.ltp}
+          change={underlyingTick?.change}
           changePercent={underlyingTick?.change_percent}
+          open={underlyingTick?.open}
+          high={underlyingTick?.high}
+          low={underlyingTick?.low}
         />
         <Ticker
           title="Put (PE)"
           symbol={peLeg?.symbol}
           ltp={peTick?.ltp}
+          change={peTick?.change}
           changePercent={peTick?.change_percent}
+          open={peTick?.open}
+          high={peTick?.high}
+          low={peTick?.low}
         />
       </div>
 
