@@ -37,7 +37,9 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 MIN_TRAIL_PROFIT = 1.0  # don't trail until >= 1 in profit (matches the UI engine)
-EMIT_THROTTLE_SEC = 1.0  # debounce browser SL-update pushes (trailing writes are NOT throttled)
+PERSIST_THROTTLE_SEC = 1.5  # rate-limit trailing-SL writes (latest value, bounds restart staleness)
+EMIT_THROTTLE_SEC = 1.0  # debounce browser SL-update pushes
+MODE_CACHE_SEC = 5.0  # cache analyze/live mode lookup so _on_tick doesn't hit the DB per tick
 EXIT_RETRY_COOLDOWN_SEC = 3.0  # throttle retries for a leg whose exit keeps failing
 SUBSCRIBE_MODE = "LTP"
 
@@ -126,6 +128,7 @@ class ScalpingRiskMonitor:
         self._last_exit_attempt: dict[str, float] = {}
         self._last_persist: dict[str, float] = {}
         self._last_emit: dict[str, float] = {}
+        self._mode_cache: tuple[str | None, float] | None = None
         # Background sync coalescing — sync() does blocking WS subscribe calls (up to
         # ~12s for the proxy ack), so it must NEVER run on a request thread.
         # request_sync() schedules it on a single daemon worker and coalesces repeats.
@@ -341,11 +344,15 @@ class ScalpingRiskMonitor:
         del symkey
 
     def _maybe_persist(self, key: str, state: dict) -> None:
-        # Persist a trailed stop PROMPTLY (no throttle) so a restart never resumes
-        # from a stale, looser stop. Trailing only ratchets, so writes are bounded by
-        # new extremes (not every tick). MUST carry `mode` or the upsert would write
-        # the wrong (analyze-default) row. The UI emit stays throttled separately.
-        self._last_persist[key] = time.monotonic()
+        # Persist the LATEST trailed stop, rate-limited so a fast market can't storm
+        # SQLite writes (which would contend the shared DB and slow every request).
+        # The write always uses the current in-memory state, so staleness on a
+        # restart is bounded to <= PERSIST_THROTTLE_SEC (then it re-trails on the next
+        # tick). MUST carry `mode` or the upsert would write the wrong row.
+        now = time.monotonic()
+        if now - self._last_persist.get(key, 0.0) < PERSIST_THROTTLE_SEC:
+            return
+        self._last_persist[key] = now
         try:
             from database.scalping_db import upsert_sl_state
 
@@ -512,17 +519,25 @@ class ScalpingRiskMonitor:
     def _mode(self) -> str | None:
         """Current trading mode ('analyze'/'live') for segregating SLs.
 
-        Returns None if it can't be determined; callers then degrade safely
-        (no mode filtering — the exit worker's position check still protects).
+        Cached for MODE_CACHE_SEC so the per-tick check in _on_tick doesn't hit the
+        DB (+ a scoped-session remove) on every market tick. Returns None if it
+        can't be determined; callers then degrade safely (no mode filtering — the
+        exit worker's position check still protects).
         """
+        now = time.monotonic()
+        cached = self._mode_cache
+        if cached is not None and now - cached[1] < MODE_CACHE_SEC:
+            return cached[0]
         try:
             from database.settings_db import get_analyze_mode
 
-            return "analyze" if get_analyze_mode() else "live"
+            value = "analyze" if get_analyze_mode() else "live"
         except Exception:
-            return None
+            value = None
         finally:
             self._remove_session("database.settings_db")
+        self._mode_cache = (value, now)
+        return value
 
     def _resolve_api_key(self) -> str | None:
         from database.auth_db import get_api_key_for_tradingview
