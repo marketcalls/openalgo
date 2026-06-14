@@ -48,6 +48,23 @@ const MAX_LOTS = 20
 const ORDER_COOLDOWN_MS = 120 // min gap between two order fires (anti double-fire)
 const ARMED_STORAGE_KEY = 'scalping.armed'
 
+type ScalpingExchange = 'NSE' | 'BSE' | 'MCX' | 'CDS'
+
+// Search exchange for single-instrument segments (equity vs derivatives per exchange).
+function searchExchangeFor(exchange: ScalpingExchange, segment: Segment): string {
+  if (segment === 'EQUITY') return exchange // NSE | BSE
+  if (exchange === 'NSE') return 'NFO'
+  if (exchange === 'BSE') return 'BFO'
+  return exchange // MCX | CDS trade options/futures on their own exchange
+}
+
+// Product display label (OpenAlgo value stays MIS/NRML/CNC on the wire).
+function productDisplay(p: string): string {
+  if (p === 'MIS') return 'Intraday'
+  if (p === 'NRML') return 'Margin'
+  return p
+}
+
 // Order/position events that should refresh the books (event-driven, no polling).
 const BOOK_EVENTS = [
   'order_event',
@@ -198,10 +215,13 @@ export default function Scalping() {
   const appMode = useThemeStore((s) => s.appMode) // 'live' | 'analyzer'
   const queryClient = useQueryClient()
 
-  // Segment & exchange. OPTIONS = dual-leg (CE/PE); FUTURES/EQUITY = single instrument.
-  const [exchange, setExchange] = useState<'NSE' | 'BSE'>('NSE')
+  // Segment & exchange. Index OPTIONS (NSE/BSE) = dual-leg (CE/PE); everything
+  // else (Futures, Equity, and MCX/CDS options) = single instrument via search.
+  const [exchange, setExchange] = useState<ScalpingExchange>('NSE')
   const [segment, setSegment] = useState<Segment>('OPTIONS')
-  const isSingle = segment !== 'OPTIONS'
+  const equityAllowed = exchange === 'NSE' || exchange === 'BSE'
+  const optionsIndexMode = segment === 'OPTIONS' && equityAllowed
+  const isSingle = !optionsIndexMode
 
   const [underlying, setUnderlying] = useState<string>('')
   const [expiry, setExpiry] = useState<string>('')
@@ -236,18 +256,20 @@ export default function Scalping() {
     }
   }, [armed])
 
-  // Segment/exchange change: pick a sensible default product and reset the
-  // single-instrument selection (equity is MIS-only; derivatives default NRML).
+  // Segment/exchange change: pick a sensible default product, force Futures when
+  // Equity isn't available (MCX/CDS), and reset the single-instrument selection.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on segment/exchange change
   useEffect(() => {
+    if (segment === 'EQUITY' && !equityAllowed) {
+      setSegment('FUTURES')
+      return
+    }
     setProduct(segment === 'EQUITY' ? 'MIS' : 'NRML')
     setInstrument(null)
     setSearchQuery('')
   }, [segment, exchange])
 
-  // Exchange the single-instrument search runs on: equity on NSE/BSE, futures on
-  // the matching F&O exchange (NFO/BFO).
-  const searchExchange = segment === 'EQUITY' ? exchange : exchange === 'NSE' ? 'NFO' : 'BFO'
+  const searchExchange = searchExchangeFor(exchange, segment)
   const { data: searchResp } = useQuery({
     queryKey: ['scalping', 'search', searchExchange, searchQuery, segment],
     queryFn: () => scalpingApi.search(searchExchange, searchQuery),
@@ -846,13 +868,15 @@ export default function Scalping() {
         <CardContent className="grid grid-cols-1 gap-4 pt-6 md:grid-cols-4">
           <div className="space-y-1">
             <label className="text-sm text-muted-foreground">Exchange</label>
-            <Select value={exchange} onValueChange={(v) => setExchange(v as 'NSE' | 'BSE')}>
+            <Select value={exchange} onValueChange={(v) => setExchange(v as ScalpingExchange)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="NSE">NSE</SelectItem>
                 <SelectItem value="BSE">BSE</SelectItem>
+                <SelectItem value="MCX">MCX</SelectItem>
+                <SelectItem value="CDS">CDS</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -866,7 +890,7 @@ export default function Scalping() {
               <SelectContent>
                 <SelectItem value="OPTIONS">Options</SelectItem>
                 <SelectItem value="FUTURES">Futures</SelectItem>
-                <SelectItem value="EQUITY">Equity</SelectItem>
+                {equityAllowed && <SelectItem value="EQUITY">Equity</SelectItem>}
               </SelectContent>
             </Select>
           </div>
@@ -1043,45 +1067,79 @@ export default function Scalping() {
               <span className="text-sm font-medium">One-Click</span>
             </label>
 
-            {segment === 'EQUITY' ? (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">Qty</span>
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  value={equityShares}
-                  onChange={(e) => setEquityShares(Math.max(1, Number(e.target.value) || 1))}
-                  className="w-24"
-                />
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">Lots</span>
-                <Select value={String(lots)} onValueChange={(v) => setLots(Number(v))}>
-                  <SelectTrigger className="w-20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: MAX_LOTS }, (_, i) => i + 1).map((n) => (
-                      <SelectItem key={n} value={String(n)}>
-                        {n}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            {/* Qty: +/- stepper. Equity = shares; derivatives = lots (max 20). */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">
+                {segment === 'EQUITY' ? 'Qty' : `Qty (In Lot: ${lots})`}
+              </span>
+              {segment === 'EQUITY' ? (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setEquityShares((q) => Math.max(1, q - 1))}
+                  >
+                    −
+                  </Button>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    value={equityShares}
+                    onChange={(e) => setEquityShares(Math.max(1, Number(e.target.value) || 1))}
+                    className="w-20 text-center"
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setEquityShares((q) => q + 1)}
+                  >
+                    +
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setLots((n) => Math.max(1, n - 1))}
+                  >
+                    −
+                  </Button>
+                  <span className="w-10 text-center font-mono tabular-nums">{lots}</span>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setLots((n) => Math.min(MAX_LOTS, n + 1))}
+                  >
+                    +
+                  </Button>
+                </div>
+              )}
+            </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Product</span>
+              <span className="text-sm text-muted-foreground">Product Type</span>
               <Select value={product} onValueChange={(v) => setProduct(v as ScalpingProduct)}>
+                <SelectTrigger className="w-28">
+                  <SelectValue>{productDisplay(product)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="MIS">Intraday</SelectItem>
+                  {segment !== 'EQUITY' && <SelectItem value="NRML">Margin</SelectItem>}
+                  {segment === 'EQUITY' && <SelectItem value="CNC">Delivery</SelectItem>}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Order Type</span>
+              <Select value="MARKET" disabled>
                 <SelectTrigger className="w-28">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="MIS">MIS</SelectItem>
-                  {segment !== 'EQUITY' && <SelectItem value="NRML">NRML</SelectItem>}
+                  <SelectItem value="MARKET">Market</SelectItem>
                 </SelectContent>
               </Select>
             </div>
