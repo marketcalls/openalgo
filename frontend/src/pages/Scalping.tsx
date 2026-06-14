@@ -94,7 +94,7 @@ export default function Scalping() {
   // Order-entry controls
   const [armed, setArmed] = useState(false)
   const [lots, setLots] = useState(1)
-  const [product, setProduct] = useState<ScalpingProduct>('MIS')
+  const [product, setProduct] = useState<ScalpingProduct>('NRML')
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
 
   // Underlyings
