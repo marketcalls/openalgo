@@ -60,6 +60,15 @@ Instrument under test: **NIFTY** ATM CE/PE and the nearest **NIFTY FUT** on NFO
 - **UI interaction** (keyboard fire, dropdowns, OHLC bar) — requires a browser
   session; covered by `npm run build` + biome, pending a manual click-through.
 
+## Exchange restructure validation (2026-06-14, follow-up)
+After re-landing the unified exchange model (NSE/BSE/NFO/BFO/MCX/CDS):
+- Option chain for **NFO** (NIFTY) and **MCX** (CRUDEOIL, ATM from current-month
+  future LTP) return correct ATM + CE/PE symbols against sandbox.
+- An order resolved through the **generalized strikes path** (NIFTY ATM CE)
+  placed and flattened cleanly in sandbox (entry code 200 → +1 lot → flat).
+- CDS option chain depends on the currency-future carrying a live quote in the
+  feed (no logic issue; degrades gracefully when absent).
+
 ## How to re-run
 With the app connected to a broker in **Analyzer (Sandbox)** mode, run a Python
 script (under the repo root, after `import restx_api` to resolve the service
