@@ -37,8 +37,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 MIN_TRAIL_PROFIT = 1.0  # don't trail until >= 1 in profit (matches the UI engine)
-PERSIST_THROTTLE_SEC = 2.0  # debounce trailing-SL writes (not polling)
-EMIT_THROTTLE_SEC = 1.0  # debounce browser SL-update pushes
+EMIT_THROTTLE_SEC = 1.0  # debounce browser SL-update pushes (trailing writes are NOT throttled)
 EXIT_RETRY_COOLDOWN_SEC = 3.0  # throttle retries for a leg whose exit keeps failing
 SUBSCRIBE_MODE = "LTP"
 
@@ -342,10 +341,11 @@ class ScalpingRiskMonitor:
         del symkey
 
     def _maybe_persist(self, key: str, state: dict) -> None:
-        now = time.monotonic()
-        if now - self._last_persist.get(key, 0.0) < PERSIST_THROTTLE_SEC:
-            return
-        self._last_persist[key] = now
+        # Persist a trailed stop PROMPTLY (no throttle) so a restart never resumes
+        # from a stale, looser stop. Trailing only ratchets, so writes are bounded by
+        # new extremes (not every tick). MUST carry `mode` or the upsert would write
+        # the wrong (analyze-default) row. The UI emit stays throttled separately.
+        self._last_persist[key] = time.monotonic()
         try:
             from database.scalping_db import upsert_sl_state
 
@@ -354,6 +354,7 @@ class ScalpingRiskMonitor:
                     "symbol": state["symbol"],
                     "exchange": state["exchange"],
                     "product": state["product"],
+                    "mode": state.get("mode"),
                     "current_sl": state["current_sl"],
                     "highest_price": state.get("highest_price"),
                     "lowest_price": state.get("lowest_price"),

@@ -29,6 +29,7 @@ import { useMarketData } from '@/hooks/useMarketData'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
 import { buildPositionRows } from '@/lib/scalpingRows'
+import { mergeTick, type TickView } from '@/lib/scalpingTick'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import type {
@@ -86,16 +87,6 @@ const BOOK_EVENTS = [
 
 // A WebSocket tick considered stale after this -> fall back to MultiQuotes.
 const TICK_STALE_MS = 5000
-
-// Normalized ticker view merged from the WS feed or the MultiQuotes fallback.
-interface TickView {
-  ltp?: number
-  change?: number
-  change_percent?: number
-  open?: number
-  high?: number
-  low?: number
-}
 
 // Which leg/product the Set-SL dialog is editing.
 interface SLTarget {
@@ -550,40 +541,19 @@ export default function Scalping() {
     }
   }, [apiKey, symbolsKey])
 
-  // Merged tick, FIELD BY FIELD (avoids flicker). For each field, prefer a FRESH
-  // WebSocket value when it actually exists, else MultiQuotes, else the last WS
-  // snapshot. This matters because the WS Quote tick omits change/change_percent
-  // (and high/low for the index), while MultiQuotes provides them — returning the
-  // WS source wholesale would blank those fields on every tick and flicker.
+  // Merged tick (live WS, MultiQuotes after-hours), field-by-field to avoid flicker.
+  // Logic lives in lib/scalpingTick.mergeTick (pure + unit-tested).
   const getTick = useCallback(
     (symbol: string, exchange: string): TickView | undefined => {
       const key = `${exchange}:${symbol}`
       const entry = marketData.get(key)
-      const ws = entry?.data as TickView | undefined
-      const mq = mqMap.get(key)
-      if (!ws && !mq) return undefined
-      const wsFresh =
-        ws?.ltp != null &&
-        entry?.lastUpdate != null &&
-        Date.now() - entry.lastUpdate < TICK_STALE_MS
-      // Prefer a fresh WS value only when present; otherwise MultiQuotes; otherwise WS snapshot.
-      const pick = (wsVal?: number, mqVal?: number) =>
-        wsFresh && wsVal != null ? wsVal : (mqVal ?? wsVal)
-      const ltp = pick(ws?.ltp, mq?.ltp)
-      const prev = mq?.prev_close || 0
-      const mqChange = prev && ltp != null ? ltp - prev : undefined
-      const mqChangePct = prev && ltp != null ? ((ltp - prev) / prev) * 100 : undefined
-      return {
-        ltp,
-        open: pick(ws?.open, mq?.open),
-        high: pick(ws?.high, mq?.high),
-        low: pick(ws?.low, mq?.low),
-        change: wsFresh && ws?.change != null ? ws.change : (mqChange ?? ws?.change),
-        change_percent:
-          wsFresh && ws?.change_percent != null
-            ? ws.change_percent
-            : (mqChangePct ?? ws?.change_percent),
-      }
+      return mergeTick(
+        entry?.data as TickView | undefined,
+        entry?.lastUpdate,
+        mqMap.get(key),
+        Date.now(),
+        TICK_STALE_MS
+      )
     },
     [marketData, mqMap]
   )
