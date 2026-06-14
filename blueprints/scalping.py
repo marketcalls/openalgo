@@ -72,6 +72,21 @@ SUPPORTED_UNDERLYINGS = {
 }
 
 
+# Index underlyings whose spot LTP comes from the index feed (NSE_INDEX/BSE_INDEX);
+# everything else on NFO/BFO is a stock (NSE/BSE spot). MCX/CDS use the future.
+_NSE_INDEX_UNDERLYINGS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "INDIAVIX"}
+_BSE_INDEX_UNDERLYINGS = {"SENSEX", "BANKEX", "SENSEX50"}
+
+
+def _underlying_quote(underlying: str, fo_exchange: str):
+    """Return (symbol, exchange) to subscribe for the underlying's live LTP."""
+    if fo_exchange == "NFO":
+        return underlying, ("NSE_INDEX" if underlying in _NSE_INDEX_UNDERLYINGS else "NSE")
+    if fo_exchange == "BFO":
+        return underlying, ("BSE_INDEX" if underlying in _BSE_INDEX_UNDERLYINGS else "BSE")
+    return None, None  # MCX/CDS underlying is the current-month future (set separately)
+
+
 def _get_api_key():
     """Resolve the current user's OpenAlgo API key from session."""
     username = session.get("user")
@@ -103,10 +118,14 @@ def underlyings():
 @scalping_bp.route("/scalping/api/expiry", methods=["GET"])
 @check_session_validity
 def expiry():
-    """Return option expiry dates (DDMMMYY) for a supported underlying."""
+    """Return expiry dates (DDMMMYY) for an underlying on an F&O exchange."""
     underlying = (request.args.get("underlying") or "").strip().upper()
-    if underlying not in SUPPORTED_UNDERLYINGS:
-        return jsonify({"status": "error", "message": f"Unsupported underlying: {underlying}"}), 400
+    exchange = (request.args.get("exchange") or "").strip().upper()
+    instrumenttype = (request.args.get("instrumenttype") or "options").strip().lower()
+    if not underlying:
+        return jsonify({"status": "error", "message": "underlying is required"}), 400
+    if exchange not in VALID_LEG_EXCHANGES:
+        return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
 
     api_key = _get_api_key()
     if not api_key:
@@ -114,9 +133,8 @@ def expiry():
             {"status": "error", "message": "API key not configured. Generate one at /apikey"}
         ), 401
 
-    fo_exchange = SUPPORTED_UNDERLYINGS[underlying]["fo_exchange"]
     success, response, status_code = get_expiry_dates(
-        symbol=underlying, exchange=fo_exchange, instrumenttype="options", api_key=api_key
+        symbol=underlying, exchange=exchange, instrumenttype=instrumenttype, api_key=api_key
     )
     if not success:
         return jsonify(response), status_code
@@ -126,15 +144,122 @@ def expiry():
     return jsonify({"status": "success", "data": normalized})
 
 
+def _parse_expiry(s: str):
+    from datetime import datetime
+
+    for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d%b%y"):
+        try:
+            return datetime.strptime((s or "").upper(), fmt)
+        except ValueError:
+            continue
+    from datetime import datetime as _dt
+
+    return _dt.max
+
+
+def _mcx_cds_option_chain(underlying, exchange, expiry_ddmmmyy, strike_count, api_key):
+    """Option chain for MCX/CDS where the ATM reference is the current-month future
+    (no spot symbol exists). Returns (success, response, code) matching get_option_chain.
+    """
+    from database.symbol import SymToken
+    from database.symbol import db_session as symbol_session
+    from services.quotes_service import get_quotes
+
+    futs = (
+        symbol_session.query(SymToken)
+        .filter(
+            SymToken.exchange == exchange,
+            SymToken.name == underlying,
+            SymToken.instrumenttype == "FUT",
+        )
+        .all()
+    )
+    futs = sorted(futs, key=lambda r: _parse_expiry(r.expiry))
+    if not futs:
+        return False, {"status": "error", "message": f"No futures for {underlying} on {exchange}"}, 400
+    fut_symbol = futs[0].symbol
+    ok, qresp, _qc = get_quotes(symbol=fut_symbol, exchange=exchange, api_key=api_key)
+    ltp = float((qresp.get("data") or {}).get("ltp") or 0) if ok and isinstance(qresp, dict) else 0
+    if ltp <= 0:
+        return False, {"status": "error", "message": f"No LTP for {fut_symbol}"}, 400
+
+    opts = (
+        symbol_session.query(SymToken)
+        .filter(
+            SymToken.exchange == exchange,
+            SymToken.name == underlying,
+            SymToken.instrumenttype.in_(("CE", "PE")),
+        )
+        .all()
+    )
+    by_strike: dict = {}
+    for r in opts:
+        if _normalize_expiry(r.expiry or "") != expiry_ddmmmyy:
+            continue
+        by_strike.setdefault(r.strike, {})[r.instrumenttype] = r
+    all_strikes = sorted(by_strike)
+    if not all_strikes:
+        return False, {"status": "error", "message": "No option strikes for that expiry"}, 400
+
+    atm = min(all_strikes, key=lambda s: abs(s - ltp))
+    atm_idx = all_strikes.index(atm)
+    lo = max(0, atm_idx - strike_count)
+    hi = min(len(all_strikes), atm_idx + strike_count + 1)
+
+    chain = []
+    for s in all_strikes[lo:hi]:
+        n = all_strikes.index(s) - atm_idx
+        ce_label = "ATM" if n == 0 else (f"ITM{abs(n)}" if n < 0 else f"OTM{n}")
+        pe_label = "ATM" if n == 0 else (f"OTM{abs(n)}" if n < 0 else f"ITM{n}")
+        ce = by_strike[s].get("CE")
+        pe = by_strike[s].get("PE")
+        chain.append(
+            {
+                "strike": s,
+                "ce": {
+                    "symbol": ce.symbol if ce else None,
+                    "label": ce_label,
+                    "lotsize": ce.lotsize if ce else None,
+                    "tick_size": ce.tick_size if ce else None,
+                },
+                "pe": {
+                    "symbol": pe.symbol if pe else None,
+                    "label": pe_label,
+                    "lotsize": pe.lotsize if pe else None,
+                    "tick_size": pe.tick_size if pe else None,
+                },
+            }
+        )
+
+    return (
+        True,
+        {
+            "status": "success",
+            "underlying": underlying,
+            "underlying_ltp": ltp,
+            "underlying_symbol": fut_symbol,
+            "underlying_exchange": exchange,
+            "expiry_date": expiry_ddmmmyy,
+            "atm_strike": atm,
+            "chain": chain,
+            "fo_exchange": exchange,
+        },
+        200,
+    )
+
+
 @scalping_bp.route("/scalping/api/strikes", methods=["GET"])
 @check_session_validity
 def strikes():
-    """Return the option chain (CE/PE strikes around ATM) for an underlying + expiry."""
+    """Option chain (CE/PE around ATM) for underlying + expiry on any F&O exchange."""
     underlying = (request.args.get("underlying") or "").strip().upper()
-    if underlying not in SUPPORTED_UNDERLYINGS:
-        return jsonify({"status": "error", "message": f"Unsupported underlying: {underlying}"}), 400
+    exchange = (request.args.get("exchange") or "").strip().upper()
+    if not underlying:
+        return jsonify({"status": "error", "message": "underlying is required"}), 400
+    if exchange not in VALID_LEG_EXCHANGES:
+        return jsonify({"status": "error", "message": f"Invalid exchange: {exchange}"}), 400
 
-    expiry_date = (request.args.get("expiry") or "").strip().upper()
+    expiry_date = _normalize_expiry((request.args.get("expiry") or "").strip().upper())
     if not expiry_date:
         return jsonify({"status": "error", "message": "expiry parameter is required"}), 400
 
@@ -150,21 +275,25 @@ def strikes():
             {"status": "error", "message": "API key not configured. Generate one at /apikey"}
         ), 401
 
-    index_exchange = SUPPORTED_UNDERLYINGS[underlying]["index_exchange"]
-    success, response, status_code = get_option_chain(
-        underlying=underlying,
-        exchange=index_exchange,
-        expiry_date=_normalize_expiry(expiry_date),
-        strike_count=strike_count,
-        api_key=api_key,
-    )
-    if not success:
+    if exchange in ("NFO", "BFO"):
+        success, response, status_code = get_option_chain(
+            underlying=underlying,
+            exchange=exchange,
+            expiry_date=expiry_date,
+            strike_count=strike_count,
+            api_key=api_key,
+        )
+        if isinstance(response, dict):
+            response["fo_exchange"] = exchange
+            u_sym, u_exch = _underlying_quote(underlying, exchange)
+            response["underlying_symbol"] = u_sym
+            response["underlying_exchange"] = u_exch
         return jsonify(response), status_code
 
-    # Pass through the chain plus the F&O exchange the legs trade on, so the
-    # frontend can subscribe and (in Phase 1) place orders with the right exchange.
-    response["fo_exchange"] = SUPPORTED_UNDERLYINGS[underlying]["fo_exchange"]
-    response["index_exchange"] = index_exchange
+    # MCX / CDS — ATM from the current-month future.
+    success, response, status_code = _mcx_cds_option_chain(
+        underlying, exchange, expiry_date, strike_count, api_key
+    )
     return jsonify(response), status_code
 
 
