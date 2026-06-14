@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { io, type Socket } from 'socket.io-client'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 
 /**
  * Supported Socket.IO event types for order-related updates
@@ -57,38 +58,28 @@ export function useOrderEventRefresh(
 ): void {
   const { events = ['order_event', 'analyzer_update'], delay = 500, enabled = true } = options
 
-  const socketRef = useRef<Socket | null>(null)
   const refreshFnRef = useRef(refreshFn)
   const eventsRef = useRef(events)
   eventsRef.current = events
+
+  // Reuse the ONE app-wide Socket.IO connection (SocketProvider) instead of opening
+  // our own. Each Socket.IO long-poll holds an HTTP connection, and the browser's
+  // ~6-per-host limit is shared across all tabs — so a per-hook connection (×pages
+  // ×tabs) exhausts the pool and the app hangs. Sharing one connection fixes that.
+  const { socket } = useSocketContext()
 
   // Keep refresh function reference up to date
   useEffect(() => {
     refreshFnRef.current = refreshFn
   }, [refreshFn])
 
-  // Depend on a STABLE key, not the array identity. Callers almost always pass an
-  // inline array (new reference every render); keying the effect on the array
-  // identity tore down and recreated the Socket.IO connection on every render,
-  // churning server-side connections/threads and degrading the whole app. Keying
-  // on the event *contents* means we connect once and only reconnect when the set
-  // actually changes.
+  // Key the effect on the event CONTENTS (callers pass inline arrays), and on the
+  // shared socket — re-attach listeners only when the socket or the set changes.
   const eventsKey = events.join('|')
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: events read via ref; eventsKey tracks content
   useEffect(() => {
-    if (!enabled) return
-
-    // Build Socket.IO URL from current location
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-
-    const socket = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
-    })
-    socketRef.current = socket
+    if (!enabled || !socket) return
 
     const handleEvent = () => {
       // Delay slightly to allow server to process the event
@@ -100,13 +91,13 @@ export function useOrderEventRefresh(
       socket.on(event, handleEvent)
     })
 
+    // Only remove OUR listeners — never disconnect the shared connection.
     return () => {
       subscribed.forEach((event) => {
         socket.off(event, handleEvent)
       })
-      socket.disconnect()
     }
-  }, [eventsKey, delay, enabled])
+  }, [socket, eventsKey, delay, enabled])
 }
 
 /**
