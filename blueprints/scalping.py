@@ -581,7 +581,7 @@ def upsert_sl():
         "quantity": quantity,
     }
     for field in ("entry_price", "initial_sl", "trailing_step", "highest_price",
-                  "lowest_price", "current_sl"):
+                  "lowest_price", "current_sl", "target"):
         if data.get(field) is not None:
             try:
                 val = float(data[field])

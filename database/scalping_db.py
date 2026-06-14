@@ -58,6 +58,7 @@ class ScalpingSLState(Base):
     highest_price = Column(Float, nullable=True)  # peak LTP seen since entry (long legs)
     lowest_price = Column(Float, nullable=True)  # trough LTP seen since entry (short legs)
     current_sl = Column(Float, nullable=True)
+    target = Column(Float, nullable=True)  # take-profit price (0/None = no target)
 
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -102,10 +103,13 @@ def _migrate_add_columns():
         if "scalping_sl_state" not in inspector.get_table_names():
             return
         existing = {c["name"] for c in inspector.get_columns("scalping_sl_state")}
-        if "lowest_price" not in existing:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "lowest_price" not in existing:
                 conn.execute(text("ALTER TABLE scalping_sl_state ADD COLUMN lowest_price FLOAT"))
-            logger.info("Scalping DB: added lowest_price column")
+                logger.info("Scalping DB: added lowest_price column")
+            if "target" not in existing:
+                conn.execute(text("ALTER TABLE scalping_sl_state ADD COLUMN target FLOAT"))
+                logger.info("Scalping DB: added target column")
     except Exception as e:
         logger.exception(f"Error migrating scalping_sl_state columns: {e}")
 
@@ -124,6 +128,7 @@ def _to_dict(row: "ScalpingSLState") -> dict:
         "highest_price": row.highest_price,
         "lowest_price": row.lowest_price,
         "current_sl": row.current_sl,
+        "target": row.target,
         "is_active": row.is_active,
     }
 
@@ -158,6 +163,7 @@ def upsert_sl_state(data: dict) -> dict | None:
             "highest_price",
             "lowest_price",
             "current_sl",
+            "target",
             "is_active",
         ):
             if field in data and data[field] is not None:

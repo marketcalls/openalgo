@@ -47,6 +47,7 @@ export function SetSLDialog({
   const [stoploss, setStoploss] = useState('')
   const [trailingEnabled, setTrailingEnabled] = useState(false)
   const [trailingStep, setTrailingStep] = useState('')
+  const [targetPrice, setTargetPrice] = useState('')
 
   // Seed fields when the dialog opens.
   useEffect(() => {
@@ -55,10 +56,12 @@ export function SetSLDialog({
       setStoploss(String(existing.initialSl))
       setTrailingEnabled(existing.trailingEnabled)
       setTrailingStep(existing.trailingStep ? String(existing.trailingStep) : '')
+      setTargetPrice(existing.target ? String(existing.target) : '')
     } else {
       setStoploss('')
       setTrailingEnabled(false)
       setTrailingStep('')
+      setTargetPrice('')
     }
   }, [open, existing])
 
@@ -81,6 +84,7 @@ export function SetSLDialog({
     if (quantity <= 0) return
     if (directionError) return // wrong-side stop would exit immediately
     const step = Number(trailingStep)
+    const tgt = Number(targetPrice)
     const entry = entryPrice > 0 ? entryPrice : (ltp ?? 0)
     onSave({
       symbol: leg.symbol,
@@ -95,6 +99,7 @@ export function SetSLDialog({
       highestPrice: entry,
       lowestPrice: entry,
       currentSl: sl,
+      target: Number.isFinite(tgt) && tgt > 0 ? tgt : 0,
       active: true,
     })
     onOpenChange(false)
@@ -171,6 +176,18 @@ export function SetSLDialog({
               </p>
             </div>
           )}
+
+          <div className="space-y-1">
+            <Label htmlFor="sl-target">Target price (optional)</Label>
+            <Input
+              id="sl-target"
+              type="number"
+              inputMode="decimal"
+              value={targetPrice}
+              onChange={(e) => setTargetPrice(e.target.value)}
+              placeholder={side === 'BUY' ? 'above entry' : 'below entry'}
+            />
+          </div>
         </div>
 
         <DialogFooter className="gap-2">

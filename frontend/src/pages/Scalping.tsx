@@ -6,6 +6,7 @@ import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -218,6 +219,15 @@ export default function Scalping() {
   const [product, setProduct] = useState<ScalpingProduct>('NRML')
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
 
+  // Global predefined SL / Target — when enabled, auto-attached to every new entry.
+  // Value is in points or percent of entry (default points).
+  const [predefSlOn, setPredefSlOn] = useState(false)
+  const [predefSlValue, setPredefSlValue] = useState('')
+  const [predefSlUnit, setPredefSlUnit] = useState<'PTS' | 'PCT'>('PTS')
+  const [predefTgtOn, setPredefTgtOn] = useState(false)
+  const [predefTgtValue, setPredefTgtValue] = useState('')
+  const [predefTgtUnit, setPredefTgtUnit] = useState<'PTS' | 'PCT'>('PTS')
+
   useEffect(() => {
     try {
       localStorage.setItem(ARMED_STORAGE_KEY, armed ? '1' : '0')
@@ -367,6 +377,21 @@ export default function Scalping() {
     () => new Set((trackedResp?.data ?? []).map((t) => `${t.exchange}:${t.symbol}:${t.product}`)),
     [trackedResp]
   )
+  // Order Book / Trade Book scoped to the scalping list (only this terminal's orders).
+  const scopedOrders = useMemo(
+    () =>
+      orders.filter((o) =>
+        trackedKeys.has(`${o.exchange}:${o.symbol}:${(o.product || '').toUpperCase()}`)
+      ),
+    [orders, trackedKeys]
+  )
+  const scopedTrades = useMemo(
+    () =>
+      trades.filter((t) =>
+        trackedKeys.has(`${t.exchange}:${t.symbol}:${(t.product || '').toUpperCase()}`)
+      ),
+    [trades, trackedKeys]
+  )
 
   const refreshBooks = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['scalping', 'positions'] })
@@ -422,6 +447,26 @@ export default function Scalping() {
       marketData.get(`${exchange}:${symbol}`)?.data?.ltp,
     [marketData]
   )
+
+  // Latest live data + predefined config for the (stable) order handler.
+  const marketDataRef = useRef(marketData)
+  marketDataRef.current = marketData
+  const predefRef = useRef({
+    slOn: predefSlOn,
+    slValue: predefSlValue,
+    slUnit: predefSlUnit,
+    tgtOn: predefTgtOn,
+    tgtValue: predefTgtValue,
+    tgtUnit: predefTgtUnit,
+  })
+  predefRef.current = {
+    slOn: predefSlOn,
+    slValue: predefSlValue,
+    slUnit: predefSlUnit,
+    tgtOn: predefTgtOn,
+    tgtValue: predefTgtValue,
+    tgtUnit: predefTgtUnit,
+  }
 
   // Latest positions for the SL engine to size/direct exits from (avoids stale closure).
   const positionsRef = useRef(positions)
@@ -525,6 +570,47 @@ export default function Scalping() {
   // scalping. Held-key auto-repeat is additionally filtered via e.repeat below.
   const lastFireRef = useRef(0)
 
+  // After an entry, auto-attach the global predefined SL / Target (points or %
+  // of the fill LTP) so the websocket SL engine manages the exit.
+  const attachPredefinedSL = useCallback(
+    (leg: SelectedLeg, action: ScalpingAction, quantity: number, prod: ScalpingProduct) => {
+      const cfg = predefRef.current
+      if (!cfg.slOn && !cfg.tgtOn) return
+      const ltp = marketDataRef.current.get(`${leg.exchange}:${leg.symbol}`)?.data?.ltp
+      if (!ltp || ltp <= 0) return
+      const toPts = (val: string, unit: 'PTS' | 'PCT') => {
+        const n = Number(val)
+        if (!Number.isFinite(n) || n <= 0) return 0
+        return unit === 'PCT' ? (ltp * n) / 100 : n
+      }
+      const slPts = cfg.slOn ? toPts(cfg.slValue, cfg.slUnit) : 0
+      const tgtPts = cfg.tgtOn ? toPts(cfg.tgtValue, cfg.tgtUnit) : 0
+      if (slPts <= 0 && tgtPts <= 0) return
+      const isBuy = action === 'BUY'
+      // No-SL sentinel that never triggers (target-only): below for long, far above for short.
+      const initialSl =
+        slPts > 0 ? (isBuy ? ltp - slPts : ltp + slPts) : isBuy ? 0 : Number.MAX_SAFE_INTEGER
+      const target = tgtPts > 0 ? (isBuy ? ltp + tgtPts : ltp - tgtPts) : 0
+      setSL({
+        symbol: leg.symbol,
+        exchange: leg.exchange,
+        product: prod,
+        side: action,
+        entry: ltp,
+        quantity,
+        initialSl,
+        trailingEnabled: false,
+        trailingStep: 0,
+        highestPrice: ltp,
+        lowestPrice: ltp,
+        currentSl: initialSl,
+        target,
+        active: true,
+      })
+    },
+    [setSL]
+  )
+
   const submitOrder = useCallback(
     async (leg: SelectedLeg | null, action: ScalpingAction) => {
       const s = stateRef.current
@@ -568,6 +654,7 @@ export default function Scalping() {
         })
         setLastLatencyMs(Math.round(performance.now() - t0))
         if (res.status === 'success') {
+          attachPredefinedSL(leg, action, quantity, s.product)
           refreshBooks()
         } else if (s.appMode === 'live') {
           showToast.error(res.message ?? 'Order failed', 'orders')
@@ -578,7 +665,7 @@ export default function Scalping() {
         if (!handledGlobally) showToast.error(apiErrorMessage(e), 'orders')
       }
     },
-    [refreshBooks]
+    [refreshBooks, attachPredefinedSL]
   )
 
   // Note: close-all / cancel-all (F6/F7) and the trailing-SL auto-exit are
@@ -999,6 +1086,60 @@ export default function Scalping() {
               </Select>
             </div>
 
+            {/* Global predefined SL — auto-attached to every entry when enabled */}
+            <div className="flex items-center gap-1.5" title="Auto stop-loss on every entry">
+              <Checkbox checked={predefSlOn} onCheckedChange={(v) => setPredefSlOn(v === true)} />
+              <span className="text-sm text-muted-foreground">SL</span>
+              <Input
+                type="number"
+                inputMode="decimal"
+                disabled={!predefSlOn}
+                value={predefSlValue}
+                onChange={(e) => setPredefSlValue(e.target.value)}
+                placeholder="0"
+                className="w-16"
+              />
+              <Select
+                value={predefSlUnit}
+                onValueChange={(v) => setPredefSlUnit(v as 'PTS' | 'PCT')}
+              >
+                <SelectTrigger className="w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="PTS">Pts</SelectItem>
+                  <SelectItem value="PCT">%</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Global predefined Target — auto take-profit on every entry */}
+            <div className="flex items-center gap-1.5" title="Auto target on every entry">
+              <Checkbox checked={predefTgtOn} onCheckedChange={(v) => setPredefTgtOn(v === true)} />
+              <span className="text-sm text-muted-foreground">Target</span>
+              <Input
+                type="number"
+                inputMode="decimal"
+                disabled={!predefTgtOn}
+                value={predefTgtValue}
+                onChange={(e) => setPredefTgtValue(e.target.value)}
+                placeholder="0"
+                className="w-16"
+              />
+              <Select
+                value={predefTgtUnit}
+                onValueChange={(v) => setPredefTgtUnit(v as 'PTS' | 'PCT')}
+              >
+                <SelectTrigger className="w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="PTS">Pts</SelectItem>
+                  <SelectItem value="PCT">%</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div
               className="ml-auto flex items-center gap-6 font-mono"
               title="Sum across the position-book rows below (open + today's closed trades)"
@@ -1243,7 +1384,7 @@ export default function Scalping() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {orders.map((o) => (
+              {scopedOrders.map((o) => (
                 <TableRow key={o.orderid}>
                   <TableCell className="font-mono text-sm">{o.symbol}</TableCell>
                   <TableCell className={o.action === 'BUY' ? 'text-green-600' : 'text-red-600'}>
@@ -1255,7 +1396,7 @@ export default function Scalping() {
                   <TableCell className="font-mono text-xs">{o.orderid}</TableCell>
                 </TableRow>
               ))}
-              {orders.length === 0 && (
+              {scopedOrders.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-muted-foreground">
                     No orders
@@ -1278,7 +1419,7 @@ export default function Scalping() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {trades.map((t) => (
+              {scopedTrades.map((t) => (
                 <TableRow key={`${t.orderid}-${t.timestamp}`}>
                   <TableCell className="font-mono text-sm">{t.symbol}</TableCell>
                   <TableCell className={t.action === 'BUY' ? 'text-green-600' : 'text-red-600'}>
@@ -1291,7 +1432,7 @@ export default function Scalping() {
                   <TableCell className="font-mono text-xs">{t.orderid}</TableCell>
                 </TableRow>
               ))}
-              {trades.length === 0 && (
+              {scopedTrades.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center text-muted-foreground">
                     No trades

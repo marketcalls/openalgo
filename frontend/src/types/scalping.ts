@@ -99,6 +99,7 @@ export interface ScalpingSLState {
   highest_price: number | null
   lowest_price: number | null
   current_sl: number | null
+  target: number | null
   is_active: boolean
 }
 
