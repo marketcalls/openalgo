@@ -74,10 +74,12 @@ _RUST_LOG_DEFAULT = (
 )
 os.environ.setdefault("RUST_LOG", _RUST_LOG_DEFAULT)
 
+import collections
 import queue
 import re
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -266,6 +268,18 @@ class WhatsAppBotService:
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
 
+        # Inbound channel for wars callbacks. wars fires on_message/on_disconnect
+        # (and on_qr/on_pair_code during pairing) from its **own native tokio OS
+        # threads**, never from a greenlet. Touching any eventlet-monkey-patched
+        # resource (SocketIO emit, the DB session, a green Event/Queue wait) from
+        # those threads poisons the eventlet hub — `greenlet.error: Cannot switch
+        # to a different thread` — and hangs the whole gunicorn worker (#1479).
+        # So the callbacks do ONE thing: append raw primitives to this deque
+        # (atomic under the GIL, no green primitive). The bot-loop greenlet drains
+        # it and performs all green work safely on the hub. `deque` is the right
+        # tool — append/popleft are thread-safe without any lock.
+        self._inbound: collections.deque = collections.deque()
+
         # Pairing state — read by REST /pair/status, written by the pairing
         # thread. Protected by _lock.
         self._pair_state: dict[str, Any] = {
@@ -396,38 +410,65 @@ class WhatsAppBotService:
             self._pair_wa = wa
             logger.info("WhatsApp pair: temp wars client created, registering handlers")
 
+            # on_qr / on_pair_code fire on wars' tokio threads — marshal only.
+            pair_inbound: collections.deque = collections.deque()
+
             @wa.on_qr
             def _on_qr(code: str) -> None:
-                try:
-                    data_url = wars.qr_to_data_url(code)
-                except Exception:
-                    logger.exception("WhatsApp pair: qr_to_data_url failed")
-                    data_url = None
-                with self._lock:
-                    self._pair_state["status"] = "awaiting_scan"
-                    self._pair_state["qr_data_url"] = data_url
-                self._emit("whatsapp_qr", {"data_url": data_url})
-                logger.info("WhatsApp pair: QR emitted (rotation)")
+                pair_inbound.append(("qr", code))
 
             @wa.on_pair_code
             def _on_pair_code(code: str) -> None:
-                with self._lock:
-                    self._pair_state["status"] = "awaiting_scan"
-                    self._pair_state["pair_code"] = code
-                self._emit("whatsapp_pair_code", {"code": code})
-                logger.info("WhatsApp pair: pair code issued")
+                pair_inbound.append(("pair_code", code))
+
+            def _drain_pair_events() -> None:
+                # Runs on THIS greenlet, so emitting the QR / updating _pair_state
+                # is hub-safe (doing it on the tokio callback thread hung the
+                # worker — that is the #1479 pairing freeze).
+                while pair_inbound:
+                    try:
+                        kind, code = pair_inbound.popleft()
+                    except IndexError:
+                        break
+                    if kind == "qr":
+                        try:
+                            data_url = wars.qr_to_data_url(code)
+                        except Exception:
+                            logger.exception("WhatsApp pair: qr_to_data_url failed")
+                            data_url = None
+                        with self._lock:
+                            self._pair_state["status"] = "awaiting_scan"
+                            self._pair_state["qr_data_url"] = data_url
+                        self._emit("whatsapp_qr", {"data_url": data_url})
+                        logger.info("WhatsApp pair: QR emitted (rotation)")
+                    elif kind == "pair_code":
+                        with self._lock:
+                            self._pair_state["status"] = "awaiting_scan"
+                            self._pair_state["pair_code"] = code
+                        self._emit("whatsapp_pair_code", {"code": code})
+                        logger.info("WhatsApp pair: pair code issued")
 
             logger.info("WhatsApp pair: calling wars.connect(phone=%r)", phone)
             wa.connect(phone=phone)
 
+            # Poll for pairing completion while draining QR/pair-code events on
+            # this greenlet. `time.sleep` is eventlet-monkey-patched under
+            # gunicorn, so it yields the hub — the web app stays responsive for
+            # the whole up-to-300s scan window. (`is_connected()` returns the same
+            # `is_logged_in` signal the old `wait_until_ready` blocked on.)
             logger.info("WhatsApp pair: waiting for phone-side scan (up to 300s)")
-            wa.wait_until_ready(timeout=300)
+            deadline = time.monotonic() + 300
+            while True:
+                _drain_pair_events()
+                if wa.is_connected():
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Pairing timed out — please try again")
+                time.sleep(0.25)
 
-            # If we got here, WhatsApp has confirmed the pair. Finalize
-            # synchronously on this thread — the temp wars instance is
-            # already in a "paired+online" state, so export_session has
-            # everything it needs.
-            logger.info("WhatsApp pair: wait_until_ready returned — pairing succeeded")
+            # WhatsApp confirmed the pair. Finalize on this greenlet — the temp
+            # wars instance is "paired+online", so export_session has what it needs.
+            logger.info("WhatsApp pair: scan detected — pairing succeeded")
             self._finalize_pair(wa, temp_db_path, owner_user_id, owner_username)
             finalized = True
 
@@ -574,6 +615,7 @@ class WhatsAppBotService:
 
             self._stop_event.clear()
             self._ready_event.clear()
+            self._inbound.clear()
             # Drain any stale commands from a prior session.
             while True:
                 try:
@@ -621,11 +663,22 @@ class WhatsAppBotService:
             logger.info("WhatsApp bot thread up and connected")
             self._ready_event.set()
 
-            # Command-pumping loop. Short polling interval keeps stop latency
-            # low without busy-spinning when the channel is idle.
+            # Pump loop. Each iteration: (1) drain inbound wars events that the
+            # callbacks marshaled here from tokio threads, then (2) wait briefly
+            # for an outbound send command. Both halves run on this greenlet, so
+            # every green operation (DB, SocketIO, wars.send) is hub-safe.
             while not self._stop_event.is_set():
+                # (1) inbound wars events (on_message / on_disconnect)
+                while self._inbound:
+                    try:
+                        evt = self._inbound.popleft()
+                    except IndexError:
+                        break
+                    self._handle_inbound(wa, evt)
+
+                # (2) outbound send commands from request greenlets
                 try:
-                    cmd = self._cmd_queue.get(timeout=0.5)
+                    cmd = self._cmd_queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
                 op, args, kwargs, result_holder, event = cmd
@@ -869,46 +922,67 @@ class WhatsAppBotService:
     # ------------------------------------------------------------------
 
     def _register_handlers(self, wa) -> None:
+        # These callbacks run on wars' native tokio OS threads. They must do
+        # NOTHING that touches an eventlet-monkey-patched resource (DB, SocketIO,
+        # green Event/Queue) — see the `_inbound` note in __init__. They only
+        # extract plain primitives (reading PyO3 fields is GIL-safe) and append
+        # to the deque; `_handle_inbound` does the real work on the bot greenlet.
         @wa.on_message
         def _handle(msg) -> None:
             try:
-                is_from_me = bool(getattr(msg, "is_from_me", False))
-
-                # Lazy own-JID capture. wars 0.1.3 doesn't expose the paired
-                # device's own JID as an attribute, so we sniff it from the
-                # first is_from_me=True message we observe. The "sender" on
-                # those events IS the operator's primary JID. Store once,
-                # ignore re-captures.
-                if is_from_me:
-                    sender = getattr(msg, "sender", "") or getattr(msg, "chat", "") or ""
-                    self._maybe_capture_own_jid(sender)
-
-                text = (getattr(msg, "text", None) or "").strip()
-                if not text or not text.startswith("/"):
-                    return
-                # Single-user OpenAlgo: the only identity allowed to drive
-                # the bot is the operator's primary device. WhatsApp's
-                # multi-device protocol marks messages from the paired
-                # account itself (i.e., the operator typing on their phone
-                # and the message being mirrored to this linked client) as
-                # is_from_me=True. Anyone else who messages the operator's
-                # WhatsApp number arrives as is_from_me=False — those are
-                # silently ignored so a random contact cannot run /closeall.
-                if not is_from_me:
-                    logger.debug("WhatsApp command from non-owner ignored")
-                    return
-                self._dispatch_command(wa, msg, text)
+                self._inbound.append(
+                    (
+                        "message",
+                        bool(getattr(msg, "is_from_me", False)),
+                        (getattr(msg, "sender", "") or getattr(msg, "chat", "") or ""),
+                        getattr(msg, "chat", "") or "",
+                        getattr(msg, "text", None) or "",
+                    )
+                )
             except Exception:
-                logger.exception("WhatsApp message handler crashed")
+                # Never let a callback raise on a tokio thread.
+                logger.debug("WhatsApp on_message marshal failed", exc_info=True)
 
         @wa.on_disconnect
         def _on_disconnect() -> None:
-            logger.warning("WhatsApp wars on_disconnect fired")
-            with self._lock:
-                self._is_running = False
-            self._emit(
-                "whatsapp_status", {"is_running": False, "is_paired": self.is_paired}
-            )
+            try:
+                self._inbound.append(("disconnect",))
+            except Exception:
+                logger.debug("WhatsApp on_disconnect marshal failed", exc_info=True)
+
+    def _handle_inbound(self, wa, evt: tuple) -> None:
+        """Process one marshaled wars event on the bot-loop greenlet, where all
+        green operations (DB, SocketIO, wars.send) are hub-safe."""
+        try:
+            kind = evt[0]
+            if kind == "disconnect":
+                logger.warning("WhatsApp wars on_disconnect fired")
+                with self._lock:
+                    self._is_running = False
+                self._emit(
+                    "whatsapp_status", {"is_running": False, "is_paired": self.is_paired}
+                )
+                return
+
+            # kind == "message"
+            _, is_from_me, sender, chat, text = evt
+
+            # Lazy own-JID capture from the first is_from_me message we observe.
+            if is_from_me:
+                self._maybe_capture_own_jid(sender)
+
+            text = (text or "").strip()
+            if not text or not text.startswith("/"):
+                return
+            # Single-user OpenAlgo: only the operator's own device (is_from_me)
+            # may drive the bot; messages from any other contact are ignored so
+            # a random sender cannot run /closeall.
+            if not is_from_me:
+                logger.debug("WhatsApp command from non-owner ignored")
+                return
+            self._dispatch_command(wa, chat, sender, text)
+        except Exception:
+            logger.exception("WhatsApp inbound handler crashed")
 
     def _maybe_capture_own_jid(self, sender_jid: str) -> None:
         """Persist sender_jid as the device's own JID + own_phone if we
@@ -932,12 +1006,10 @@ class WhatsAppBotService:
         except Exception:
             logger.exception("Failed to persist own_jid")
 
-    def _dispatch_command(self, wa, msg, text: str) -> None:
-        """Parse `/cmd arg1 arg2 ...` and route to the matching handler.
-        Caller has already authenticated this as a message from the
-        single-user operator (is_from_me=True)."""
-        chat = getattr(msg, "chat", "")
-        sender_jid = getattr(msg, "sender", chat)
+    def _dispatch_command(self, wa, chat: str, sender_jid: str, text: str) -> None:
+        """Parse `/cmd arg1 arg2 ...` and route to the matching handler. Runs on
+        the bot-loop greenlet. Caller has already authenticated this as a message
+        from the single-user operator (is_from_me=True)."""
         parts = text.split()
         cmd = parts[0].lower().lstrip("/")
         args = parts[1:]
@@ -963,7 +1035,10 @@ class WhatsAppBotService:
             return
         log_command(sender_jid, cmd, {"args": args})
         try:
-            handler(wa, msg, chat, sender_jid, args)
+            # Command handlers take (wa, msg, chat, sender_jid, args); `msg` is
+            # unused by all of them, and we no longer carry the wars message
+            # object across threads, so pass None.
+            handler(wa, None, chat, sender_jid, args)
         except Exception:
             logger.exception("WhatsApp command handler raised: %s", cmd)
             self.send_sync(chat, "An error occurred handling that command.")
