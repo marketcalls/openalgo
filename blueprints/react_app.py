@@ -151,6 +151,12 @@ def react_holdings():
     return serve_react_app()
 
 
+# Scalping Terminal
+@react_bp.route("/scalping", strict_slashes=False)
+def react_scalping():
+    return serve_react_app()
+
+
 # Search pages
 @react_bp.route("/search/token")
 def react_search_token():
