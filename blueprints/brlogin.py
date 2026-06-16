@@ -8,6 +8,7 @@ import jwt
 from flask import Blueprint, jsonify, make_response, redirect, request, session, url_for
 from flask import current_app as app
 
+from broker.zerodha.api.auth_api import format_auth_token as format_zerodha_auth_token
 from limiter import limiter  # Import the limiter instance
 from utils.auth_utils import handle_auth_failure, handle_auth_success
 from utils.config import (
@@ -21,7 +22,6 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-BROKER_API_KEY = get_broker_api_key()
 LOGIN_RATE_LIMIT_MIN = get_login_rate_limit_min()
 LOGIN_RATE_LIMIT_HOUR = get_login_rate_limit_hour()
 
@@ -847,7 +847,7 @@ def broker_callback(broker, para=None):
         session["broker"] = broker
         logger.info(f"Successfully connected broker: {broker}")
         if broker == "zerodha":
-            auth_token = f"{BROKER_API_KEY}:{auth_token}"
+            auth_token = format_zerodha_auth_token(auth_token)
         if broker == "dhan":
             auth_token = f"{auth_token}"
 

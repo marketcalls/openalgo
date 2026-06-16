@@ -14,6 +14,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TEST_DB = Path(__file__).resolve().parents[1] / "tmp" / "test_auth_resume.db"
 TEST_DB.parent.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{TEST_DB.as_posix()}")
+os.environ["LOG_FORMAT"] = "[%(asctime)s] %(levelname)s in %(module)s: %(message)s"
+os.environ["LOG_TO_FILE"] = "False"
+os.environ.setdefault("API_KEY_PEPPER", "a" * 64)
+os.environ.setdefault("FERNET_SALT", "b" * 32)
 atexit.register(lambda: TEST_DB.unlink(missing_ok=True))
 
 import blueprints.auth as auth_bp_module  # noqa: E402
@@ -166,3 +170,45 @@ def test_login_get_clears_expired_existing_session(monkeypatch):
         assert response.status_code == 302
         assert response.location == "/login"
         assert "user" not in session
+
+
+def test_zerodha_callback_formats_auth_token_with_broker_api_key(monkeypatch):
+    import blueprints.brlogin as brlogin_module
+
+    app = Flask(__name__)
+    app.secret_key = "test-secret"
+    app.broker_auth_functions = {
+        "zerodha_auth": lambda request_token: ("raw-access-token", None),
+    }
+
+    captured = {}
+
+    def fake_handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
+        captured.update(
+            {
+                "auth_token": auth_token,
+                "user_session_key": user_session_key,
+                "broker": broker,
+                "feed_token": feed_token,
+                "user_id": user_id,
+            }
+        )
+        return {"status": "ok"}, 200
+
+    monkeypatch.setenv("BROKER_API_KEY", "kite-key")
+    monkeypatch.setattr(brlogin_module, "BROKER_API_KEY", "stale-module-key", raising=False)
+    monkeypatch.setattr(brlogin_module, "handle_auth_success", fake_handle_auth_success)
+
+    with app.test_request_context("/zerodha/callback?request_token=request-token", method="GET"):
+        session["user"] = "admin"
+        response, status_code = brlogin_module.broker_callback("zerodha")
+
+    assert status_code == 200
+    assert response == {"status": "ok"}
+    assert captured == {
+        "auth_token": "kite-key:raw-access-token",
+        "user_session_key": "admin",
+        "broker": "zerodha",
+        "feed_token": None,
+        "user_id": None,
+    }
