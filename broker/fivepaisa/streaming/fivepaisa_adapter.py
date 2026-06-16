@@ -5,6 +5,7 @@ import re
 import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,14 @@ from .fivepaisa_mapping import FivePaisaCapabilityRegistry, FivePaisaExchangeMap
 class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """5Paisa-specific implementation of the WebSocket adapter"""
 
+    # Subscription batching: 5Paisa accepts an array of scrips per
+    # MarketFeedV3 / MarketDepthService frame, so coalesce scrips of the SAME
+    # method into one frame instead of one frame per symbol.
+    MAX_SCRIPS_PER_SUBSCRIBE = 50
+    # Delay between successive batch frames (server prefers fewer, larger frames
+    # with breathing room; only applied when more batches remain).
+    SUBSCRIPTION_DELAY = 0.5
+
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger("fivepaisa_websocket")
@@ -40,6 +49,11 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Single reconnect driver: only one _connect_with_retry thread may be
         # alive at a time so two run_forever sockets can never overlap.
         self._connect_thread = None
+        # Subscription batch queue: items are (method, scrip_dict). A single
+        # processor thread drains it into coalesced multi-scrip frames.
+        self.pending_subscriptions = deque()
+        self._sub_thread = None
+        self._stop_event = threading.Event()
         self.last_snapshot = {}  # Store last known values for each token
 
     def initialize(
@@ -170,6 +184,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # after a prior max-attempts giveup will actually reconnect.
             self.running = True
             self.reconnect_attempts = 0
+            self._stop_event.clear()
             if self._connect_thread and self._connect_thread.is_alive():
                 self.logger.debug("Connect thread already running; not starting another.")
                 return
@@ -224,11 +239,93 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from 5Paisa WebSocket"""
         self.running = False
+        # Wake the batch processor out of any inter-batch wait and drop queued work.
+        self._stop_event.set()
+        with self.lock:
+            self.pending_subscriptions.clear()
+
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
+
+    def _enqueue_subscriptions(self, items: list) -> None:
+        """Queue (method, scrip) items for batched sending and ensure the batch
+        processor thread is running."""
+        if not items:
+            return
+        with self.lock:
+            self.pending_subscriptions.extend(items)
+            if self._sub_thread is None or not self._sub_thread.is_alive():
+                self._sub_thread = threading.Thread(
+                    target=self._process_pending_subscriptions, daemon=True
+                )
+                self._sub_thread.start()
+
+    def _process_pending_subscriptions(self) -> None:
+        """Drain the pending queue into coalesced 5Paisa subscribe frames.
+
+        Scrips are grouped by method (MarketFeedV3 vs MarketDepthService cannot
+        share a frame) and sent up to MAX_SCRIPS_PER_SUBSCRIBE per frame, with a
+        throttle between frames. Failed batches are re-queued. This replaces the
+        previous one-frame-per-symbol flood on bulk subscribe / resubscribe.
+        """
+        consecutive_failures = 0
+        while self.pending_subscriptions and self.running and not self._stop_event.is_set():
+            if not (self.connected and self.ws_client):
+                # Not connected yet; _on_open re-queues everything on connect,
+                # so just back off briefly and re-check (interruptible).
+                consecutive_failures += 1
+                if consecutive_failures > 5:
+                    self.logger.warning(
+                        "Batch processor: not connected after retries; pausing queue."
+                    )
+                    break
+                if self._stop_event.wait(min(2 * consecutive_failures, 10)):
+                    break
+                continue
+            consecutive_failures = 0
+
+            # Pull a batch of same-method scrips off the front of the queue.
+            batch_method = None
+            batch_scrips = []
+            with self.lock:
+                while (
+                    self.pending_subscriptions
+                    and len(batch_scrips) < self.MAX_SCRIPS_PER_SUBSCRIBE
+                ):
+                    method, scrip = self.pending_subscriptions[0]
+                    if batch_method is None:
+                        batch_method = method
+                    elif method != batch_method:
+                        break
+                    self.pending_subscriptions.popleft()
+                    batch_scrips.append(scrip)
+
+            if not batch_scrips:
+                continue
+
+            try:
+                self.ws_client.subscribe(batch_method, batch_scrips)
+                self.logger.info(
+                    f"Sent batched subscription: {len(batch_scrips)} scrips via {batch_method}"
+                )
+            except Exception as e:
+                self.logger.error(f"Batch subscription failed ({batch_method}): {e}")
+                # Re-queue the failed batch (front, preserving order) for retry.
+                with self.lock:
+                    for scrip in reversed(batch_scrips):
+                        self.pending_subscriptions.appendleft((batch_method, scrip))
+                if self._stop_event.wait(self.SUBSCRIPTION_DELAY * 2):
+                    break
+                continue
+
+            # Throttle only when more work remains, so a single-symbol subscribe
+            # (the common UI case) isn't penalized with a wait it doesn't need.
+            if self.pending_subscriptions:
+                if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
+                    break
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -295,17 +392,15 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "scrip_data": scrip_data,
             }
 
-        # Subscribe if connected
+        # Queue for batched sending when connected. When not connected, _on_open
+        # re-queues every stored subscription on (re)connect, so we skip here to
+        # avoid double-enqueuing the same scrip.
         if self.connected and self.ws_client:
-            try:
-                self.logger.info(
-                    f"Subscribing to {symbol} ({exchange}/{brexchange}) - Token: {token}, Method: {method}, Exch: {exch_code}, Type: {exch_type}"
-                )
-                self.ws_client.subscribe(method, scrip_data)
-                self.logger.info(f"Successfully sent subscription request for {symbol}.{exchange}")
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+            self.logger.debug(
+                f"Queueing subscription for {symbol} ({exchange}/{brexchange}) - "
+                f"Token: {token}, Method: {method}, Exch: {exch_code}, Type: {exch_type}"
+            )
+            self._enqueue_subscriptions([(method, scrip_data[0])])
 
         # Return success
         return self._create_success_response(
@@ -375,16 +470,15 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Connection succeeded; reset backoff so the next drop retries promptly.
         self.reconnect_attempts = 0
 
-        # Resubscribe to existing subscriptions if reconnecting
+        # Resubscribe to existing subscriptions via the batch queue (coalesced
+        # into multi-scrip frames) rather than one frame per symbol.
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    self.ws_client.subscribe(sub["method"], sub["scrip_data"])
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+            items = [
+                (sub["method"], sub["scrip_data"][0]) for sub in self.subscriptions.values()
+            ]
+        if items:
+            self.logger.info(f"Resubscribing {len(items)} subscription(s) in batches")
+            self._enqueue_subscriptions(items)
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
