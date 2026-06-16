@@ -25,7 +25,11 @@ class FivePaisaWebSocket:
         "default": "wss://openfeed.5paisa.com/Feeds/api/chat",
     }
 
-    HEART_BEAT_INTERVAL = 10  # seconds
+    HEART_BEAT_INTERVAL = 10  # seconds (websocket ping interval)
+    # Pong deadline; must be < HEART_BEAT_INTERVAL. Without it, a half-open
+    # (dead-but-not-closed) TCP connection is never detected: run_forever blocks
+    # forever, on_close never fires, the socket FD leaks and no reconnect occurs.
+    PING_TIMEOUT = 5  # seconds
 
     # Subscription Methods
     MARKET_FEED = "MarketFeedV3"
@@ -158,9 +162,13 @@ class FivePaisaWebSocket:
                 on_close=self._on_close,
             )
 
-            # Run the WebSocket connection
+            # Run the WebSocket connection. ping_timeout enforces a pong deadline
+            # so a half-open connection is detected and closed (freeing the FD and
+            # triggering reconnect) instead of blocking run_forever indefinitely.
             self.wsapp.run_forever(
-                sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=self.HEART_BEAT_INTERVAL
+                sslopt={"cert_reqs": ssl.CERT_NONE},
+                ping_interval=self.HEART_BEAT_INTERVAL,
+                ping_timeout=self.PING_TIMEOUT,
             )
 
         except Exception as e:

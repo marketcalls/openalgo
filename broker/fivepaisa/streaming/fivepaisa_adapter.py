@@ -202,8 +202,23 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         so two connections can never overlap. reconnect_attempts is reset in
         _on_open once a connection actually succeeds, so backoff grows only
         across consecutive failures.
+
+        The exit decision is taken at the top of the loop under self.lock and
+        clears self._connect_thread there, so connect() cannot race us into a
+        state where running=True but no driver thread is alive: if connect() set
+        running=True first we observe it and keep going; otherwise we clear the
+        handle before connect()'s guard inspects it and it starts a fresh driver.
         """
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+        while True:
+            with self.lock:
+                if not self.running:
+                    self._connect_thread = None
+                    return
+                if self.reconnect_attempts >= self.max_reconnect_attempts:
+                    self.logger.error("Max reconnection attempts reached. Giving up.")
+                    self._connect_thread = None
+                    return
+
             try:
                 # Re-read a fresh token before every connect attempt so a
                 # daily-rolled token doesn't leave the feed permanently dead.
@@ -217,21 +232,20 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.error(f"Connection error: {e}")
 
-            # Stop requested via disconnect() -> exit cleanly, no reconnect.
-            if not self.running:
-                break
-
-            # Socket closed while we still want to run: back off and reconnect.
+            # Socket closed; count this attempt and back off before the next one.
+            # The top-of-loop locked check handles running / max-attempts exit.
             self.reconnect_attempts += 1
-            if self.reconnect_attempts >= self.max_reconnect_attempts:
-                break
-            delay = min(
-                self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-            )
-            self.logger.warning(
-                f"5Paisa WebSocket disconnected; reconnecting in {delay} seconds..."
-            )
-            time.sleep(delay)
+            if self.reconnect_attempts < self.max_reconnect_attempts:
+                delay = min(
+                    self.reconnect_delay * (2**self.reconnect_attempts),
+                    self.max_reconnect_delay,
+                )
+                self.logger.warning(
+                    f"5Paisa WebSocket disconnected; reconnecting in {delay} seconds..."
+                )
+                # Interruptible: disconnect() sets _stop_event so we wake immediately
+                # instead of lingering in a non-interruptible sleep.
+                self._stop_event.wait(delay)
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
