@@ -1042,7 +1042,8 @@ def samco_ip_status():
         return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     from broker.samco.api.auth_api import get_client_id
-    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_secret_key as has_secret_key
+    from database.auth_db import samco_get_ip_status as get_ip_status
+    from database.auth_db import samco_has_secret_key as has_secret_key
 
     uid = get_client_id()
     ip_status = get_ip_status(uid)
@@ -1061,7 +1062,9 @@ def samco_update_ip():
         return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     from broker.samco.api.auth_api import get_client_id, get_password, register_ip, update_ip
-    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_registered_ip as has_registered_ip, samco_save_ip_info as save_ip_info
+    from database.auth_db import samco_get_ip_status as get_ip_status
+    from database.auth_db import samco_has_registered_ip as has_registered_ip
+    from database.auth_db import samco_save_ip_info as save_ip_info
 
     uid = get_client_id()
     password = get_password()

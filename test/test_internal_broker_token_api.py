@@ -1,7 +1,7 @@
+import atexit
 import logging
 import os
 import sys
-import atexit
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,12 +19,12 @@ atexit.register(lambda: TEST_DB.unlink(missing_ok=True))
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import utils.auth_utils as auth_utils
 from blueprints import internal_broker_token as internal_broker_token_module
 from blueprints.internal_broker_token import internal_broker_token_bp
 from broker.zerodha.api import auth_api as zerodha_auth_api
 from limiter import limiter
 from services import broker_token_import_service as import_service
-import utils.auth_utils as auth_utils
 
 
 def test_zerodha_format_auth_token_uses_clean_env_api_key(monkeypatch):
