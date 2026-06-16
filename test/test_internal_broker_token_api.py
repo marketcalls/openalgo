@@ -19,6 +19,7 @@ atexit.register(lambda: TEST_DB.unlink(missing_ok=True))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from broker.zerodha.api import auth_api as zerodha_auth_api
+from services import broker_token_import_service as import_service
 import utils.auth_utils as auth_utils
 
 
@@ -163,3 +164,108 @@ def test_activate_broker_auth_token_loads_existing_contract_when_fresh(monkeypat
         ("thread", "load_existing_master_contract", ("zerodha",), True),
         ("started",),
     ]
+
+
+def test_import_broker_token_rejects_invalid_apikey(monkeypatch):
+    monkeypatch.setattr(import_service, "verify_api_key", lambda apikey: None)
+
+    with pytest.raises(import_service.InvalidApiKeyError) as exc:
+        import_service.import_broker_token("bad-api-key", "zerodha", "raw-access-token")
+
+    assert exc.value.status_code == 403
+
+
+def test_import_broker_token_rejects_unsupported_broker(monkeypatch):
+    with pytest.raises(import_service.UnsupportedBrokerError) as exc:
+        import_service.import_broker_token("openalgo-api-key", "dhan", "raw-access-token")
+
+    assert exc.value.status_code == 400
+
+
+def test_import_broker_token_rejects_blank_access_token(monkeypatch):
+    with pytest.raises(import_service.InvalidAccessTokenError) as exc:
+        import_service.import_broker_token("openalgo-api-key", "zerodha", " ")
+
+    assert exc.value.status_code == 400
+
+
+def test_import_broker_token_validation_failure_does_not_activate(monkeypatch):
+    activated = {"called": False}
+
+    monkeypatch.setattr(import_service, "verify_api_key", lambda apikey: "admin")
+    monkeypatch.setattr(import_service, "format_auth_token", lambda token: "kite-key:raw-access-token")
+    monkeypatch.setattr(
+        import_service,
+        "validate_access_token",
+        lambda token: (False, "zerodha_profile_rejected"),
+    )
+    monkeypatch.setattr(
+        import_service,
+        "activate_broker_auth_token",
+        lambda *args, **kwargs: activated.update(called=True),
+    )
+
+    with pytest.raises(import_service.InvalidAccessTokenError):
+        import_service.import_broker_token("openalgo-api-key", "zerodha", "raw-access-token")
+
+    assert activated["called"] is False
+
+
+def test_import_broker_token_success_activates_formatted_token(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(import_service, "verify_api_key", lambda apikey: "admin")
+    monkeypatch.setattr(import_service, "format_auth_token", lambda token: "kite-key:raw-access-token")
+    monkeypatch.setattr(import_service, "validate_access_token", lambda token: (True, None))
+    monkeypatch.setattr(import_service, "get_auth_token", lambda user_id, bypass_cache=False: None)
+    monkeypatch.setattr(
+        import_service,
+        "activate_broker_auth_token",
+        lambda auth_token, user_session_key, broker: calls.append(
+            (auth_token, user_session_key, broker)
+        )
+        or 42,
+    )
+
+    result = import_service.import_broker_token("openalgo-api-key", "zerodha", "raw-access-token")
+
+    assert result.broker == "zerodha"
+    assert result.user_id == "admin"
+    assert result.updated is True
+    assert calls == [("kite-key:raw-access-token", "admin", "zerodha")]
+
+
+def test_import_broker_token_unchanged_skips_activation(monkeypatch):
+    activated = {"called": False}
+
+    monkeypatch.setattr(import_service, "verify_api_key", lambda apikey: "admin")
+    monkeypatch.setattr(import_service, "format_auth_token", lambda token: "kite-key:raw-access-token")
+    monkeypatch.setattr(import_service, "validate_access_token", lambda token: (True, None))
+    monkeypatch.setattr(
+        import_service,
+        "get_auth_token",
+        lambda user_id, bypass_cache=False: "kite-key:raw-access-token",
+    )
+    monkeypatch.setattr(
+        import_service,
+        "activate_broker_auth_token",
+        lambda *args, **kwargs: activated.update(called=True),
+    )
+
+    result = import_service.import_broker_token("openalgo-api-key", "zerodha", "raw-access-token")
+
+    assert result.updated is False
+    assert activated["called"] is False
+
+
+def test_import_broker_token_persistence_failure_maps_to_500(monkeypatch):
+    monkeypatch.setattr(import_service, "verify_api_key", lambda apikey: "admin")
+    monkeypatch.setattr(import_service, "format_auth_token", lambda token: "kite-key:raw-access-token")
+    monkeypatch.setattr(import_service, "validate_access_token", lambda token: (True, None))
+    monkeypatch.setattr(import_service, "get_auth_token", lambda user_id, bypass_cache=False: None)
+    monkeypatch.setattr(import_service, "activate_broker_auth_token", lambda *args, **kwargs: None)
+
+    with pytest.raises(import_service.BrokerTokenPersistenceError) as exc:
+        import_service.import_broker_token("openalgo-api-key", "zerodha", "raw-access-token")
+
+    assert exc.value.status_code == 500
