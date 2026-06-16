@@ -296,12 +296,18 @@ def place_order_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
     AUTH_TOKEN = auth
 
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token)
+    # Pass the auth token so transform_data can fetch quotes for Market Price
+    # Protection (5Paisa rejects plain market orders; MARKET -> protected LIMIT).
+    newdata = transform_data(data, token, AUTH_TOKEN)
     headers = {"Content-Type": "application/json", "Authorization": f"bearer {AUTH_TOKEN}"}
 
     json_data = {"head": {"key": api_key}, "body": newdata}
 
     payload = json.dumps(json_data)
+
+    # Log the outgoing request at INFO so order placement is captured even when
+    # LOG_LEVEL is the default INFO (sensitive keys are redacted by the logger).
+    logger.info(f"5Paisa PlaceOrder request: {payload}")
 
     try:
         # Get the shared httpx client
@@ -316,15 +322,51 @@ def place_order_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
         response.raise_for_status()
         response_data = response.json()
 
-        logger.debug(f"Order Response: {response_data}")
+        logger.info(f"5Paisa PlaceOrder response: {response_data}")
 
-        if response_data["head"]["statusDescription"] == "Success":
-            orderid = response_data["body"]["BrokerOrderID"]
+        head = response_data.get("head", {}) or {}
+        body = response_data.get("body", {}) or {}
+        broker_order_id = body.get("BrokerOrderID", 0)
+        body_status = body.get("Status")
+        broker_message = body.get("Message", "")
+
+        # 5Paisa sends Status as int 0, but normalize in case it arrives as "0".
+        try:
+            status_ok = int(body_status) == 0
+        except (TypeError, ValueError):
+            status_ok = False
+
+        # 5Paisa returns HTTP 200 with head.statusDescription == "Success" even
+        # when the order is rejected by RMS. A genuinely accepted order has
+        # body.Status == 0 AND a non-zero BrokerOrderID. Anything else (margin
+        # shortfall, market closed, invalid scrip, etc.) is a rejection and must
+        # NOT be reported as a phantom success with orderid 0.
+        if (
+            head.get("statusDescription") == "Success"
+            and status_ok
+            and broker_order_id
+        ):
+            orderid = broker_order_id
+            # Add status attribute to make it compatible with place_order.py
+            response.status = response.status_code
         else:
             orderid = None
-
-        # Add status attribute to make it compatible with place_order.py
-        response.status = response.status_code
+            reason = (
+                broker_message
+                or head.get("statusDescription")
+                or "Order rejected by 5Paisa"
+            )
+            logger.error(
+                f"5Paisa order rejected - Status: {body_status}, "
+                f"BrokerOrderID: {broker_order_id}, "
+                f"RMSResponseCode: {body.get('RMSResponseCode')}, Message: {reason}"
+            )
+            # Surface the broker's rejection reason to the service layer, which
+            # reads response_data.get("message") and res.status.
+            response_data["message"] = reason
+            # Force a non-200 status so place_order_service reports an error
+            # instead of a success with orderid 0.
+            response.status = 400
 
         return response, response_data, orderid
 
@@ -423,7 +465,7 @@ def _place_smartorder_locked(data, AUTH_TOKEN, symbol, exchange, product):
 
         # logger.debug(f"{order_data}")
         # Place the order
-        res, response, orderid = place_order_api(order_data, auth)
+        res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
         _invalidate_position_cache(AUTH_TOKEN)
         logger.debug(f"{response}")
         logger.debug(f"{orderid}")
