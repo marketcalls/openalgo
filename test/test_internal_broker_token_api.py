@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from flask import Flask
 
 os.environ["LOG_FORMAT"] = "[%(asctime)s] %(levelname)s in %(module)s: %(message)s"
 os.environ["LOG_TO_FILE"] = "False"
@@ -18,7 +19,10 @@ atexit.register(lambda: TEST_DB.unlink(missing_ok=True))
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from blueprints import internal_broker_token as internal_broker_token_module
+from blueprints.internal_broker_token import internal_broker_token_bp
 from broker.zerodha.api import auth_api as zerodha_auth_api
+from limiter import limiter
 from services import broker_token_import_service as import_service
 import utils.auth_utils as auth_utils
 
@@ -269,3 +273,113 @@ def test_import_broker_token_persistence_failure_maps_to_500(monkeypatch):
         import_service.import_broker_token("openalgo-api-key", "zerodha", "raw-access-token")
 
     assert exc.value.status_code == 500
+
+
+@pytest.fixture()
+def internal_token_client():
+    app = Flask(__name__)
+    app.config.update(
+        TESTING=True,
+        RATELIMIT_ENABLED=False,
+    )
+    limiter.init_app(app)
+    app.register_blueprint(internal_broker_token_bp, url_prefix="/internal")
+    return app.test_client()
+
+
+def _post_broker_token(client, header_secret="shared-secret", payload=None):
+    headers = {}
+    if header_secret is not None:
+        headers["X-OpenAlgo-Token-Service-Secret"] = header_secret
+    return client.post(
+        "/internal/broker-token",
+        json=payload
+        or {
+            "apikey": "openalgo-api-key",
+            "broker": "zerodha",
+            "access_token": "raw-access-token",
+        },
+        headers=headers,
+    )
+
+
+def test_internal_broker_token_secret_unset_returns_404(
+    monkeypatch,
+    internal_token_client,
+):
+    monkeypatch.delenv("OPENALGO_TOKEN_SERVICE_SECRET", raising=False)
+
+    response = _post_broker_token(internal_token_client)
+
+    assert response.status_code == 404
+
+
+def test_internal_broker_token_missing_secret_header_returns_403(
+    monkeypatch,
+    internal_token_client,
+):
+    monkeypatch.setenv("OPENALGO_TOKEN_SERVICE_SECRET", "shared-secret")
+
+    response = _post_broker_token(internal_token_client, header_secret=None)
+
+    assert response.status_code == 403
+
+
+def test_internal_broker_token_bad_secret_header_returns_403(
+    monkeypatch,
+    internal_token_client,
+):
+    monkeypatch.setenv("OPENALGO_TOKEN_SERVICE_SECRET", "shared-secret")
+
+    response = _post_broker_token(internal_token_client, header_secret="wrong-secret")
+
+    assert response.status_code == 403
+
+
+def test_internal_broker_token_success_response(
+    monkeypatch,
+    internal_token_client,
+):
+    monkeypatch.setenv("OPENALGO_TOKEN_SERVICE_SECRET", "shared-secret")
+
+    monkeypatch.setattr(
+        internal_broker_token_module,
+        "import_broker_token",
+        lambda **kwargs: import_service.BrokerTokenImportResult(
+            broker="zerodha",
+            user_id="admin",
+            updated=True,
+        ),
+    )
+
+    response = _post_broker_token(internal_token_client)
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "success",
+        "data": {"broker": "zerodha", "user_id": "admin", "updated": True},
+    }
+
+
+def test_internal_broker_token_service_error_response(
+    monkeypatch,
+    internal_token_client,
+):
+    monkeypatch.setenv("OPENALGO_TOKEN_SERVICE_SECRET", "shared-secret")
+
+    def fail_import(**kwargs):
+        raise import_service.UnsupportedBrokerError("unsupported_broker")
+
+    monkeypatch.setattr(internal_broker_token_module, "import_broker_token", fail_import)
+
+    response = _post_broker_token(
+        internal_token_client,
+        payload={
+            "apikey": "openalgo-api-key",
+            "broker": "dhan",
+            "access_token": "raw-access-token",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"status": "error", "message": "unsupported_broker"}
