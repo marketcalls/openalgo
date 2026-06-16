@@ -469,7 +469,7 @@ class BrokerData:
 
                 for i in range(0, len(symbols), BATCH_SIZE):
                     batch = symbols[i : i + BATCH_SIZE]
-                    logger.info(
+                    logger.debug(
                         f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
                     )
 
@@ -683,7 +683,7 @@ class BrokerData:
         # Reorder columns
         df = df[["timestamp", "open", "high", "low", "close", "volume"]]
 
-        logger.info(f"Processed {len(df)} candles from raw data")
+        logger.debug(f"Processed {len(df)} candles from raw data")
         return df
 
     def get_history(
@@ -789,7 +789,7 @@ class BrokerData:
 
                     candles = response.get("data", {}).get("candles", [])
                     if not candles:
-                        logger.info(f"No data for chunk {chunk_start} to {chunk_end}")
+                        logger.debug(f"No data for chunk {chunk_start} to {chunk_end}")
                         current_start = current_end + pd.Timedelta(days=1)
                         continue
 
@@ -892,7 +892,7 @@ class BrokerData:
                             )
                             continue
                         dfs.append(chunk_df)
-                        logger.info(f"Added {len(transformed_candles)} candles from chunk")
+                        logger.debug(f"Added {len(transformed_candles)} candles from chunk")
 
                 except Exception as e:
                     logger.error(f"Error processing chunk {chunk_start} to {chunk_end}: {e}")
