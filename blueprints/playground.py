@@ -4,7 +4,7 @@ import os
 import re
 from collections import OrderedDict
 
-from flask import Blueprint, current_app, jsonify, render_template, request, session
+from flask import Blueprint, current_app, jsonify, redirect, session, url_for
 
 from database.auth_db import get_api_key_for_tradingview
 from utils.logging import get_logger
@@ -285,14 +285,15 @@ playground_bp = Blueprint("playground", __name__, url_prefix="/playground")
 
 
 @playground_bp.route("/")
-@check_session_validity
 def index():
-    """Render the API tester page"""
-    login_username = session.get("user")
-    # Get the decrypted API key if it exists
-    api_key = get_api_key_for_tradingview(login_username) if login_username else None
-    logger.info(f"Playground accessed by user: {login_username}")
-    return render_template("playground.html", login_username=login_username, api_key=api_key or "")
+    """Redirect the legacy trailing-slash URL to the React-served playground page.
+
+    The playground UI is rendered by the React SPA at ``/playground``
+    (``blueprints/react_app.py``). This route only preserves the old
+    ``/playground/`` URL so it 302s to the live page instead of 500ing on a
+    template that no longer exists.
+    """
+    return redirect(url_for("react.react_playground"))
 
 
 @playground_bp.route("/api-key")
