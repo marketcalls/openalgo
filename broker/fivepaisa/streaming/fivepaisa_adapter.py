@@ -37,6 +37,9 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        # Single reconnect driver: only one _connect_with_retry thread may be
+        # alive at a time so two run_forever sockets can never overlap.
+        self._connect_thread = None
         self.last_snapshot = {}  # Store last known values for each token
 
     def initialize(
@@ -140,7 +143,18 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 new_client.on_error = self._on_error
                 new_client.on_close = self._on_close
                 new_client.on_message = self._on_message
+
+                # Close the previous client before dropping the reference so its
+                # socket/ping thread are released now rather than waiting on GC
+                # (which is not guaranteed to close the underlying socket).
+                old_client = self.ws_client
                 self.ws_client = new_client
+                if old_client is not None:
+                    try:
+                        old_client.close_connection()
+                    except Exception as e:
+                        self.logger.debug(f"Error closing previous WebSocket client: {e}")
+
                 self.logger.info("Rebuilt 5Paisa WebSocket client with fresh auth token")
             except Exception as e:
                 self.logger.error(f"Failed to rebuild client with fresh token: {e}")
@@ -151,10 +165,29 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        with self.lock:
+            # Reset run/backoff state so an adapter reused after disconnect() or
+            # after a prior max-attempts giveup will actually reconnect.
+            self.running = True
+            self.reconnect_attempts = 0
+            if self._connect_thread and self._connect_thread.is_alive():
+                self.logger.debug("Connect thread already running; not starting another.")
+                return
+            self._connect_thread = threading.Thread(
+                target=self._connect_with_retry, daemon=True
+            )
+            self._connect_thread.start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to 5Paisa WebSocket with retry logic"""
+        """Single reconnection driver for the 5Paisa WebSocket.
+
+        ws_client.connect() blocks in run_forever() until the socket closes;
+        when it returns we loop and reconnect (with exponential backoff) as long
+        as we're still running. This is the ONLY code path that opens a socket,
+        so two connections can never overlap. reconnect_attempts is reset in
+        _on_open once a connection actually succeeds, so backoff grows only
+        across consecutive failures.
+        """
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
                 # Re-read a fresh token before every connect attempt so a
@@ -164,17 +197,26 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(
                     f"Connecting to 5Paisa WebSocket (attempt {self.reconnect_attempts + 1})"
                 )
+                # Blocks until the socket closes (clean drop or error).
                 self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
+            except Exception as e:
+                self.logger.error(f"Connection error: {e}")
+
+            # Stop requested via disconnect() -> exit cleanly, no reconnect.
+            if not self.running:
                 break
 
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-                )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+            # Socket closed while we still want to run: back off and reconnect.
+            self.reconnect_attempts += 1
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                break
+            delay = min(
+                self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+            )
+            self.logger.warning(
+                f"5Paisa WebSocket disconnected; reconnecting in {delay} seconds..."
+            )
+            time.sleep(delay)
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
             self.logger.error("Max reconnection attempts reached. Giving up.")
@@ -330,6 +372,8 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback when connection is established"""
         self.logger.info("Connected to 5Paisa WebSocket")
         self.connected = True
+        # Connection succeeded; reset backoff so the next drop retries promptly.
+        self.reconnect_attempts = 0
 
         # Resubscribe to existing subscriptions if reconnecting
         with self.lock:
@@ -347,13 +391,15 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.error(f"5Paisa WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
-        """Callback when connection is closed"""
+        """Callback when connection is closed.
+
+        Reconnection is driven solely by the _connect_with_retry loop: when the
+        socket closes, run_forever() returns there and that loop reconnects. We
+        must NOT spawn another connect thread here, or two sockets could run
+        concurrently (FD/thread leak).
+        """
         self.logger.info("5Paisa WebSocket connection closed")
         self.connected = False
-
-        # Attempt to reconnect if we're still running
-        if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""

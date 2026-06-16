@@ -168,10 +168,23 @@ class FivePaisaWebSocket:
             raise e
 
     def close_connection(self):
-        """Close the WebSocket connection"""
-        if self.wsapp:
-            self.connected = False
-            self.wsapp.close()
+        """Close the WebSocket connection.
+
+        Idempotent and exception-safe: callers (reconnect, token rebuild,
+        adapter disconnect) may invoke this on an already-closed or partially
+        initialized client. We always clear state and never propagate, so a
+        failed close can't leak the handle or break the caller.
+        """
+        self.connected = False
+        wsapp = self.wsapp
+        if wsapp is None:
+            return
+        # Drop our reference first so a second call is a no-op even if close() blocks.
+        self.wsapp = None
+        try:
+            wsapp.close()
+        except Exception as e:
+            self.logger.debug(f"Error closing 5Paisa WebSocket: {e}")
 
     def subscribe(self, method: str, scrip_data: list[dict]) -> None:
         """
