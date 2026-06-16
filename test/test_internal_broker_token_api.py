@@ -383,3 +383,25 @@ def test_internal_broker_token_service_error_response(
 
     assert response.status_code == 400
     assert response.get_json() == {"status": "error", "message": "unsupported_broker"}
+
+
+def test_import_broker_token_logs_no_raw_access_token_or_apikey(monkeypatch, caplog):
+    monkeypatch.setattr(import_service, "verify_api_key", lambda apikey: "admin")
+    monkeypatch.setattr(import_service, "format_auth_token", lambda token: "kite-key:super-secret-token")
+    monkeypatch.setattr(import_service, "validate_access_token", lambda token: (True, None))
+    monkeypatch.setattr(import_service, "get_auth_token", lambda user_id, bypass_cache=False: None)
+    monkeypatch.setattr(import_service, "activate_broker_auth_token", lambda *args, **kwargs: 42)
+
+    with caplog.at_level(logging.INFO):
+        result = import_service.import_broker_token(
+            "openalgo-api-key-secret",
+            "zerodha",
+            "super-secret-token",
+        )
+
+    assert result.updated is True
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "super-secret-token" not in logs
+    assert "openalgo-api-key-secret" not in logs
+    assert "token_len=18" in logs
+    assert "token_fp=" in logs
