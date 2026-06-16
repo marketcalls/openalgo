@@ -469,7 +469,7 @@ class BrokerData:
 
                 for i in range(0, len(symbols), BATCH_SIZE):
                     batch = symbols[i : i + BATCH_SIZE]
-                    logger.info(
+                    logger.debug(
                         f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
                     )
 
@@ -683,7 +683,7 @@ class BrokerData:
         # Reorder columns
         df = df[["timestamp", "open", "high", "low", "close", "volume"]]
 
-        logger.info(f"Processed {len(df)} candles from raw data")
+        logger.debug(f"Processed {len(df)} candles from raw data")
         return df
 
     def get_history(
@@ -709,8 +709,15 @@ class BrokerData:
                 interval = "1d"  # Always use 1d internally for daily
                 logger.debug(f"Debug: Converted interval from {original_interval} to {interval}")
 
+            # Normalize exchange for index symbols. Index tokens are stored under
+            # NSE_INDEX / BSE_INDEX in the symbol DB, so looking them up with the
+            # raw NSE / BSE exchange returns the wrong (or no) token and the
+            # historical API then returns nothing.
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+            is_index = normalized_exchange.endswith("_INDEX")
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
 
             # Map interval
             fivepaisa_interval = self.map_interval(interval)
@@ -782,7 +789,7 @@ class BrokerData:
 
                     candles = response.get("data", {}).get("candles", [])
                     if not candles:
-                        logger.info(f"No data for chunk {chunk_start} to {chunk_end}")
+                        logger.debug(f"No data for chunk {chunk_start} to {chunk_end}")
                         current_start = current_end + pd.Timedelta(days=1)
                         continue
 
@@ -809,16 +816,22 @@ class BrokerData:
                             # 1. Zero volume
                             # 2. All prices are zero
                             # 3. High = Low (usually indicates no trading)
-                            if (
-                                volume == 0
-                                or (
-                                    open_price == 0
-                                    and high_price == 0
-                                    and low_price == 0
-                                    and close_price == 0
-                                )
-                                or (high_price == low_price)
-                            ):
+                            #
+                            # Indices (NIFTY, SENSEX, INDIAVIX, ...) have no traded
+                            # volume, so a zero-volume candle is valid data for them.
+                            # Applying the volume/high==low filters to indices drops
+                            # every candle. For indices we only skip fully-empty
+                            # (all-zero OHLC) candles.
+                            all_prices_zero = (
+                                open_price == 0
+                                and high_price == 0
+                                and low_price == 0
+                                and close_price == 0
+                            )
+                            if is_index:
+                                if all_prices_zero:
+                                    continue
+                            elif volume == 0 or all_prices_zero or (high_price == low_price):
                                 continue
 
                             # For daily candles, create timestamp at midnight UTC like Angel does
@@ -879,7 +892,7 @@ class BrokerData:
                             )
                             continue
                         dfs.append(chunk_df)
-                        logger.info(f"Added {len(transformed_candles)} candles from chunk")
+                        logger.debug(f"Added {len(transformed_candles)} candles from chunk")
 
                 except Exception as e:
                     logger.error(f"Error processing chunk {chunk_start} to {chunk_end}: {e}")
