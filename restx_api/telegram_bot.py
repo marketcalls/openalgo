@@ -94,9 +94,24 @@ preferences_model = api.model(
 
 
 def run_async(coro):
+    """Runs an async coroutine in a synchronous context.
+    
+    Creates a new event loop for the coroutine to execute and properly closes it when completed.
+    For calling async functions from Flask request handlers.
+
+    Args: 
+        coro: A coroutine object to be executed.
+
+    Returns: 
+        Returns what is produced by the coroutine that was executed.
+
+    Raises:
+        RuntimeError: If the event loop fails to initialize.
+        Any exception that is raised by the coroutine being executed.
+
+    Example:
+        result = run_async(telegram_bot_service.stop_bot())
     """
-    TODO: Change to Google-style docstring using PEP 257.
-    Helper to run async coroutine in sync context"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
