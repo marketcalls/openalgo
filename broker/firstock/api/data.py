@@ -13,6 +13,19 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def map_firstock_exchange(exchange: str) -> str:
+    """Map OpenAlgo index exchanges to the exchange code Firstock expects.
+
+    Firstock has no separate index exchange segment: NSE indices (e.g. NIFTY)
+    are quoted under "NSE" and BSE indices (e.g. SENSEX) under "BSE".
+    """
+    if exchange == "NSE_INDEX":
+        return "NSE"
+    if exchange == "BSE_INDEX":
+        return "BSE"
+    return exchange
+
+
 def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout=None):
     """
     Common function to make API calls to Firstock using shared httpx client with connection pooling
@@ -169,8 +182,8 @@ class BrokerData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             payload = {
                 "userId": os.getenv("BROKER_API_KEY")[:-4],
@@ -283,12 +296,8 @@ class BrokerData:
                 )
                 continue
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = (
-                "NSE"
-                if exchange == "NSE_INDEX"
-                else ("BSE" if exchange == "BSE_INDEX" else exchange)
-            )
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             data_array.append({"exchange": firstock_exchange, "tradingSymbol": br_symbol})
 
@@ -350,8 +359,8 @@ class BrokerData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             payload = {
                 "userId": os.getenv("BROKER_API_KEY")[:-4],
@@ -639,7 +648,7 @@ class BrokerData:
                     try:
                         # Prepare request for this chunk
                         br_symbol = get_br_symbol(symbol, exchange)
-                        firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+                        firstock_exchange = map_firstock_exchange(exchange)
 
                         payload = {
                             "userId": os.getenv("BROKER_API_KEY")[:-4],
@@ -973,8 +982,8 @@ class BrokerData:
 
             logger.info(f"Getting {interval} data for {br_symbol} from {start_str} to {end_str}")
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             # Prepare payload according to new API format
             payload = {
