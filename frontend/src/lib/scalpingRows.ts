@@ -54,8 +54,9 @@ export function buildPositionRows(
   for (const t of trades) {
     const product = (t.product || '').toUpperCase()
     const rec = ensure(t.symbol, t.exchange, product)
-    const qty = Math.abs(t.quantity || 0)
-    const px = t.average_price || 0
+    // Coerce broker numeric fields: live brokers can return these as strings.
+    const qty = Math.abs(Number(t.quantity) || 0)
+    const px = Number(t.average_price) || 0
     if ((t.action || '').toUpperCase() === 'BUY') {
       rec.buyQty += qty
       rec.buyValue += qty * px
@@ -69,9 +70,13 @@ export function buildPositionRows(
   for (const p of positions) {
     const product = (p.product || '').toUpperCase()
     const rec = ensure(p.symbol, p.exchange, product)
-    rec.posQty = p.quantity
-    rec.ltp = p.ltp
-    rec.posAvg = p.average_price
+    // Coerce broker numeric fields. The PositionBook API contract returns these
+    // as strings (e.g. "83.74") for live brokers, which previously left
+    // row.avgPrice a string and crashed the table on avgPrice.toFixed() (#1532).
+    // Sandbox returns numbers, where Number() is a no-op.
+    rec.posQty = Number(p.quantity) || 0
+    rec.ltp = Number(p.ltp) || 0
+    rec.posAvg = Number(p.average_price) || 0
   }
 
   const rows: ScalpingPositionRow[] = []

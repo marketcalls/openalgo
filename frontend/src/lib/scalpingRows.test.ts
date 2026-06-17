@@ -87,4 +87,41 @@ describe('buildPositionRows', () => {
     expect(r.ltp).toBe(120)
     expect(r.unrealizedPnl).toBe((120 - 90) * 65)
   })
+
+  it('coerces string numerics from the live PositionBook contract (#1532)', () => {
+    // Live brokers (e.g. Zerodha) return PositionBook numerics as strings, per
+    // the documented API contract: { quantity: "-1", average_price: "83.74", ... }.
+    // The row must be numeric so the UI can call avgPrice.toFixed() without crashing.
+    const livePos = {
+      symbol: SYM,
+      exchange: 'NFO',
+      product: 'NRML',
+      quantity: '65',
+      average_price: '90.5',
+      ltp: '110.25',
+      pnl: '0',
+      pnlpercent: '0',
+    } as unknown as Position
+    const liveTrade = {
+      symbol: SYM,
+      exchange: 'NFO',
+      product: 'NRML',
+      action: 'BUY',
+      quantity: '65',
+      average_price: '90.5',
+      trade_value: '5882.5',
+      orderid: 'o1',
+      timestamp: '2026-06-14 10:00:00',
+    } as unknown as Trade
+    const r = buildPositionRows([livePos], [liveTrade], {})[0]
+    expect(typeof r.avgPrice).toBe('number')
+    expect(typeof r.netQty).toBe('number')
+    expect(typeof r.ltp).toBe('number')
+    expect(typeof r.buyAvg).toBe('number')
+    expect(r.netQty).toBe(65)
+    expect(r.avgPrice).toBe(90.5)
+    expect(r.unrealizedPnl).toBe((110.25 - 90.5) * 65)
+    expect(() => r.avgPrice.toFixed(2)).not.toThrow()
+    expect(r.avgPrice.toFixed(2)).toBe('90.50')
+  })
 })
