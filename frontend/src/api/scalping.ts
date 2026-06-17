@@ -75,6 +75,36 @@ export const scalpingApi = {
     return response.data
   },
 
+  // Historical candles for the scalping charts. interval is an OpenAlgo interval
+  // (1m/5m/15m); lookback scales 1m=1 day, 5m=3, 15m=9. Pass `date` (the trading
+  // date learned on first load) so the periodic reconcile pulls a single day.
+  getHistory: async (
+    symbol: string,
+    exchange: string,
+    interval: string,
+    date?: string
+  ): Promise<{
+    status: string
+    symbol: string
+    exchange: string
+    interval: string
+    date: string | null
+    candles: Array<{
+      time: number
+      open: number
+      high: number
+      low: number
+      close: number
+      volume: number
+    }>
+    message?: string
+  }> => {
+    const params: Record<string, string> = { symbol, exchange, interval }
+    if (date) params.date = date
+    const response = await webClient.get('/scalping/api/history', { params })
+    return response.data
+  },
+
   placeOrder: async (req: ScalpingOrderRequest): Promise<ScalpingOrderResponse> => {
     const response = await webClient.post<ScalpingOrderResponse>('/scalping/api/order', req)
     return response.data

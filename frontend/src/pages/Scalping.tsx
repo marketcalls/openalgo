@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { type QuotesData, tradingApi } from '@/api/trading'
+import { ScalpChart } from '@/components/scalping/ScalpChart'
 import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -250,6 +251,10 @@ export default function Scalping() {
   const [lots, setLots] = useState(1)
   const [product, setProduct] = useState<ScalpingProduct>('NRML')
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
+
+  // Shared timeframe for the live charts (OpenAlgo interval format). One switch
+  // flips every chart (CE / underlying / PE, or the single instrument) at once.
+  const [chartTf, setChartTf] = useState('1m')
 
   // Global predefined SL / Target — when enabled, auto-attached to every new entry.
   // Value is in points or percent of entry (default points).
@@ -1210,6 +1215,67 @@ export default function Scalping() {
             high={peTick?.high}
             low={peTick?.low}
           />
+        </div>
+      )}
+
+      {/* Live charts (candles + volume + OHLC legend), shared timeframe */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">Timeframe</span>
+        <div className="inline-flex items-center rounded-md border p-0.5">
+          {['1m', '5m', '15m'].map((tf) => (
+            <button
+              type="button"
+              key={tf}
+              onClick={() => setChartTf(tf)}
+              className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                chartTf === tf
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isSingle ? (
+        <div className="grid grid-cols-1 gap-3">
+          <div className="h-[340px]">
+            <ScalpChart
+              symbol={singleLeg?.symbol ?? ''}
+              exchange={singleLeg?.exchange ?? ''}
+              interval={chartTf}
+              title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="h-[340px]">
+            <ScalpChart
+              symbol={ceLeg?.symbol ?? ''}
+              exchange={ceLeg?.exchange ?? ''}
+              interval={chartTf}
+              title="Call (CE)"
+            />
+          </div>
+          <div className="h-[340px]">
+            <ScalpChart
+              symbol={underlyingSym}
+              exchange={underlyingExch}
+              interval={chartTf}
+              title={underlying || 'Underlying'}
+            />
+          </div>
+          <div className="h-[340px]">
+            <ScalpChart
+              symbol={peLeg?.symbol ?? ''}
+              exchange={peLeg?.exchange ?? ''}
+              interval={chartTf}
+              title="Put (PE)"
+            />
+          </div>
         </div>
       )}
 
