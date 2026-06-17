@@ -224,6 +224,13 @@ def react_oitracker():
     return serve_react_app()
 
 
+# Chart test page (dev/testing only) - 1m history + live forming candle.
+# Intentionally not linked from any menu; reachable only by direct URL.
+@react_bp.route("/chart/test")
+def react_chart_test():
+    return serve_react_app()
+
+
 # Max Pain analysis
 @react_bp.route("/maxpain")
 def react_maxpain():
