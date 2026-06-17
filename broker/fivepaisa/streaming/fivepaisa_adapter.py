@@ -286,7 +286,19 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         previous one-frame-per-symbol flood on bulk subscribe / resubscribe.
         """
         consecutive_failures = 0
-        while self.pending_subscriptions and self.running and not self._stop_event.is_set():
+        while self.running and not self._stop_event.is_set():
+            # Decide whether to exit on an EMPTY queue under the same lock that
+            # _enqueue_subscriptions holds when it appends work and checks our
+            # liveness. Doing the emptiness test outside the lock is a lost-wakeup
+            # race: an enqueue could add an item and observe this thread still
+            # alive (so skip starting a new one) in the instant between our
+            # unlocked test and our return, stranding that item until the next
+            # enqueue/reconnect. Clearing _sub_thread here closes that window.
+            with self.lock:
+                if not self.pending_subscriptions:
+                    self._sub_thread = None
+                    return
+
             if not (self.connected and self.ws_client):
                 # Not connected yet; _on_open re-queues everything on connect,
                 # so just back off briefly and re-check (interruptible).
@@ -340,6 +352,11 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if self.pending_subscriptions:
                 if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
                     break
+
+        # Loop exited via stop/pause (not the empty-queue return above): clear the
+        # handle so a later _enqueue_subscriptions starts a fresh processor.
+        with self.lock:
+            self._sub_thread = None
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -460,10 +477,19 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
-        # Remove from subscriptions
+        # Remove from subscriptions and cancel any still-queued subscribe for the
+        # same (method, scrip). Without this, a quick subscribe->unsubscribe would
+        # send Unsubscribe now but leave the batched Subscribe in the queue, which
+        # the processor then sends afterwards — resurrecting a stale server-side
+        # subscription and unwanted feed traffic.
+        target = (method, scrip_data[0])
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
+            if self.pending_subscriptions:
+                self.pending_subscriptions = deque(
+                    item for item in self.pending_subscriptions if item != target
+                )
 
         # Unsubscribe if connected
         if self.connected and self.ws_client:

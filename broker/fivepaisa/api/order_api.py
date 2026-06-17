@@ -305,9 +305,12 @@ def place_order_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
 
     payload = json.dumps(json_data)
 
-    # Log the outgoing request at INFO so order placement is captured even when
-    # LOG_LEVEL is the default INFO (sensitive keys are redacted by the logger).
-    logger.info(f"5Paisa PlaceOrder request: {payload}")
+    # Log the order body at INFO so placements are captured even at the default
+    # INFO level. We deliberately log only `body`, never the full payload: the
+    # `head.key` field carries the broker API key in plaintext and the JSON key
+    # name "key" is NOT covered by the logger's redaction patterns, so logging
+    # the whole payload would leak the credential to app logs on every order.
+    logger.info(f"5Paisa PlaceOrder request body: {json.dumps(newdata)}")
 
     try:
         # Get the shared httpx client
