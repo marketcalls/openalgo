@@ -292,10 +292,17 @@ class StopBot(Resource):
 
 
 def get_webhook_secret():
-    """
-    TODO: Change to Google style docstring using PEP 257.
-    Get or generate webhook secret for Telegram webhook verification.
-    Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
+    """Get or generate webhook secret for Telegram webhook verification.
+   
+    Uses TELEGRAM_WEBHOOK_SECRET env ver, or if its not set, devires from hashing the bot token so
+    the raw token is not exposed and the same bot always gets the same secret.
+    
+    Returns:
+        str | None: The webhook secret if set, or the first 32 characters of the bot token's
+        SHA-256 hex digest, or None if neither is available.
+
+    Example:
+        secret = get_webhook_secret()
     """
     # First check for explicit webhook secret
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
