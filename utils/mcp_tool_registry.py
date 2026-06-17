@@ -98,6 +98,16 @@ TOOL_SCOPES: dict[str, str] = {
     "get_timings": SCOPE_READ_MARKET,
     "check_holiday": SCOPE_READ_MARKET,
     "get_instruments": SCOPE_READ_MARKET,
+    # ---- Research: technical indicators (openalgo.ta over history) ----
+    "calculate_indicator": SCOPE_READ_MARKET,
+    "get_trend_snapshot": SCOPE_READ_MARKET,
+    "get_momentum_snapshot": SCOPE_READ_MARKET,
+    "get_volatility_snapshot": SCOPE_READ_MARKET,
+    "get_support_resistance": SCOPE_READ_MARKET,
+    "detect_signals": SCOPE_READ_MARKET,
+    "screen_instruments": SCOPE_READ_MARKET,
+    "multi_timeframe_analysis": SCOPE_READ_MARKET,
+    "correlation_beta": SCOPE_READ_MARKET,
     # ---- Info / introspection — readable by anyone with any scope ----
     # These are exempt from the scope filter because they help clients
     # discover what they can do. Implementing as read:market keeps the
