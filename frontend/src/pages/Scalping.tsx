@@ -1716,7 +1716,7 @@ export default function Scalping() {
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums">{t.quantity}</TableCell>
                   <TableCell className="text-right font-mono tabular-nums">
-                    {t.average_price?.toFixed(2)}
+                    {Number(t.average_price || 0).toFixed(2)}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{t.orderid}</TableCell>
                 </TableRow>
