@@ -250,82 +250,145 @@ class BrokerData:
     _MULTIQUOTE_RATE_DELAY = 0.15  # ~6-7 req/sec, safely under Arrow's 10/sec
     _HISTORY_RATE_DELAY = 0.15  # throttle between historical date-chunks
 
-    def get_multiquotes(self, symbols):
-        """Batch quotes via /info/quotes/full. `symbols` is a list of
-        {symbol, exchange}. Large sets are split into batches with a delay so we
-        stay within Arrow's per-endpoint rate limit."""
+    @staticmethod
+    def _leg_error(item, message):
+        """One result entry flagging a single leg as failed. Mirrors the Angel /
+        Zerodha multiquotes contract: every requested leg is accounted for, so
+        callers (e.g. the sandbox engine) can see exactly which symbols are
+        missing rather than getting a silently short list."""
+        return {"symbol": item.get("symbol"), "exchange": item.get("exchange"), "error": message}
+
+    @staticmethod
+    def _format_quote(q):
+        """Arrow FULL-quote payload -> OpenAlgo quote dict (same shape as get_quotes)."""
+        bids = q.get("bids") or [{}]
+        asks = q.get("asks") or [{}]
+        return {
+            "ask": _scale(asks[0].get("price", 0)),
+            "bid": _scale(bids[0].get("price", 0)),
+            "high": _scale(q.get("high", 0)),
+            "low": _scale(q.get("low", 0)),
+            "ltp": _scale(q.get("ltp", 0)),
+            "open": _scale(q.get("open", 0)),
+            "prev_close": _scale(q.get("close", 0)),
+            "volume": q.get("volume", 0),
+            "oi": q.get("oi", 0),
+        }
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """Get real-time quotes for multiple symbols with automatic batching.
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: One entry per requested leg --
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+                  or {'symbol', 'exchange', 'error'} for legs that fail. A
+                  failing batch never sinks the rest (a 500 on one batch used to
+                  discard every other quote and stall sandbox fills/square-off).
+        """
         try:
-            results = []
+            all_results = []
             n = len(symbols)
             for i in range(0, n, self._MULTIQUOTE_MAX_PER_REQUEST):
                 batch = symbols[i : i + self._MULTIQUOTE_MAX_PER_REQUEST]
-                results.extend(self._process_quotes_batch(batch))
+                all_results.extend(self._process_quotes_batch(batch))
+                # Rate limit delay between batches
                 if i + self._MULTIQUOTE_MAX_PER_REQUEST < n:
                     time.sleep(self._MULTIQUOTE_RATE_DELAY)
-            return results
+            return all_results
         except Exception as e:
-            logger.exception(f"Error fetching Arrow multiquotes: {e}")
+            logger.exception("Error fetching multiquotes")
             raise ArrowAPIError(f"Error fetching multiquotes: {e}") from e
 
-    def _process_quotes_batch(self, symbols):
-        """Fetch one batch of quotes. Response order is not guaranteed, so match
-        results to requests by the returned token."""
-        client = get_httpx_client()
-        headers = get_arrow_headers(self.auth_token, with_json=True)
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """Process a single batch of symbols (internal method).
 
+        Builds the request body + token map, fetches quotes, then builds results
+        from the token map so every requested leg is accounted for -- skipped and
+        missing legs become error entries rather than silently disappearing
+        (matches Angel/Zerodha)."""
         body = []
         token_map = {}  # token(str) -> original {symbol, exchange}
+        skipped_symbols = []  # legs we can't resolve / can't send
+
         for item in symbols:
-            if item.get("exchange") in QUOTE_UNSUPPORTED_EXCHANGES:
-                # CDS/BCD/NCO would 400 the entire batch; skip them.
+            symbol = item["symbol"]
+            exchange = item["exchange"]
+
+            if exchange in QUOTE_UNSUPPORTED_EXCHANGES:
+                # CDS/BCD/NCO would 400 the entire batch; report, don't send.
+                logger.warning(f"Skipping {symbol} on {exchange}: exchange not supported by Arrow quotes")
+                skipped_symbols.append(self._leg_error(item, "Exchange not supported by Arrow quotes"))
                 continue
+
             try:
-                br_symbol, token, arrow_exchange = self._lookup(item["symbol"], item["exchange"])
-            except Exception:
+                br_symbol, token, arrow_exchange = self._lookup(symbol, exchange)
+            except Exception as e:
+                logger.warning(f"Skipping {symbol} on {exchange}: {e}")
+                skipped_symbols.append(self._leg_error(item, str(e)))
                 continue
+
             if arrow_exchange == "INDEX":
                 # A single bad symbol 400s the whole batch, so resolve the
                 # index's quote name first (cached after the first probe).
-                name = self._resolve_index_quote_name(item["symbol"], br_symbol, token)
+                name = self._resolve_index_quote_name(symbol, br_symbol, token)
                 if not name:
+                    skipped_symbols.append(self._leg_error(item, "Index not served by Arrow quote API"))
                     continue
                 body.append({"exchange": "INDEX", "symbol": name})
             else:
                 body.append({"exchange": arrow_exchange, "symbol": br_symbol})
             token_map[str(token)] = item
 
-        if not body:
-            return []
+        # Return skipped symbols if no valid instruments
+        if not token_map:
+            return skipped_symbols
 
-        response = client.post(f"{ROOT_URL}/info/quotes/full", headers=headers, json=body)
-        response.raise_for_status()
-        data = response.json().get("data", [])
+        # Fetch quotes and index the response by token
+        quotes_by_token = self._fetch_quotes(body)
 
+        # Build results from token_map so missing legs are reported, not dropped
         results = []
-        for q in data:
-            original = token_map.get(str(q.get("token")))
-            if not original:
+        for token_str, original in token_map.items():
+            quote = quotes_by_token.get(token_str)
+            if quote is None:
+                results.append(self._leg_error(original, "No quote data available"))
                 continue
-            bids = q.get("bids") or [{}]
-            asks = q.get("asks") or [{}]
             results.append(
-                {
-                    "symbol": original["symbol"],
-                    "exchange": original["exchange"],
-                    "data": {
-                        "ask": _scale(asks[0].get("price", 0)),
-                        "bid": _scale(bids[0].get("price", 0)),
-                        "high": _scale(q.get("high", 0)),
-                        "low": _scale(q.get("low", 0)),
-                        "ltp": _scale(q.get("ltp", 0)),
-                        "open": _scale(q.get("open", 0)),
-                        "prev_close": _scale(q.get("close", 0)),
-                        "volume": q.get("volume", 0),
-                        "oi": q.get("oi", 0),
-                    },
-                }
+                {"symbol": original["symbol"], "exchange": original["exchange"], "data": self._format_quote(quote)}
             )
-        return results
+
+        # Include skipped symbols in results
+        return skipped_symbols + results
+
+    def _fetch_quotes(self, body: list) -> dict:
+        """POST the request body to /info/quotes/full and index the response by
+        token. Returns {token(str): quote_dict}, or {} on failure -- never
+        raises, so callers turn missing tokens into per-leg errors.
+
+        On an HTTP error the server's own response body is logged: it's the only
+        thing that explains a 500/400 (a mis-mapped symbol, e.g. an NSE equity
+        sent without its '-EQ' series suffix, surfaces here as "unable to get
+        quotes"), and the request sample distinguishes that from an Arrow-side
+        outage."""
+        try:
+            client = get_httpx_client()
+            headers = get_arrow_headers(self.auth_token, with_json=True)
+            response = client.post(f"{ROOT_URL}/info/quotes/full", headers=headers, json=body)
+            response.raise_for_status()
+            data = response.json().get("data", [])
+            return {str(q.get("token")): q for q in data}
+        except httpx.HTTPStatusError as e:
+            detail = (e.response.text or "").strip().replace("\n", " ")[:300]
+            logger.warning(
+                f"Arrow quotes {e.response.status_code} for {len(body)} instruments. "
+                f"Response: {detail}. Sample request: {body[:3]}"
+            )
+        except Exception as e:
+            logger.warning(f"Arrow quotes request failed for {len(body)} instruments: {e}")
+        return {}
 
     def get_history(self, symbol, exchange, timeframe, from_date, to_date):
         """Historical candles -> OpenAlgo DataFrame (timestamp, open, high, low,
