@@ -75,6 +75,7 @@ Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital,
 - Samco
 - Shoonya (Finvasia)
 - Tradejini
+- TradeSmart
 - Upstox
 - Wisdom Capital
 - Zebu
