@@ -44,6 +44,7 @@ const allBrokers = [
   { id: 'samco', name: 'Samco', authType: 'totp' },
   { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
   { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
+  { id: 'tradesmart', name: 'TradeSmart', authType: 'oauth' },
   { id: 'upstox', name: 'Upstox', authType: 'oauth' },
   { id: 'wisdom', name: 'Wisdom Capital', authType: 'totp' },
   { id: 'zebu', name: 'Zebu', authType: 'totp' },
@@ -149,6 +150,7 @@ export default function BrokerSelect() {
       case 'rmoney':
       case 'shoonya':
       case 'tradejini':
+      case 'tradesmart':
       case 'wisdom':
       case 'zebu':
         // Brokers using callback route (form-based or redirect-based)

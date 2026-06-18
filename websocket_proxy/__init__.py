@@ -93,6 +93,9 @@ from broker.samco.streaming.samco_adapter import SamcoWebSocketAdapter
 # Import the shoonya_adapter
 from broker.shoonya.streaming.shoonya_adapter import ShoonyaWebSocketAdapter
 
+# Import the tradesmart_adapter
+from broker.tradesmart.streaming.tradesmart_adapter import TradeSmartWebSocketAdapter
+
 # Import the upstox_adapter
 from broker.upstox.streaming.upstox_adapter import UpstoxWebSocketAdapter
 
@@ -113,6 +116,7 @@ register_adapter("zerodha", ZerodhaWebSocketAdapter)
 register_adapter("dhan", DhanWebSocketAdapter)
 register_adapter("flattrade", FlattradeWebSocketAdapter)
 register_adapter("shoonya", ShoonyaWebSocketAdapter)
+register_adapter("tradesmart", TradeSmartWebSocketAdapter)
 register_adapter("ibulls", IbullsWebSocketAdapter)
 register_adapter("compositedge", CompositedgeWebSocketAdapter)
 register_adapter("fivepaisa", FivepaisaWebSocketAdapter)
@@ -163,6 +167,7 @@ __all__ = [
     "DhanWebSocketAdapter",
     "FlattradeWebSocketAdapter",
     "ShoonyaWebSocketAdapter",
+    "TradeSmartWebSocketAdapter",
     "IbullsWebSocketAdapter",
     "CompositedgeWebSocketAdapter",
     "FivepaisaWebSocketAdapter",
