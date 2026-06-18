@@ -35,6 +35,13 @@ const tools = [
     color: 'bg-blue-500',
   },
   {
+    title: 'OI Range',
+    description:
+      'Open Interest by strike for a custom range with ATM-relative quick selectors and optional 1-minute auto-refresh',
+    href: '/oirange',
+    color: 'bg-sky-500',
+  },
+  {
     title: 'Max Pain',
     description: 'Max Pain strike calculation with visual pain distribution across strikes',
     href: '/maxpain',
