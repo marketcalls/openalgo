@@ -536,8 +536,13 @@ class BrokerData:
                 # Set start time to 09:15 (market open) for the start date
                 from_date = from_date.replace(hour=9, minute=15)
 
-                # If end_date is today, set the end time to current time
-                current_time = pd.Timestamp.now()
+                # If end_date is today, set the end time to current time.
+                # Anchor "now" to IST wall-clock (not the server's local time) so
+                # the client-side clip below stays correct on UTC/non-IST hosts.
+                # Definedge candle timestamps are naive IST; comparing them against
+                # a server-local now() would truncate the most recent candles by the
+                # host's UTC offset (~5.5h of missing data on a UTC deployment).
+                current_time = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
                 if to_date.date() == current_time.date():
                     to_date = current_time.replace(second=0, microsecond=0)
                 else:
