@@ -456,6 +456,11 @@ def strikes():
             {"status": "error", "message": "API key not configured. Generate one at /apikey"}
         ), 401
 
+    # The scalping ladder only needs the strike list + ATM + symbols (it streams live
+    # prices over the WebSocket feed), so default to a structure-only build that skips
+    # the slow per-strike broker multiquote. Pass ?quotes=true to include live quotes.
+    with_quotes = (request.args.get("quotes", "false").strip().lower() == "true")
+
     if exchange in ("NFO", "BFO"):
         success, response, status_code = get_option_chain(
             underlying=underlying,
@@ -463,6 +468,7 @@ def strikes():
             expiry_date=expiry_date,
             strike_count=strike_count,
             api_key=api_key,
+            with_quotes=with_quotes,
         )
         if isinstance(response, dict):
             response["fo_exchange"] = exchange
@@ -675,8 +681,25 @@ def order():
         "quantity": quantity,
     }
 
+    # Pass the client-supplied LTP (from the live WebSocket feed) through as a prefetched
+    # quote. In analyze/sandbox mode the sandbox engine uses it instead of fetching its own
+    # per-order quote (which retries with sleeps and stalls placement). Ignored in live mode.
+    prefetched_quote = None
+    ltp_raw = data.get("ltp")
+    if ltp_raw is not None:
+        try:
+            ltp_val = float(ltp_raw)
+            if ltp_val > 0:
+                prefetched_quote = {"ltp": ltp_val}
+        except (TypeError, ValueError):
+            prefetched_quote = None
+
     success, response, status_code = place_order(
-        order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
+        order_data=order_data,
+        api_key=api_key,
+        auth_token=auth_token,
+        broker=broker,
+        prefetched_quote=prefetched_quote,
     )
     # Record this instrument in the scalping list so Close-All / the position book
     # stay scoped to the scalping strategy (broker positions carry no strategy tag).

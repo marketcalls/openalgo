@@ -89,6 +89,11 @@ const BOOK_EVENTS = [
 // A WebSocket tick considered stale after this -> fall back to MultiQuotes.
 const TICK_STALE_MS = 5000
 
+// Collapse rapid book-refresh triggers (multi-leg entries, and the SocketIO order events
+// for several legs arriving together) into at most one refetch per window, so we don't
+// hammer the broker's order/trade/position endpoints.
+const REFRESH_THROTTLE_MS = 400
+
 // Which leg/product the Set-SL dialog is editing.
 interface SLTarget {
   symbol: string
@@ -470,15 +475,40 @@ export default function Scalping() {
     [trades, trackedKeys]
   )
 
+  // Throttled (leading + trailing): the first trigger refetches immediately, and any
+  // further triggers within REFRESH_THROTTLE_MS collapse into a single trailing refetch.
+  // This de-dups the order's success path + its SocketIO event and bounds multi-leg bursts.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastRefreshRef = useRef(0)
   const refreshBooks = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['scalping', 'positions'] })
-    queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
-    queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
-    queryClient.invalidateQueries({ queryKey: ['scalping', 'tracked'] })
+    const run = () => {
+      lastRefreshRef.current = Date.now()
+      queryClient.invalidateQueries({ queryKey: ['scalping', 'positions'] })
+      queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
+      queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
+      queryClient.invalidateQueries({ queryKey: ['scalping', 'tracked'] })
+    }
+    const since = Date.now() - lastRefreshRef.current
+    if (since >= REFRESH_THROTTLE_MS) {
+      run()
+    } else if (refreshTimerRef.current == null) {
+      refreshTimerRef.current = setTimeout(() => {
+        refreshTimerRef.current = null
+        run()
+      }, REFRESH_THROTTLE_MS - since)
+    }
   }, [queryClient])
 
-  // Refresh the books on order/position events instead of polling.
-  useOrderEventRefresh(refreshBooks, { events: [...BOOK_EVENTS] })
+  // Clear any pending trailing refetch on unmount (timer hygiene).
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current != null) clearTimeout(refreshTimerRef.current)
+    }
+  }, [])
+
+  // Refresh the books on order/position events instead of polling. The short delay lets
+  // the server finish persisting before we refetch (was 500ms; 150ms keeps the UI snappy).
+  useOrderEventRefresh(refreshBooks, { events: [...BOOK_EVENTS], delay: 150 })
 
   // Subscribe the live feed for underlying (Quote, for %chg), CE/PE legs, AND
   // every symbol in the position book — so book LTP and P&L update in realtime.
@@ -757,6 +787,9 @@ export default function Scalping() {
       // analyzer_update in analyzer mode. We don't toast success here (latency is
       // in the header). We only toast an error in LIVE mode, where the backend
       // emits no socket event on failure, or on a transport error (no response).
+      // The live LTP from the WS feed — sent so the sandbox engine can price the fill
+      // without its own (slow, retry-prone) per-order quote fetch. Ignored in live mode.
+      const legLtp = marketDataRef.current.get(`${leg.exchange}:${leg.symbol}`)?.data?.ltp
       try {
         const res = await scalpingApi.placeOrder({
           symbol: leg.symbol,
@@ -765,11 +798,13 @@ export default function Scalping() {
           quantity,
           product: s.product,
           lots: sentLots,
+          ltp: legLtp != null && legLtp > 0 ? legLtp : undefined,
         })
         setLastLatencyMs(Math.round(performance.now() - t0))
         if (res.status === 'success') {
           attachPredefinedSL(leg, action, quantity, s.product)
-          refreshBooks()
+          // Books refresh from this order's SocketIO event (order_event / analyzer_update)
+          // via useOrderEventRefresh — no manual refetch here, to avoid a double refresh.
         } else if (s.appMode === 'live') {
           showToast.error(res.message ?? 'Order failed', 'orders')
         }
@@ -779,7 +814,7 @@ export default function Scalping() {
         if (!handledGlobally) showToast.error(apiErrorMessage(e), 'orders')
       }
     },
-    [refreshBooks, attachPredefinedSL]
+    [attachPredefinedSL]
   )
 
   // Note: close-all / cancel-all (F6/F7) and the trailing-SL auto-exit are
