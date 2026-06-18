@@ -1,11 +1,13 @@
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from datetime import date, timedelta
+from typing import Any
 
 import httpx
+import pandas as pd
 from mcp.server.fastmcp import FastMCP
-from openalgo import api
+from openalgo import api, ta
 
 # Two boot paths share this module:
 #
@@ -809,9 +811,11 @@ def get_historical_data(
     symbol: str,
     exchange: str,
     interval: str,
-    start_date: str,
-    end_date: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
     source: str = "api",
+    bars: int = 20,
+    lookback_days: int | None = None,
 ) -> str:
     """
     Get historical OHLCV data for a symbol.
@@ -822,24 +826,38 @@ def get_historical_data(
         interval: Time interval. With source='api': '1m', '3m', '5m', '10m', '15m', '30m', '1h', 'D'.
                   With source='db': also supports custom intervals (2m, 4m, 6m, 7m, 2h, 3h, 4h) and
                   daily-based (W, M, Q, Y plus multiples like 2W, 3M).
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
+        start_date: Start date (YYYY-MM-DD). Optional — when omitted, the last `bars`
+                    (default 20) most-recent bars are returned (or `lookback_days` if given).
+        end_date: End date (YYYY-MM-DD). Optional — defaults to today.
         source: 'api' (default) fetches from broker API. 'db' fetches from the local
                 OpenAlgo Historify DuckDB store (1m/D stored, other intervals computed via SQL).
+        bars: Number of most-recent bars to return (default 20). The window is fetched
+              server-side; only the last `bars` rows are sent back to keep the payload small.
+              Increase only if you explicitly need more rows.
+        lookback_days: When dates are omitted, fetch the last N calendar days instead of a
+                       bar-count window (e.g., 30 for "last 30 days").
 
     Returns:
-        JSON with count and data (list of {timestamp, open, high, low, close, volume}).
+        JSON with total count, returned count, a truncated flag, and data (list of
+        {timestamp, open, high, low, close, volume}) — the last `bars` rows.
     """
     try:
-        response = client.history(
-            symbol=symbol.upper(),
-            exchange=exchange.upper(),
-            interval=interval,
-            start_date=start_date,
-            end_date=end_date,
-            source=source,
+        # Fetch enough to satisfy `bars` (min 252) unless an explicit range/lookback is given.
+        response = _load_history(
+            symbol, exchange, interval, start_date, end_date, max(252, bars), lookback_days, source
         )
-        return _to_json(response)
+        total = len(response)
+        return json.dumps(
+            {
+                "count": total,
+                "returned": min(bars, total),
+                "truncated": total > bars,
+                "bars": bars,
+                "data": _df_records(response, bars),
+            },
+            indent=2,
+            default=str,
+        )
     except Exception as e:
         return f"Error getting historical data: {str(e)}"
 
@@ -1326,6 +1344,843 @@ def analyzer_toggle(mode: bool) -> str:
         return json.dumps(response, indent=2, default=str)
     except Exception as e:
         return json.dumps({"status": "error", "error": str(e)}, indent=2)
+
+
+# ============================================================
+# RESEARCH TOOLS — TECHNICAL INDICATORS (openalgo.ta)
+# ============================================================
+# These tools fetch OHLCV history via the SDK (client.history) and
+# compute indicators with `from openalgo import ta`. They are SDK-only
+# and work under BOTH the stdio and HTTP transports.
+
+# Indicators whose first inputs are High/Low/Close (and optionally
+# Volume) rather than a single Close series. Used to auto-pick inputs
+# in calculate_indicator() when the caller does not pass `inputs`.
+_HLC_INDICATORS = {
+    "atr", "natr", "true_range", "adx", "adxr", "dmi", "dx", "supertrend",
+    "stochastic", "stochf", "cci", "williams_r", "keltner", "donchian",
+    "aroon", "aroon_oscillator", "psar", "ichimoku", "pivot_points",
+    "ultimate_oscillator", "uo_oscillator", "chandelier_exit", "starc",
+    "elderray", "ckstop", "fractals", "rwi", "alligator", "gator_oscillator",
+    "bop", "rvi", "fisher", "avgprice", "medprice", "midprice", "typprice",
+    "wclprice",
+}
+_HLCV_INDICATORS = {"mfi", "cmf", "adl", "emv", "klingervolumeoscillator"}
+
+
+def _history_df(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+    source: str = "api",
+):
+    """Fetch OHLCV history as a timestamp-indexed DataFrame. Raises on failure.
+
+    source: 'api' (default) fetches from the broker API; 'db' fetches from the local
+    OpenAlgo Historify DuckDB store (1m/D stored, other intervals computed via SQL,
+    enabling custom intervals like 2m/4m/W/M/Q for research).
+    """
+    df = client.history(
+        symbol=symbol.upper(),
+        exchange=exchange.upper(),
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+    )
+    # SDK returns a DataFrame on success, a dict on error.
+    if not hasattr(df, "reset_index"):
+        raise ValueError(f"history error: {df}")
+    if len(df) == 0:
+        raise ValueError("no historical data returned for the given range")
+    return df
+
+
+# Approx bars per trading day per interval (NSE ~6h15m session). Used only to size
+# the calendar window when fetching by bar-count, so it can be a rough estimate.
+_BARS_PER_DAY = {
+    "1m": 375, "3m": 125, "5m": 75, "10m": 38, "15m": 25, "30m": 13,
+    "1h": 7, "60m": 7, "2h": 4, "3h": 3, "4h": 2,
+    "d": 1, "day": 1, "w": 0.2, "week": 0.2, "m": 0.05, "month": 0.05,
+}
+
+
+def _load_history(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+):
+    """Fetch OHLCV history with a flexible lookback window.
+
+    Resolution priority:
+      1. Explicit start_date (with optional end_date) -> use that range verbatim.
+      2. lookback_days given -> last N calendar days ending today (e.g., "last 30 days").
+      3. else -> last `lookback_bars` bars (default 252 ≈ one trading year of daily data):
+         fetch a wide-enough calendar window, then tail to exactly `lookback_bars` rows.
+    """
+    end = end_date or date.today().isoformat()
+    if start_date:
+        return _history_df(symbol, exchange, interval, start_date, end, source)
+    if lookback_days:
+        start = (date.fromisoformat(end) - timedelta(days=int(lookback_days))).isoformat()
+        return _history_df(symbol, exchange, interval, start, end, source)
+    bpd_per_day = _BARS_PER_DAY.get(interval.lower(), 75)
+    cal_days = int((lookback_bars / bpd_per_day) * 1.6) + 5
+    start = (date.fromisoformat(end) - timedelta(days=cal_days)).isoformat()
+    df = _history_df(symbol, exchange, interval, start, end, source)
+    return df.tail(int(lookback_bars))
+
+
+def _idx_iso(df, pos: int) -> str:
+    """ISO timestamp of the row at positional index `pos` (e.g., 0 first, -1 last)."""
+    ts = df.index[pos]
+    return ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+
+
+def _last(series) -> float | None:
+    """Last non-null value of a Series-like as a rounded float, or None."""
+    try:
+        s = series.dropna()
+        return round(float(s.iloc[-1]), 4) if len(s) else None
+    except Exception:
+        return None
+
+
+def _df_records(df, limit: int | None = None):
+    """Convert a DataFrame to JSON-safe records with an ISO 'timestamp' column."""
+    out = df.tail(limit) if limit else df
+    out = out.reset_index()
+    out = out.rename(columns={out.columns[0]: "timestamp"})
+    return json.loads(out.to_json(orient="records", date_format="iso"))
+
+
+def _resolve_inputs(df, name: str, inputs: list[str] | None):
+    """Pick the ordered input Series for an indicator (caller override or heuristic)."""
+    if inputs:
+        cols = [c.lower() for c in inputs]
+    elif name in _HLCV_INDICATORS:
+        cols = ["high", "low", "close", "volume"]
+    elif name in _HLC_INDICATORS:
+        cols = ["high", "low", "close"]
+    else:
+        cols = ["close"]
+    return cols, [df[c] for c in cols]
+
+
+def _bundle(df, specs: list[tuple]):
+    """Compute latest values for a set of indicators, capturing per-item errors.
+
+    specs: list of (key, callable) where callable returns a Series or tuple of Series.
+    Tuple results become a list of latest values (see each tool's 'legend').
+    """
+    result: dict[str, Any] = {}
+    for key, fn in specs:
+        try:
+            val = fn()
+            result[key] = [_last(s) for s in val] if isinstance(val, tuple) else _last(val)
+        except Exception as e:
+            result[key] = {"error": str(e)}
+    return result
+
+
+def _as_bool(x, index) -> pd.Series:
+    """Coerce an indicator boolean result (Series or array) to a clean bool Series."""
+    s = pd.Series(list(x), index=index)
+    return s.fillna(False).astype(bool)
+
+
+@mcp.tool()
+def calculate_indicator(
+    symbol: str,
+    exchange: str,
+    indicator: str,
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    params: dict[str, Any] | None = None,
+    inputs: list[str] | None = None,
+    bars: int = 20,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    Run ANY of the 80+ openalgo.ta indicators over a symbol's historical OHLCV.
+
+    History is fetched (db/api) and the indicator is computed entirely on the
+    OpenAlgo server; only compact results are returned — never the raw OHLCV.
+
+    Args:
+        symbol: Stock symbol (e.g., 'RELIANCE', 'NIFTY')
+        exchange: Exchange name (NSE, NFO, NSE_INDEX, etc.)
+        indicator: ta function name, case-insensitive (e.g., 'rsi','macd','supertrend',
+                   'atr','bbands','adx','ema','vwap').
+        interval: '1m','3m','5m','10m','15m','30m','1h','D' (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — when omitted, a lookback window
+                   ending today is used.
+        params: Extra keyword args for the indicator (e.g., {"period": 14} for rsi;
+                {"period": 10, "multiplier": 3} for supertrend;
+                {"fast_period": 12, "slow_period": 26, "signal_period": 9} for macd).
+        inputs: Ordered list of OHLCV columns to feed the indicator, e.g. ["close"] or
+                ["high","low","close"]. Optional — auto-detected for common indicators;
+                pass it explicitly if a result errors on inputs.
+        bars: Number of most-recent computed rows to return (default 20). The indicator
+              is ALWAYS computed server-side over the FULL fetched history; only the last
+              `bars` rows (plus latest value and summary stats) are sent back, so the
+              payload stays small. Increase only if you explicitly need more rows.
+        lookback_bars: Bars of history to load/compute over when dates are omitted
+                       (default 252 ≈ one trading year of daily data).
+        lookback_days: Alternative calendar-day lookback (e.g., 30 for "last 30 days").
+                       Overrides lookback_bars when set.
+        source: 'api' (default, broker API) or 'db' (local Historify DuckDB store, which
+                supports custom research intervals like 2m/4m/W/M/Q).
+
+    Returns:
+        JSON with the latest value(s), summary stats (last/min/max/mean), and a 'data'
+        series of the last `bars` rows — all computed server-side. Multi-output indicators
+        (macd, bbands, supertrend, stochastic, adx, ichimoku, keltner, donchian) report
+        out0, out1, ...
+    """
+    try:
+        df = _load_history(
+            symbol, exchange, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        name = indicator.lower()
+        fn = getattr(ta, name, None)
+        if fn is None:
+            return json.dumps(
+                {"status": "error", "message": f"unknown indicator '{indicator}'"}, indent=2
+            )
+        cols, args = _resolve_inputs(df, name, inputs)
+        result = fn(*args, **(params or {}))
+        out = pd.DataFrame(index=df.index)
+        if isinstance(result, tuple):
+            for i, s in enumerate(result):
+                out[f"out{i}"] = pd.Series(list(s), index=df.index)
+        else:
+            out["value"] = pd.Series(list(result), index=df.index)
+
+        def _stats(s):
+            s = s.dropna()
+            if not len(s):
+                return None
+            return {
+                "last": round(float(s.iloc[-1]), 4),
+                "min": round(float(s.min()), 4),
+                "max": round(float(s.max()), 4),
+                "mean": round(float(s.mean()), 4),
+            }
+
+        cols_out = list(out.columns)
+        ts = out.index[-1]
+        payload: dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "exchange": exchange.upper(),
+            "indicator": name,
+            "inputs": cols,
+            "params": params or {},
+            "interval": interval,
+            "source": source,
+            "bars": len(out),
+            "last_close": _last(df["close"]),
+            "latest_timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "latest": {c: _last(out[c]) for c in cols_out},
+            "summary": {c: _stats(out[c]) for c in cols_out},
+            "returned_bars": min(bars, len(out)),
+            "data": _df_records(out, bars),
+        }
+        return json.dumps(payload, indent=2, default=str)
+    except Exception as e:
+        return f"Error calculating indicator: {str(e)}"
+
+
+@mcp.tool()
+def get_trend_snapshot(
+    symbol: str,
+    exchange: str,
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    One-call trend read: SMA(20/50/200), EMA(20/50), Supertrend, ADX/DMI, Ichimoku.
+
+    Args:
+        symbol: Stock symbol
+        exchange: Exchange name
+        interval: Candle interval (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — default to a lookback window ending today.
+        lookback_bars: Bars of history loaded when dates are omitted (default 252, enough for SMA200).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+
+    Returns:
+        JSON with latest indicator values and a 'legend' explaining multi-value entries.
+    """
+    try:
+        df = _load_history(
+            symbol, exchange, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        snap = _bundle(
+            df,
+            [
+                ("sma_20", lambda: ta.sma(df["close"], 20)),
+                ("sma_50", lambda: ta.sma(df["close"], 50)),
+                ("sma_200", lambda: ta.sma(df["close"], 200)),
+                ("ema_20", lambda: ta.ema(df["close"], 20)),
+                ("ema_50", lambda: ta.ema(df["close"], 50)),
+                ("supertrend", lambda: ta.supertrend(df["high"], df["low"], df["close"])),
+                ("adx_di", lambda: ta.adx(df["high"], df["low"], df["close"], period=14)),
+                ("ichimoku", lambda: ta.ichimoku(df["high"], df["low"], df["close"])),
+            ],
+        )
+        return json.dumps(
+            {
+                "symbol": symbol.upper(),
+                "exchange": exchange.upper(),
+                "interval": interval,
+                "from": _idx_iso(df, 0),
+                "to": _idx_iso(df, -1),
+                "bars_loaded": len(df),
+                "last_close": _last(df["close"]),
+                "indicators": snap,
+                "legend": {
+                    "supertrend": "[supertrend_value, direction(+1 up / -1 down)]",
+                    "adx_di": "[+DI, -DI, ADX]",
+                    "ichimoku": "[tenkan, kijun, senkou_a, senkou_b, chikou]",
+                },
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error getting trend snapshot: {str(e)}"
+
+
+@mcp.tool()
+def get_momentum_snapshot(
+    symbol: str,
+    exchange: str,
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    One-call momentum read: RSI(14), MACD, Stochastic, CCI(20), Williams %R(14).
+
+    Args:
+        symbol: Stock symbol
+        exchange: Exchange name
+        interval: Candle interval (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — default to a lookback window ending today.
+        lookback_bars: Bars of history loaded when dates are omitted (default 252).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+
+    Returns:
+        JSON with latest values and a 'legend' for multi-value entries.
+    """
+    try:
+        df = _load_history(
+            symbol, exchange, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        snap = _bundle(
+            df,
+            [
+                ("rsi_14", lambda: ta.rsi(df["close"], 14)),
+                ("macd", lambda: ta.macd(df["close"])),
+                ("stochastic", lambda: ta.stochastic(df["high"], df["low"], df["close"])),
+                ("cci_20", lambda: ta.cci(df["high"], df["low"], df["close"], 20)),
+                ("williams_r_14", lambda: ta.williams_r(df["high"], df["low"], df["close"], 14)),
+            ],
+        )
+        return json.dumps(
+            {
+                "symbol": symbol.upper(),
+                "exchange": exchange.upper(),
+                "interval": interval,
+                "from": _idx_iso(df, 0),
+                "to": _idx_iso(df, -1),
+                "bars_loaded": len(df),
+                "last_close": _last(df["close"]),
+                "indicators": snap,
+                "legend": {
+                    "macd": "[macd_line, signal_line, histogram]",
+                    "stochastic": "[%K, %D]",
+                },
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error getting momentum snapshot: {str(e)}"
+
+
+@mcp.tool()
+def get_volatility_snapshot(
+    symbol: str,
+    exchange: str,
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    One-call volatility read: ATR, NATR, Bollinger Bands (+%B, width), Keltner,
+    Donchian, Historical Volatility.
+
+    Args:
+        symbol: Stock symbol
+        exchange: Exchange name
+        interval: Candle interval (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — default to a lookback window ending today.
+        lookback_bars: Bars of history loaded when dates are omitted (default 252).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+
+    Returns:
+        JSON with latest values and a 'legend' for multi-value band entries.
+    """
+    try:
+        df = _load_history(
+            symbol, exchange, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        snap = _bundle(
+            df,
+            [
+                ("atr_14", lambda: ta.atr(df["high"], df["low"], df["close"], period=14)),
+                ("natr_14", lambda: ta.natr(df["high"], df["low"], df["close"], period=14)),
+                ("bbands", lambda: ta.bbands(df["close"], period=20, std_dev=2.0)),
+                ("bb_percent_b", lambda: ta.bbpercent(df["close"], period=20, std_dev=2.0)),
+                ("bb_width", lambda: ta.bbwidth(df["close"], period=20, std_dev=2.0)),
+                ("keltner", lambda: ta.keltner(df["high"], df["low"], df["close"])),
+                ("donchian", lambda: ta.donchian(df["high"], df["low"], period=20)),
+                ("historical_volatility", lambda: ta.hv(df["close"])),
+            ],
+        )
+        return json.dumps(
+            {
+                "symbol": symbol.upper(),
+                "exchange": exchange.upper(),
+                "interval": interval,
+                "from": _idx_iso(df, 0),
+                "to": _idx_iso(df, -1),
+                "bars_loaded": len(df),
+                "last_close": _last(df["close"]),
+                "indicators": snap,
+                "legend": {
+                    "bbands": "[upper, middle, lower]",
+                    "keltner": "[upper, middle, lower]",
+                    "donchian": "[upper, middle, lower]",
+                },
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error getting volatility snapshot: {str(e)}"
+
+
+@mcp.tool()
+def get_support_resistance(
+    symbol: str,
+    exchange: str,
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    period: int = 20,
+    source: str = "api",
+) -> str:
+    """
+    Support/resistance levels: Pivot Points, Donchian channel, and rolling
+    highest-high / lowest-low over `period`.
+
+    Args:
+        symbol: Stock symbol
+        exchange: Exchange name
+        interval: Candle interval (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — default to a lookback window ending today.
+        lookback_bars: Bars of history loaded when dates are omitted (default 252).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+        period: Lookback window for Donchian / highest / lowest (default 20).
+
+    Returns:
+        JSON with latest levels. 'pivot_points' is returned as ta.pivot_points emits it
+        (typically [pivot, r1, s1, r2, s2, r3, s3]).
+    """
+    try:
+        df = _load_history(
+            symbol, exchange, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        snap = _bundle(
+            df,
+            [
+                ("donchian", lambda: ta.donchian(df["high"], df["low"], period=period)),
+                ("highest_high", lambda: ta.highest(df["high"], period)),
+                ("lowest_low", lambda: ta.lowest(df["low"], period)),
+                ("pivot_points", lambda: ta.pivot_points(df["high"], df["low"], df["close"])),
+            ],
+        )
+        return json.dumps(
+            {
+                "symbol": symbol.upper(),
+                "exchange": exchange.upper(),
+                "interval": interval,
+                "from": _idx_iso(df, 0),
+                "to": _idx_iso(df, -1),
+                "bars_loaded": len(df),
+                "period": period,
+                "last_close": _last(df["close"]),
+                "levels": snap,
+                "legend": {"donchian": "[upper, middle, lower]"},
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error getting support/resistance: {str(e)}"
+
+
+@mcp.tool()
+def detect_signals(
+    symbol: str,
+    exchange: str,
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    signal_type: str = "ema_cross",
+    fast: int = 20,
+    slow: int = 50,
+    period: int = 14,
+    upper: float = 70.0,
+    lower: float = 30.0,
+    limit: int = 20,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    Detect technical signals over a symbol's history using ta crossover/threshold logic.
+
+    Args:
+        symbol: Stock symbol
+        exchange: Exchange name
+        interval: Candle interval (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — default to the lookback window.
+        lookback_bars: Bars loaded when dates omitted (default 252).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+        signal_type: One of:
+            'ema_cross'      - EMA(fast) crossing EMA(slow)
+            'sma_cross'      - SMA(fast) crossing SMA(slow)
+            'macd_cross'     - MACD line crossing its signal line
+            'supertrend_flip'- Supertrend direction flip
+            'rsi_threshold'  - RSI crossing out of oversold(lower) / overbought(upper)
+        fast / slow: MA periods for ema_cross / sma_cross
+        period: Lookback for rsi_threshold (default 14)
+        upper / lower: RSI overbought / oversold levels (default 70 / 30)
+        limit: Max number of most-recent signal events to return (default 20)
+
+    Returns:
+        JSON with recent events [{timestamp, signal: 'bullish'|'bearish'}] plus current values.
+    """
+    try:
+        df = _load_history(
+            symbol, exchange, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        close = df["close"]
+        extra: dict[str, Any] = {}
+
+        if signal_type in ("ema_cross", "sma_cross"):
+            ma = ta.ema if signal_type == "ema_cross" else ta.sma
+            f, s = ma(close, fast), ma(close, slow)
+            bull = _as_bool(ta.crossover(f, s), df.index)
+            bear = _as_bool(ta.crossunder(f, s), df.index)
+            extra = {"fast": _last(f), "slow": _last(s)}
+        elif signal_type == "macd_cross":
+            line, sig, _hist = ta.macd(close)
+            bull = _as_bool(ta.crossover(line, sig), df.index)
+            bear = _as_bool(ta.crossunder(line, sig), df.index)
+            extra = {"macd_line": _last(line), "signal_line": _last(sig)}
+        elif signal_type == "supertrend_flip":
+            st, d = ta.supertrend(df["high"], df["low"], close)
+            d = pd.Series(list(d), index=df.index)
+            bull = (d > 0) & (d.shift(1) <= 0)
+            bear = (d < 0) & (d.shift(1) >= 0)
+            bull, bear = bull.fillna(False), bear.fillna(False)
+            extra = {"supertrend": _last(st), "direction": _last(d)}
+        elif signal_type == "rsi_threshold":
+            r = pd.Series(list(ta.rsi(close, period)), index=df.index)
+            bull = (r > lower) & (r.shift(1) <= lower)
+            bear = (r < upper) & (r.shift(1) >= upper)
+            bull, bear = bull.fillna(False), bear.fillna(False)
+            extra = {"rsi": _last(r)}
+        else:
+            return json.dumps(
+                {"status": "error", "message": f"unknown signal_type '{signal_type}'"}, indent=2
+            )
+
+        def _stamp(ts):
+            return ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+
+        events = [{"timestamp": _stamp(ts), "signal": "bullish"} for ts, v in bull.items() if v]
+        events += [{"timestamp": _stamp(ts), "signal": "bearish"} for ts, v in bear.items() if v]
+        events.sort(key=lambda r: r["timestamp"])
+
+        return json.dumps(
+            {
+                "symbol": symbol.upper(),
+                "exchange": exchange.upper(),
+                "interval": interval,
+                "signal_type": signal_type,
+                "last_close": _last(close),
+                "current": extra,
+                "event_count": len(events),
+                "events": events[-limit:],
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error detecting signals: {str(e)}"
+
+
+@mcp.tool()
+def screen_instruments(
+    symbols: list[dict[str, str]],
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    condition: str = "rsi_below",
+    value: float = 30.0,
+    period: int = 14,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    Scan a watchlist of symbols for a technical condition.
+
+    Note: this fetches history per symbol sequentially — keep the list modest (≤ ~25)
+    or use a coarse interval to bound runtime and broker API calls.
+
+    Args:
+        symbols: List of {"symbol","exchange"} pairs.
+            Example: [{"symbol":"RELIANCE","exchange":"NSE"},{"symbol":"INFY","exchange":"NSE"}]
+        interval: Candle interval (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — default to the lookback window.
+        lookback_bars: Bars loaded per symbol when dates omitted (default 252).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+        condition: One of:
+            'rsi_below' / 'rsi_above'        - RSI(period) vs `value`
+            'price_above_sma'/'price_below_sma' - last close vs SMA(period)
+            'supertrend_bullish'/'supertrend_bearish' - current Supertrend direction
+        value: Threshold for rsi conditions (default 30)
+        period: Lookback for rsi / sma (default 14)
+
+    Returns:
+        JSON with per-symbol {passed, metric} and a count of matches.
+    """
+    try:
+        results = []
+        for item in symbols:
+            sym, exch = item.get("symbol", ""), item.get("exchange", "")
+            try:
+                df = _load_history(
+                    sym, exch, interval, start_date, end_date, lookback_bars, lookback_days, source
+                )
+                close = df["close"]
+                metric: Any = None
+                passed = False
+                if condition in ("rsi_below", "rsi_above"):
+                    metric = _last(ta.rsi(close, period))
+                    if metric is not None:
+                        passed = metric < value if condition == "rsi_below" else metric > value
+                elif condition in ("price_above_sma", "price_below_sma"):
+                    sma, c = _last(ta.sma(close, period)), _last(close)
+                    metric = c
+                    if sma is not None and c is not None:
+                        passed = c > sma if condition == "price_above_sma" else c < sma
+                elif condition in ("supertrend_bullish", "supertrend_bearish"):
+                    _st, d = ta.supertrend(df["high"], df["low"], close)
+                    metric = _last(pd.Series(list(d), index=df.index))
+                    if metric is not None:
+                        passed = metric > 0 if condition == "supertrend_bullish" else metric < 0
+                else:
+                    return json.dumps(
+                        {"status": "error", "message": f"unknown condition '{condition}'"}, indent=2
+                    )
+                results.append(
+                    {"symbol": sym.upper(), "exchange": exch.upper(), "passed": passed, "metric": metric}
+                )
+            except Exception as e:
+                results.append({"symbol": sym, "exchange": exch, "error": str(e)})
+
+        matched = [r for r in results if r.get("passed")]
+        return json.dumps(
+            {
+                "condition": condition,
+                "value": value,
+                "period": period,
+                "scanned": len(symbols),
+                "matched": len(matched),
+                "results": results,
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error screening instruments: {str(e)}"
+
+
+@mcp.tool()
+def multi_timeframe_analysis(
+    symbol: str,
+    exchange: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    intervals: list[str] | None = None,
+    indicator: str = "rsi",
+    params: dict[str, Any] | None = None,
+    inputs: list[str] | None = None,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    Compute the same indicator across multiple timeframes for confluence analysis.
+
+    Args:
+        symbol: Stock symbol
+        exchange: Exchange name
+        start_date / end_date: YYYY-MM-DD. Optional — default to the lookback window per interval.
+        intervals: List of intervals (default ['5m','15m','1h','D'])
+        indicator: ta function name (default 'rsi')
+        params: Extra keyword args for the indicator (e.g., {"period": 14})
+        inputs: Ordered input columns; auto-detected if omitted.
+        lookback_bars: Bars loaded per interval when dates omitted (default 252).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+
+    Returns:
+        JSON with the latest indicator value (and last_close) per timeframe.
+    """
+    try:
+        intervals = intervals or ["5m", "15m", "1h", "D"]
+        name = indicator.lower()
+        fn = getattr(ta, name, None)
+        if fn is None:
+            return json.dumps(
+                {"status": "error", "message": f"unknown indicator '{indicator}'"}, indent=2
+            )
+        out: dict[str, Any] = {}
+        for itv in intervals:
+            try:
+                df = _load_history(
+                    symbol, exchange, itv, start_date, end_date, lookback_bars, lookback_days, source
+                )
+                _cols, args = _resolve_inputs(df, name, inputs)
+                res = fn(*args, **(params or {}))
+                value = [_last(s) for s in res] if isinstance(res, tuple) else _last(res)
+                out[itv] = {"value": value, "last_close": _last(df["close"]), "bars": len(df)}
+            except Exception as e:
+                out[itv] = {"error": str(e)}
+        return json.dumps(
+            {
+                "symbol": symbol.upper(),
+                "exchange": exchange.upper(),
+                "indicator": name,
+                "params": params or {},
+                "timeframes": out,
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error in multi-timeframe analysis: {str(e)}"
+
+
+@mcp.tool()
+def correlation_beta(
+    symbol1: str,
+    exchange1: str,
+    symbol2: str,
+    exchange2: str,
+    interval: str = "D",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    period: int = 20,
+    lookback_bars: int = 252,
+    lookback_days: int | None = None,
+    source: str = "api",
+) -> str:
+    """
+    Correlation / Beta / Linear-regression slope between two symbols (pairs & hedge research).
+
+    Both symbols' closes are aligned on common timestamps before computing.
+
+    Args:
+        symbol1 / exchange1: First instrument (the 'asset')
+        symbol2 / exchange2: Second instrument (the 'market'/benchmark)
+        interval: Candle interval (default 'D')
+        start_date / end_date: YYYY-MM-DD. Optional — default to the lookback window.
+        period: Rolling window for correlation/beta/slope (default 20)
+        lookback_bars: Bars loaded per symbol when dates omitted (default 252).
+        lookback_days: Alternative calendar-day lookback (e.g., 30). Overrides lookback_bars.
+
+    Returns:
+        JSON with rolling correlation, rolling beta, LR slope of symbol1, the full-sample
+        Pearson correlation, and the number of overlapping bars.
+    """
+    try:
+        df1 = _load_history(
+            symbol1, exchange1, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        df2 = _load_history(
+            symbol2, exchange2, interval, start_date, end_date, lookback_bars, lookback_days, source
+        )
+        j = pd.DataFrame({"a": df1["close"], "b": df2["close"]}).dropna()
+        if len(j) < 2:
+            return json.dumps(
+                {"status": "error", "message": "insufficient overlapping bars between symbols"},
+                indent=2,
+            )
+        p = min(period, len(j))
+        metrics = _bundle(
+            j,
+            [
+                ("correlation_rolling", lambda: ta.correlation(j["a"], j["b"], p)),
+                ("beta_rolling", lambda: ta.beta(j["a"], j["b"], p)),
+                ("lrslope_symbol1", lambda: ta.lrslope(j["a"], p)),
+            ],
+        )
+        metrics["pearson_full_sample"] = round(float(j["a"].corr(j["b"])), 4)
+        return json.dumps(
+            {
+                "symbol1": symbol1.upper(),
+                "symbol2": symbol2.upper(),
+                "interval": interval,
+                "period": p,
+                "overlapping_bars": len(j),
+                "metrics": metrics,
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as e:
+        return f"Error calculating correlation/beta: {str(e)}"
 
 
 if __name__ == "__main__":
