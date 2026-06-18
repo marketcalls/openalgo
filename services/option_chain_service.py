@@ -45,7 +45,7 @@ Strike Labels (different for CE and PE):
     - Strike ABOVE ATM: CE is OTM, PE is ITM
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
@@ -217,7 +217,12 @@ def get_option_symbols_for_chain(
 
 
 def get_option_chain(
-    underlying: str, exchange: str, expiry_date: str, strike_count: int, api_key: str
+    underlying: str,
+    exchange: str,
+    expiry_date: str,
+    strike_count: int,
+    api_key: str,
+    with_quotes: bool = True,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Main function to get option chain data.
@@ -228,6 +233,11 @@ def get_option_chain(
         expiry_date: Expiry date in DDMMMYY format (e.g., 28NOV25)
         strike_count: Number of strikes above and below ATM
         api_key: OpenAlgo API key
+        with_quotes: When True (default) fetch live per-strike quotes via the broker.
+            When False, build the strike ladder + ATM + symbols/lotsize/tick purely from
+            cache/DB (one underlying LTP only) and leave price fields at 0 — used by the
+            scalping ladder, which streams live prices over the WebSocket feed instead of
+            paying for a slow per-strike broker multiquote.
 
     Returns:
         Tuple of (success, response_data, status_code)
@@ -378,49 +388,57 @@ def get_option_chain(
                 404,
             )
 
-        # Step 8: Fetch quotes for all options using multiquotes
-        logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
-        if exchange.upper() in CRYPTO_EXCHANGES:
-            # Reuse _auth, _bmod, _dh already initialised in Step 3 — no second
-            # DB query or module import needed.
-            try:
-                _results = []
-                for _item in symbols_to_fetch:
-                    try:
-                        _oq = _dh.get_quotes(_item["symbol"], _item["exchange"])
-                        _results.append(
-                            {"symbol": _item["symbol"], "exchange": _item["exchange"], "data": _oq}
-                        )
-                    except Exception as _qe:
-                        logger.warning(f"[CRYPTO] Quote error for {_item['symbol']}: {_qe}")
-                        _results.append(
-                            {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
-                        )
-                quotes_response = {"status": "success", "results": _results}
-                success = True
-                status_code = 200
-            except Exception as _e:
-                return (
-                    False,
-                    {"status": "error", "message": f"Failed to fetch option quotes: {_e}"},
-                    500,
-                )
-        else:
-            success, quotes_response, status_code = get_multiquotes(
-                symbols=symbols_to_fetch, api_key=api_key
-            )
-
-        # Build quote lookup map
+        # Step 8: Fetch live quotes for all options via multiquotes. Skipped when
+        # with_quotes=False (e.g. the scalping ladder) — the structure is built from
+        # cache/DB and live prices stream over the WebSocket feed, avoiding a slow
+        # per-strike broker multiquote (e.g. Flattrade throttles to 10 quotes/sec).
         quotes_map = {}
-        if success and "results" in quotes_response:
-            for result in quotes_response["results"]:
-                symbol = result.get("symbol")
-                if symbol:
-                    # Handle both formats: direct data or nested data
-                    if "data" in result:
-                        quotes_map[symbol] = result["data"]
-                    elif "error" not in result:
-                        quotes_map[symbol] = result
+        if with_quotes:
+            logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
+            if exchange.upper() in CRYPTO_EXCHANGES:
+                # Reuse _auth, _bmod, _dh already initialised in Step 3 — no second
+                # DB query or module import needed.
+                try:
+                    _results = []
+                    for _item in symbols_to_fetch:
+                        try:
+                            _oq = _dh.get_quotes(_item["symbol"], _item["exchange"])
+                            _results.append(
+                                {"symbol": _item["symbol"], "exchange": _item["exchange"], "data": _oq}
+                            )
+                        except Exception as _qe:
+                            logger.warning(f"[CRYPTO] Quote error for {_item['symbol']}: {_qe}")
+                            _results.append(
+                                {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
+                            )
+                    quotes_response = {"status": "success", "results": _results}
+                    success = True
+                    status_code = 200
+                except Exception as _e:
+                    return (
+                        False,
+                        {"status": "error", "message": f"Failed to fetch option quotes: {_e}"},
+                        500,
+                    )
+            else:
+                success, quotes_response, status_code = get_multiquotes(
+                    symbols=symbols_to_fetch, api_key=api_key
+                )
+
+            # Build quote lookup map
+            if success and "results" in quotes_response:
+                for result in quotes_response["results"]:
+                    symbol = result.get("symbol")
+                    if symbol:
+                        # Handle both formats: direct data or nested data
+                        if "data" in result:
+                            quotes_map[symbol] = result["data"]
+                        elif "error" not in result:
+                            quotes_map[symbol] = result
+        else:
+            logger.info(
+                f"Structure-only option chain ({len(symbols_to_fetch)} symbols); skipping live quotes"
+            )
 
         # Step 9: Build final chain response
         chain = []
@@ -486,6 +504,7 @@ def get_option_chain(
                 "underlying_prev_close": underlying_prev_close,
                 "expiry_date": final_expiry,
                 "atm_strike": atm_strike,
+                "quotes_included": with_quotes,
                 "chain": chain,
             },
             200,
