@@ -29,6 +29,10 @@ class InvalidAccessTokenError(BrokerTokenImportError):
     status_code = 400
 
 
+class BrokerTokenConfigurationError(BrokerTokenImportError):
+    status_code = 500
+
+
 class BrokerTokenPersistenceError(BrokerTokenImportError):
     status_code = 500
 
@@ -82,7 +86,10 @@ def import_broker_token(apikey: str | None, broker: str | None, access_token: st
     try:
         formatted_token = format_auth_token(cleaned_access_token)
     except ValueError as exc:
-        raise InvalidAccessTokenError(str(exc)) from exc
+        message = str(exc)
+        if message == "zerodha_access_token_missing":
+            raise InvalidAccessTokenError(message) from exc
+        raise BrokerTokenConfigurationError(message) from exc
 
     is_valid, validation_reason = validate_access_token(cleaned_access_token)
     if not is_valid:

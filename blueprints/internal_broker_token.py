@@ -12,7 +12,7 @@ SECRET_HEADER = "X-OpenAlgo-Token-Service-Secret"
 
 
 def _configured_secret() -> str:
-    return (os.getenv("OPENALGO_TOKEN_SERVICE_SECRET") or "").strip()
+    return (os.getenv("OPENALGO_TOKEN_SERVICE_SECRET") or "").strip().strip("'\"")
 
 
 def _error(message: str, status_code: int):

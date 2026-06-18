@@ -193,6 +193,20 @@ def test_import_broker_token_rejects_blank_access_token(monkeypatch):
     assert exc.value.status_code == 400
 
 
+def test_import_broker_token_maps_broker_config_error_to_500(monkeypatch):
+    def fail_format_auth_token(token):
+        raise ValueError("zerodha_broker_api_key_missing")
+
+    monkeypatch.setattr(import_service, "verify_api_key", lambda apikey: "admin")
+    monkeypatch.setattr(import_service, "format_auth_token", fail_format_auth_token)
+
+    with pytest.raises(import_service.BrokerTokenConfigurationError) as exc:
+        import_service.import_broker_token("openalgo-api-key", "zerodha", "raw-access-token")
+
+    assert exc.value.status_code == 500
+    assert exc.value.message == "zerodha_broker_api_key_missing"
+
+
 def test_import_broker_token_validation_failure_does_not_activate(monkeypatch):
     activated = {"called": False}
 
@@ -359,6 +373,27 @@ def test_internal_broker_token_success_response(
         "status": "success",
         "data": {"broker": "zerodha", "user_id": "admin", "updated": True},
     }
+
+
+def test_internal_broker_token_accepts_quoted_configured_secret(
+    monkeypatch,
+    internal_token_client,
+):
+    monkeypatch.setenv("OPENALGO_TOKEN_SERVICE_SECRET", "'shared-secret'")
+
+    monkeypatch.setattr(
+        internal_broker_token_module,
+        "import_broker_token",
+        lambda **kwargs: import_service.BrokerTokenImportResult(
+            broker="zerodha",
+            user_id="admin",
+            updated=True,
+        ),
+    )
+
+    response = _post_broker_token(internal_token_client)
+
+    assert response.status_code == 200
 
 
 def test_internal_broker_token_service_error_response(
