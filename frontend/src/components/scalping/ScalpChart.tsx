@@ -26,6 +26,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { useMarketData } from '@/hooks/useMarketData'
+import { priceDecimals } from '@/lib/scalpingPrice'
 import { useThemeStore } from '@/stores/themeStore'
 
 // Matches the IST shift the backend bakes into bar times so live bars line up
@@ -47,8 +48,11 @@ interface Candle {
   volume: number
 }
 
-function fmtPrice(n: number): string {
-  return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+function fmtPrice(n: number, decimals = 2): string {
+  return n.toLocaleString('en-IN', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })
 }
 function fmtVol(n: number): string {
   const a = Math.abs(n)
@@ -110,6 +114,9 @@ export function ScalpChart({
     const container = containerRef.current
     if (!container || !enabled) return
 
+    // Currency derivatives (CDS/BCD) price to 4 decimals; everything else to 2.
+    const decimals = priceDecimals(exchange)
+
     const chart = createChart(container, {
       autoSize: true,
       layout: {
@@ -135,6 +142,7 @@ export function ScalpChart({
       borderVisible: false,
       wickUpColor: UP,
       wickDownColor: DOWN,
+      priceFormat: { type: 'price', precision: decimals, minMove: 10 ** -decimals },
     })
     const vol = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
@@ -170,8 +178,8 @@ export function ScalpChart({
       el.innerHTML =
         `<div style="color:${titleColor};font-weight:600">${symbol} ` +
         `<span style="color:${muted};font-weight:500">· ${intervalRef.current} · ${exchange}</span></div>` +
-        `<div style="color:${col};margin-top:1px">O${fmtPrice(bar.open)} H${fmtPrice(bar.high)} ` +
-        `L${fmtPrice(bar.low)} C${fmtPrice(bar.close)} ${sign}${fmtPrice(chg)} (${sign}${pct.toFixed(2)}%)</div>` +
+        `<div style="color:${col};margin-top:1px">O${fmtPrice(bar.open, decimals)} H${fmtPrice(bar.high, decimals)} ` +
+        `L${fmtPrice(bar.low, decimals)} C${fmtPrice(bar.close, decimals)} ${sign}${fmtPrice(chg, decimals)} (${sign}${pct.toFixed(2)}%)</div>` +
         `<div style="color:${muted};margin-top:1px">Volume <span style="color:${col}">${fmtVol(bar.volume)}</span></div>`
     }
     renderLegendRef.current = renderLegend
@@ -297,7 +305,12 @@ export function ScalpChart({
         const candles = d.candles || []
         tradingDateRef.current = d.date || null
         if (!candles.length) {
-          setStatus('no history')
+          // No broker history (e.g. TradeSmart serves none for the CDS segment).
+          // Build the chart live from the websocket feed instead of stalling on
+          // a permanent "no history" — readyRef lets the tick effect form bars.
+          readyRef.current = true
+          currentBucketRef.current = null
+          setStatus('waiting for live ticks…')
           schedule()
           return
         }
@@ -398,6 +411,8 @@ export function ScalpChart({
     candle.update({ time: bar.time as UTCTimestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close })
     vol.update({ time: bar.time as UTCTimestamp, value: bar.volume, color })
     renderLegendRef.current()
+    // Clear the live-only "waiting for ticks" placeholder once a bar exists.
+    setStatus((s) => (s ? '' : s))
   }, [ltp, ts, tickVol])
 
   if (!enabled) {

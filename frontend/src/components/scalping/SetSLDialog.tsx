@@ -15,6 +15,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { SLState } from '@/hooks/useTrailingSL'
+import { priceDecimals } from '@/lib/scalpingPrice'
 import type { ScalpingAction, ScalpingProduct, SelectedLeg } from '@/types/scalping'
 
 interface SetSLDialogProps {
@@ -65,15 +66,18 @@ export function SetSLDialog({
     }
   }, [open, existing])
 
+  // Currency derivatives (CDS/BCD) display to 4 decimals; everything else to 2.
+  const decimals = priceDecimals(leg?.exchange)
+
   // Reference price for validating stop direction: prefer live LTP, else entry.
   const slNum = Number(stoploss)
   const refPrice = ltp != null && ltp > 0 ? ltp : entryPrice
   let directionError = ''
   if (Number.isFinite(slNum) && slNum > 0 && refPrice > 0) {
     if (side === 'BUY' && slNum >= refPrice) {
-      directionError = `Long (BUY): stop-loss must be below ${refPrice.toFixed(2)}`
+      directionError = `Long (BUY): stop-loss must be below ${refPrice.toFixed(decimals)}`
     } else if (side === 'SELL' && slNum <= refPrice) {
-      directionError = `Short (SELL): stop-loss must be above ${refPrice.toFixed(2)}`
+      directionError = `Short (SELL): stop-loss must be above ${refPrice.toFixed(decimals)}`
     }
   }
 
@@ -82,9 +86,9 @@ export function SetSLDialog({
   let targetError = ''
   if (Number.isFinite(tgtNum) && tgtNum > 0 && refPrice > 0) {
     if (side === 'BUY' && tgtNum <= refPrice) {
-      targetError = `Long (BUY): target must be above ${refPrice.toFixed(2)}`
+      targetError = `Long (BUY): target must be above ${refPrice.toFixed(decimals)}`
     } else if (side === 'SELL' && tgtNum >= refPrice) {
-      targetError = `Short (SELL): target must be below ${refPrice.toFixed(2)}`
+      targetError = `Short (SELL): target must be below ${refPrice.toFixed(decimals)}`
     }
   }
 
@@ -135,11 +139,11 @@ export function SetSLDialog({
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-muted-foreground">Entry</span>
-              <div className="font-mono">{entryPrice > 0 ? entryPrice.toFixed(2) : '—'}</div>
+              <div className="font-mono">{entryPrice > 0 ? entryPrice.toFixed(decimals) : '—'}</div>
             </div>
             <div>
               <span className="text-muted-foreground">LTP</span>
-              <div className="font-mono">{ltp != null ? ltp.toFixed(2) : '—'}</div>
+              <div className="font-mono">{ltp != null ? ltp.toFixed(decimals) : '—'}</div>
             </div>
             <div>
               <span className="text-muted-foreground">Side</span>
