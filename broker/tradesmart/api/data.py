@@ -12,11 +12,13 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Global rate limiter — Noren data APIs are rate limited (~10 req/sec). Serialize
-# calls across threads with a small min-interval to stay comfortably under it.
+# Global rate limiter — TradeSmart (Noren) caps data APIs at 120 requests/min
+# per user (it returns "... exceeds Limit 120 for user" past that). 0.55s/req
+# ≈ 109/min keeps the whole app — quotes, option chain, OI tracker, scalping,
+# history — under the ceiling through this single shared gate.
 _last_api_call_time = 0.0
 _rate_limit_lock = threading.Lock()
-TRADESMART_MIN_REQUEST_INTERVAL = 0.12  # ~8.3 req/sec
+TRADESMART_MIN_REQUEST_INTERVAL = 0.55  # ~109 req/min, under the 120/min cap
 
 
 def _apply_rate_limit():
@@ -42,12 +44,47 @@ def _normalize_data_exchange(exchange):
     return exchange
 
 
-def _get_api_response(endpoint, auth, payload):
-    """Rate-limited POST returning parsed JSON (dict or list)."""
+def _is_rate_limit_error(response) -> bool:
+    """Return True when TradeSmart reports a per-minute rate-limit hit.
+
+    Noren returns ``stat=Not_Ok`` with an emsg like "Invalid Input :  Order
+    Recieved 141 in a current minute exceeds Limit 120 for user" once the
+    minute's data-API budget is exhausted.
+    """
+    if not isinstance(response, dict):
+        return False
+    if response.get("stat") != "Not_Ok":
+        return False
+    emsg = response.get("emsg", "")
+    return "exceeds Limit" in emsg or "exceeds limit" in emsg
+
+
+def _get_api_response(endpoint, auth, payload, retry_count=0):
+    """Rate-limited POST returning parsed JSON (dict or list).
+
+    Retries with exponential backoff when TradeSmart reports a per-minute
+    rate-limit hit, so a burst of quote requests (e.g. a 90+ symbol option
+    chain or the OI tracker) degrades to slower-but-successful instead of
+    failing the whole batch.
+    """
+    MAX_RETRIES = 3
+    RETRY_DELAY = 2.0  # base seconds for exponential backoff
+
     _apply_rate_limit()
     payload.setdefault("uid", resolve_uid(auth))
     response = post(endpoint, payload, auth)
-    return json.loads(response.text)
+    parsed = json.loads(response.text)
+
+    if _is_rate_limit_error(parsed) and retry_count < MAX_RETRIES:
+        retry_delay = RETRY_DELAY * (2**retry_count)
+        logger.warning(
+            f"TradeSmart rate limit hit ({parsed.get('emsg')}). "
+            f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
+        )
+        time.sleep(retry_delay)
+        return _get_api_response(endpoint, auth, payload, retry_count + 1)
+
+    return parsed
 
 
 class BrokerData:
