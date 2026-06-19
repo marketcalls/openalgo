@@ -1,0 +1,1 @@
+import{ct as e}from"./index-DBASeRtM.js";var t={getOIData:async t=>(await e.post(`/oitracker/api/oi-data`,t)).data,getMaxPain:async t=>(await e.post(`/oitracker/api/maxpain`,t)).data,getUnderlyings:async t=>(await e.get(`/search/api/underlyings?exchange=${t}`)).data,getExpiries:async(t,n)=>(await e.get(`/search/api/expiries?exchange=${t}&underlying=${n}`)).data};export{t};
