@@ -280,9 +280,17 @@ class BrokerData:
 
             if isinstance(response, dict):
                 if response.get("stat") == "Not_Ok":
-                    raise Exception(
-                        f"Error from TradeSmart API: {response.get('emsg', 'Unknown error')}"
-                    )
+                    emsg = response.get("emsg", "Unknown error")
+                    # "no data" is a benign empty result, not an error. TradeSmart's
+                    # Noren backend serves no historical series for the CDS currency
+                    # segment, and illiquid contracts can have no trades in the window.
+                    # Return an empty frame so the caller renders an empty/live chart
+                    # instead of surfacing a 500 and logging a traceback every cycle.
+                    if "no data" in emsg.lower():
+                        return pd.DataFrame(
+                            columns=["close", "high", "low", "open", "timestamp", "volume", "oi"]
+                        )
+                    raise Exception(f"Error from TradeSmart API: {emsg}")
             elif not isinstance(response, list):
                 raise Exception("Invalid response format from TradeSmart API")
 
