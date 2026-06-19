@@ -21,13 +21,14 @@ Chain data (get_timeseries_chain_data):
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 
 from database.token_db_enhanced import fno_search_symbols
 from services.history_service import get_history
 from services.option_chain_service import get_option_chain
-from utils.constants import NSE_INDEX_SYMBOLS, BSE_INDEX_SYMBOLS
+from utils.constants import BSE_INDEX_SYMBOLS, NSE_INDEX_SYMBOLS
 from utils.logging import get_logger
 
 
@@ -51,7 +52,7 @@ def _find_futures_symbol(
     """
     try:
         options_exchange = _get_options_exchange(exchange)
-        
+
         # Convert DDMMMYY to DD-MMM-YY for database lookup
         expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
 
@@ -99,16 +100,14 @@ def _fetch_symbol_history_batch(
     api_key: str,
 ) -> dict[str, list[dict]]:
     """
-    Fetch history for multiple symbols sequentially with rate limiting.
+    Fetch history for multiple symbols in parallel with transient-error retry.
 
-    This is the core data-fetching workhorse used by get_multi_symbol_history.
-    It is symbol-agnostic — works with any tradable instrument (options, futures,
-    equities, indices) as long as the broker supports history for it.
+    Rate limiting is handled by history_service._enforce_rate_limit() — a global
+    0.35s minimum interval between broker history calls.  No per-fetch delay is
+    needed here; the existing rate limiter already paces at ~3 req/sec.
 
-    Rate limiting:
-        - 500 ms delay between individual fetches
-        - 1.0 s extra delay between batches of 5
-        - Up to 2 retries with exponential backoff (1.5s, 3.0s)
+    Transient errors (429, 502-504, connection failures) are retried; 4xx errors
+    and permanent failures fail fast to avoid waiting on invalid symbols.
 
     Args:
         symbols:    List of dicts, each with 'symbol' and 'exchange' keys.
@@ -122,14 +121,16 @@ def _fetch_symbol_history_batch(
         Dict mapping symbol name -> list of candle dicts:
         [ {"timestamp": int, "ltp": float, "oi": int, "volume": int}, ... ]
     """
-    results = {}
-
-    BATCH_SIZE = 5
-    BATCH_DELAY = 1.0       # seconds between batches
+    MAX_WORKERS = 5
     MAX_RETRIES = 2
-    RETRY_BASE_DELAY = 1.5  # seconds, doubles each retry
+    RETRY_BASE_DELAY = 1.5
 
-    def fetch_one_with_retry(symbol_info: dict) -> tuple[str, str, list[dict]]:
+    def _is_transient(status_code: int | None, exc: Exception | None) -> bool:
+        if exc is not None:
+            return isinstance(exc, (ConnectionError, TimeoutError, OSError))
+        return status_code in (429, 502, 503, 504)
+
+    def _fetch_one(symbol_info: dict) -> tuple[str, str, list[dict]]:
         symbol = symbol_info["symbol"]
         exchange = symbol_info["exchange"]
 
@@ -144,33 +145,37 @@ def _fetch_symbol_history_batch(
                     api_key=api_key,
                 )
                 if success and resp.get("data"):
-                    # Extract only the fields needed for columnar output
-                    data = []
-                    for candle in resp["data"]:
-                        data.append({
-                            "timestamp": candle.get("timestamp"),
-                            "ltp": candle.get("close", 0),
-                            "oi": candle.get("oi", 0) or 0,
-                            "volume": candle.get("volume", 0) or 0,
-                        })
+                    data = [
+                        {
+                            "timestamp": c.get("timestamp"),
+                            "ltp": c.get("close", 0),
+                            "oi": c.get("oi", 0) or 0,
+                            "volume": c.get("volume", 0) or 0,
+                        }
+                        for c in resp["data"]
+                    ]
                     return symbol, exchange, data
 
-                # Retry on any error (rate limit, broker throttle, etc.)
-                if attempt < MAX_RETRIES:
+                if attempt < MAX_RETRIES and _is_transient(status_code, None):
                     delay = RETRY_BASE_DELAY * (2 ** attempt)
                     logger.warning(
-                        f"Error fetching {symbol} (status={status_code}), "
+                        f"Transient error {symbol} (status={status_code}), "
                         f"retry {attempt + 1} after {delay}s"
                     )
                     time.sleep(delay)
                     continue
 
+                if attempt >= MAX_RETRIES or not _is_transient(status_code, None):
+                    if status_code not in (400, 404):
+                        logger.warning(
+                            f"Error fetching {symbol} (status={status_code})"
+                        )
                 return symbol, exchange, []
             except Exception as e:
-                if attempt < MAX_RETRIES:
+                if attempt < MAX_RETRIES and _is_transient(None, e):
                     delay = RETRY_BASE_DELAY * (2 ** attempt)
                     logger.warning(
-                        f"Exception fetching {symbol}, "
+                        f"Transient exception {symbol}, "
                         f"retry {attempt + 1} after {delay}s: {e}"
                     )
                     time.sleep(delay)
@@ -179,19 +184,16 @@ def _fetch_symbol_history_batch(
                 return symbol, exchange, []
         return symbol, exchange, []
 
-    # Process in batches to respect broker rate limits
-    INDIVIDUAL_DELAY = 0.5  # 500 ms between each fetch
-    for i in range(0, len(symbols), BATCH_SIZE):
-        batch = symbols[i: i + BATCH_SIZE]
-        for j, symbol_info in enumerate(batch):
-            sym, exch, data = fetch_one_with_retry(symbol_info)
-            results[f"{sym}:{exch}"] = data
-            # Delay after every fetch (including last in batch)
-            time.sleep(INDIVIDUAL_DELAY)
-
-        # Extra delay between batches (skip after last batch)
-        if i + BATCH_SIZE < len(symbols):
-            time.sleep(BATCH_DELAY)
+    results: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        fut_map = {executor.submit(_fetch_one, s): s for s in symbols}
+        for fut in as_completed(fut_map):
+            try:
+                sym, exch, data = fut.result()
+                results[f"{sym}:{exch}"] = data
+            except Exception as e:
+                s = fut_map[fut]
+                logger.warning(f"Unhandled error fetching {s.get('symbol')}: {e}")
 
     return results
 
@@ -228,24 +230,24 @@ def get_timeseries_chain_data(
             strike_count=strike_count,
             api_key=api_key,
         )
-        
+
         if not success:
             return False, chain_response, status_code
-        
+
         options_exchange = _get_options_exchange(exchange)
-        
+
         # Find futures symbol
         futures_info = _find_futures_symbol(underlying, exchange, expiry_date, api_key)
-        
+
         # Extract symbols from chain
         symbols = []
         chain = chain_response.get("chain", [])
         lot_size = None
-        
+
         for item in chain:
             ce = item.get("ce")
             pe = item.get("pe")
-            
+
             if ce and ce.get("symbol"):
                 symbols.append({
                     "symbol": ce["symbol"],
@@ -255,7 +257,7 @@ def get_timeseries_chain_data(
                 })
                 if lot_size is None and ce.get("lotsize"):
                     lot_size = ce["lotsize"]
-            
+
             if pe and pe.get("symbol"):
                 symbols.append({
                     "symbol": pe["symbol"],
@@ -265,7 +267,7 @@ def get_timeseries_chain_data(
                 })
                 if lot_size is None and pe.get("lotsize"):
                     lot_size = pe["lotsize"]
-        
+
         return (
             True,
             {
@@ -280,7 +282,7 @@ def get_timeseries_chain_data(
             },
             200,
         )
-    
+
     except Exception as e:
         logger.exception(f"Error in get_timeseries_chain_data: {e}")
         return (

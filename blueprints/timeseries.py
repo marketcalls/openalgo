@@ -13,11 +13,11 @@ from flask import Blueprint, jsonify, request, session
 from flask_cors import cross_origin
 
 from database.auth_db import get_api_key_for_tradingview
-from services.timeseries_service import get_timeseries_chain_data, get_multi_symbol_history
+from limiter import limiter
+from services.timeseries_service import get_multi_symbol_history, get_timeseries_chain_data
+from utils.datetime_utils import get_ist_date_str
 from utils.logging import get_logger
 from utils.session import check_session_validity
-from utils.datetime_utils import get_ist_date_str
-from limiter import limiter
 
 logger = get_logger(__name__)
 
@@ -106,6 +106,10 @@ def get_data():
     regardless of whether it's a CE option, PE option, futures, equity, etc.
     The frontend is responsible for classification and aggregation.
 
+    Fetches run in parallel via ThreadPoolExecutor (max 5 workers) with
+    transient-error retry.  Rate limiting is managed by history_service's
+    global 0.35s throttle (~3 req/sec).
+
     Required params:
         symbols:    [{symbol, exchange}, ...]
         start_date: YYYY-MM-DD
@@ -152,12 +156,33 @@ def get_data():
                 "message": f"Invalid interval. Allowed: {', '.join(sorted(ALLOWED_INTERVALS))}",
             }), 400
 
-        # Validate date formats
-        date_re = r"^\d{4}-\d{2}-\d{2}$"
-        if not re.match(date_re, start_date) or not re.match(date_re, end_date):
+        # Validate date format, calendar validity, ordering, and reasonableness
+        try:
+            _start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            _end_dt   = datetime.strptime(end_date,   "%Y-%m-%d")
+        except ValueError:
             return jsonify({
                 "status": "error",
-                "message": "Invalid date format. Expected YYYY-MM-DD",
+                "message": "Invalid date — not a real calendar date (expected YYYY-MM-DD)",
+            }), 400
+
+        if _start_dt > _end_dt:
+            return jsonify({
+                "status": "error",
+                "message": "start_date must not be after end_date",
+            }), 400
+
+        _cutoff = datetime(2000, 1, 1)
+        if _start_dt < _cutoff:
+            return jsonify({
+                "status": "error",
+                "message": "start_date is too far in the past",
+            }), 400
+
+        if _end_dt > datetime(2099, 12, 31):
+            return jsonify({
+                "status": "error",
+                "message": "end_date is too far in the future",
             }), 400
 
         # Validate and sanitize symbols structure — only symbol + exchange required
@@ -168,7 +193,7 @@ def get_data():
                     "status": "error",
                     "message": "Each symbol must have 'symbol' and 'exchange' fields",
                 }), 400
-            
+
             # Explicitly strip any extra fields (strike, type, etc.) to keep the payload clean
             sym_str = str(s["symbol"]).strip()
             exch_str = str(s["exchange"]).strip()

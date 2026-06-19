@@ -114,6 +114,8 @@ function convertExpiryForAPI(expiry: string): string {
     return expiry.replace(/-/g, '').toUpperCase()
 }
 
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000
+
 function parseTimestamp(raw: string | number): Date | null {
     if (!raw) return null
     if (typeof raw === 'number') return new Date(raw > 1e12 ? raw : raw * 1000)
@@ -127,11 +129,22 @@ function parseTimestamp(raw: string | number): Date | null {
     return null
 }
 
+function formatIST(date: Date, showSeconds = false): string {
+    const shifted = new Date(date.getTime() + IST_OFFSET_MS)
+    const hh = String(shifted.getUTCHours()).padStart(2, '0')
+    const mm = String(shifted.getUTCMinutes()).padStart(2, '0')
+    if (showSeconds) {
+        const ss = String(shifted.getUTCSeconds()).padStart(2, '0')
+        return `${hh}:${mm}:${ss}`
+    }
+    return `${hh}:${mm}`
+}
+
 function formatTime(timestamp: string): string {
     if (!timestamp) return ''
     const d = parseTimestamp(timestamp)
     if (!d) return String(timestamp)
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    return formatIST(d)
 }
 
 function formatNumber(val: number, decimals = 0): string {
@@ -145,17 +158,18 @@ function formatNumber(val: number, decimals = 0): string {
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-/** Format timestamp as "10 Feb 11:23:07 AM" */
+/** Format timestamp as "10 Feb 11:23:07 AM" in IST */
 function formatUpdatedTimestamp(timestamp: string): string {
     const d = parseTimestamp(timestamp)
     if (!d) return ''
-    const day = d.getDate()
-    const mon = MONTH_SHORT[d.getMonth()]
-    let h = d.getHours()
+    const shifted = new Date(d.getTime() + IST_OFFSET_MS)
+    const day = shifted.getUTCDate()
+    const mon = MONTH_SHORT[shifted.getUTCMonth()]
+    let h = shifted.getUTCHours()
     const ampm = h >= 12 ? 'PM' : 'AM'
     h = h % 12 || 12
-    const mm = String(d.getMinutes()).padStart(2, '0')
-    const ss = String(d.getSeconds()).padStart(2, '0')
+    const mm = String(shifted.getUTCMinutes()).padStart(2, '0')
+    const ss = String(shifted.getUTCSeconds()).padStart(2, '0')
     return `${day} ${mon} ${h}:${mm}:${ss} ${ampm}`
 }
 
