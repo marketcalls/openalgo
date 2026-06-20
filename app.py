@@ -48,6 +48,7 @@ from blueprints.historify import historify_bp  # Import the historify blueprint
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.scalping import scalping_bp  # Import the Scalping terminal blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
+from blueprints.gamma_density import gamma_density_bp  # Import the Gamma Density blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
 from blueprints.custom_straddle import custom_straddle_bp  # Import custom straddle blueprint
@@ -290,6 +291,7 @@ def create_app():
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
+    app.register_blueprint(gamma_density_bp)  # Register Gamma Density blueprint
     app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
     app.register_blueprint(strategy_chart_bp)  # Register strategy chart blueprint
     app.register_blueprint(custom_straddle_bp)  # Register custom straddle blueprint
