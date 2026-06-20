@@ -61,6 +61,7 @@ const IVChart = lazy(() => import('@/pages/IVChart'))
 const Scalping = lazy(() => import('@/pages/Scalping'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
 const OIRange = lazy(() => import('@/pages/OIRange'))
+const GammaDensity = lazy(() => import('@/pages/GammaDensity'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
 const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
 const CustomStraddle = lazy(() => import('@/pages/CustomStraddle'))
@@ -199,6 +200,7 @@ function App() {
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />
                 <Route path="/oirange" element={<OIRange />} />
+                <Route path="/gammadensity" element={<GammaDensity />} />
                 <Route path="/maxpain" element={<MaxPain />} />
                 <Route path="/straddle" element={<StraddleChart />} />
                 <Route path="/straddlepnl" element={<CustomStraddle />} />

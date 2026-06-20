@@ -75,6 +75,13 @@ const tools = [
     color: 'bg-indigo-500',
   },
   {
+    title: 'Gamma Density',
+    description:
+      'Γ×OI density and convexity zones with intraday & to-expiry views, ATM IV, and ±1σ/±2σ expected-move bands',
+    href: '/gammadensity',
+    color: 'bg-lime-500',
+  },
+  {
     title: 'IV Smile',
     description: 'Implied Volatility smile with Call/Put IV curves, ATM IV, and skew analysis',
     href: '/ivsmile',
