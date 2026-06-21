@@ -30,7 +30,7 @@ from typing import Any
 from services.option_chain_service import get_option_chain
 from services.option_greeks_service import (
     DEFAULT_INTEREST_RATES,
-    _resolve_index_weekly_forward,
+    _resolve_forward_price,
     calculate_time_to_expiry,
     get_underlying_exchange,
 )
@@ -199,10 +199,10 @@ def calculate_gamma_density(
         r = interest_rate / 100.0
 
         # Forward price for Black-76, consistent with option_greeks_service:
-        # index weekly -> per-expiry synthetic future; monthly index / stocks ->
-        # spot. The expected-move band and Spot marker still use the cash spot.
+        # per-expiry synthetic future for all F&O (index/stock/MCX/CDS), spot
+        # fallback. The expected-move band and Spot marker still use cash spot.
         base_for_forward = chain_response.get("underlying", underlying)
-        forward = _resolve_index_weekly_forward(
+        forward = _resolve_forward_price(
             base_for_forward,
             exchange,
             get_underlying_exchange(base_for_forward, exchange),

@@ -223,74 +223,26 @@ def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
     return "NSE"
 
 
-def _is_index_symbol(base_symbol: str) -> bool:
-    """True for NSE/BSE index underlyings (which can have weekly expiries)."""
-    return base_symbol in NSE_INDEX_SYMBOLS or base_symbol in BSE_INDEX_SYMBOLS
-
-
-def _parse_db_expiry(date_str: str) -> "datetime | None":
-    """Parse a master-contract expiry ('31-JUL-25' or '31-JUL-2025') to a date."""
-    for fmt in ("%d-%b-%y", "%d-%b-%Y"):
-        try:
-            return datetime.strptime(date_str, fmt).date()
-        except (ValueError, TypeError):
-            continue
-    return None
-
-
-def _is_monthly_expiry(
+def _resolve_forward_price(
     base_symbol: str,
     options_exchange: str,
-    expiry: datetime,
-    api_key: str | None,
-    expiry_cache: dict | None = None,
-) -> bool:
-    """
-    Classify an expiry as monthly (last expiry of its calendar month) vs weekly.
-
-    Monthly = the latest available option expiry within the same year+month for
-    this underlying. Anything earlier in that month is a weekly. If the expiry
-    list can't be resolved, default to monthly (i.e. use spot) — the safe path.
-
-    expiry_cache: optional dict reused across a batch to avoid refetching the
-    expiry list per leg.
-    """
-    if expiry_cache is None:
-        expiry_cache = {}
-    key = (base_symbol, options_exchange.upper())
-    dates = expiry_cache.get(key)
-    if dates is None:
-        from services.expiry_service import get_expiry_dates
-
-        dates = []
-        try:
-            ok, resp, _ = get_expiry_dates(base_symbol, options_exchange, "options", api_key)
-            if ok:
-                for s in resp.get("data", []):
-                    d = _parse_db_expiry(s)
-                    if d:
-                        dates.append(d)
-        except Exception as e:
-            logger.warning(f"Could not load expiries for {base_symbol} {options_exchange}: {e}")
-        expiry_cache[key] = dates
-
-    target = expiry.date()
-    same_month = [d for d in dates if d.year == target.year and d.month == target.month]
-    if not same_month:
-        return True  # unknown → treat as monthly (use spot)
-    return target >= max(same_month)
-
-
-def _get_synthetic_future(
-    base_symbol: str,
     underlying_exchange: str,
-    expiry_code: str,
+    expiry: datetime,
     api_key: str | None,
     synth_cache: dict | None = None,
 ) -> float | None:
-    """Synthetic future (forward) for an underlying+expiry, cached. None on failure."""
+    """
+    Black-76 forward for an option's Greeks: the per-expiry SYNTHETIC FUTURE
+    (ATM_strike + ATM_CE - ATM_PE, put-call parity) for every F&O underlying and
+    expiry — index, stocks, MCX, CDS. Returns None to mean "fall back to spot"
+    (e.g. the synthetic cannot be computed because ATM CE/PE quotes are missing).
+
+    Single source of truth for the forward rule. Cached per
+    (underlying, underlying_exchange, expiry) via synth_cache.
+    """
     if synth_cache is None:
         synth_cache = {}
+    expiry_code = expiry.strftime("%d%b%y").upper()  # DDMMMYY, e.g. 26JUN25
     key = (base_symbol, underlying_exchange, expiry_code)
     if key in synth_cache:
         return synth_cache[key]
@@ -299,41 +251,15 @@ def _get_synthetic_future(
     try:
         from services.synthetic_future_service import calculate_synthetic_future
 
-        ok, resp, _ = calculate_synthetic_future(base_symbol, underlying_exchange, expiry_code, api_key)
+        ok, resp, _ = calculate_synthetic_future(
+            base_symbol, underlying_exchange, expiry_code, api_key
+        )
         if ok:
             price = resp.get("synthetic_future_price")
     except Exception as e:
         logger.warning(f"Synthetic future calc failed for {base_symbol} {expiry_code}: {e}")
     synth_cache[key] = price
     return price
-
-
-def _resolve_index_weekly_forward(
-    base_symbol: str,
-    options_exchange: str,
-    underlying_exchange: str,
-    expiry: datetime,
-    api_key: str | None,
-    expiry_cache: dict | None = None,
-    synth_cache: dict | None = None,
-) -> float | None:
-    """
-    Forward price to use for an INDEX option's Greeks:
-      * weekly expiry  -> per-expiry synthetic future (forward)
-      * monthly expiry -> None (caller falls back to spot index)
-      * non-index      -> None (caller uses spot stock/commodity price)
-
-    This is the single source of truth for the "weekly = synthetic future,
-    monthly = spot" rule.
-    """
-    if not _is_index_symbol(base_symbol):
-        return None
-    if _is_monthly_expiry(base_symbol, options_exchange, expiry, api_key, expiry_cache):
-        return None
-    expiry_code = expiry.strftime("%d%b%y").upper()
-    return _get_synthetic_future(
-        base_symbol, underlying_exchange, expiry_code, api_key, synth_cache
-    )
 
 
 def calculate_time_to_expiry(expiry: datetime) -> tuple[float, float]:
@@ -757,19 +683,19 @@ def get_option_greeks(
             else:
                 spot_exchange = get_underlying_exchange(base_symbol, exchange)
 
-            # Index weekly expiries use the per-expiry synthetic future as the
-            # Black-76 forward; monthly index / stocks fall back to spot. Skipped
-            # when the caller supplied a custom underlying (e.g. a FUT symbol).
-            synthetic_forward = None
+            # Black-76 forward = per-expiry synthetic future for all F&O; spot
+            # fallback. Skipped when the caller supplied a custom underlying
+            # (e.g. a FUT symbol).
+            resolved_forward = None
             if not underlying_symbol or underlying_symbol == base_symbol:
-                synthetic_forward = _resolve_index_weekly_forward(
+                resolved_forward = _resolve_forward_price(
                     base_symbol, exchange, spot_exchange, expiry, api_key
                 )
 
-            if synthetic_forward:
-                spot_price = synthetic_forward
+            if resolved_forward:
+                spot_price = resolved_forward
                 logger.info(
-                    f"Using synthetic future {synthetic_forward} as forward for weekly {option_symbol}"
+                    f"Using forward {resolved_forward} for {option_symbol}"
                 )
                 success = True
             else:
@@ -863,8 +789,7 @@ def get_multi_option_greeks(
     parsed_symbols = {}  # symbol -> (base_symbol, expiry, strike, opt_type)
     spot_keys = {}  # (spot_symbol, spot_exchange) -> spot_price
     symbol_to_spot_key = {}  # symbol -> (spot_symbol, spot_exchange)
-    symbol_forward = {}  # symbol -> synthetic forward price (index weeklies only)
-    expiry_cache = {}  # (base, options_exchange) -> [expiry dates]  (per-batch reuse)
+    symbol_forward = {}  # symbol -> Black-76 forward (synthetic future)
     synth_cache = {}  # (base, underlying_exchange, expiry_code) -> synthetic future
 
     for sym_req in symbols:
@@ -883,12 +808,12 @@ def get_multi_option_greeks(
             spot_keys[spot_key] = None  # will be filled with price
             symbol_to_spot_key[symbol] = spot_key
 
-            # Index weekly -> per-expiry synthetic future as the Black-76 forward;
-            # monthly index / stocks keep spot. Skipped if the caller passed a
-            # custom underlying (e.g. an explicit FUT symbol).
+            # Black-76 forward = per-expiry synthetic future for all F&O; spot
+            # fallback. Skipped if the caller passed a custom underlying
+            # (e.g. an explicit FUT symbol).
             if not passed_underlying or passed_underlying == base_symbol:
-                forward = _resolve_index_weekly_forward(
-                    base_symbol, exchange, spot_exchange, expiry, api_key, expiry_cache, synth_cache
+                forward = _resolve_forward_price(
+                    base_symbol, exchange, spot_exchange, expiry, api_key, synth_cache
                 )
                 if forward:
                     symbol_forward[symbol] = forward
