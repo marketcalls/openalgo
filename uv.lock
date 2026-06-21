@@ -1551,7 +1551,7 @@ wheels = [
 
 [[package]]
 name = "openalgoui"
-version = "2.0.1.3"
+version = "2.0.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "aniso8601" },
