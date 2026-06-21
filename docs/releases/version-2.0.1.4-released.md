@@ -2,9 +2,9 @@
 
 **Date: 21st June 2026**
 
-**Feature Release: Scalping Terminal (keyboard-driven order entry with a server-side SL/TP/TSL engine across all F&O exchanges, live candlestick/volume charts), the TradeSmart (Noren v2) broker integration, two new options tools (Gamma Density and OI Range), a /chart/test live multi-chart streaming page, technical-indicator research tools for the MCP server, F&O freeze-quantity correctness across every exchange, and a startup/runtime performance sweep (WAL SQLite, warm broker modules, deferred traffic-log purge)**
+**Feature Release: Scalping Terminal (keyboard-driven order entry with a server-side SL/TP/TSL engine across all F&O exchanges, live candlestick/volume charts), the TradeSmart (Noren v2) broker integration, two new options tools (Gamma Density and OI Range), forward-based Black-76 option Greeks (synthetic future for all F&O), a /chart/test live multi-chart streaming page, technical-indicator research tools for the MCP server, F&O freeze-quantity correctness across every exchange, and a startup/runtime performance sweep (WAL SQLite, warm broker modules, deferred traffic-log purge)**
 
-This release spans 90+ commits since v2.0.1.3. The headline feature is the **Scalping Terminal** (`/scalping`) — a keyboard-first order-entry surface with a server-side stop-loss / target / trailing-stop engine, full F&O exchange + segment coverage (NSE/BSE equity & futures, NFO/BFO/CDS/MCX options), live WebSocket-driven tickers and candlestick/volume charts, and freeze-quantity-safe exits. Alongside it ships the **TradeSmart (Noren v2)** broker integration, two new analytics tools — **Gamma Density** (Γ×OI density and convexity zones with forward-based Black-76 IV) and **OI Range** (open interest by strike for a custom range) — and a **/chart/test** page for live multi-chart streaming. The MCP server gains **technical-indicator research tools**, F&O **freeze-quantity handling** is corrected for CDS/MCX and BSE indices, and a **performance sweep** enables WAL on every SQLite connection, warms broker modules at startup, and purges traffic logs past their retention window off the hot path.
+This release spans 90+ commits since v2.0.1.3. The headline feature is the **Scalping Terminal** (`/scalping`) — a keyboard-first order-entry surface with a server-side stop-loss / target / trailing-stop engine, full F&O exchange + segment coverage (NSE/BSE equity & futures, NFO/BFO/CDS/MCX options), live WebSocket-driven tickers and candlestick/volume charts, and freeze-quantity-safe exits. Alongside it ships the **TradeSmart (Noren v2)** broker integration, two new analytics tools — **Gamma Density** (Γ×OI density and convexity zones) and **OI Range** (open interest by strike for a custom range) — and a **/chart/test** page for live multi-chart streaming. Option **Greeks now price off the forward**: the per-expiry **synthetic future** is the Black-76 underlying for every F&O segment (index, stocks, MCX, CDS), aligning IV/Greeks with the industry-standard forward-based convention. The MCP server gains **technical-indicator research tools**, F&O **freeze-quantity handling** is corrected for CDS/MCX and BSE indices, and a **performance sweep** enables WAL on every SQLite connection, warms broker modules at startup, and purges traffic logs past their retention window off the hot path.
 
 ***
 
@@ -17,7 +17,8 @@ This release spans 90+ commits since v2.0.1.3. The headline feature is the **Sca
   * **Live data & charts**: WebSocket-live LTP with a MultiQuotes after-hours fallback, OHLC range visualization on the tickers, and live candlestick + volume charts on a shared timeframe.
   * **Freeze-safe**: exits never exceed exchange freeze limits, with whole-lot splitting on close and an unknown-freeze fallback.
 * **TradeSmart (Noren v2) broker integration (#1548)** — New broker plugin on the Noren v2 stack, with a common broker-integration testing guide and an automated runner added alongside it.
-* **Gamma Density tool (`/gammadensity`, #1553)** — Γ×OI density and convexity zones (Intraday and To-Expiry panels, ±1σ/±2σ expected-move bands, ATM IV) for all exchanges and underlyings. Index **weekly** options price off the per-expiry **synthetic future** as the Black-76 forward (monthly index / stocks use spot), fixing IV/Greeks alignment for weekly index options.
+* **Gamma Density tool (`/gammadensity`, #1553)** — Γ×OI density and convexity zones (Intraday and To-Expiry panels, ±1σ/±2σ expected-move bands, ATM IV) for all exchanges and underlyings, with the forward-based Black-76 IV described below.
+* **Forward-based Black-76 option Greeks (#1555)** — The per-expiry **synthetic future** (`ATM_strike + ATM_CE − ATM_PE`, put-call parity) is now the Black-76 underlying for **every F&O segment** — index (weekly and monthly), stocks, MCX, CDS — with spot only as a fallback. This corrects IV/Greeks alignment with the standard forward-based convention used across the industry; previously spot was used as the underlying, biasing IV (notably on weeklies). Applied to the single and batch option-Greeks services and Gamma Density.
 * **OI Range tool (`/oirange`)** — Open interest by strike for a custom strike range with ATM-relative quick selectors and optional 1-minute auto-refresh.
 * **Chart Test page (`/chart/test`)** — Live multi-chart streaming page for validating real-time candlestick/volume rendering across instruments.
 * **MCP technical-indicator research tools** — The MCP server gains indicator-calculation/research tools for use from Claude Desktop / Cursor / Windsurf.
@@ -54,9 +55,19 @@ A new `database/scalping_db.py` table persists scalping strategy/SL state; it is
 
 **Options tools**
 
-* **Gamma Density** (`44a7fe50`, PR #1553) — `services/gamma_density_service.py` reuses the option chain for OI + LTP and computes per-strike gamma via `opengreeks` Black-76 for two horizons (intraday 1-day and full to-expiry), returning Γ×OI density plus daily/to-expiry ±1σ/±2σ expected-move bands. Index weekly options use the per-expiry synthetic future as the Black-76 forward; the expected-move band and Spot marker stay on cash spot.
+* **Gamma Density** (`44a7fe50`, PR #1553) — `services/gamma_density_service.py` reuses the option chain for OI + LTP and computes per-strike gamma via `opengreeks` Black-76 for two horizons (intraday 1-day and full to-expiry), returning Γ×OI density plus daily/to-expiry ±1σ/±2σ expected-move bands. The expected-move band and Spot marker stay on cash spot.
 * **OI Range** (`dc05c7ac`) — open interest by strike for a custom range, with ATM-relative quick selectors (5/10/15/20 strikes each side) and optional 1-minute auto-refresh.
 * **Chart Test** (`e745e319`) — `/chart/test` live multi-chart streaming page; `59d41f35` adds the explicit `/scalping` route to `react_app.py`.
+
+***
+
+**Option Greeks — Black-76 forward**
+
+`fix(greeks): use synthetic future as Black-76 forward for all F&O` — `e46eb60a`, merged via PR #1555.
+
+* `services/option_greeks_service.py` — a single `_resolve_forward_price` helper returns the per-expiry **synthetic future** (`ATM_strike + ATM_CE − ATM_PE`) as the Black-76 underlying for every F&O segment, resolving the options exchange automatically (NSE/NSE_INDEX→NFO, BSE→BFO, MCX→MCX, CDS→CDS). It falls back to spot when the synthetic can't be computed (missing ATM CE/PE), and an explicit caller-supplied underlying/forward still wins. Wired into both the single (`get_option_greeks`) and batch (`get_multi_option_greeks`, the Strategy Builder path) services and cached per (underlying, exchange, expiry).
+* `services/gamma_density_service.py` — uses the same forward; the expected-move band and Spot marker remain on cash spot.
+* Net effect: IV/Greeks now match the standard forward-based Black-76 convention; the prior spot-as-underlying approach biased IV, most visibly on weekly index options.
 
 ***
 
@@ -171,7 +182,7 @@ uv run app.py
 
 **Contributors**
 
-* **@marketcalls (Rajandran)** — release management; Scalping Terminal (keyboard order entry, server-side SL/TP/TSL engine, all-exchange option chain/futures, live charts, freeze-safe exits, hardening); Gamma Density and OI Range tools; Chart Test live-streaming page; MCP technical-indicator research tools; F&O freeze-quantity fixes (CDS/MCX/BSE indices); WAL/startup/latency performance sweep; WhatsApp eventlet-hub and `wars` fixes; SDK pin bump.
+* **@marketcalls (Rajandran)** — release management; Scalping Terminal (keyboard order entry, server-side SL/TP/TSL engine, all-exchange option chain/futures, live charts, freeze-safe exits, hardening); Gamma Density and OI Range tools; forward-based Black-76 option Greeks for all F&O (#1555); Chart Test live-streaming page; MCP technical-indicator research tools; F&O freeze-quantity fixes (CDS/MCX/BSE indices); WAL/startup/latency performance sweep; WhatsApp eventlet-hub and `wars` fixes; SDK pin bump.
 * **@Kalaiviswa** — TradeSmart (Noren v2) broker integration (#1548); Arrow multiquotes resilience; 5paisa market orders/smart-order/WS-reconnect overhaul (#1524) and intraday timestamp fixes; Firstock `BSE_INDEX`→`BSE` mapping; Definedge intraday IST anchoring.
 
 ***
