@@ -130,6 +130,10 @@ def get_quotes_with_auth(
     try:
         # Initialize broker's data handler based on broker's requirements
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
+            # At module level:
+            # BrokerData.__init__ params: self (1) + auth_token (1) = 2 minimum
+            # If param_count > 2, the broker also accepts feed_token
+            _MIN_BROKER_INIT_PARAMS = 2
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
             if param_count > _MIN_BROKER_INIT_PARAMS:  # More than self and auth_token
@@ -261,6 +265,10 @@ def get_multiquotes_with_auth(
     try:
         # Initialize broker's data handler based on broker's requirements
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
+            # At module level:
+            # BrokerData.__init__ params: self (1) + auth_token (1) = 2 minimum
+            # If param_count > 2, the broker also accepts feed_token
+            _MIN_BROKER_INIT_PARAMS = 2
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
             if param_count > _MIN_BROKER_INIT_PARAMS:  # More than self and auth_token
