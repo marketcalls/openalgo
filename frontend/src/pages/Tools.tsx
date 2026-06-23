@@ -93,6 +93,13 @@ const tools = [
     href: '/oiprofile',
     color: 'bg-orange-500',
   },
+  {
+    title: 'Arbitrage',
+    description:
+      'Realtime futures calendar-spread scanner across NFO & MCX, ranked by executable bid/ask spread % with one-click two-leg orders',
+    href: '/arbitrage',
+    color: 'bg-green-600',
+  },
 ]
 
 export default function Tools() {
