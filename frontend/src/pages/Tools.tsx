@@ -35,6 +35,13 @@ const tools = [
     color: 'bg-blue-500',
   },
   {
+    title: 'OI Range',
+    description:
+      'Open Interest by strike for a custom range with ATM-relative quick selectors and optional 1-minute auto-refresh',
+    href: '/oirange',
+    color: 'bg-sky-500',
+  },
+  {
     title: 'Max Pain',
     description: 'Max Pain strike calculation with visual pain distribution across strikes',
     href: '/maxpain',
@@ -66,6 +73,13 @@ const tools = [
     description: 'Gamma Exposure analysis with OI Walls, Net GEX per strike, and top gamma strikes',
     href: '/gex',
     color: 'bg-indigo-500',
+  },
+  {
+    title: 'Gamma Density',
+    description:
+      'Γ×OI density and convexity zones with intraday & to-expiry views, ATM IV, and ±1σ/±2σ expected-move bands',
+    href: '/gammadensity',
+    color: 'bg-lime-500',
   },
   {
     title: 'IV Smile',

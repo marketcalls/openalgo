@@ -49,7 +49,7 @@ def get_api_response(endpoint, auth_token, method="GET", payload=None):
     if payload:
         logger.debug(f"DEBUG - Payload: {json.dumps(payload, indent=2)}")
         if "oms_order_id" in payload:
-            logger.info(f"DEBUG - Order ID in payload: {payload['oms_order_id']}")
+            logger.debug(f"DEBUG - Order ID in payload: {payload['oms_order_id']}")
 
     try:
         if method == "GET":
@@ -110,13 +110,13 @@ def get_order_book(auth):
     # Fetch completed orders
     completed_orders = fetch_orders(auth, client_id, "completed")
     if completed_orders.get("status") == "error":
-        logger.info(f"DEBUG - Error fetching completed orders: {completed_orders.get('message')}")
+        logger.debug(f"DEBUG - Error fetching completed orders: {completed_orders.get('message')}")
         completed_orders = {"data": {"orders": []}}
 
     # Fetch pending orders
     pending_orders = fetch_orders(auth, client_id, "pending")
     if pending_orders.get("status") == "error":
-        logger.info(f"DEBUG - Error fetching pending orders: {pending_orders.get('message')}")
+        logger.debug(f"DEBUG - Error fetching pending orders: {pending_orders.get('message')}")
         pending_orders = {"data": {"orders": []}}
 
     # Combine the orders
@@ -418,7 +418,7 @@ def get_holdings(auth):
 
     # Check if there was an error in the API response
     if holdings_response.get("status") == "error":
-        logger.info(f"DEBUG - Error fetching holdings: {holdings_response.get('message')}")
+        logger.debug(f"DEBUG - Error fetching holdings: {holdings_response.get('message')}")
         return holdings_response
 
     # Transform the holdings data into the standard format
@@ -426,7 +426,7 @@ def get_holdings(auth):
 
     # Print debug information about the response
     logger.debug(f"DEBUG - Holdings response type: {type(holdings_response)}")
-    logger.info(
+    logger.debug(
         f"DEBUG - Holdings response keys: {holdings_response.keys() if isinstance(holdings_response, dict) else 'Not a dictionary'}"
     )
 
@@ -638,10 +638,10 @@ def place_order_api(data, auth_token):
                 return None, {"status": "error", "message": "Client ID not found"}, None
         else:
             return None, info_response, None
-    logger.info(f"Client ID: {client_id}")
+    logger.debug(f"Client ID: {client_id}")
     # Transform OpenAlgo order format to Pocketful format
     newdata = transform_data(data, client_id=client_id)
-    logger.info(f"Transformed data: {newdata}")
+    logger.debug(f"Transformed data: {newdata}")
     # Make the API request
     response_data = get_api_response(ORDER_ENDPOINT, auth_token, method="POST", payload=newdata)
 
@@ -682,8 +682,8 @@ def place_smartorder_api(data, auth):
             get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
         )
 
-        logger.info(f"position_size : {position_size}")
-        logger.info(f"Open Position : {current_position}")
+        logger.debug(f"position_size : {position_size}")
+        logger.debug(f"Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -718,11 +718,11 @@ def place_smartorder_api(data, auth):
             if position_size > current_position:
                 action = "BUY"
                 quantity = position_size - current_position
-                # logger.info(f"smart buy quantity : {quantity}")
+                # logger.debug(f"smart buy quantity : {quantity}")
             elif position_size < current_position:
                 action = "SELL"
                 quantity = current_position - position_size
-                # logger.info(f"smart sell quantity : {quantity}")
+                # logger.debug(f"smart sell quantity : {quantity}")
 
         if action:
             # Prepare data for placing the order
@@ -730,12 +730,12 @@ def place_smartorder_api(data, auth):
             order_data["action"] = action
             order_data["quantity"] = str(quantity)
 
-            # logger.info(f"{order_data}")
+            # logger.debug(f"{order_data}")
             # Place the order
             res, response, orderid = place_order_api(order_data, AUTH_TOKEN)
             _invalidate_position_cache(AUTH_TOKEN)
-            # logger.info(f"{res}")
-            # logger.info(f"{response}")
+            # logger.debug(f"{res}")
+            # logger.debug(f"{response}")
 
             return res, response, orderid
 
@@ -782,7 +782,7 @@ def close_all_positions(current_api_key, auth):
 
         # Parse JSON response
         response_data = response.json()
-        logger.info(f"DEBUG - Response status: {response_data.get('status')}")
+        logger.debug(f"DEBUG - Response status: {response_data.get('status')}")
 
         # Early return if no data or error status
         if response_data.get("status") != "success" or "data" not in response_data:
@@ -984,12 +984,12 @@ def modify_order(data, auth):
         else:
             return info_response, 400
 
-    logger.info(f"Client ID: {client_id}")
-    logger.info(f"Original order data: {data}")
+    logger.debug(f"Client ID: {client_id}")
+    logger.debug(f"Original order data: {data}")
 
     # Transform OpenAlgo modify order format to Pocketful format
     transformed_data = transform_modify_order_data(data, client_id=client_id)
-    logger.info(f"Transformed order data: {transformed_data}")
+    logger.debug(f"Transformed order data: {transformed_data}")
 
     # Use manual httpx client request to avoid URL path manipulation issues
     client = get_httpx_client()
@@ -998,15 +998,15 @@ def modify_order(data, auth):
     url = f"{BASE_URL}/api/v1/orders"
     headers = {"Authorization": f"Bearer {auth}", "Content-Type": "application/json"}
 
-    logger.info(f"Making direct PUT request to: {url}")
-    logger.info(f"With payload: {json.dumps(transformed_data, indent=2)}")
+    logger.debug(f"Making direct PUT request to: {url}")
+    logger.debug(f"With payload: {json.dumps(transformed_data, indent=2)}")
 
     try:
         # Make direct request using httpx client - bypass get_api_response to have more control
         response = client.put(url, headers=headers, json=transformed_data)
-        logger.info(f"Response status: {response.status_code}")
-        logger.info(f"Response URL: {response.url}")
-        logger.info(f"Response content: {response.text}")
+        logger.debug(f"Response status: {response.status_code}")
+        logger.debug(f"Response URL: {response.url}")
+        logger.debug(f"Response content: {response.text}")
 
         response.raise_for_status()
 
@@ -1103,7 +1103,7 @@ def cancel_all_orders_api(data, auth):
             logger.debug(f"DEBUG - Order statuses found: {statuses}")
 
             # Print a sample order to understand structure
-            logger.info(
+            logger.debug(
                 f"DEBUG - Sample order structure: {pending_orders[0] if pending_orders else 'No orders'}"
             )
 
@@ -1140,7 +1140,7 @@ def cancel_all_orders_api(data, auth):
         logger.debug(f"DEBUG - Found {len(mode_new_orders)} orders with mode=NEW")
         if mode_new_orders:
             for idx, order in enumerate(mode_new_orders):
-                logger.info(
+                logger.debug(
                     f"DEBUG - Mode=NEW order {idx + 1}: status={order.get('status')}, id={order.get('order_id') or order.get('id') or 'unknown'}"
                 )
 
@@ -1150,7 +1150,7 @@ def cancel_all_orders_api(data, auth):
 
     logger.debug(f"DEBUG - Found {len(orders_to_cancel)} open orders to cancel")
     if orders_to_cancel:
-        logger.info(
+        logger.debug(
             f"DEBUG - Order IDs to cancel: {[order.get('order_id', 'Unknown') for order in orders_to_cancel]}"
         )
 
@@ -1178,7 +1178,7 @@ def cancel_all_orders_api(data, auth):
         for field in possible_order_id_fields:
             if field in order and order[field]:
                 orderid = order[field]
-                logger.info(f"DEBUG - Using order ID from field '{field}': {orderid}")
+                logger.debug(f"DEBUG - Using order ID from field '{field}': {orderid}")
                 break
 
         if not orderid:

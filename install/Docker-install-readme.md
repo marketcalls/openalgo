@@ -521,6 +521,7 @@ sudo rm -rf /var/lib/docker
 | Samco | `samco` | No |
 | Shoonya | `shoonya` | No |
 | Tradejini | `tradejini` | No |
+| TradeSmart | `tradesmart` | No |
 | Upstox | `upstox` | No |
 | Wisdom Capital | `wisdom` | Yes |
 | Zebu | `zebu` | No |

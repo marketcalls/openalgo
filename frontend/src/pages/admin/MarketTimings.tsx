@@ -34,7 +34,7 @@ export default function MarketTimingsPage() {
   const [checkTimings, setCheckTimings] = useState<TodayTiming[] | null>(null)
   const [isChecking, setIsChecking] = useState(false)
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fetch once on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of timings on mount; fetchTimings is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchTimings()
   }, [])

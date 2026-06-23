@@ -51,6 +51,7 @@ export default function TwoFactorEnforcement() {
   })
   const [totpCode, setTotpCode] = useState('')
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time 2FA status load on mount; fetchStatus has no reactive inputs
   useEffect(() => {
     fetchStatus()
   }, [])

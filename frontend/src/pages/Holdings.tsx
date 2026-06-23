@@ -7,6 +7,7 @@ import {
   RefreshCw,
   TrendingDown,
   TrendingUp,
+  Wallet,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
@@ -31,6 +32,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+import { EmptyState } from '@/components/ui/empty-state'
 
 function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
@@ -323,7 +325,11 @@ export default function Holdings() {
           ) : error ? (
             <div className="text-center py-12 text-muted-foreground">{error}</div>
           ) : holdings.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">No holdings found</div>
+            <EmptyState
+              icon={Wallet}
+              title="No holdings found"
+              description="Connect a broker to start tracking your portfolio."
+            />
           ) : (
             <div className="overflow-x-auto">
               <Table>

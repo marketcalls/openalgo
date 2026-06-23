@@ -5,10 +5,11 @@ from datetime import datetime
 
 import httpx
 import pandas as pd
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -18,7 +19,7 @@ logger = get_logger(__name__)
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -291,7 +292,7 @@ def process_zebu_nfo_data(output_path):
 
     # Apply the expiry date format
     #  df["expiry"] = df["expiry"].apply(format_expiry_date)
-    
+
     # First convert string to datetime object using the original format '15-APR-2026'
     df['expiry'] = pd.to_datetime(df['expiry'], format='%d-%b-%Y', errors='coerce')
     # Format the datetime object to the desired format '15-APR-26'
@@ -413,7 +414,7 @@ def process_zebu_cds_data(output_path):
 
     # Apply the expiry date format
     #  df["expiry"] = df["expiry"].apply(format_expiry_date)
-    
+
     # First convert string to datetime object using the original format '15-APR-2026'
     df['expiry'] = pd.to_datetime(df['expiry'], format='%d-%b-%Y', errors='coerce')
     # Format the datetime object to the desired format '15-APR-26'
@@ -537,7 +538,7 @@ def process_zebu_mcx_data(output_path):
 
     # Apply the expiry date format
     #  df["expiry"] = df["expiry"].apply(format_expiry_date)
-    
+
     # First convert string to datetime object using the original format '15-APR-2026'
     df['expiry'] = pd.to_datetime(df['expiry'], format='%d-%b-%Y', errors='coerce')
     # Format the datetime object to the desired format '15-APR-26'

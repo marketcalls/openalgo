@@ -55,7 +55,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -85,6 +85,8 @@ export default function HistorifyCharts() {
   const navigate = useNavigate()
   const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
   const isDarkMode = mode === 'dark' || appMode === 'analyzer'
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { symbol: urlSymbol } = useParams()
@@ -236,6 +238,7 @@ export default function HistorifyCharts() {
   }, [uniqueSymbols, symbolSearch])
 
   // Load catalog on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time catalog fetch on mount; loadCatalog is a non-memoized fetch helper and must not re-run on every render
   useEffect(() => {
     loadCatalog()
   }, [])
@@ -248,6 +251,7 @@ export default function HistorifyCharts() {
   }, [selectedSymbol, selectedExchange, selectedInterval, setSearchParams])
 
   // Load chart data when selection changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: this network fetch must fire only when the instrument/interval selection changes, not on every startDate/endDate/catalog change pulled in via loadChartData/updateDataInfo
   useEffect(() => {
     if (selectedSymbol && selectedExchange && effectiveInterval) {
       loadChartData()
@@ -471,14 +475,7 @@ export default function HistorifyCharts() {
         chartRef.current = null
       }
     }
-  }, [
-    isDarkMode,
-    chartData,
-    isFullscreen,
-    isIntradayInterval,
-    isCustomInterval,
-    customIntervalUnit,
-  ])
+  }, [isDarkMode, chartData, isIntradayInterval, isCustomInterval, customIntervalUnit])
 
   const loadCatalog = async () => {
     try {
@@ -487,7 +484,7 @@ export default function HistorifyCharts() {
       if (data.status === 'success') {
         setCatalog(data.data || [])
       }
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const loadChartData = useCallback(async () => {
@@ -517,7 +514,7 @@ export default function HistorifyCharts() {
       } else {
         showToast.error(data.message || 'Failed to load chart data', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load chart data', 'historify')
     } finally {
       setIsLoading(false)
@@ -569,7 +566,13 @@ export default function HistorifyCharts() {
     >
       {/* Header */}
       <div className="h-14 border-b border-border flex items-center px-4 bg-card/50">
-        <Button variant="ghost" size="icon" className="mr-2" asChild aria-label="Go back to Historify">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="mr-2"
+          asChild
+          aria-label="Go back to Historify"
+        >
           <Link to="/historify">
             <ArrowLeft className="h-5 w-5" />
           </Link>
@@ -700,7 +703,13 @@ export default function HistorifyCharts() {
             />
           </div>
 
-          <Button variant="outline" size="icon" onClick={loadChartData} disabled={isLoading} aria-label="Refresh chart">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={loadChartData}
+            disabled={isLoading}
+            aria-label="Refresh chart"
+          >
             <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
           </Button>
         </div>
@@ -765,7 +774,12 @@ export default function HistorifyCharts() {
             {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
-          <Button variant="ghost" size="icon" onClick={toggleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          >
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </Button>
           <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>

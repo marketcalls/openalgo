@@ -26,13 +26,12 @@ test.describe('Navigation - Mobile', () => {
     // Wait for any redirects
     await page.waitForLoadState('networkidle')
 
-    // On mobile, if we're on an authenticated page, bottom nav should be visible
-    // But if redirected to login, it won't be there
-    const url = page.url()
-
-    if (url.includes('dashboard')) {
-      const bottomNav = page.locator('nav.md\\:hidden')
-      await expect(bottomNav).toBeVisible()
+    const bottomNav = page.locator('nav.md\\:hidden')
+    try {
+      await expect(bottomNav).toBeVisible({ timeout: 5000 })
+    } catch {
+      // Unauthenticated sessions can render the login page before the URL changes.
+      await expect(page.locator('input[type="password"]')).toBeVisible()
     }
   })
 
@@ -41,15 +40,13 @@ test.describe('Navigation - Mobile', () => {
 
     await page.waitForLoadState('networkidle')
 
-    const url = page.url()
-
-    if (url.includes('dashboard')) {
-      // Check for touch-manipulation class on nav links
-      const navLinks = page.locator('.touch-manipulation')
-      const count = await navLinks.count()
-
-      // Should have touch-optimized elements
-      expect(count).toBeGreaterThan(0)
+    const navLinks = page.locator('.touch-manipulation')
+    try {
+      await expect(navLinks.first()).toBeVisible({ timeout: 5000 })
+      expect(await navLinks.count()).toBeGreaterThan(0)
+    } catch {
+      // Unauthenticated sessions can render the login page before the URL changes.
+      await expect(page.locator('input[type="password"]')).toBeVisible()
     }
   })
 })

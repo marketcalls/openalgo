@@ -82,10 +82,10 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
             # For successful responses, return the data array directly for list endpoints
             if response_data.get("status") == "success" and "data" in response_data:
-                logger.info(f"Successfully fetched data from {endpoint}")
+                logger.debug(f"Successfully fetched data from {endpoint}")
                 return response_data["data"]
 
-        logger.info(f"Response data: {response_data}")
+        logger.debug(f"Response data: {response_data}")
         return response_data
 
     except Exception as e:
@@ -174,7 +174,7 @@ def get_trade_book(auth):
                         f"Enriched trade {exch_order_id} with txn_type={order_info['txn_type']}, product={order_info['product']}"
                     )
 
-        logger.info(
+        logger.debug(
             f"Fetched {len(all_trades)} total trades (EQUITY + DERIVATIVE), enriched with order book data"
         )
         return all_trades
@@ -206,7 +206,7 @@ def get_positions(auth):
             result = get_api_response("/portfolio/positions", auth, params=query)
 
             # Debug: Log the actual API response to understand the structure
-            logger.info(f"Positions API response for {query}: {result}")
+            logger.debug(f"Positions API response for {query}: {result}")
 
             if result and isinstance(result, dict):
                 # Extract net_positions and day_positions from the response
@@ -215,11 +215,11 @@ def get_positions(auth):
 
                 # Debug: Log sample position if available
                 if net_positions:
-                    logger.info(
+                    logger.debug(
                         f"Sample net_position fields: {list(net_positions[0].keys()) if net_positions[0] else 'empty'}"
                     )
                 if day_positions:
-                    logger.info(
+                    logger.debug(
                         f"Sample day_position fields: {list(day_positions[0].keys()) if day_positions[0] else 'empty'}"
                     )
 
@@ -243,7 +243,7 @@ def get_positions(auth):
                 # Fallback: if response is directly a list (legacy format)
                 all_positions.extend(result)
 
-        logger.info(f"Fetched {len(all_positions)} total positions (all segments and products)")
+        logger.debug(f"Fetched {len(all_positions)} total positions (all segments and products)")
         return all_positions
 
     except Exception as e:
@@ -315,7 +315,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_response = _get_cached_positions(auth)
     net_qty = "0"
-    # logger.info(f"Positions response: {positions_response}")
+    # logger.debug(f"Positions response: {positions_response}")
 
     # Check if positions_response is an error response
     if isinstance(positions_response, dict) and positions_response.get("status") == "error":
@@ -368,10 +368,10 @@ def place_order_api(data, auth):
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     data["apikey"] = BROKER_API_KEY
     token = get_token(data["symbol"], data["exchange"])
-    logger.info(f"Original order data: {data}")
-    logger.info(f"Security token: {token}")
+    logger.debug(f"Original order data: {data}")
+    logger.debug(f"Security token: {token}")
     newdata = transform_data(data, token)
-    logger.info(f"Transformed data: {newdata}")
+    logger.debug(f"Transformed data: {newdata}")
     headers = {
         "Authorization": AUTH_TOKEN,
         "Content-Type": "application/json",
@@ -380,9 +380,9 @@ def place_order_api(data, auth):
     payload = json.dumps(newdata)
 
     logger.debug(f"Placing order with payload: {payload}")
-    logger.info(f"Indmoney API URL: {get_url('/order')}")
-    logger.info(f"Indmoney API Headers: {headers}")
-    logger.info(f"Indmoney API Payload: {payload}")
+    logger.debug(f"Indmoney API URL: {get_url('/order')}")
+    logger.debug(f"Indmoney API Headers: {headers}")
+    logger.debug(f"Indmoney API Payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -406,7 +406,7 @@ def place_order_api(data, auth):
         if response_data and response_data.get("status") == "success":
             # Indmoney returns order ID in data.order_id field
             orderid = response_data.get("data", {}).get("order_id")
-            logger.info(f"Order placed successfully with ID: {orderid}")
+            logger.debug(f"Order placed successfully with ID: {orderid}")
             # Format response to match OpenAlgo API standard
             response_data = {"orderid": orderid, "status": "success"}
         elif response_data and response_data.get("status") in ["error", "failure"]:
@@ -453,8 +453,8 @@ def place_smartorder_api(data, auth):
             get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
         )
 
-        logger.info(f"position_size : {position_size}")
-        logger.info(f"Open Position : {current_position}")
+        logger.debug(f"position_size : {position_size}")
+        logger.debug(f"Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -566,7 +566,7 @@ def close_all_positions(current_api_key, auth):
 
             # get openalgo symbol to send to placeorder function
             symbol = get_symbol(position["security_id"], exchange)
-            logger.info(f"The Symbol is {symbol}")
+            logger.debug(f"The Symbol is {symbol}")
 
             # Determine product type based on actual API response
             api_product = position.get("product", "")
@@ -710,7 +710,7 @@ def cancel_all_orders_api(data, auth):
         for order in order_book_response
         if order["status"] in ["PENDING", "O-PENDING", "SL-PENDING"]
     ]
-    logger.info(f"Orders to cancel: {orders_to_cancel}")
+    logger.debug(f"Orders to cancel: {orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

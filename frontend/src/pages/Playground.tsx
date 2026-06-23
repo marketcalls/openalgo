@@ -41,7 +41,7 @@ import { Input } from '@/components/ui/input'
 import { JsonEditor } from '@/components/ui/json-editor'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -174,6 +174,8 @@ export default function Playground() {
   // Theme store
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
 
   const handleLogout = async () => {
     try {
@@ -237,6 +239,7 @@ export default function Playground() {
       })
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time load on mount; loadApiKey/loadEndpoints are stable per-render fetchers and must not refire when their closures are recreated.
   useEffect(() => {
     loadApiKey()
     loadEndpoints()
@@ -425,7 +428,7 @@ export default function Playground() {
     setResponseSize(null)
     setResponseHeaders({})
 
-    const startTime = Date.now()
+    let startTime = Date.now()
 
     try {
       const options: RequestInit = {
@@ -464,6 +467,9 @@ export default function Playground() {
         }
       }
 
+      // Restart the clock here so the displayed time covers only the API
+      // request itself, not the CSRF token fetch above.
+      startTime = Date.now()
       const response = await fetch(fetchUrl, options)
       const elapsed = Date.now() - startTime
 

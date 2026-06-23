@@ -30,6 +30,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/optionchain': 'Option Chain',
   '/ivchart': 'IV Chart',
   '/oitracker': 'OI Tracker',
+  '/oirange': 'OI Range',
+  '/gammadensity': 'Gamma Density',
   '/maxpain': 'Max Pain',
   '/straddle': 'Straddle Chart',
   '/straddlepnl': 'Straddle P&L',

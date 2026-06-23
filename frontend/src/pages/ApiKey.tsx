@@ -49,9 +49,9 @@ export default function ApiKey() {
   const [orderMode, setOrderMode] = useState<'auto' | 'semi_auto'>('auto')
   const [isTogglingMode, setIsTogglingMode] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time API key load on mount; fetchApiKeyData has no reactive inputs
   useEffect(() => {
     fetchApiKeyData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchApiKeyData = async () => {
@@ -76,7 +76,7 @@ export default function ApiKey() {
           showToast.error('Failed to load API key - please refresh', 'system')
         }
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load API key', 'system')
     } finally {
       setIsLoading(false)
@@ -123,7 +123,7 @@ export default function ApiKey() {
       } else {
         showToast.error(data.error || 'Failed to generate API key', 'system')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to generate API key', 'system')
     } finally {
       setIsRegenerating(false)
@@ -161,7 +161,7 @@ export default function ApiKey() {
       } else {
         showToast.error(data.error || 'Failed to update order mode', 'system')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to update order mode', 'system')
     } finally {
       setIsTogglingMode(false)

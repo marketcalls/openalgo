@@ -92,7 +92,7 @@ export default function Search() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [copyFormat, setCopyFormat] = useState<CopyFormat>('exchange_symbol')
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fetch once on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchResults reads the initial URL searchParams and must not re-run on every render
   useEffect(() => {
     fetchResults()
   }, [])

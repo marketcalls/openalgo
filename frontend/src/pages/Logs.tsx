@@ -71,7 +71,7 @@ export default function LogsPage() {
         setLogs(Array.isArray(response.data.logs) ? response.data.logs : [])
         setTotalPages(response.data.total_pages || 1)
         setCurrentPage(response.data.current_page || 1)
-      } catch (error) {
+      } catch (_error) {
         showToast.error('Failed to load logs', 'monitoring')
       } finally {
         setIsLoading(false)

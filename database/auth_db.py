@@ -153,6 +153,10 @@ broker_cache = TTLCache(maxsize=1024, ttl=3000)
 verified_api_key_cache = TTLCache(maxsize=1024, ttl=36000)  # 10 hours
 # Define a cache for invalid API keys with shorter 5-minute TTL (prevent cache poisoning)
 invalid_api_key_cache = TTLCache(maxsize=512, ttl=300)  # 5 minutes
+# Order mode (auto/semi_auto) is checked on every order request; cache it to
+# avoid a DB query per order. Invalidated by update_order_mode via
+# invalidate_user_cache, so the TTL is only a backstop.
+order_mode_cache = TTLCache(maxsize=128, ttl=60)
 
 # Conditionally create engine based on DB type
 if DATABASE_URL and "sqlite" in DATABASE_URL:
@@ -750,6 +754,7 @@ def invalidate_user_cache(user_id):
     feed_token_cache.clear()
     verified_api_key_cache.clear()
     invalid_api_key_cache.clear()
+    order_mode_cache.clear()
     logger.info(f"Cleared all caches for user_id: {user_id}")
 
 
@@ -1013,11 +1018,15 @@ def get_order_mode(user_id):
     Returns:
         str: 'auto' or 'semi_auto', defaults to 'auto' if not set
     """
+    cached_mode = order_mode_cache.get(user_id)
+    if cached_mode is not None:
+        return cached_mode
+
     try:
         api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
-        if api_key_obj and api_key_obj.order_mode:
-            return api_key_obj.order_mode
-        return "auto"  # Default to auto mode
+        mode = api_key_obj.order_mode if api_key_obj and api_key_obj.order_mode else "auto"
+        order_mode_cache[user_id] = mode
+        return mode
     except Exception as e:
         logger.exception(f"Error getting order mode for user {user_id}: {e}")
         return "auto"  # Default to auto on error

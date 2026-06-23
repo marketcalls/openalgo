@@ -66,7 +66,7 @@ export default function ViewStrategy() {
       const data = await strategyApi.getStrategy(Number(strategyId))
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategy', 'strategy')
       navigate('/strategy')
     } finally {
@@ -81,7 +81,7 @@ export default function ViewStrategy() {
         const response = await fetch('/api/config/host', { credentials: 'include' })
         const data = await response.json()
         setHostConfig(data)
-      } catch (error) {
+      } catch (_error) {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -93,9 +93,9 @@ export default function ViewStrategy() {
     fetchHostConfig()
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchStrategy should not re-run on every render
   useEffect(() => {
     fetchStrategy()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const copyToClipboard = async (text: string, field: string) => {
@@ -123,7 +123,7 @@ export default function ViewStrategy() {
       } else {
         showToast.error(response.message || 'Failed to toggle strategy', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to toggle strategy', 'strategy')
     } finally {
       setToggling(false)
@@ -141,7 +141,7 @@ export default function ViewStrategy() {
       } else {
         showToast.error(response.message || 'Failed to delete strategy', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete strategy', 'strategy')
     } finally {
       setDeleting(false)
@@ -159,7 +159,7 @@ export default function ViewStrategy() {
       } else {
         showToast.error(response.message || 'Failed to delete mapping', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete mapping', 'strategy')
     }
   }
@@ -381,7 +381,9 @@ export default function ViewStrategy() {
                         variant="outline"
                         size="icon"
                         onClick={() => copyToClipboard(strategy.webhook_id, 'webhook_id')}
-                        aria-label={copiedField === 'webhook_id' ? 'Webhook ID copied' : 'Copy webhook ID'}
+                        aria-label={
+                          copiedField === 'webhook_id' ? 'Webhook ID copied' : 'Copy webhook ID'
+                        }
                       >
                         {copiedField === 'webhook_id' ? (
                           <Check className="h-4 w-4 text-green-500" />

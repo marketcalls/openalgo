@@ -78,6 +78,7 @@ export default function HolidaysPage() {
   const [deleteHoliday, setDeleteHoliday] = useState<Holiday | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fetch is intentionally keyed only on currentYear; fetchHolidays is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchHolidays(currentYear)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,7 +91,7 @@ export default function HolidaysPage() {
       setHolidays(response.data)
       setYears(response.years)
       setExchanges(response.exchanges)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load holidays', 'admin')
     } finally {
       setIsLoading(false)

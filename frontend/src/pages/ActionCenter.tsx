@@ -121,7 +121,7 @@ export default function ActionCenterPage() {
           }
         )
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load action center data', 'actionCenter')
     } finally {
       setIsLoading(false)
@@ -131,7 +131,7 @@ export default function ActionCenterPage() {
 
   useEffect(() => {
     fetchData()
-  }, [fetchData, activeFilter])
+  }, [fetchData])
 
   // Socket connection for realtime order updates
   useEffect(() => {
@@ -566,7 +566,11 @@ export default function ActionCenterPage() {
                               variant="ghost"
                               className="h-8 w-8"
                               onClick={() => toggleExpanded(order.id)}
-                              aria-label={expandedOrders.has(order.id) ? 'Collapse order details' : 'Expand order details'}
+                              aria-label={
+                                expandedOrders.has(order.id)
+                                  ? 'Collapse order details'
+                                  : 'Expand order details'
+                              }
                             >
                               {expandedOrders.has(order.id) ? (
                                 <ChevronUp className="h-4 w-4" />

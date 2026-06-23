@@ -82,7 +82,7 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { useSocket } from '@/hooks/useSocket'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -256,6 +256,8 @@ function getDateFromPreset(months: number): string {
 export default function Historify() {
   const { appMode, toggleAppMode, mode, toggleMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
   const navigate = useNavigate()
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
 
@@ -473,6 +475,7 @@ export default function Historify() {
   // }, [catalog, catalogFilter])
 
   // Load data on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional one-time initial data load on mount; the loaders are recreated every render, so adding them would re-run all fetches on every render.
   useEffect(() => {
     loadWatchlist()
     loadCatalog()
@@ -485,6 +488,7 @@ export default function Historify() {
   }, [])
 
   // Socket.IO event handlers
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loaders are invoked inside socket event callbacks at event-fire time (not at bind time); since they are recreated every render, including them would re-register all socket listeners on every render. Re-binding is intentionally limited to socket/expandedSchedule changes.
   useEffect(() => {
     if (!socket) return
 
@@ -615,6 +619,7 @@ export default function Historify() {
   }, [])
 
   // Symbol search
+  // biome-ignore lint/correctness/useExhaustiveDependencies: performSearch is recreated every render; the debounce must reset only when the search query (newSymbol) changes, not on every render, so it is intentionally excluded.
   useEffect(() => {
     const timer = setTimeout(() => {
       if (newSymbol.length >= 2) {
@@ -633,7 +638,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/watchlist', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setWatchlist(data.data || [])
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const loadCatalog = async () => {
@@ -641,7 +646,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/catalog', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setCatalog(data.data || [])
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const loadIntervals = async () => {
@@ -649,7 +654,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/intervals', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setIntervals(data.data)
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const loadHistorifyIntervals = async () => {
@@ -663,7 +668,7 @@ export default function Historify() {
           all_intervals: data.all_intervals,
         })
       }
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const loadStats = async () => {
@@ -671,7 +676,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/stats', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setStats(data.data)
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const loadExchanges = async () => {
@@ -679,7 +684,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/exchanges', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success' && data.data?.length > 0) setExchanges(data.data)
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const loadJobs = async () => {
@@ -688,7 +693,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/jobs?limit=50', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setJobs(data.data || [])
-    } catch (error) {
+    } catch (_error) {
     } finally {
       setJobsLoading(false)
     }
@@ -701,7 +706,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/schedules', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setSchedules(data.data || [])
-    } catch (error) {
+    } catch (_error) {
     } finally {
       setSchedulesLoading(false)
     }
@@ -716,7 +721,7 @@ export default function Historify() {
       if (data.status === 'success') {
         setScheduleExecutions((prev) => ({ ...prev, [scheduleId]: data.data || [] }))
       }
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const resetScheduleForm = () => {
@@ -793,7 +798,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to save schedule', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to save schedule', 'historify')
     } finally {
       setIsCreatingSchedule(false)
@@ -815,7 +820,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to delete schedule', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete schedule', 'historify')
     }
   }
@@ -836,7 +841,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to toggle schedule', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to toggle schedule', 'historify')
     }
   }
@@ -857,7 +862,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to pause/resume schedule', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to pause/resume schedule', 'historify')
     }
   }
@@ -878,7 +883,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to trigger schedule', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to trigger schedule', 'historify')
     }
   }
@@ -928,7 +933,7 @@ export default function Historify() {
       const data = await response.json()
       setSearchResults((data.results || []).slice(0, 10))
       setShowSearchResults(true)
-    } catch (error) {
+    } catch (_error) {
       setSearchResults([])
     }
   }
@@ -956,7 +961,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to add symbol', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to add symbol', 'historify')
     }
   }
@@ -978,7 +983,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to remove symbol', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to remove symbol', 'historify')
     }
   }
@@ -1016,7 +1021,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to bulk add symbols', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to bulk add symbols', 'historify')
     } finally {
       setIsBulkAdding(false)
@@ -1116,7 +1121,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to create job', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to create job', 'historify')
     }
   }
@@ -1145,7 +1150,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to pause job', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to pause job', 'historify')
     }
   }
@@ -1165,7 +1170,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to resume job', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to resume job', 'historify')
     }
   }
@@ -1185,7 +1190,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to cancel job', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to cancel job', 'historify')
     }
   }
@@ -1205,7 +1210,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to retry job', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to retry job', 'historify')
     }
   }
@@ -1228,7 +1233,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to delete job', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete job', 'historify')
     }
   }
@@ -1252,7 +1257,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to delete data', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete data', 'historify')
     } finally {
       setDeleteDialogOpen(false)
@@ -1285,7 +1290,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to delete data', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to delete data', 'historify')
     } finally {
       setIsBulkDeleting(false)
@@ -1317,7 +1322,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to remove from watchlist', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to remove from watchlist', 'historify')
     } finally {
       setIsBulkWatchlistDeleting(false)
@@ -1374,7 +1379,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to upload data', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to upload CSV', 'historify')
     } finally {
       setIsUploading(false)
@@ -1416,7 +1421,7 @@ export default function Historify() {
       } else {
         showToast.error(data.message || 'Failed to export data', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to export data', 'historify')
     } finally {
       setIsExporting(false)
@@ -2607,7 +2612,9 @@ export default function Historify() {
                                     className="h-8 w-8"
                                     onClick={() => handlePauseResumeSchedule(schedule)}
                                     title={schedule.is_paused ? 'Resume' : 'Pause'}
-                                    aria-label={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
+                                    aria-label={
+                                      schedule.is_paused ? 'Resume schedule' : 'Pause schedule'
+                                    }
                                   >
                                     {schedule.is_paused ? (
                                       <Play className="h-4 w-4" />
@@ -2653,7 +2660,11 @@ export default function Historify() {
                                     }
                                   }}
                                   title="View history"
-                                  aria-label={expandedSchedule === schedule.id ? 'Collapse schedule details' : 'Expand schedule details'}
+                                  aria-label={
+                                    expandedSchedule === schedule.id
+                                      ? 'Collapse schedule details'
+                                      : 'Expand schedule details'
+                                  }
                                 >
                                   {expandedSchedule === schedule.id ? (
                                     <X className="h-4 w-4" />

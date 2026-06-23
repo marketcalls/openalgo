@@ -542,15 +542,15 @@ else
         if command -v npm >/dev/null 2>&1; then
             log_message "Building React frontend (dist/ not found)..." "$BLUE"
             cd "$OPENALGO_PATH/frontend"
-            npm install && npm run build
+            npm ci && npm run build
             if [ $? -eq 0 ]; then
                 log_message "Frontend built successfully" "$GREEN"
             else
-                log_message "Frontend build failed. Run manually: cd frontend && npm install && npm run build" "$YELLOW"
+                log_message "Frontend build failed. Run manually: cd frontend && npm ci && npm run build" "$YELLOW"
             fi
         else
             log_message "Warning: frontend/dist/ not found and Node.js is not installed." "$YELLOW"
-            log_message "Install Node.js and run: cd frontend && npm install && npm run build" "$YELLOW"
+            log_message "Install Node.js 20.20+, 22.22+, or 24.13+ and run: cd frontend && npm ci && npm run build" "$YELLOW"
         fi
     fi
 

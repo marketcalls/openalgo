@@ -328,6 +328,7 @@ export default function ProfilePage() {
   // Check if in analyzer mode (theme changes blocked)
   const isAnalyzerMode = appMode === 'analyzer'
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time data load on mount; fetchProfileData/fetchBrokerCredentials are stable per-render fetchers and must not refire when their closures are recreated.
   useEffect(() => {
     fetchProfileData()
     fetchBrokerCredentials()
@@ -354,7 +355,7 @@ export default function ProfilePage() {
           setTestEmail(smtp.smtp_username || '')
         }
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load profile data', 'admin')
     } finally {
       setIsLoading(false)
@@ -373,7 +374,7 @@ export default function ProfilePage() {
         setHostServer(response.data.data.host_server)
         setWebsocketUrl(response.data.data.websocket_url || '')
       }
-    } catch (error) {}
+    } catch (_error) {}
   }
 
   const fetchPermissions = async () => {
@@ -385,7 +386,7 @@ export default function ProfilePage() {
       if (response.data.status === 'success') {
         setPermissionsData(response.data.data)
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load permission status', 'admin')
     } finally {
       setIsLoadingPermissions(false)
@@ -420,7 +421,7 @@ export default function ProfilePage() {
       } else {
         showToast.error('Failed to fix permissions', 'admin')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to fix permissions', 'admin')
     } finally {
       setIsFixingPermissions(false)

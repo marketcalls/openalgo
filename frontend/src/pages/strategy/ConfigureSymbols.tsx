@@ -77,16 +77,16 @@ export default function ConfigureSymbols() {
       const data = await strategyApi.getStrategy(Number(strategyId))
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategy', 'strategy')
     } finally {
       setLoading(false)
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchStrategy should not re-run on every render
   useEffect(() => {
     fetchStrategy()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Debounced symbol search
@@ -100,7 +100,7 @@ export default function ConfigureSymbols() {
         setSearchLoading(true)
         const results = await strategyApi.searchSymbols(query, exchange || undefined)
         setSearchResults(results)
-      } catch (error) {
+      } catch (_error) {
       } finally {
         setSearchLoading(false)
       }
@@ -167,7 +167,7 @@ export default function ConfigureSymbols() {
       } else {
         showToast.error(response.message || 'Failed to add symbol', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to add symbol', 'strategy')
     } finally {
       setSubmitting(false)
@@ -197,7 +197,7 @@ export default function ConfigureSymbols() {
       } else {
         showToast.error(response.message || 'Failed to add symbols', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to add symbols', 'strategy')
     } finally {
       setSubmitting(false)
@@ -215,7 +215,7 @@ export default function ConfigureSymbols() {
       } else {
         showToast.error(response.message || 'Failed to remove symbol', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to remove symbol', 'strategy')
     } finally {
       setDeleteDialogOpen(false)

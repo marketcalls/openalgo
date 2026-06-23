@@ -305,6 +305,7 @@ export default function IVChart() {
 
   // ── Data fetching ───────────────────────────────────────────────
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run-once on mount to load the available interval list; selectedInterval is read only to seed a default and must not re-trigger this fetch on user interval changes
   useEffect(() => {
     const fetchIntervals = async () => {
       try {
@@ -356,7 +357,7 @@ export default function IVChart() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -387,8 +388,7 @@ export default function IVChart() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // ── Load IV + Greeks data ───────────────────────────────────────
 

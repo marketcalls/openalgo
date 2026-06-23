@@ -40,6 +40,7 @@ tmp/
 *.tmp
 checkpoint.txt
 checkpoints.json
+log/ws_proxy_stats.json
 
 
 # Strategy encryption key
@@ -53,6 +54,7 @@ db/backups/
 !symbols.csv
 !all_symbols.csv
 !data/qtyfreeze.csv
+!docs/migration/*.csv
 
 # Environments 
 .env 

@@ -177,8 +177,11 @@ class DhanWebSocket:
                     on_message=self._on_message,
                     on_error=self._on_error,
                     on_close=self._on_close,
-                    on_ping=lambda ws, msg: self.logger.debug("Received ping"),
-                    on_pong=lambda ws, msg: self.logger.debug("Received pong"),
+                    # Stamp the liveness clock on protocol ping/pong too, not just
+                    # on broker code-0 heartbeats — so the data-stall watchdog can
+                    # never false-fire while the socket is provably alive.
+                    on_ping=lambda ws, msg: setattr(self, "last_message_time", time.time()),
+                    on_pong=lambda ws, msg: setattr(self, "last_message_time", time.time()),
                 )
 
                 # Run the WebSocket with ping interval

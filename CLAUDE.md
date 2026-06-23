@@ -32,7 +32,7 @@ All surfaces share the Sandbox engine (₹1 Crore sandbox capital, exchange-alig
 
 ### Prerequisites
 - Python 3.12+ (required per pyproject.toml)
-- Node.js 20/22/24 for React frontend development
+- Node.js 20.20+, 22.22+, or 24.13+ for React frontend development (per `frontend/package.json`)
 - **uv package manager (required)** - Never use global Python
 
 ### Initial Setup
@@ -565,3 +565,9 @@ All error logging uses `logger.exception()` (not `logger.error()` + manual trace
 - When actively editing React code, run `cd frontend && npm install && npm run build` (build only, no tests). Tests run in CI; not required for local iteration.
 - The local `.gitignore` excludes `frontend/dist/` so contributors cannot accidentally commit their own build output — but CI uses `git add -f` to override the ignore on `main` only.
 - See the "Important: Frontend Build (CI/CD)" section above for the full picture.
+
+### File Descriptor (FD) Hygiene
+- Be FD-aware while coding: every DB engine/session, file, socket, WebSocket, ZeroMQ socket, subprocess pipe, thread, and executor is a file descriptor — prefer `with` context managers or shared singletons and guarantee close/reap on every path (success, error, and reconnect); preventing a leak at creation is far cheaper than hunting it later.
+- After building a feature or fixing anything that touches DB, WebSockets/streaming, threads/executors, subprocesses, files, or sockets, intelligently run a focused FD audit of just that change before calling it done.
+- Honor the conventions: all SQLite engines via `database.engine_factory.create_db_engine()` (NullPool), every `scoped_session` registered in the `app.py` teardown or used as `with db_session() as session:`, HTTP via the shared `utils/httpx_client.get_httpx_client()`, WebSocket adapters close-before-reconnect, subprocesses write to a log file (not PIPE) and are `.wait()`-reaped, and threads/executors are shared module-level singletons (never per-call).
+- If the audit finds an FD that is not released, do not silently proceed: tell the user exactly where it leaks and why it matters (a long-running single-worker Gunicorn/eventlet process accumulates descriptors until it hits the OS limit — "too many open files", refused DB connections, dropped sockets, eventual crash or forced restart), and ask them to approve the fix.

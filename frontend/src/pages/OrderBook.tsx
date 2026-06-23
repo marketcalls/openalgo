@@ -2,8 +2,10 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  ClipboardList,
   Clock,
   Download,
+  FilterX,
   Loader2,
   Pencil,
   RefreshCw,
@@ -37,6 +39,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -58,7 +61,7 @@ import type { Order, OrderStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 
 // Sort configuration types
-type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status'
+type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status' | 'price'
 interface SortConfig {
   key: SortKey
   direction: 'asc' | 'desc'
@@ -177,9 +180,22 @@ export default function OrderBook() {
         return sortConfig.direction === 'asc' ? aTime - bTime : bTime - aTime
       }
 
+      // Numeric comparison for Price (broker payloads may carry it as string)
+      if (sortConfig.key === 'price') {
+        const aPrice = Number(aValue) || 0
+        const bPrice = Number(bValue) || 0
+        return sortConfig.direction === 'asc' ? aPrice - bPrice : bPrice - aPrice
+      }
+
       // Standard string comparison for Symbol, Action, and Status
       if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
+
+      // Symbol sort groups orders by instrument; order each group by price
+      // so the book reads as a ladder per instrument (issue #1339 part 2).
+      if (sortConfig.key === 'symbol') {
+        return (Number(a.price) || 0) - (Number(b.price) || 0)
+      }
       return 0
     })
   }, [orders, statusFilter, sortConfig])
@@ -589,18 +605,24 @@ export default function OrderBook() {
               ) : error ? (
                 <div className="text-center py-12 text-muted-foreground">{error}</div>
               ) : sortedAndFilteredOrders.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  {hasActiveFilters ? (
-                    <div>
-                      <p className="mb-4">No orders match your filters</p>
+                hasActiveFilters ? (
+                  <EmptyState
+                    icon={FilterX}
+                    title="No orders match your filters"
+                    description="Try adjusting or clearing your filters to see results."
+                    action={
                       <Button variant="ghost" size="sm" onClick={clearFilters}>
                         Clear Filters
                       </Button>
-                    </div>
-                  ) : (
-                    'No orders today'
-                  )}
-                </div>
+                    }
+                  />
+                ) : (
+                  <EmptyState
+                    icon={ClipboardList}
+                    title="No orders today"
+                    description="Orders you place will display here."
+                  />
+                )
               ) : (
                 <div className="overflow-x-auto">
                   <Table>
@@ -636,7 +658,20 @@ export default function OrderBook() {
                           </div>
                         </TableHead>
                         <TableHead className="w-[70px] text-right">Qty</TableHead>
-                        <TableHead className="w-[100px] text-right">Price</TableHead>
+                        <TableHead
+                          className="w-[100px] text-right cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => requestSort('price')}
+                        >
+                          <div className="flex items-center justify-end gap-1">
+                            Price
+                            {sortConfig.key === 'price' &&
+                              (sortConfig.direction === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              ))}
+                          </div>
+                        </TableHead>
                         <TableHead className="w-[100px] text-right">Trigger</TableHead>
                         <TableHead className="w-[80px]">Type</TableHead>
                         {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}

@@ -20,10 +20,10 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import { isActiveRoute, mobileSheetItems, navItems, profileMenuItems } from '@/config/navigation'
+import { isActiveRoute, mobileSheetItems, navItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { useBrokerStore } from '@/stores/brokerStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -34,14 +34,9 @@ export function Navbar() {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
-  const { capabilities } = useBrokerStore()
 
-  // Filter menu items based on broker capabilities
-  const filteredProfileMenuItems = profileMenuItems.filter((item) => {
-    if (item.href === '/leverage') return capabilities?.leverage_config === true
-    if (item.href === '/holdings') return capabilities?.broker_type !== 'crypto'
-    return true
-  })
+  // Profile menu filtered by broker capabilities (shared hook, issue #1480)
+  const filteredProfileMenuItems = useProfileMenuItems()
 
   const handleLogout = async () => {
     try {
@@ -168,12 +163,16 @@ export function Navbar() {
           <span className="hidden font-semibold sm:inline-block">OpenAlgo</span>
         </Link>
 
-        {/* Desktop Navigation */}
+        {/* Desktop Navigation.
+            Icon-only between md and xl so all 9 items fit portrait monitors
+            and small laptops (768-1280px wide) without squashing or pushing
+            the profile menu off-screen; full labels from xl up (issue #1384). */}
         <nav className="hidden md:flex items-center gap-1">
           {navItems.map((item) => (
             <Link
               key={item.href}
               to={item.href}
+              title={item.label}
               className={cn(
                 'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
                 isActive(item.href)
@@ -181,16 +180,18 @@ export function Navbar() {
                   : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               )}
             >
-              {item.label}
+              <item.icon className="h-4 w-4 shrink-0" />
+              <span className="hidden xl:inline">{item.label}</span>
             </Link>
           ))}
         </nav>
 
         {/* Right Side */}
         <div className="ml-auto flex items-center gap-1 sm:gap-2">
-          {/* Broker Badge */}
+          {/* Broker Badge — hidden below lg to keep the bar within narrow
+              (portrait/small-laptop) widths */}
           {user?.broker && (
-            <Badge variant="outline" className="hidden sm:flex text-xs">
+            <Badge variant="outline" className="hidden lg:flex text-xs">
               {user.broker}
             </Badge>
           )}
@@ -203,10 +204,10 @@ export function Navbar() {
               appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
             )}
           >
-            <span className="hidden sm:inline">
+            <span className="hidden lg:inline">
               {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
             </span>
-            <span className="sm:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
+            <span className="lg:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
           </Badge>
 
           {/* Mode Toggle */}

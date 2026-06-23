@@ -103,7 +103,7 @@ export default function OITracker() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings[selectedExchange]])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -134,8 +134,7 @@ export default function OITracker() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // Fetch OI data - uses requestIdRef to discard stale responses
   const fetchOIData = useCallback(async () => {
@@ -163,13 +162,13 @@ export default function OITracker() {
     }
   }, [selectedUnderlying, selectedExpiry, selectedExchange])
 
+  // Only trigger on expiry change - not on fetchOIData identity change,
+  // which would cause a stale request with mixed params during exchange switch.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: must fire only when selectedExpiry changes; adding fetchOIData would refire on underlying/exchange changes mid-switch and issue a stale request with mixed params
   useEffect(() => {
     if (selectedExpiry) {
       fetchOIData()
     }
-    // Only trigger on expiry change - not on fetchOIData identity change,
-    // which would cause a stale request with mixed params during exchange switch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExpiry])
 
   // Theme colors for Plotly

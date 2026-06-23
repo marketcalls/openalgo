@@ -611,6 +611,48 @@ def broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)  # Only pass the code parameter
         forward_url = "broker.html"
 
+    elif broker == "tradesmart":
+        # TradeSmart (Noren v2) OAuth — mirrors shoonya/zebu. BROKER_API_KEY
+        # format is userid:::client_id.
+        code = (
+            request.args.get("code")
+            or request.args.get("request_token")
+            or request.args.get("request-token")
+        )
+        # Manual fallback: paste a pre-minted access_token directly (bypasses
+        # GenAcsTok). Use when the OAuth redirect is unavailable — navigate to
+        #   /tradesmart/callback?access_token=<TOKEN>&uid=<CLIENT_ID>
+        manual_token = request.args.get("access_token") or request.form.get("access_token")
+        if manual_token:
+            from broker.tradesmart.api.baseurl import resolve_uid
+
+            manual_uid = request.args.get("uid") or request.form.get("uid") or resolve_uid()
+            auth_token = f"{manual_uid}:::{manual_token}" if manual_uid else manual_token
+            error_message = None
+            logger.info("TradeSmart broker - manual access_token accepted")
+            forward_url = "broker.html"
+        elif code:
+            # OAuth callback: exchange code (+checksum) for an access token.
+            logger.debug("TradeSmart broker - OAuth callback received")
+            auth_token, error_message = auth_function(code)
+            forward_url = "broker.html"
+        else:
+            # Initial visit — redirect to the TradeSmart OAuth login page.
+            logger.info("Redirecting to TradeSmart OAuth login page")
+            full_api_key = os.getenv("BROKER_API_KEY")
+            if not full_api_key:
+                return handle_auth_failure(
+                    "BROKER_API_KEY not configured in environment",
+                    forward_url="broker.html",
+                )
+            parts = full_api_key.split(":::", 1)
+            client_id = parts[1] if len(parts) == 2 and parts[1] else parts[0]
+            tradesmart_login_url = (
+                "https://v2api.tradesmartonline.in/OAuthlogin/authorize/oauth"
+                f"?client_id={client_id}"
+            )
+            return redirect(tradesmart_login_url)
+
     elif broker == "kotak":
         logger.debug(f"Kotak broker - The Broker is {broker}")
         if request.method == "GET":
@@ -820,6 +862,21 @@ def broker_callback(broker, para=None):
         except Exception as e:
             logger.exception(f"RMoney callback error: {e}")
             return jsonify({"error": f"Error processing request: {str(e)}"}), 500
+
+    elif broker == "arrow":
+        # Arrow redirects back with `request-token` (hyphen, per its docs). The
+        # generic branch below only checks `request_token`/`code`, so handle the
+        # hyphenated spelling (and other plausible variants) explicitly so the
+        # request token is never silently dropped.
+        code = (
+            request.args.get("request-token")
+            or request.args.get("request_token")
+            or request.args.get("requestToken")
+            or request.args.get("code")
+        )
+        logger.debug(f"Arrow broker - request token present: {bool(code)}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
 
     else:
         code = request.args.get("code") or request.args.get("request_token")

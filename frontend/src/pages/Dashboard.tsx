@@ -67,6 +67,9 @@ export default function Dashboard() {
     status: 'pending',
   })
   const [isAuthenticated, setIsAuthenticated] = useState(true) // Assume authenticated initially
+  // Broker token revoked/expired while the app session is still valid
+  // (daily token rollover). Routes the user to /broker, not /login (#1400).
+  const [brokerExpired, setBrokerExpired] = useState(false)
 
   // Fetch dashboard funds data
   const fetchFundsData = useCallback(async () => {
@@ -77,7 +80,12 @@ export default function Dashboard() {
       })
 
       if (response.status === 401) {
-        setIsAuthenticated(false)
+        const body = await response.json().catch(() => null)
+        if (body?.code === 'BROKER_SESSION_EXPIRED') {
+          setBrokerExpired(true)
+        } else {
+          setIsAuthenticated(false)
+        }
         setIsLoading(false)
         return
       }
@@ -90,7 +98,7 @@ export default function Dashboard() {
       } else {
         setError(data.message || 'Failed to fetch margin data')
       }
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to fetch margin data')
     } finally {
       setIsLoading(false)
@@ -258,6 +266,25 @@ export default function Dashboard() {
       borderColor: 'border-orange-500/20 hover:border-orange-500/40',
     },
   ]
+
+  // Broker token expired but the app session is fine: send the user to the
+  // broker reconnect flow, not /login (which would bounce back) — #1400.
+  if (brokerExpired) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+        <h1 className="text-2xl font-bold">Broker Session Expired</h1>
+        <p className="text-muted-foreground">
+          Your broker token has expired (brokers roll tokens daily). Reconnect to continue trading.
+        </p>
+        <Link
+          to="/broker"
+          className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Reconnect Broker
+        </Link>
+      </div>
+    )
+  }
 
   // If not authenticated, show login prompt
   if (!isAuthenticated) {

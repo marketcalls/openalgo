@@ -175,7 +175,7 @@ export default function Token() {
             setExpiries(data.expiries)
           }
         }
-      } catch (error) {
+      } catch (_error) {
       } finally {
         if (requestId === fnoRequestIdRef.current) {
           setIsFnoLoading(false)
@@ -202,7 +202,7 @@ export default function Token() {
             setExpiries(data.expiries)
           }
         }
-      } catch (error) {}
+      } catch (_error) {}
     }
 
     fetchExpiriesForUnderlying()
@@ -239,7 +239,7 @@ export default function Token() {
         const data = await response.json()
         setSearchResults((data.results || []).slice(0, 10))
         setShowResults(true)
-      } catch (error) {
+      } catch (_error) {
         setSearchResults([])
       } finally {
         setIsLoading(false)

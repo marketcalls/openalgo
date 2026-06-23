@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowUpDown,
+  ChartCandlestick,
   ChevronDown,
   ChevronRight,
   Download,
@@ -58,6 +59,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -196,7 +198,7 @@ export default function Positions() {
             exchange: prefs.filters.exchange || [],
           })
       }
-    } catch (e) {}
+    } catch (_e) {}
   }, [])
 
   // Save preferences to localStorage
@@ -451,7 +453,7 @@ export default function Positions() {
       } else {
         showToast.error(response.message || 'Failed to close position', 'positions')
       }
-    } catch (err) {
+    } catch (_err) {
       showToast.error('Failed to close position', 'positions')
     }
   }
@@ -465,7 +467,7 @@ export default function Positions() {
       } else {
         showToast.error(response.message || 'Failed to close all positions', 'positions')
       }
-    } catch (err) {
+    } catch (_err) {
       showToast.error('Failed to close all positions', 'positions')
     }
   }
@@ -868,14 +870,16 @@ export default function Positions() {
           ) : error ? (
             <div className="text-center py-12 text-muted-foreground">{error}</div>
           ) : filteredPositions.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <p className="mb-4">No positions match your filters</p>
-              {hasActiveFilters && (
+            <EmptyState
+              icon={ChartCandlestick}
+              title="No positions match your filters"
+              description="Try adjusting or clearing your filters to see results."
+              action={hasActiveFilters ?
                 <Button variant="ghost" size="sm" onClick={clearFilters}>
                   Clear Filters
-                </Button>
-              )}
-            </div>
+                </Button> : undefined
+              }
+            />
           ) : (
             <div className="overflow-x-auto">
               <Table>

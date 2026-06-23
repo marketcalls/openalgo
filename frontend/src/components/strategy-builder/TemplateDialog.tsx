@@ -73,6 +73,7 @@ export function TemplateDialog({
   const [strikeOverrides, setStrikeOverrides] = useState<Record<number, number>>({})
 
   // Reset overrides when template changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: template?.id is an intentional reset trigger — the body only calls setters, but it MUST re-fire when the selected template changes to clear stale overrides
   useEffect(() => {
     setStrikeOverrides({})
     setLots(1)
@@ -221,6 +222,7 @@ export function TemplateDialog({
               <label className="text-[11px] font-medium text-muted-foreground">Lot Qty</label>
               <div className="flex h-9 items-center overflow-hidden rounded-md border">
                 <button
+                  type="button"
                   onClick={() => setLots(Math.max(1, lots - 1))}
                   className="h-full px-2 text-muted-foreground hover:bg-muted"
                 >
@@ -234,6 +236,7 @@ export function TemplateDialog({
                   className="w-full border-x bg-transparent text-center text-xs outline-none"
                 />
                 <button
+                  type="button"
                   onClick={() => setLots(lots + 1)}
                   className="h-full px-2 text-muted-foreground hover:bg-muted"
                 >
