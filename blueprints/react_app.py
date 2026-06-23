@@ -267,6 +267,12 @@ def react_oiprofile():
     return serve_react_app()
 
 
+# Arbitrage - Futures calendar-spread scanner
+@react_bp.route("/arbitrage")
+def react_arbitrage():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
