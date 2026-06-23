@@ -175,15 +175,23 @@ if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
     log "Remote MCP will be enabled at https://$DOMAIN/mcp" "$GREEN"
 fi
 
+# Application Instance Name (for supporting multiple instances on same machine)
+log "\nApplication Instance Name Configuration" "$YELLOW"
+log "Use different APP_NAME for running multiple OpenAlgo instances (e.g., 'openalgo', 'paper', 'scorpio')" "$BLUE"
+read -p "Enter APP_NAME for this instance (default: openalgo): " APP_NAME_INPUT
+APP_NAME="${APP_NAME_INPUT:-openalgo}"
+log "APP_NAME set to: $APP_NAME" "$GREEN"
+
 # Generate security keys
 log "\nGenerating security keys..." "$BLUE"
 APP_KEY=$(generate_hex)
 API_KEY_PEPPER=$(generate_hex)
 
 # Set installation path
-INSTALL_PATH="/opt/openalgo"
+INSTALL_PATH="/opt/${APP_NAME}"
 
 log "\n=== Installation Summary ===" "$YELLOW"
+log "APP_NAME: $APP_NAME" "$BLUE"
 log "Domain: $DOMAIN" "$BLUE"
 log "Broker: $BROKER_NAME" "$BLUE"
 log "Installation Path: $INSTALL_PATH" "$BLUE"
@@ -385,14 +393,17 @@ log "Config: shm=${SHM_SIZE_MB}MB, threads=${THREAD_LIMIT}, strategy_mem=${STRAT
 # Create docker-compose.yaml
 log "\n=== Creating Docker Compose Configuration ===" "$BLUE"
 $SUDO tee docker-compose.yaml > /dev/null << EOF
+version: "3.9"
+name: ${APP_NAME}
+
 services:
   openalgo:
-    image: openalgo:latest
+    image: ${APP_NAME}:latest
     build:
       context: .
       dockerfile: Dockerfile
 
-    container_name: openalgo-web
+    container_name: ${APP_NAME}
 
     ports:
       - "127.0.0.1:5000:5000"
@@ -400,11 +411,11 @@ services:
 
     # Use named volumes to avoid permission issues with non-root container user
     volumes:
-      - openalgo_db:/app/db
-      - openalgo_log:/app/log
-      - openalgo_strategies:/app/strategies
-      - openalgo_keys:/app/keys
-      - openalgo_tmp:/app/tmp
+      - db:/app/db
+      - log:/app/log
+      - strategies:/app/strategies
+      - keys:/app/keys
+      - tmp:/app/tmp
       - ./.env:/app/.env
 
     environment:
@@ -435,15 +446,15 @@ services:
 
 # Named volumes for data persistence with proper permissions
 volumes:
-  openalgo_db:
+  db:
     driver: local
-  openalgo_log:
+  log:
     driver: local
-  openalgo_strategies:
+  strategies:
     driver: local
-  openalgo_keys:
+  keys:
     driver: local
-  openalgo_tmp:
+  tmp:
     driver: local
 EOF
 
@@ -721,7 +732,7 @@ log "\nWaiting for container to be healthy..." "$YELLOW"
 sleep 10
 
 # Check container status
-CONTAINER_STATUS=$(sudo docker ps --filter "name=openalgo-web" --format "{{.Status}}")
+CONTAINER_STATUS=$(sudo docker ps --filter "name=${APP_NAME}" --format "{{.Status}}")
 if [[ $CONTAINER_STATUS == *"Up"* ]]; then
     log "Container started successfully!" "$GREEN"
 else
@@ -733,83 +744,85 @@ fi
 log "\n=== Creating Management Scripts ===" "$BLUE"
 
 # Status script
-$SUDO tee /usr/local/bin/openalgo-status > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/${APP_NAME}-status > /dev/null << 'EOFSCRIPT'
 #!/bin/bash
+APP_NAME=$(grep '^name:' /opt/${APP_NAME}/docker-compose.yaml | awk '{print $2}')
 echo "=========================================="
 echo "OpenAlgo Status"
 echo "=========================================="
 echo ""
 echo "Container Status:"
-sudo docker ps --filter "name=openalgo-web" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+sudo docker ps --filter "name=${APP_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 echo ""
 echo "Container Health:"
-sudo docker inspect openalgo-web --format='{{.State.Health.Status}}' 2>/dev/null || echo "Container not found"
+sudo docker inspect ${APP_NAME} --format='{{.State.Health.Status}}' 2>/dev/null || echo "Container not found"
 echo ""
 echo "Recent Logs:"
-sudo docker compose -f /opt/openalgo/docker-compose.yaml logs --tail=30
+sudo docker compose -f /opt/${APP_NAME}/docker-compose.yaml logs --tail=30
 EOFSCRIPT
 
-$SUDO chmod +x /usr/local/bin/openalgo-status
+$SUDO chmod +x /usr/local/bin/${APP_NAME}-status
 
 # Restart script
-$SUDO tee /usr/local/bin/openalgo-restart > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/${APP_NAME}-restart > /dev/null << 'EOFSCRIPT'
 #!/bin/bash
+APP_NAME=$(grep '^name:' /opt/${APP_NAME}/docker-compose.yaml | awk '{print $2}')
 echo "Restarting OpenAlgo..."
-cd /opt/openalgo
+cd /opt/${APP_NAME}
 sudo docker compose restart
 sleep 10
 echo "Container Status:"
-sudo docker ps --filter "name=openalgo-web"
+sudo docker ps --filter "name=${APP_NAME}"
 EOFSCRIPT
 
-$SUDO chmod +x /usr/local/bin/openalgo-restart
+$SUDO chmod +x /usr/local/bin/${APP_NAME}-restart
 
 # Logs script
-$SUDO tee /usr/local/bin/openalgo-logs > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/${APP_NAME}-logs > /dev/null << EOFSCRIPT
 #!/bin/bash
-cd /opt/openalgo
+cd /opt/${APP_NAME}
 sudo docker compose logs -f --tail=100
 EOFSCRIPT
 
-$SUDO chmod +x /usr/local/bin/openalgo-logs
+$SUDO chmod +x /usr/local/bin/${APP_NAME}-logs
 
 # Backup script
-$SUDO tee /usr/local/bin/openalgo-backup > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/${APP_NAME}-backup > /dev/null << EOFSCRIPT
 #!/bin/bash
-BACKUP_DIR="/opt/openalgo-backups"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="$BACKUP_DIR/openalgo_backup_$TIMESTAMP.tar.gz"
-mkdir -p $BACKUP_DIR
+BACKUP_DIR="/opt/${APP_NAME}-backups"
+TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="\$BACKUP_DIR/${APP_NAME}_backup_\$TIMESTAMP.tar.gz"
+mkdir -p \$BACKUP_DIR
 echo "Creating backup..."
-cd /opt/openalgo
+cd /opt/${APP_NAME}
 
 # Backup .env file and Docker volume data
 echo "Backing up configuration and volume data..."
 sudo docker compose stop
 
 # Create temp directory for volume exports
-TEMP_DIR=$(mktemp -d)
+TEMP_DIR=\$(mktemp -d)
 
 # Export data from Docker volumes
-sudo docker run --rm -v openalgo_db:/data -v $TEMP_DIR:/backup alpine tar -czf /backup/db.tar.gz -C /data . 2>/dev/null
-sudo docker run --rm -v openalgo_strategies:/data -v $TEMP_DIR:/backup alpine tar -czf /backup/strategies.tar.gz -C /data . 2>/dev/null
+sudo docker run --rm -v ${APP_NAME}_db:/data -v \$TEMP_DIR:/backup alpine tar -czf /backup/db.tar.gz -C /data . 2>/dev/null
+sudo docker run --rm -v ${APP_NAME}_strategies:/data -v \$TEMP_DIR:/backup alpine tar -czf /backup/strategies.tar.gz -C /data . 2>/dev/null
 
 # Create final backup
-sudo tar -czf $BACKUP_FILE .env -C $TEMP_DIR db.tar.gz strategies.tar.gz 2>/dev/null
+sudo tar -czf \$BACKUP_FILE .env -C \$TEMP_DIR db.tar.gz strategies.tar.gz 2>/dev/null
 
 # Cleanup temp directory
-sudo rm -rf $TEMP_DIR
+sudo rm -rf \$TEMP_DIR
 
 sudo docker compose start
-echo "Backup created: $BACKUP_FILE"
+echo "Backup created: \$BACKUP_FILE"
 
 # Keep only last 7 backups
-cd $BACKUP_DIR
-ls -t openalgo_backup_*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm
+cd \$BACKUP_DIR
+ls -t ${APP_NAME}_backup_*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm
 echo "Backup completed!"
 EOFSCRIPT
 
-$SUDO chmod +x /usr/local/bin/openalgo-backup
+$SUDO chmod +x /usr/local/bin/${APP_NAME}-backup
 
 log "Management scripts created successfully!" "$GREEN"
 
@@ -828,10 +841,11 @@ log "OpenAlgo Docker Installation Complete!" "$GREEN"
 log "============================================" "$GREEN"
 
 log "\nInstallation Summary:" "$YELLOW"
+log "APP_NAME: $APP_NAME" "$BLUE"
 log "Domain: https://$DOMAIN" "$BLUE"
 log "Broker: $BROKER_NAME" "$BLUE"
 log "Installation Path: $INSTALL_PATH" "$BLUE"
-log "Container: openalgo-web" "$BLUE"
+log "Container: ${APP_NAME}" "$BLUE"
 if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
     log "Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
 else
@@ -844,10 +858,10 @@ log "2. Create your admin account and login" "$GREEN"
 log "3. Configure your broker settings" "$GREEN"
 
 log "\nUseful Commands:" "$YELLOW"
-log "View status:  openalgo-status" "$BLUE"
-log "View logs:    openalgo-logs" "$BLUE"
-log "Restart:      openalgo-restart" "$BLUE"
-log "Backup:       openalgo-backup" "$BLUE"
+log "View status:  ${APP_NAME}-status" "$BLUE"
+log "View logs:    ${APP_NAME}-logs" "$BLUE"
+log "Restart:      ${APP_NAME}-restart" "$BLUE"
+log "Backup:       ${APP_NAME}-backup" "$BLUE"
 
 log "\nDocker Commands:" "$YELLOW"
 log "Restart:      cd $INSTALL_PATH && sudo docker compose restart" "$BLUE"

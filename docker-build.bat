@@ -4,9 +4,19 @@ REM This script builds and deploys OpenAlgo with numba/llvmlite support
 
 setlocal enabledelayedexpansion
 
-set IMAGE_NAME=openalgo
+REM Load APP_NAME from .env file
+set APP_NAME=openalgo
+if exist ".env" (
+    for /f "tokens=2 delims==" %%i in ('findstr /I "^APP_NAME" .env') do (
+        set APP_NAME=%%i
+        REM Remove quotes and spaces
+        for /f "useback tokens=*" %%a in ('!APP_NAME!') do set APP_NAME=%%~a
+    )
+)
+
+set IMAGE_NAME=%APP_NAME%
 set IMAGE_TAG=latest
-set CONTAINER_NAME=openalgo-web
+set CONTAINER_NAME=%APP_NAME%
 
 echo.
 echo ========================================

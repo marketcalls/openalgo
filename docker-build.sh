@@ -12,9 +12,15 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-IMAGE_NAME="openalgo"
+# Load APP_NAME from .env file, default to 'openalgo' if not set
+if [ -f ".env" ]; then
+    APP_NAME=$(grep '^APP_NAME=' .env | cut -d'=' -f2 | tr -d "' \"")
+fi
+APP_NAME=${APP_NAME:-openalgo}
+
+IMAGE_NAME="${APP_NAME}"
 IMAGE_TAG="latest"
-CONTAINER_NAME="openalgo-web"
+CONTAINER_NAME="${APP_NAME}"
 
 # Functions
 print_header() {
@@ -116,7 +122,7 @@ verify_dependencies() {
     print_info "Checking if runtime libraries are installed..."
 
     # Create temporary container to check
-    TEMP_CONTAINER=$(docker run -d ${IMAGE_NAME}:${IMAGE_TAG} sleep 10)
+    TEMP_CONTAINER=$(docker run -d "${IMAGE_NAME}:${IMAGE_TAG}" sleep 10)
 
     # Check for required libraries
     if docker exec ${TEMP_CONTAINER} dpkg -l | grep -q "libopenblas0"; then
@@ -167,18 +173,18 @@ start_container() {
     else
         print_info "Starting with docker run..."
         docker run -d \
-            --name ${CONTAINER_NAME} \
+            --name "${CONTAINER_NAME}" \
             --shm-size=2g \
             -p 5000:5000 \
             -p 8765:8765 \
-            -v openalgo_db:/app/db \
-            -v openalgo_log:/app/log \
-            -v openalgo_strategies:/app/strategies \
-            -v openalgo_keys:/app/keys \
+            -v db:/app/db \
+            -v log:/app/log \
+            -v strategies:/app/strategies \
+            -v keys:/app/keys \
             -v "$(pwd)/.env:/app/.env" \
             --tmpfs /app/tmp:size=1g,mode=1777 \
             --restart unless-stopped \
-            ${IMAGE_NAME}:${IMAGE_TAG}
+            "${IMAGE_NAME}:${IMAGE_TAG}"
         print_success "Container started via docker run"
     fi
 

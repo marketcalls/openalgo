@@ -32,8 +32,18 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-IMAGE="marketcalls/openalgo:latest"
-CONTAINER="openalgo"
+# Load APP_NAME from local .env if present, otherwise use default image
+APP_NAME="openalgo"
+if [ -f "${OPENALGO_DIR}/.env" ]; then
+    local_app_name=$(grep '^APP_NAME=' "${OPENALGO_DIR}/.env" 2>/dev/null | cut -d'=' -f2 | tr -d "' \"")
+    if [ -n "$local_app_name" ]; then
+        APP_NAME="$local_app_name"
+        IMAGE="${APP_NAME}:latest"
+    fi
+fi
+# If .env not found locally, use Docker Hub image (default for quick-start users)
+: ${IMAGE:="marketcalls/openalgo:latest"}
+CONTAINER="${APP_NAME:-openalgo}"
 ENV_FILE=".env"
 SAMPLE_ENV_URL="https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env"
 # Use the directory where the script is located

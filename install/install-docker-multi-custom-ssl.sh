@@ -876,22 +876,25 @@ for i in "${!CONF_DOMAINS[@]}"; do
 
     # 6. Docker Compose
     cat <<EOF > "$INSTANCE_DIR/docker-compose.yaml"
+version: "3.9"
+name: ${PROJECT_NAME}
+
 services:
   openalgo:
     image: ${PROJECT_NAME}:latest
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ${PROJECT_NAME}-web
+    container_name: ${PROJECT_NAME}
     ports:
       - "127.0.0.1:${FLASK_PORT}:5000"
       - "127.0.0.1:${WS_PORT}:8765"
     volumes:
-      - openalgo_db:/app/db
-      - openalgo_log:/app/log
-      - openalgo_strategies:/app/strategies
-      - openalgo_keys:/app/keys
-      - openalgo_tmp:/app/tmp
+      - db:/app/db
+      - log:/app/log
+      - strategies:/app/strategies
+      - keys:/app/keys
+      - tmp:/app/tmp
       - ./.env:/app/.env
     environment:
       - FLASK_ENV=production
@@ -916,15 +919,15 @@ services:
     restart: unless-stopped
 
 volumes:
-  openalgo_db:
+  db:
     driver: local
-  openalgo_log:
+  log:
     driver: local
-  openalgo_strategies:
+  strategies:
     driver: local
-  openalgo_keys:
+  keys:
     driver: local
-  openalgo_tmp:
+  tmp:
     driver: local
 EOF
 
