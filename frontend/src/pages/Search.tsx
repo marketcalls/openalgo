@@ -1,10 +1,12 @@
 import {
+  AlertTriangle,
   ArrowUpDown,
   ChevronLeft,
   ChevronRight,
   Copy,
   Download,
   Search as SearchIcon,
+  SearchX,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -474,11 +476,27 @@ export default function Search() {
               <TableBody>
                 {paginatedResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={9} className="py-12">
                       {error ? (
-                        <span className="text-destructive">{error}</span>
+                        <div className="flex flex-col items-center justify-center text-center">
+                          <AlertTriangle className="h-12 w-12 text-destructive mb-4" />
+                          <h3 className="text-lg font-semibold mb-2">Search Failed</h3>
+                          <p className="text-sm text-destructive">{error}</p>
+                        </div>
                       ) : (
-                        'No results found'
+                        <div className="flex flex-col items-center justify-center text-center">
+                          <SearchX className="h-12 w-12 text-muted-foreground mb-4" />
+                          <h3 className="text-lg font-semibold mb-2">No Results Found</h3>
+                          <p className="text-sm text-muted-foreground mb-4">
+                            Try a different symbol or adjust your search filters.
+                          </p>
+                          <Button asChild size="sm">
+                            <Link to="/search/token">
+                              <SearchIcon className="h-4 w-4 mr-2" />
+                              New Search
+                            </Link>
+                          </Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>

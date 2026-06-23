@@ -1,4 +1,4 @@
-import { ArrowLeft, Clock, Pencil, Save, Search, X } from 'lucide-react'
+import { ArrowLeft, CalendarOff, Clock, Pencil, Save, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adminApi } from '@/api/admin'
@@ -37,7 +37,6 @@ export default function MarketTimingsPage() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of timings on mount; fetchTimings is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchTimings()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchTimings = async () => {
@@ -260,8 +259,12 @@ export default function MarketTimingsPage() {
             </CardHeader>
             <CardContent>
               {todayTimings.length === 0 ? (
-                <div className="text-center text-muted-foreground py-4">
-                  Markets are closed today (Weekend/Holiday)
+                <div className="flex flex-col items-center justify-center text-center py-8">
+                  <CalendarOff className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">Markets Closed</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Markets are closed today (Weekend/Holiday)
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -309,8 +312,12 @@ export default function MarketTimingsPage() {
               {checkTimings !== null && (
                 <div className="border-t pt-4">
                   {checkTimings.length === 0 ? (
-                    <div className="text-center text-muted-foreground py-4">
-                      Markets are closed on {checkDate} (Weekend/Holiday)
+                    <div className="flex flex-col items-center justify-center text-center py-8">
+                      <CalendarOff className="h-12 w-12 text-muted-foreground mb-4" />
+                      <h3 className="text-lg font-semibold mb-2">Markets Closed</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Markets are closed on {checkDate} (Weekend/Holiday)
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-2">
