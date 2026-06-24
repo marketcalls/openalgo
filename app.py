@@ -7,6 +7,27 @@ import os
 import re
 import sys
 
+
+def _ensure_db_directory() -> None:
+    """Create the SQLite database directory before any engine connects.
+
+    On a fresh install ``db/`` does not exist yet, and the database engines (and
+    their background threads) are created/used in parallel during startup. The
+    first connection then fails with ``unable to open database file``, which can
+    leave a database partially initialized. Creating the directory up front, before
+    any database module is imported, removes that race. Derived from DATABASE_URL
+    (all SQLite databases live under the same directory).
+    """
+    db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+    if db_url.startswith("sqlite:///"):
+        db_path = db_url.replace("sqlite:///", "", 1)
+        db_dir = os.path.dirname(os.path.abspath(db_path))
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+
+
+_ensure_db_directory()
+
 # Show loading indicator early (before heavy imports) so user sees immediate feedback.
 # The full banner with "Ready" status prints later, right before the server accepts connections.
 if __name__ == "__main__":

@@ -82,8 +82,8 @@ class SandboxOrders(Base):
     update_timestamp = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        Index("idx_user_status", "user_id", "order_status"),
-        Index("idx_symbol_exchange", "symbol", "exchange"),
+        Index("idx_sandbox_user_status", "user_id", "order_status"),
+        Index("idx_sandbox_symbol_exchange", "symbol", "exchange"),
         CheckConstraint(
             "order_status IN ('open', 'complete', 'cancelled', 'rejected')",
             name="check_order_status",
