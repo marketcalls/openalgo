@@ -1611,36 +1611,7 @@ class TelegramBotService:
             await update.message.reply_text("❌ Failed to fetch P&L")
             return
 
-        funds = response.get("data", {})
-
-        # Handle P&L values that might be strings from some brokers
-        try:
-            realized_pnl = float(funds.get("m2mrealized", 0))
-        except (ValueError, TypeError):
-            realized_pnl = 0.0
-
-        try:
-            unrealized_pnl = float(funds.get("m2munrealized", 0))
-        except (ValueError, TypeError):
-            unrealized_pnl = 0.0
-
-        total_pnl = realized_pnl + unrealized_pnl
-
-        # Emojis based on P&L
-        realized_emoji = "🟢" if realized_pnl > 0 else "🔴" if realized_pnl < 0 else "⚪"
-        unrealized_emoji = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
-        total_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
-
-        message = (
-            "💹 *PROFIT & LOSS*\n"
-            "━━━━━━━━━━━━━━━\n\n"
-            f"{realized_emoji} *Realized P&L*\n"
-            f"└ {cs}{realized_pnl:,.2f}\n\n"
-            f"{unrealized_emoji} *Unrealized P&L*\n"
-            f"└ {cs}{unrealized_pnl:,.2f}\n\n"
-            f"{total_emoji} *Total P&L*\n"
-            f"└ {cs}{total_pnl:,.2f}"
-        )
+        message = self._format_pnl_funds(response, cs=cs)
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
         log_command(user.id, "pnl", update.effective_chat.id)
@@ -2022,22 +1993,45 @@ class TelegramBotService:
             f"💼 Total: {cs}{(available + collateral):,.2f}"
         )
 
-    def _format_pnl(self, response: dict, cs: str = '₹') -> str:
-        """Format P&L response into message (uses positionbook data)"""
+    def _format_pnl_funds(self, response: dict, cs: str = '₹') -> str:
+        """Format P&L from the funds response (realized + unrealized + total).
+
+        Shared by the /pnl command and the menu P&L button so both report the
+        exact same values from the same source (GitHub issue #1576 — the menu
+        button previously summed positionbook day-P&L, which disagreed with /pnl).
+        """
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch P&L"
 
-        positions = response.get("data", [])
-        total_pnl = 0.0
-        for pos in positions:
-            try:
-                pnl = float(pos.get("pnl", 0))
-                total_pnl += pnl
-            except Exception:
-                pass
+        funds = response.get("data", {})
 
-        pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
-        return f"💹 *PROFIT & LOSS*\n━━━━━━━━━━━━━━━\n\n{pnl_emoji} *Day P&L*\n└ {cs}{total_pnl:,.2f}"
+        # P&L values may arrive as strings from some brokers
+        try:
+            realized_pnl = float(funds.get("m2mrealized", 0))
+        except (ValueError, TypeError):
+            realized_pnl = 0.0
+
+        try:
+            unrealized_pnl = float(funds.get("m2munrealized", 0))
+        except (ValueError, TypeError):
+            unrealized_pnl = 0.0
+
+        total_pnl = realized_pnl + unrealized_pnl
+
+        realized_emoji = "🟢" if realized_pnl > 0 else "🔴" if realized_pnl < 0 else "⚪"
+        unrealized_emoji = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
+        total_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+
+        return (
+            "💹 *PROFIT & LOSS*\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            f"{realized_emoji} *Realized P&L*\n"
+            f"└ {cs}{realized_pnl:,.2f}\n\n"
+            f"{unrealized_emoji} *Unrealized P&L*\n"
+            f"└ {cs}{unrealized_pnl:,.2f}\n\n"
+            f"{total_emoji} *Total P&L*\n"
+            f"└ {cs}{total_pnl:,.2f}"
+        )
 
     async def cmd_closeall(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /closeall command — close all open positions with confirmation"""
@@ -2518,8 +2512,8 @@ class TelegramBotService:
                 response = await loop.run_in_executor(None, client.funds)
                 message = self._format_funds(response, cs=cs)
             elif callback_data == "pnl":
-                response = await loop.run_in_executor(None, client.positionbook)
-                message = self._format_pnl(response, cs=cs)
+                response = await loop.run_in_executor(None, client.funds)
+                message = self._format_pnl_funds(response, cs=cs)
             else:
                 message = "❌ Unknown command"
 
