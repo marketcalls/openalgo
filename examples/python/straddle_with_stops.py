@@ -1,3 +1,4 @@
+import os
 import time
 
 import pytz
@@ -10,7 +11,7 @@ print("🔁 OpenAlgo Python Bot is running.")
 # OpenAlgo Client
 # =====================================
 client = api(
-    api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
+    api_key=os.getenv("OPENALGO_API_KEY"),
     host="http://127.0.0.1:5000",
 )
 
@@ -67,7 +68,7 @@ def place_nifty_straddle_with_sl():
                 "option_type": "CE",
                 "action": "SELL",
                 "quantity": qty,
-                "expiry_date": "09DEC25",
+                "expiry_date": "30JUN26",
                 "product": "NRML",
                 "pricetype": "MARKET",
                 "splitsize": 0,
@@ -77,7 +78,7 @@ def place_nifty_straddle_with_sl():
                 "option_type": "PE",
                 "action": "SELL",
                 "quantity": qty,
-                "expiry_date": "09DEC25",
+                "expiry_date": "30JUN26",
                 "product": "NRML",
                 "pricetype": "MARKET",
                 "splitsize": 0,

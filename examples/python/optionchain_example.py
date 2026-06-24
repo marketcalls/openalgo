@@ -1,8 +1,10 @@
+import os
+
 from openalgo import api
 
 # Initialize client
 client = api(
-    api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
+    api_key=os.getenv("OPENALGO_API_KEY"),
     host="http://127.0.0.1:5000",
 )
 
@@ -24,7 +26,7 @@ else:
 # Get option chain (5 strikes around ATM)
 # -------------------------------------------------------
 chain = client.optionchain(
-    underlying="NIFTY", exchange="NSE_INDEX", expiry_date="30DEC25", strike_count=5
+    underlying="NIFTY", exchange="NSE_INDEX", expiry_date="30JUN26", strike_count=5
 )
 
 print("\nNIFTY Option Chain (5 strikes around ATM):")
