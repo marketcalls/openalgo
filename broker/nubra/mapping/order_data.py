@@ -56,15 +56,19 @@ def map_order_data(order_data):
         else:
             transaction_type = order_side.replace("ORDER_SIDE_", "") if order_side else ""
 
-        # Nubra: order_status -> status (complete/open/rejected)
+        # Nubra: order_status -> status (complete/open/rejected/cancelled).
+        # Nubra OrderStatus enum: PENDING, SENT, OPEN, REJECTED, CANCELLED,
+        # FILLED, TRIGGERED. (There is no PARTIALLY_FILLED state - partial fills
+        # stay OPEN with filled_qty < order_qty.)
         order_status = order.get("order_status", "")
         status_map = {
             "ORDER_STATUS_FILLED": "complete",
             "ORDER_STATUS_OPEN": "open",
             "ORDER_STATUS_PENDING": "open",
+            "ORDER_STATUS_SENT": "open",
+            "ORDER_STATUS_TRIGGERED": "open",
             "ORDER_STATUS_REJECTED": "rejected",
             "ORDER_STATUS_CANCELLED": "cancelled",
-            "ORDER_STATUS_PARTIALLY_FILLED": "open",
         }
         status = status_map.get(order_status, order_status.replace("ORDER_STATUS_", "").lower() if order_status else "")
 
@@ -100,6 +104,16 @@ def map_order_data(order_data):
         else:
             # Fallback: try to derive from price_type or default to MARKET
             ordertype = price_type.upper() if price_type else "MARKET"
+
+        # A stop (SL/SL-M) order that is still working (not filled/cancelled/
+        # rejected) is awaiting its trigger -> surface as OpenAlgo "trigger pending"
+        # (matches the zerodha reference vocabulary).
+        if ordertype in ("SL", "SL-M") and order_status in (
+            "ORDER_STATUS_PENDING",
+            "ORDER_STATUS_OPEN",
+            "ORDER_STATUS_SENT",
+        ):
+            status = "trigger pending"
 
         # Nubra: order_delivery_type -> producttype (CNC/MIS/NRML)
         delivery_type = order.get("order_delivery_type", "")
@@ -280,10 +294,13 @@ def map_trade_data(trade_data):
     if not orders:
         return []
 
-    # Filter for filled/completed orders only (these are the "trades")
+    # Treat any order with a non-zero filled quantity as a trade. Nubra has no
+    # PARTIALLY_FILLED status (partial fills stay OPEN with filled_qty > 0), so
+    # filtering on filled_qty captures both full and partial fills.
     filled_orders = [
         order for order in orders
-        if order.get("order_status") in ["ORDER_STATUS_FILLED", "ORDER_STATUS_PARTIALLY_FILLED"]
+        if (order.get("filled_qty") or 0) > 0
+        or order.get("order_status") == "ORDER_STATUS_FILLED"
     ]
 
     normalized_trades = []

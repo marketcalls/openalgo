@@ -76,7 +76,7 @@ def copy_from_dataframe(df):
 
 def download_nubra_instruments(output_path):
     """
-    Downloads instrument data from Nubra API for NSE and BSE exchanges.
+    Downloads instrument data from Nubra API for NSE, BSE and MCX exchanges.
     """
     date = datetime.now().strftime('%Y-%m-%d')
 
@@ -98,7 +98,7 @@ def download_nubra_instruments(output_path):
 
     all_data = []
 
-    for exchange in ['NSE', 'BSE']:
+    for exchange in ['NSE', 'BSE', 'MCX']:
         url = f'https://api.nubra.io/refdata/refdata/{date}?exchange={exchange}'
         logger.info(f"Downloading Nubra instruments for {exchange}")
 
@@ -128,11 +128,16 @@ def process_nubra_json(path):
     Rules:
     - NSE + non-STOCK  -> exchange = NFO, brexchange = NSE
     - BSE + non-STOCK  -> exchange = BFO, brexchange = BSE
+    - MCX (commodity FUT/OPT) -> exchange stays MCX, brexchange = MCX
     - STOCK instruments keep their original exchange
     - Expiry column remains in DB as DD-MMM-YY
     - Symbol format follows OpenAlgo F&O spec:
-        FUT : [BASE][DDMMMYY]FUT
-        OPT : [BASE][DDMMMYY][STRIKE][CE/PE]
+        FUT : [BASE][DDMMMYY]FUT       e.g. CRUDEOILM20MAY24FUT (MCX)
+        OPT : [BASE][DDMMMYY][STRIKE][CE/PE]  e.g. CRUDEOIL17APR246750CE (MCX)
+
+    Note: strike_price and tick_size are scaled by /100 (paise) uniformly across
+    NSE/BSE/MCX per Nubra's unified refdata schema. Verify MCX strike/tick
+    scaling against a live MCX master download (commodity scaling can differ).
     """
 
     df = pd.read_json(path)
