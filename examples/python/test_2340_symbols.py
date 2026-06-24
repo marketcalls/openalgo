@@ -15,7 +15,7 @@ from openalgo import api
 
 # Initialize client
 client = api(
-    api_key="7653f710c940cdf1d757b5a7d808a60f43bc7e9c0239065435861da2869ec0fc",
+    api_key=os.getenv("OPENALGO_API_KEY"),
     host="http://127.0.0.1:5000",
     ws_url="ws://127.0.0.1:8765",
 )

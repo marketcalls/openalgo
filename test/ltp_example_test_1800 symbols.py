@@ -117,7 +117,7 @@ def main():
 
     # Initialize the API client
     client = api(
-        api_key="be51d361903e0898eafeee5824b2997430acb34116c5677240e1b97fc9c4d068",  # Replace with your actual API key
+        api_key=os.getenv("OPENALGO_API_KEY"),  # Set OPENALGO_API_KEY in your environment
         host="http://127.0.0.1:5000",
         ws_url="ws://127.0.0.1:8765",
     )
