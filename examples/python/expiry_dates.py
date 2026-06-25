@@ -9,13 +9,14 @@ Monthly: current_month, next_month, far_month
 Reference: AlgoMirror Strategy Executor implementation
 """
 
+import os
 from datetime import datetime
 
 from openalgo import api
 
 # Initialize client with explicit parameters
 client = api(
-    api_key="7371cc58b9d30204e5fee1d143dc8cd926bcad90c24218201ad81735384d2752",  # Replace with your API key
+    api_key=os.getenv("OPENALGO_API_KEY"),  # Set OPENALGO_API_KEY in your environment
     host="http://127.0.0.1:5000",  # Replace with your API host
 )
 

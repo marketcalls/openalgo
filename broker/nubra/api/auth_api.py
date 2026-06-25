@@ -23,6 +23,59 @@ def get_device_id():
     return "OPENALGO"
 
 
+def _normalize_totp(totp_code):
+    """
+    Normalize a TOTP code to a clean, zero-padded 6-digit string.
+
+    TOTP codes are 6-digit strings where a leading zero is significant
+    (e.g. "012345"). Returns None if the input is not 1-6 digits.
+    """
+    s = str(totp_code).strip()
+    if not s.isdigit() or not 1 <= len(s) <= 6:
+        return None
+    return s.zfill(6)
+
+
+def _totp_login(client, base_url, device_id, phone, totp_str):
+    """
+    Call POST /totp/login, hedging the int-vs-string ambiguity for leading-zero
+    codes.
+
+    Nubra's docs show ``totp`` as a JSON integer, but ``int("012345")`` drops the
+    leading zero -- which fails if the server compares the code as a string. For
+    a leading-zero code we therefore try the documented integer first, then fall
+    back to the zero-padded string (which is correct whether the server compares
+    numerically or as a string). The TOTP stays valid within its 30s window, so
+    the retry reuses the same live code.
+
+    Returns:
+        (response, data) for the first attempt that yields an auth_token, or the
+        last attempt if none succeeded.
+    """
+    headers = {"Content-Type": "application/json", "x-device-id": device_id}
+
+    candidates = [int(totp_str)]
+    # Only a leading-zero code needs the string fallback (int repr differs).
+    if totp_str != str(int(totp_str)):
+        candidates.append(totp_str)
+
+    last = None
+    for totp_val in candidates:
+        response = client.post(
+            f"{base_url}/totp/login",
+            json={"phone": phone, "totp": totp_val},
+            headers=headers,
+        )
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        last = (response, data)
+        if data.get("auth_token"):
+            return response, data
+    return last
+
+
 def authenticate_broker(totp_code):
     """
     Authenticate with Nubra broker using TOTP flow.
@@ -51,24 +104,23 @@ def authenticate_broker(totp_code):
             "Missing BROKER_API_KEY (phone) or BROKER_API_SECRET (mpin) in environment",
         )
 
+    # Normalize the TOTP up front so a leading-zero code (e.g. "012345") is not
+    # silently mangled by int() later in the flow.
+    totp_str = _normalize_totp(totp_code)
+    if totp_str is None:
+        return None, None, "Invalid TOTP code: expected a 6-digit numeric code"
+
     base_url = get_base_url()
     device_id = get_device_id()
 
     try:
         client = get_httpx_client()
 
-        # Step 1: Login via TOTP
+        # Step 1: Login via TOTP (int per docs, with a string fallback for
+        # leading-zero codes).
         logger.info(f"Nubra TOTP login initiated for phone: {phone[:5]}***")
 
-        totp_login_payload = {"phone": phone, "totp": int(totp_code)}
-
-        totp_login_headers = {"Content-Type": "application/json", "x-device-id": device_id}
-
-        totp_response = client.post(
-            f"{base_url}/totp/login", json=totp_login_payload, headers=totp_login_headers
-        )
-
-        totp_data = totp_response.json()
+        totp_response, totp_data = _totp_login(client, base_url, device_id, phone, totp_str)
         logger.info(f"Nubra TOTP login response status: {totp_response.status_code}")
         logger.info(f"Nubra TOTP login response data: {totp_data}")
 

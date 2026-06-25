@@ -1,3 +1,5 @@
+import os
+
 from openalgo import api
 
 print("🔁 OpenAlgo Python Bot is running.")
@@ -6,7 +8,7 @@ print("🔁 OpenAlgo Python Bot is running.")
 # Initialize API client
 # ------------------------------------------
 client = api(
-    api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
+    api_key=os.getenv("OPENALGO_API_KEY"),
     host="http://127.0.0.1:5000",
 )
 
@@ -23,7 +25,7 @@ response = client.optionsorder(
     strategy="python",
     underlying="NIFTY",  # Underlying Index
     exchange="NSE_INDEX",  # Index exchange
-    expiry_date="09DEC25",  # Correct expiry
+    expiry_date="30JUN26",  # Correct expiry
     offset="OTM2",  # Auto-select ATM strike
     option_type="CE",  # CE or PE
     action="BUY",  # BUY or SELL

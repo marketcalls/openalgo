@@ -166,6 +166,18 @@ Real-time market data flows through a three-layer pipeline:
 
 3. **Unified WebSocket Proxy Server** (`websocket_proxy/server.py`, port 8765): Subscribes to ZeroMQ, manages client WebSocket connections, handles symbol subscriptions/unsubscriptions, and delivers filtered ticks to each connected client. Includes per-symbol throttling to prevent flooding slow clients.
 
+#### ZeroMQ bus invariant — SUB binds, PUBs connect (do not break this)
+
+The ZMQ market-data bus (`ZMQ_PORT`, default 5555) is **fan-in**: the proxy's
+SUB (`websocket_proxy/server.py`) is the **single binder**, and **every publisher
+CONNECTs to it** — the broker market-data adapters (`base_adapter._connect_to_zmq_bus`
+and `connection_manager.SharedZmqPublisher.connect`) and the cache-invalidation
+publisher (`database/cache_invalidation.py`). Rules that MUST hold:
+
+- **Never make a publisher `bind()`.** Publishers connect; only the proxy SUB binds. ZMQ allows many PUBs to connect to one bound SUB (fan-in), so multiple publishers across processes share one fixed port with no contention.
+- **`ZMQ_PORT` is fixed by config and never drifts.** No port-scan, no `5555 → 5556` fallback, no runtime mutation of `os.environ["ZMQ_PORT"]`. A single instance stays on its configured port forever; `install-multi.sh` gives each instance its own `ZMQ_PORT` (`5555 + i-1`) and each stays put.
+- **Why this matters:** under gunicorn+eventlet the proxy runs *out-of-process* (a subprocess on bare-metal `install.sh`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`), while the cache-invalidation publisher runs in the gunicorn process. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays on the configured one, so **`subscribe` succeeds but no ticks are delivered** (works fine on the single-process dev server, broken only on eventlet servers — historically hard to spot). Keeping the SUB as the sole binder removes the race entirely. This applies to **all brokers** — the bus is broker-agnostic.
+
 ### Request Processing Pipeline
 
 WSGI middleware wraps in reverse order — last registered is outermost. The request flows:

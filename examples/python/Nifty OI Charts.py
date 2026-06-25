@@ -1,7 +1,7 @@
 """
 NIFTY Option Chain - CE/PE Open Interest Histogram (Side by Side)
 Author : OpenAlgo GPT
-Description: Plots Option Chain OI histogram for NIFTY 27JAN26 expiry
+Description: Plots Option Chain OI histogram for NIFTY 30JUN26 expiry
              CE (green) and PE (red) bars SIDE BY SIDE
              Only 100-point strikes (no 50s)
              White background
@@ -23,9 +23,9 @@ API_HOST = "http://127.0.0.1:5000"
 # Option Chain Parameters
 UNDERLYING = "NIFTY"
 EXCHANGE = "NSE_INDEX"
-EXPIRY = "27JAN26"  # 27 January 2026 expiry
+EXPIRY = "30JUN26"  # 30 June 2026 expiry
 STRIKE_COUNT = 40  # Number of strikes around ATM
-LOT_SIZE = 75  # NIFTY lot size
+LOT_SIZE = 65  # NIFTY lot size
 STRIKE_FILTER = 100  # Only show strikes divisible by 100
 
 # ─────────────────────── INIT CLIENT ──────────────────────
