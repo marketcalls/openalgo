@@ -106,16 +106,26 @@ class WebSocketProxy:
         self._cleanup_interval = 300  # Clean stale entries every 5 minutes
         self._throttle_entry_max_age = 60  # Remove throttle entries older than 60 seconds
 
-        # ZeroMQ context for subscribing to broker adapters
+        # ZeroMQ bus for market data + cache-invalidation events.
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.SUB)
-        # Connecting to ZMQ
+        # Fan-in topology: this SUB is the SINGLE binder on the ZMQ bus and every
+        # publisher CONNECTs to it — the broker market-data adapters (this process)
+        # and the cache-invalidation publisher (the Flask/gunicorn process). The
+        # publishers used to bind and the SUB used to connect, which raced across
+        # those two processes once the proxy moved out-of-process (#1421): whoever
+        # bound the configured port first won, the loser silently slid to the next
+        # port (5556...), and the SUB — fixed on the configured port — heard nothing
+        # from it. Auth + subscribe succeeded but no ticks were delivered. Binding
+        # the SUB makes the rendezvous port deterministic regardless of process
+        # start order. Publisher side: base_adapter._connect_to_zmq_bus and
+        # connection_manager.SharedZmqPublisher.connect.
         ZMQ_HOST = os.getenv("ZMQ_HOST", "127.0.0.1")
-        ZMQ_PORT = os.getenv("ZMQ_PORT")
-        self.socket.connect(f"tcp://{ZMQ_HOST}:{ZMQ_PORT}")  # Connect to broker adapter publisher
+        ZMQ_PORT = os.getenv("ZMQ_PORT", "5555")
+        self.socket.bind(f"tcp://{ZMQ_HOST}:{ZMQ_PORT}")
 
-        # Set up ZeroMQ subscriber to receive all messages
-        self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all topics
+        # Receive all topics (market data + CACHE_INVALIDATE_*)
+        self.socket.setsockopt(zmq.SUBSCRIBE, b"")
 
     async def start(self):
         """Start the WebSocket server and ZeroMQ listener"""
