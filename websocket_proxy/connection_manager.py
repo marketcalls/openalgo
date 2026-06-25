@@ -113,65 +113,40 @@ class SharedZmqPublisher:
         self.socket.setsockopt(zmq.LINGER, 1000)
         self.socket.setsockopt(zmq.SNDHWM, 1000)
         self.zmq_port = None
-        self._bound = False
+        self._connected = False
         self._publish_lock = threading.Lock()
 
-    def bind(self, port: int | None = None) -> int:
-        """
-        Bind to a ZeroMQ port. If already bound, returns existing port.
+    def connect(self) -> int:
+        """Connect this PUB to the proxy's SUB on the ZMQ bus.
 
-        Args:
-            port: Optional specific port to bind to
+        Fan-in topology: the websocket_proxy SUB is the SOLE binder; every
+        publisher CONNECTs to it. Connecting — rather than the old bind +
+        port-scan — lets publishers in different processes (this shared
+        market-data publisher, plus the cache-invalidation publisher) share one
+        fixed rendezvous port with no bind race. The old scan is exactly what
+        stranded this publisher on 5556 while the SUB listened on 5555, so no
+        ticks were delivered. Idempotent: connects only once.
 
         Returns:
-            The port number that was bound
+            The ZMQ port this publisher is connected to.
         """
-        if self._bound:
+        if self._connected:
             return self.zmq_port
 
         with self._lock:
-            if self._bound:
+            if self._connected:
                 return self.zmq_port
 
-            # Internal message bus — bind only to the configured ZMQ_HOST
-            # (loopback by default). Publishing on `tcp://*` would expose raw
-            # tick data to anyone who can reach the port. Mirrors the bind
-            # behavior in websocket_proxy/base_adapter.py so both publisher
-            # paths are reachable from the proxy at the same address.
-            # Operators who genuinely need multi-host setups can set
-            # ZMQ_HOST=0.0.0.0 explicitly.
-            bind_host = os.getenv("ZMQ_HOST", "127.0.0.1")
-
-            # Try specified port or find available one
-            if port:
-                try:
-                    self.socket.bind(f"tcp://{bind_host}:{port}")
-                    self.zmq_port = port
-                    self._bound = True
-                    os.environ["ZMQ_PORT"] = str(port)
-                    self.logger.info(
-                        f"Shared ZMQ publisher bound to {bind_host}:{port}"
-                    )
-                    return port
-                except zmq.ZMQError as e:
-                    self.logger.warning(f"Failed to bind to port {port}: {e}")
-
-            # Find available port
-            default_port = int(os.getenv("ZMQ_PORT", "5555"))
-            for attempt_port in range(default_port, default_port + 100):
-                try:
-                    self.socket.bind(f"tcp://{bind_host}:{attempt_port}")
-                    self.zmq_port = attempt_port
-                    self._bound = True
-                    os.environ["ZMQ_PORT"] = str(attempt_port)
-                    self.logger.info(
-                        f"Shared ZMQ publisher bound to {bind_host}:{attempt_port}"
-                    )
-                    return attempt_port
-                except zmq.ZMQError:
-                    continue
-
-            raise RuntimeError("Could not bind shared ZMQ publisher to any port")
+            # Internal message bus — loopback by default. Operators who genuinely
+            # need a multi-host setup can point ZMQ_HOST at the proxy's address.
+            zmq_host = os.getenv("ZMQ_HOST", "127.0.0.1")
+            zmq_port = int(os.getenv("ZMQ_PORT", "5555"))
+            endpoint = f"tcp://{zmq_host}:{zmq_port}"
+            self.socket.connect(endpoint)
+            self.zmq_port = zmq_port
+            self._connected = True
+            self.logger.info(f"Shared ZMQ publisher connected to {endpoint}")
+            return zmq_port
 
     def publish(self, topic: str, data: dict):
         """
@@ -182,8 +157,8 @@ class SharedZmqPublisher:
             topic: Topic string for subscriber filtering
             data: Market data dictionary
         """
-        if not self._bound:
-            self.logger.error("Cannot publish: ZMQ socket not bound")
+        if not self._connected:
+            self.logger.error("Cannot publish: ZMQ publisher not connected")
             return
 
         with self._publish_lock:
@@ -215,7 +190,7 @@ class SharedZmqPublisher:
             self.context = None
 
         # Reset state
-        self._bound = False
+        self._connected = False
         self._initialized = False
         SharedZmqPublisher._instance = None
         self.logger.info("Shared ZMQ publisher cleaned up")
@@ -303,8 +278,8 @@ class ConnectionPool:
         Returns:
             New adapter instance
         """
-        # Ensure shared publisher is bound
-        self.shared_publisher.bind()
+        # Ensure shared publisher is connected to the bus
+        self.shared_publisher.connect()
 
         # Set context flag so BaseBrokerWebSocketAdapter knows to skip ZMQ creation
         _pooled_creation_context.active = True
@@ -428,8 +403,8 @@ class ConnectionPool:
                 self.broker_name = broker_name or self.broker_name
                 self.user_id = user_id or self.user_id
 
-                # Ensure shared publisher is ready
-                self.shared_publisher.bind()
+                # Ensure shared publisher is connected to the bus
+                self.shared_publisher.connect()
 
                 # Create first adapter
                 adapter = self._create_adapter()
