@@ -12,7 +12,18 @@ logger = get_logger(__name__)
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data from the broker's API using the provided auth token."""
+    """
+    Fetch margin data from the broker's API using the provided auth token.
+
+    Calculates the available collateral dynamically by subtracting
+    utilised payout from the total available cash balances fetched.
+
+    Args:
+        auth_token (str): JWT or session string provided natively by Angel login.
+
+    Returns:
+        dict: Standardized payload containing available cash, collateral, m2m, and utilized debits matching OpenAlgo dictionary schemas exactly. Or returns an empty {} dict on complete failure or parse failure.
+    """
     api_key = os.getenv("BROKER_API_KEY")
 
     # Get the shared httpx client with connection pooling
