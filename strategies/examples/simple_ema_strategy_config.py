@@ -6,6 +6,7 @@ This example declares editable OpenAlgo strategy settings with ui.* calls.
 OpenAlgo discovers these declarations on upload and injects runtime values.
 """
 
+import json
 import os
 import time
 from datetime import datetime, timedelta
@@ -174,5 +175,16 @@ def ema_strategy():
 
 if __name__ == "__main__":
     print(f"Starting {fast_period}/{slow_period} EMA Crossover Strategy...")
-    print("OCS config:", json.dumps(config, sort_keys=True))
+    print("OCS config:", json.dumps({
+        "strategy": strategy,
+        "symbol": symbol,
+        "exchange": exchange,
+        "product": product,
+        "quantity": quantity,
+        "fast_period": fast_period,
+        "slow_period": slow_period,
+        "interval": interval,
+        "history_days": history_days,
+        "poll_seconds": poll_seconds,
+    }, sort_keys=True))
     ema_strategy()

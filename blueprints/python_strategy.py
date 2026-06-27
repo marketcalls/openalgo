@@ -100,6 +100,7 @@ def broadcast_status_update(strategy_id: str, status: str, message: str = None):
 
 
 # File paths - use Path for cross-platform compatibility
+APP_ROOT = Path(__file__).resolve().parent.parent
 STRATEGIES_DIR = Path("strategies") / "scripts"
 LOGS_DIR = Path("log") / "strategies"  # Using existing log folder
 CONFIG_FILE = Path("strategies") / "strategy_configs.json"
@@ -392,6 +393,16 @@ def inject_ocs_environment(strategy_env: dict, strategy_id: str):
             strategy_env[env_key] = json.dumps(value, ensure_ascii=False)
         else:
             strategy_env[env_key] = str(value)
+
+
+def inject_strategy_pythonpath(strategy_env: dict):
+    """Ensure uploaded scripts can import OpenAlgo app-local helper packages."""
+    app_root = str(APP_ROOT)
+    existing = strategy_env.get("PYTHONPATH", "")
+    parts = [part for part in existing.split(os.pathsep) if part]
+    if app_root not in parts:
+        parts.insert(0, app_root)
+    strategy_env["PYTHONPATH"] = os.pathsep.join(parts)
 
 
 UI_FIELD_TYPES = {
@@ -730,7 +741,7 @@ def start_strategy_process(strategy_id):
             subprocess_args = create_subprocess_args()
             subprocess_args["stdout"] = log_handle
             subprocess_args["stderr"] = subprocess.STDOUT
-            subprocess_args["cwd"] = str(Path.cwd())
+            subprocess_args["cwd"] = str(APP_ROOT)
 
             # Inject documented strategy environment variables
             # (per strategies/README.md: STRATEGY_ID, STRATEGY_NAME, OPENALGO_API_KEY, OPENALGO_HOST)
@@ -751,6 +762,7 @@ def start_strategy_process(strategy_id):
             except Exception as e:
                 logger.warning(f"Could not inject API key for strategy {strategy_id}: {e}")
             inject_ocs_environment(strategy_env, strategy_id)
+            inject_strategy_pythonpath(strategy_env)
             subprocess_args["env"] = strategy_env
 
             # Start the process
