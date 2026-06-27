@@ -1,5 +1,6 @@
 # Strategy configuration file (contains user-specific data)
 strategy_configs.json
+configs/
 
 # Environment variables (contains sensitive data)
 strategy_env.json

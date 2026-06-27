@@ -1,3 +1,4 @@
+export { default as ConfigPythonStrategy } from './ConfigPythonStrategy'
 export { default as EditPythonStrategy } from './EditPythonStrategy'
 export { default as NewPythonStrategy } from './NewPythonStrategy'
 export { default as PythonStrategyIndex } from './PythonStrategyIndex'

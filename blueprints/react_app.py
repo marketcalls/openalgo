@@ -4,6 +4,10 @@ Serves the pre-built React app for migrated routes.
 """
 
 import mimetypes
+import os
+import shutil
+import subprocess
+import threading
 from pathlib import Path
 
 from flask import Blueprint, request, send_file, send_from_directory
@@ -18,7 +22,98 @@ react_bp = Blueprint("react", __name__)
 _PRECOMPRESSED_ENCODINGS = ((".br", "br"), (".gz", "gzip"))
 
 # Path to the pre-built React frontend
-FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+FRONTEND_DIST = FRONTEND_DIR / "dist"
+FRONTEND_SRC = FRONTEND_DIR / "src"
+_BUILD_LOCK = threading.Lock()
+_BUILD_THREAD_STARTED = False
+
+
+def frontend_auto_build_enabled():
+    return os.getenv("OPENALGO_AUTO_BUILD_FRONTEND", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _newest_mtime(path: Path):
+    if not path.exists():
+        return 0.0
+    if path.is_file():
+        return path.stat().st_mtime
+
+    newest = path.stat().st_mtime
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                newest = max(newest, child.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def _frontend_source_mtime():
+    watched_paths = [
+        FRONTEND_SRC,
+        FRONTEND_DIR / "package.json",
+        FRONTEND_DIR / "package-lock.json",
+        FRONTEND_DIR / "vite.config.ts",
+        FRONTEND_DIR / "tsconfig.json",
+        FRONTEND_DIR / "tsconfig.app.json",
+        FRONTEND_DIR / "index.html",
+    ]
+    return max(_newest_mtime(path) for path in watched_paths)
+
+
+def _run_frontend_command(args, timeout):
+    subprocess.run(
+        args,
+        cwd=str(FRONTEND_DIR),
+        check=True,
+        timeout=timeout,
+    )
+
+
+def _build_frontend_if_needed():
+    """Build React once outside request handling when opt-in auto-build is enabled."""
+    with _BUILD_LOCK:
+        index_html = FRONTEND_DIST / "index.html"
+        dist_mtime = index_html.stat().st_mtime if index_html.exists() else 0.0
+        source_mtime = _frontend_source_mtime()
+
+        if index_html.exists() and dist_mtime >= source_mtime:
+            return
+
+        npm = shutil.which("npm")
+        if not npm:
+            print("WARNING: npm not found; cannot auto-build React frontend")
+            return
+
+        try:
+            if not (FRONTEND_DIR / "node_modules").exists():
+                install_command = [npm, "ci"] if (FRONTEND_DIR / "package-lock.json").exists() else [npm, "install"]
+                print("React frontend dependencies missing; running npm install step...")
+                _run_frontend_command(install_command, timeout=900)
+
+            print("React frontend is stale or missing; running npm run build...")
+            _run_frontend_command([npm, "run", "build"], timeout=900)
+            print("React frontend build complete")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            print(f"WARNING: React frontend auto-build failed: {exc}")
+
+
+def start_frontend_auto_build():
+    """Start the optional frontend auto-build in a daemon thread."""
+    global _BUILD_THREAD_STARTED
+
+    if not frontend_auto_build_enabled() or _BUILD_THREAD_STARTED:
+        return
+
+    _BUILD_THREAD_STARTED = True
+    thread = threading.Thread(target=_build_frontend_if_needed, name="frontend-auto-build", daemon=True)
+    thread.start()
 
 
 def is_react_frontend_available():
@@ -357,8 +452,18 @@ def react_python_edit(strategy_id):
     return serve_react_app()
 
 
+@react_bp.route("/python/<strategy_id>/config", strict_slashes=False)
+def react_python_config(strategy_id):
+    return serve_react_app()
+
+
 @react_bp.route("/python/<strategy_id>/logs", strict_slashes=False)
 def react_python_logs(strategy_id):
+    return serve_react_app()
+
+
+@react_bp.route("/python/<strategy_id>/schedule", strict_slashes=False)
+def react_python_schedule(strategy_id):
     return serve_react_app()
 
 
