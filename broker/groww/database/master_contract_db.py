@@ -401,9 +401,25 @@ def download_groww_instrument_data(output_path):
     file_path = os.path.join(output_path, "master.csv")
     csv_url = "https://growwapi-assets.groww.in/instruments/instrument.csv"
 
-    # Expected headers - Updated to match actual CSV structure
-    headers_csv = "exchange,exchange_token,trading_symbol,groww_symbol,name,instrument_type,segment,series,isin,underlying_symbol,underlying_exchange_token,expiry_date,strike_price,lot_size,tick_size,freeze_quantity,is_reserved,buy_allowed,sell_allowed,internal_trading_symbol,is_intraday"
-    expected_headers = headers_csv.split(",")
+    # Columns that process_groww_data() reads BY NAME. We validate these are
+    # present rather than relabelling the file by position — Groww's CSV already
+    # ships a correct header, so keeping it makes us resilient to Groww adding or
+    # reordering columns (the old code hard-required an exact 21-column count and
+    # overwrote the header, which would silently mislabel or fail on any change).
+    required_columns = {
+        "exchange",
+        "exchange_token",
+        "trading_symbol",
+        "groww_symbol",
+        "name",
+        "instrument_type",
+        "segment",
+        "underlying_symbol",
+        "expiry_date",
+        "strike_price",
+        "lot_size",
+        "tick_size",
+    }
 
     try:
         # Get the shared httpx client with connection pooling
@@ -418,18 +434,18 @@ def download_groww_instrument_data(output_path):
         if len(lines) < 2 or "," not in content:
             raise ValueError("Downloaded content does not appear to be a valid CSV.")
 
-        # Verify column count matches and replace header line directly (no pandas parse needed)
-        original_headers = lines[0].strip().split(",")
-        if len(original_headers) == len(expected_headers):
-            new_content = ",".join(expected_headers) + "\n" + lines[1]
-        else:
+        # Validate the documented columns are present (by name), then keep
+        # Groww's own header as-is.
+        original_headers = [h.strip() for h in lines[0].strip().split(",")]
+        missing = required_columns - set(original_headers)
+        if missing:
             raise ValueError(
-                f"Downloaded CSV column count ({len(original_headers)}) does not match expected ({len(expected_headers)})."
+                f"Groww instrument CSV is missing expected columns: {sorted(missing)}"
             )
 
-        # Write directly to file
+        # Write directly to file, preserving Groww's header
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+            f.write(content)
         logger.info(f"Successfully saved instruments CSV to: {file_path}")
         return [file_path]
     except Exception as e:
@@ -824,6 +840,26 @@ def master_contract_download():
         )
         if nfo_space_mask.any():
             token_df.loc[nfo_space_mask, "symbol"] = token_df.loc[nfo_space_mask, "brsymbol"].str.replace(" ", "", regex=False)
+
+        # Step 5b: Enforce the NOT NULL symbol/brsymbol invariant before insert.
+        # Groww's CSV occasionally ships a row with a blank trading_symbol (e.g.
+        # a stray BSE index entry), which feeds both `symbol` and `brsymbol`.
+        # pandas leaves it as NaN and the bulk insert then fails with
+        # "NOT NULL constraint failed: symtoken.symbol", which rolls back the
+        # WHOLE download and leaves the master contract empty. Normalise NaN to
+        # "", fall back brsymbol -> symbol when only brsymbol is missing, and
+        # drop any row that still has no usable symbol.
+        before = len(token_df)
+        token_df["symbol"] = token_df["symbol"].fillna("").astype(str).str.strip()
+        token_df["brsymbol"] = token_df["brsymbol"].fillna("").astype(str).str.strip()
+        br_missing = (token_df["brsymbol"] == "") & (token_df["symbol"] != "")
+        token_df.loc[br_missing, "brsymbol"] = token_df.loc[br_missing, "symbol"]
+        token_df = token_df[token_df["symbol"] != ""].copy()
+        dropped = before - len(token_df)
+        if dropped:
+            logger.warning(
+                f"Dropped {dropped} Groww instrument row(s) with empty symbol before insert"
+            )
 
         # Step 6: Insert into database
         logger.info(f"Inserting {len(token_df)} records into database")
