@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
@@ -14,8 +15,75 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
-    """Helper function to make API calls to Angel One"""
+# ---------------------------------------------------------------------------
+# Shared, process-wide rate limiter for Angel market-data endpoints.
+#
+# Angel throttles per *client code* (account), so EVERY quote/history call in
+# this process competes for the same per-second budget — the /tools option
+# chain, the dashboard, and any background pollers all share it. A single
+# module-level limiter paces them as one stream instead of each caller guessing
+# with its own sleep.
+#
+# Real SmartAPI limits (see docs "Rate Limit"):
+#   - /market/v1/quote        : 10 req/s
+#   - /historical/.../*       :  3 req/s  (getCandleData; getOIData shares it)
+# We pace slightly below those ceilings for headroom and rely on the 403/429
+# retry-with-backoff in get_api_response() as the safety net. Both intervals are
+# env-overridable so an account that is throttled harder can dial them up
+# without a code change.
+# ---------------------------------------------------------------------------
+_rate_limit_lock = threading.Lock()
+_last_call_ts = {"quote": 0.0, "history": 0.0}
+QUOTE_MIN_INTERVAL = float(os.getenv("ANGEL_QUOTE_MIN_INTERVAL", "0.15"))      # ~6.6 req/s (limit 10)
+# History is paced at ~2 req/s. Angel's table says 3 req/s, but it enforces a
+# strict rolling 1-second window, so steady 0.4s spacing puts 3 requests inside
+# some windows and gets sporadically rejected. 0.5s keeps it at <=2 per window.
+HISTORY_MIN_INTERVAL = float(os.getenv("ANGEL_HISTORY_MIN_INTERVAL", "0.5"))   # ~2 req/s (limit 3)
+
+
+def _apply_rate_limit(category: str) -> None:
+    """Block just long enough to keep ``category`` under Angel's per-second cap.
+
+    Thread/greenlet-safe: the next allowed slot is *reserved* while holding the
+    lock, so concurrent callers queue in order instead of all firing at once and
+    tripping a 403. Under eventlet, ``time.sleep`` yields the greenlet.
+    """
+    interval = HISTORY_MIN_INTERVAL if category == "history" else QUOTE_MIN_INTERVAL
+    sleep_for = 0.0
+    with _rate_limit_lock:
+        now = time.time()
+        earliest = _last_call_ts[category] + interval
+        if now < earliest:
+            sleep_for = earliest - now
+            _last_call_ts[category] = earliest
+        else:
+            _last_call_ts[category] = now
+    if sleep_for > 0:
+        time.sleep(sleep_for)
+
+
+def _penalize_rate_limit(category: str, penalty: float) -> None:
+    """Back the WHOLE shared stream off after a broker rate-limit rejection.
+
+    Without this, a 403 only slept the failing call locally and its retry fired
+    right after the previous success — three requests landing inside one second
+    re-tripped Angel's rolling per-second window, cascading into more 403s.
+    Pushing the shared next-allowed timestamp forward spaces *every* subsequent
+    call in the category out until the pressure clears; it then self-recovers to
+    the base interval as normal calls resume.
+    """
+    with _rate_limit_lock:
+        base = max(_last_call_ts[category], time.time())
+        _last_call_ts[category] = base + penalty
+
+
+def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
+    """Helper function to make API calls to Angel One.
+
+    Paces requests through the shared per-category rate limiter and transparently
+    retries Angel's rate-limit rejection (HTTP 403 "exceeding access rate" / 429)
+    with exponential backoff. A genuine auth 403 still fails fast.
+    """
     AUTH_TOKEN = auth
     api_key = os.getenv("BROKER_API_KEY")
 
@@ -38,8 +106,12 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         payload = json.dumps(payload)
 
     url = f"https://apiconnect.angelone.in{endpoint}"
+    category = "history" if "historical" in endpoint else "quote"
 
-    try:
+    for attempt in range(max_retries + 1):
+        # Pace every attempt (including retries) through the shared limiter.
+        _apply_rate_limit(category)
+
         if method == "GET":
             response = client.get(url, headers=headers)
         elif method == "POST":
@@ -50,16 +122,45 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
 
-        if response.status_code == 403:
+        # Angel returns HTTP 403 for BOTH genuine auth failures AND rate-limit
+        # breaches ("Access denied because of exceeding access rate"). 429 is
+        # also used occasionally. Distinguish them: back off and retry the
+        # rate-limit case, fail fast on a real auth error.
+        if response.status_code in (403, 429):
+            body_text = response.text
+            lowered = body_text.lower()
+            is_rate_limit = (
+                response.status_code == 429
+                or "exceeding" in lowered
+                or "access rate" in lowered
+                or "rate limit" in lowered
+            )
+            if is_rate_limit:
+                if attempt < max_retries:
+                    backoff = 0.5 * (2**attempt)
+                    # Throttle the whole shared stream — not just this call — so
+                    # the retry doesn't immediately burst back over the limit
+                    # and cascade into more 403s.
+                    _penalize_rate_limit(category, backoff)
+                    logger.warning(
+                        f"Angel rate limit hit on {endpoint} (status {response.status_code}); "
+                        f"retry {attempt + 1}/{max_retries}, backing off {backoff:.2f}s"
+                    )
+                    continue
+                raise Exception("Angel API rate limit exceeded. Please retry shortly.")
             logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
-            logger.debug(f"Debug - Response text: {response.text}")
+            logger.debug(f"Debug - Response text: {body_text}")
             raise Exception("Authentication failed. Please check your API key and auth token.")
 
-        return json.loads(response.text)
-    except json.JSONDecodeError:
-        logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
-        logger.debug(f"Debug - Response text: {response.text}")
-        raise Exception(f"Failed to parse API response (status {response.status_code})")
+        try:
+            return json.loads(response.text)
+        except json.JSONDecodeError:
+            logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
+            logger.debug(f"Debug - Response text: {response.text}")
+            raise Exception(f"Failed to parse API response (status {response.status_code})")
+
+    # Exhausted retries without returning (all attempts were rate-limited).
+    raise Exception("Angel API rate limit exceeded. Please retry shortly.")
 
 
 class BrokerData:
@@ -150,8 +251,12 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
+            # Angel hard-caps the market-data quote endpoint at 50 tokens per
+            # request, so we must split larger requests into 50-token batches.
+            # Pacing between batches is handled centrally by the shared rate
+            # limiter inside get_api_response() (each batch is one quote call),
+            # so there is no per-batch sleep here anymore.
             BATCH_SIZE = 50  # Angel API limit: 50 symbols per request
-            RATE_LIMIT_DELAY = 1.0  # Angel rate limit: 1 request per second
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -165,13 +270,9 @@ class BrokerData:
                         f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
                     )
 
-                    # Process this batch
+                    # Process this batch (rate-limited inside get_api_response)
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
@@ -414,59 +515,83 @@ class BrokerData:
                 logger.debug(f"Debug - Fetching chunk from {current_start} to {current_end}")
                 logger.debug(f"Debug - API Payload: {payload}")
 
-                try:
-                    response = get_api_response(
-                        "/rest/secure/angelbroking/historical/v1/getCandleData",
-                        self.auth_token,
-                        "POST",
-                        payload,
-                    )
-                    logger.info(f"Debug - API Response Status: {response.get('status')}")
+                # Fetch this chunk with chunk-level retries. A transient
+                # rate-limit must NEVER cause us to skip a 30-day window —
+                # doing so would punch a gap into a long 1-minute download.
+                # get_api_response already retries its own rate-limit internally;
+                # this is the outer safety net that keeps re-trying the SAME
+                # chunk instead of advancing past it. `chunk_data` stays None
+                # only if every attempt failed (→ loud gap warning); an empty
+                # list means the chunk legitimately has no candles (weekend /
+                # holiday / pre-listing) and is fine to skip.
+                chunk_data = None
+                for chunk_attempt in range(4):
+                    try:
+                        response = get_api_response(
+                            "/rest/secure/angelbroking/historical/v1/getCandleData",
+                            self.auth_token,
+                            "POST",
+                            payload,
+                        )
+                    except Exception as chunk_error:
+                        msg = str(chunk_error).lower()
+                        if "rate limit" in msg and chunk_attempt < 3:
+                            backoff = 1.0 * (2**chunk_attempt)
+                            logger.warning(
+                                f"Rate limit on candle chunk {current_start} to {current_end}; "
+                                f"retrying chunk ({chunk_attempt + 1}/4) in {backoff:.1f}s"
+                            )
+                            time.sleep(backoff)
+                            continue
+                        logger.error(
+                            f"Debug - Error fetching chunk {current_start} to {current_end}: "
+                            f"{chunk_error}"
+                        )
+                        break
 
-                    # Check if response is empty or invalid
-                    if not response:
+                    if isinstance(response, dict) and response.get("status"):
+                        chunk_data = response.get("data", []) or []
                         logger.debug(
-                            f"Debug - Empty response for chunk {current_start} to {current_end}"
+                            f"Debug - Received {len(chunk_data)} candles for chunk "
+                            f"{current_start} to {current_end}"
                         )
-                        current_start = current_end + timedelta(days=1)
-                        continue
+                        break
 
-                    if not response.get("status"):
-                        logger.info(
-                            f"Debug - Error response: {response.get('message', 'Unknown error')}"
+                    # status False / empty response — retry the chunk if Angel
+                    # signalled a rate limit, otherwise give up on this chunk
+                    # (e.g. bad token or genuinely no data for the range).
+                    err_msg = response.get("message", "") if isinstance(response, dict) else ""
+                    if ("exceed" in err_msg.lower() or "rate" in err_msg.lower()) and chunk_attempt < 3:
+                        backoff = 1.0 * (2**chunk_attempt)
+                        _penalize_rate_limit("history", backoff)
+                        logger.warning(
+                            f"Rate-limit response on candle chunk {current_start} to {current_end}; "
+                            f"retrying chunk ({chunk_attempt + 1}/4) in {backoff:.1f}s"
                         )
-                        current_start = current_end + timedelta(days=1)
+                        time.sleep(backoff)
                         continue
-
-                except Exception as chunk_error:
-                    logger.error(
-                        f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}"
+                    logger.warning(
+                        f"Debug - Error response for chunk {current_start} to {current_end}: "
+                        f"{err_msg or 'unknown'}"
                     )
-                    current_start = current_end + timedelta(days=1)
-                    continue
+                    break
 
-                if not response.get("status"):
-                    raise Exception(
-                        f"Error from Angel API: {response.get('message', 'Unknown error')}"
-                    )
-
-                # Extract candle data and create DataFrame
-                data = response.get("data", [])
-                if data:
+                if chunk_data:
                     chunk_df = pd.DataFrame(
-                        data, columns=["timestamp", "open", "high", "low", "close", "volume"]
+                        chunk_data, columns=["timestamp", "open", "high", "low", "close", "volume"]
                     )
                     dfs.append(chunk_df)
-                    logger.debug(f"Debug - Received {len(data)} candles for chunk")
-                else:
-                    logger.debug("Debug - No data received for chunk")
+                elif chunk_data is None:
+                    # Every attempt failed — surface a loud, actionable warning
+                    # instead of silently leaving a hole in the series.
+                    logger.warning(
+                        f"POSSIBLE GAP: could not fetch candle chunk {current_start} to "
+                        f"{current_end} after 4 attempts"
+                    )
 
-                # Move to next chunk
+                # Move to next chunk (inter-chunk pacing handled by the shared
+                # history rate limiter inside get_api_response).
                 current_start = current_end + timedelta(days=1)
-
-                # Rate limit delay between chunks (0.5 seconds)
-                if current_start <= to_date:
-                    time.sleep(0.5)
 
             # If no data was found, return empty DataFrame
             if not dfs:
@@ -623,12 +748,9 @@ class BrokerData:
                     chunk_df.rename(columns={"time": "timestamp"}, inplace=True)
                     dfs.append(chunk_df)
 
-                # Move to next chunk
+                # Move to next chunk (inter-chunk pacing handled by the shared
+                # history rate limiter inside get_api_response).
                 current_start = current_end + timedelta(days=1)
-
-                # Rate limit delay between chunks (0.5 seconds)
-                if current_start <= to_date:
-                    time.sleep(0.5)
 
             # If no data was found, return empty DataFrame
             if not dfs:
