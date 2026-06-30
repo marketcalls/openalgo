@@ -94,6 +94,51 @@ def is_session_valid():
     return True
 
 
+def _todays_rollover_boundary():
+    """Return today's session-expiry boundary (default 03:00 IST) as a
+    timezone-aware IST datetime. Mirrors the boundary used by is_session_valid().
+    """
+    now_ist = datetime.now(pytz.timezone("UTC")).astimezone(pytz.timezone("Asia/Kolkata"))
+    expiry_time = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+    hour, minute = map(int, expiry_time.split(":"))
+    return now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _has_fresher_session(username, current_session_id=None):
+    """Return True if an active session for ``username`` (other than
+    ``current_session_id``) authenticated at or after today's rollover boundary.
+
+    A post-boundary active session means another device has already
+    re-established the single shared broker token after the daily ~3 AM expiry,
+    so a stale cookie crossing the boundary must NOT trigger the global token
+    revoke. See the multi-session audit (finding #1).
+    """
+    try:
+        from database.auth_db import get_active_sessions
+
+        boundary = _todays_rollover_boundary()
+        ist = pytz.timezone("Asia/Kolkata")
+        for sess in get_active_sessions(username):
+            if current_session_id and sess.get("session_id") == current_session_id:
+                continue
+            raw = sess.get("login_time")
+            if not raw:
+                continue
+            try:
+                login_dt = datetime.fromisoformat(raw)
+            except ValueError:
+                continue
+            # SQLite returns naive datetimes (tz stripped on storage); the value
+            # is IST wall-clock, so localize it before comparing.
+            if login_dt.tzinfo is None:
+                login_dt = ist.localize(login_dt)
+            if login_dt >= boundary:
+                return True
+    except Exception as e:
+        logger.warning(f"Error checking for fresher sessions for {username}: {e}")
+    return False
+
+
 def revoke_user_tokens(revoke_db_tokens=True):
     """
     Revoke auth tokens for the current user when session expires.
@@ -118,6 +163,29 @@ def revoke_user_tokens(revoke_db_tokens=True):
                 del auth_cache[cache_key_auth]
             if cache_key_feed in feed_token_cache:
                 del feed_token_cache[cache_key_feed]
+
+            # Multi-device guard (audit #1): this is the daily-rollover auto-expiry
+            # of a STALE cookie. If another device has already re-authenticated
+            # AFTER today's boundary, the single shared broker token in the DB is
+            # fresh — not stale. Running the global teardown here would revoke that
+            # fresh token, tear down its WebSocket feed (the ZeroMQ invalidation
+            # below reaches the proxy and disconnects the adapter), and force-logout
+            # every device. Suppress it: drop only THIS device's session row and
+            # return, leaving the caller to clear just this cookie.
+            if revoke_db_tokens and _has_fresher_session(username, session.get("session_id")):
+                logger.info(
+                    f"Auto-expiry: a newer session for {username} is active past the "
+                    f"daily rollover — logging out only this stale device, preserving "
+                    f"the shared broker token and other devices"
+                )
+                current_sid = session.get("session_id")
+                if current_sid:
+                    try:
+                        from database.auth_db import remove_session
+                        remove_session(current_sid)
+                    except Exception as session_error:
+                        logger.warning(f"Error removing stale session row: {session_error}")
+                return
 
             # Publish cache invalidation event via ZeroMQ for other processes
             # This notifies WebSocket proxy and other processes to clear their stale caches
