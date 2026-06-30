@@ -178,6 +178,38 @@ publisher (`database/cache_invalidation.py`). Rules that MUST hold:
 - **`ZMQ_PORT` is fixed by config and never drifts.** No port-scan, no `5555 → 5556` fallback, no runtime mutation of `os.environ["ZMQ_PORT"]`. A single instance stays on its configured port forever; `install-multi.sh` gives each instance its own `ZMQ_PORT` (`5555 + i-1`) and each stays put.
 - **Why this matters:** under gunicorn+eventlet the proxy runs *out-of-process* (a subprocess on bare-metal `install.sh`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`), while the cache-invalidation publisher runs in the gunicorn process. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays on the configured one, so **`subscribe` succeeds but no ticks are delivered** (works fine on the single-process dev server, broken only on eventlet servers — historically hard to spot). Keeping the SUB as the sole binder removes the race entirely. This applies to **all brokers** — the bus is broker-agnostic.
 
+#### Multi-session login must not tear down the shared broker feed (do not break this)
+
+OpenAlgo is single-user / single-broker per instance, but the *same* user may be
+logged in from **multiple devices/browsers at once** (`active_sessions`, cap
+`MAX_SESSIONS_PER_USER = 5`). All those sessions share **one** server-side broker
+WebSocket feed — a single connection pool keyed `{broker}_{user_id}` in
+`websocket_proxy/broker_factory.py:_POOLED_ADAPTERS`, fanned out to every browser
+client by the proxy. A second device must be able to stream **without interrupting
+the first**.
+
+The hazard: a 2nd-device login resumes the existing broker session
+(`blueprints/auth._try_resume_broker_session`) and re-persists the **same** token
+through `database.auth_db.upsert_auth`. `upsert_auth` is also what tears the shared
+feed down — it publishes a ZMQ `CACHE_INVALIDATE_ALL` (the out-of-process proxy's
+`_handle_cache_invalidation` disconnects the adapter + pool) and calls
+`cleanup_pools_for_user` in-process. That teardown is **only correct when the token
+actually changed** (real login, daily ~3 AM token rollover, logout/revoke). Rules
+that MUST hold:
+
+- **Gate the teardown on a real token change.** `upsert_auth` compares the new
+  token/feed-token/broker/revoke flag against the stored row (decrypted plaintext —
+  Fernet ciphertext is non-deterministic, so never compare the encrypted blobs). If
+  nothing material changed it clears the cheap in-process caches and returns early,
+  leaving the live feed up. Only a genuine change (or `revoke=True`) runs the
+  ZMQ-publish + `cleanup_pools_for_user` path.
+- **Why this matters:** without the gate, a 2nd-device login on the same day kills
+  the 1st device's stream until it refreshes (Shoonya), and on single-active-session
+  Finvasia/Noren brokers the disconnect/reconnect churn drops the broker token
+  entirely (Flattrade "broker session expired"). See issue #1591. The teardown
+  itself still exists for the changed-token case — do not remove it (it is the
+  #1394/#765/#851 fix); just keep it gated. This is broker-agnostic.
+
 ### Request Processing Pipeline
 
 WSGI middleware wraps in reverse order — last registered is outermost. The request flows:
