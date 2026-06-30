@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+from datetime import UTC, datetime
 
 from flask import (
     Blueprint,
@@ -917,6 +918,40 @@ def debug_smtp():
         ), 500
 
 
+# Throttle active-session heartbeat DB writes to at most one per device per
+# this many seconds. The SPA polls /session-status frequently; without a throttle
+# every poll would write to active_sessions.last_seen.
+HEARTBEAT_THROTTLE_SECONDS = 30
+
+
+def _touch_session_heartbeat():
+    """Refresh last_seen for this device's active session (throttled).
+
+    Wired into the SPA's /session-status poll so active_sessions.last_seen
+    tracks real liveness instead of staying frozen at login_time. See the
+    multi-session audit (finding #2). Throttled via the Flask session cookie
+    so a busy poll loop doesn't write to the DB on every request.
+    """
+    sid = session.get("session_id")
+    if not sid:
+        return
+    now = datetime.now(UTC)
+    last = session.get("last_heartbeat")
+    if last:
+        try:
+            if (now - datetime.fromisoformat(last)).total_seconds() < HEARTBEAT_THROTTLE_SECONDS:
+                return
+        except (ValueError, TypeError):
+            pass
+    try:
+        from database.auth_db import update_session_last_seen
+
+        update_session_last_seen(sid)
+        session["last_heartbeat"] = now.isoformat()
+    except Exception as e:
+        logger.warning(f"Error updating session heartbeat: {e}")
+
+
 @auth_bp.route("/session-status", methods=["GET"])
 def get_session_status():
     """Return current session status for React SPA."""
@@ -926,6 +961,10 @@ def get_session_status():
         return jsonify(
             {"status": "success", "message": "Not authenticated", "authenticated": False, "logged_in": False}
         ), 200
+
+    # Refresh this device's liveness heartbeat on every poll (throttled).
+    if session.get("logged_in"):
+        _touch_session_heartbeat()
 
     # If session claims to be logged in with broker, validate the auth token exists
     if session.get("logged_in") and session.get("broker"):
