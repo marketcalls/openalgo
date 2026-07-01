@@ -67,6 +67,7 @@ from blueprints.ivsmile import ivsmile_bp  # Import the IV Smile blueprint
 from blueprints.oiprofile import oiprofile_bp  # Import the OI Profile blueprint
 from blueprints.arbitrage import arbitrage_bp  # Import the Arbitrage blueprint
 from blueprints.historify import historify_bp  # Import the historify blueprint
+from blueprints.internal_broker_token import internal_broker_token_bp
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.scalping import scalping_bp  # Import the Scalping terminal blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
@@ -310,6 +311,7 @@ def create_app():
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
     app.register_blueprint(historify_bp)  # Register Historify blueprint
+    app.register_blueprint(internal_broker_token_bp, url_prefix="/internal")
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
@@ -422,6 +424,7 @@ def create_app():
 
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions["brlogin.broker_callback"])
+        csrf.exempt(app.view_functions["internal_broker_token.broker_token"])
 
         # Exempt Samco 2FA setup endpoints from CSRF (JSON API calls from React frontend)
         csrf.exempt(app.view_functions["brlogin.samco_generate_otp"])
