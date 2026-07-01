@@ -88,6 +88,16 @@ class OrderLatency(LatencyBase):
     ):
         """Log order execution latency"""
         try:
+            # The error column is a String, but callers may hand us a non-string
+            # payload — e.g. a failed request's response "message" can be a
+            # marshmallow validation-errors dict ({'symbol': ['Missing data...']}).
+            # SQLite cannot bind a dict/list to a text column, so coerce any
+            # non-string error to str and bound it to the column width.
+            if error is not None and not isinstance(error, str):
+                error = str(error)
+            if isinstance(error, str) and len(error) > 500:
+                error = error[:500]
+
             log = OrderLatency(
                 order_id=order_id,
                 user_id=user_id,
