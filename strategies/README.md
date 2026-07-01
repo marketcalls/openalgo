@@ -7,10 +7,10 @@ A complete web-based strategy hosting and scheduling system for OpenAlgo, access
 - **Upload & Manage**: Upload Python strategy scripts through web interface
 - **Start/Stop**: Control strategy execution with one click
 - **Schedule**: Set automatic start/stop times with day selection
-- **Exchange-aware calendar**: Each strategy is tagged with an exchange (NSE / BSE / NFO / BFO / MCX / BCD / CDS / CRYPTO) and the host gates start/stop using that exchange's holiday calendar — an MCX strategy keeps running on an NSE/BSE holiday during the MCX session, a CRYPTO strategy ignores all holidays, and SPECIAL_SESSION rows (Muhurat, DR-drill) override weekend rejects
+- **Exchange-aware calendar**: Each strategy is tagged with an exchange (NSE / BSE / NFO / BFO / MCX / BCD / CDS / CRYPTO) and the host gates start/stop using that exchange's holiday calendar - an MCX strategy keeps running on an NSE/BSE holiday during the MCX session, a CRYPTO strategy ignores all holidays, and SPECIAL_SESSION rows (Muhurat, DR-drill) override weekend rejects
 - **Process Isolation**: Each strategy runs in its own process
 - **Real-time Monitoring**: View logs and strategy status
-- **Parameter Configuration**: Pass custom parameters to strategies
+- **Parameter Configuration**: Configure strategy inputs through OCS-powered generated UI forms
 
 ## Installation
 
@@ -30,8 +30,8 @@ http://localhost:5000/python
 - Click "Add Strategy" button
 - Provide a name for your strategy
 - Select your Python script file
-- **Pick the exchange** the strategy trades on (NSE / BSE / NFO / BFO / MCX / BCD / CDS / CRYPTO). This drives which calendar the host uses to gate scheduled start/stop. Pick CRYPTO for 24/7 strategies — the host will skip all holiday checks and pre-fill the schedule to all 7 days
-- Add any parameters (will be available as environment variables)
+- **Pick the exchange** the strategy trades on (NSE / BSE / NFO / BFO / MCX / BCD / CDS / CRYPTO). This drives which calendar the host uses to gate scheduled start/stop. Pick CRYPTO for 24/7 strategies - the host will skip all holiday checks and pre-fill the schedule to all 7 days
+- If the script declares OCS fields with `ui.*`, OpenAlgo discovers them automatically and opens the generated configuration page after upload
 - Click "Upload Strategy"
 
 ### 2. Start/Stop Strategy
@@ -51,7 +51,7 @@ The effective trading window is the **intersection** of:
 1. Your `start..stop` time, and
 2. The exchange's session for that specific date (from the market calendar DB).
 
-So a 09:15-23:55 schedule on an MCX strategy on 14-Apr-2026 will only fire 17:00-23:55 (the partial holiday window the calendar publishes for that date), not 09:15. This is by design — you don't have to redo the schedule for every partial holiday.
+So a 09:15-23:55 schedule on an MCX strategy on 14-Apr-2026 will only fire 17:00-23:55 (the partial holiday window the calendar publishes for that date), not 09:15. This is by design - you don't have to redo the schedule for every partial holiday.
 
 ### 4. View Logs
 - Click "Logs" to view strategy output
@@ -72,7 +72,7 @@ from datetime import datetime
 # EXCHANGE prefers OPENALGO_STRATEGY_EXCHANGE (set by /python from your
 # strategy's exchange config) so the script trades on the same exchange
 # the host is gating its calendar against. Falls back to EXCHANGE env
-# var, then NSE — so the same script works standalone too.
+# var, then NSE - so the same script works standalone too.
 SYMBOL   = os.getenv('SYMBOL', 'RELIANCE')
 EXCHANGE = os.getenv(
     'OPENALGO_STRATEGY_EXCHANGE',
@@ -112,29 +112,29 @@ if __name__ == "__main__":
     main()
 ```
 
-> **Reading `OPENALGO_STRATEGY_EXCHANGE` is optional but strongly recommended.** If your script hardcodes `exchange = "NSE"`, the host will still gate it correctly per its config (e.g. host runs your script during MCX evening session because `exchange=MCX`), but your `client.placeorder(exchange="NSE", ...)` calls will still send NSE orders — and the broker will reject them. Wiring the env var keeps host calendar and script orders aligned.
+> **Reading `OPENALGO_STRATEGY_EXCHANGE` is optional but strongly recommended.** If your script hardcodes `exchange = "NSE"`, the host will still gate it correctly per its config (e.g. host runs your script during MCX evening session because `exchange=MCX`), but your `client.placeorder(exchange="NSE", ...)` calls will still send NSE orders - and the broker will reject them. Wiring the env var keeps host calendar and script orders aligned.
 
 ## Environment Variables
 
 ### Injected by the platform
 
-These are set directly on each strategy subprocess (only the ones below — the host does not inject host/port/websocket vars; see next section):
+These are set directly on each strategy subprocess (only the ones below - the host does not inject host/port/websocket vars; see next section):
 
-- `STRATEGY_ID` — unique identifier for the strategy
-- `STRATEGY_NAME` — name of the strategy
-- `OPENALGO_STRATEGY_EXCHANGE` — the exchange picked at upload/edit time (`NSE` / `BSE` / `NFO` / `BFO` / `MCX` / `BCD` / `CDS` / `CRYPTO`). Read this in your script so its trading calls match the calendar the host is gating against
-- `OPENALGO_API_KEY` — decrypted API key for this user
-- `OPENALGO_HOST` — OpenAlgo host URL, **set with `setdefault` to `http://127.0.0.1:5000`**. If `OPENALGO_HOST` is already present in `.env` (it usually isn't — `.env` uses `HOST_SERVER`), that value is kept. Treat this as a convenience fallback only
+- `STRATEGY_ID` - unique identifier for the strategy
+- `STRATEGY_NAME` - name of the strategy
+- `OPENALGO_STRATEGY_EXCHANGE` - the exchange picked at upload/edit time (`NSE` / `BSE` / `NFO` / `BFO` / `MCX` / `BCD` / `CDS` / `CRYPTO`). Read this in your script so its trading calls match the calendar the host is gating against
+- `OPENALGO_API_KEY` - decrypted API key for this user
+- `OPENALGO_HOST` - OpenAlgo host URL, **set with `setdefault` to `http://127.0.0.1:5000`**. If `OPENALGO_HOST` is already present in `.env` (it usually isn't - `.env` uses `HOST_SERVER`), that value is kept. Treat this as a convenience fallback only
 
 ### Inherited from `.env`
 
 Strategies are launched with `os.environ.copy()`, so they inherit **every** variable from OpenAlgo's `.env`. The relevant ones for connecting to OpenAlgo:
 
-- `HOST_SERVER` — REST host, e.g. `http://127.0.0.1:5000` (this is the canonical name in `.env`; **prefer this in your scripts**)
-- `WEBSOCKET_URL` — full WS URL, e.g. `ws://127.0.0.1:8765`
-- `WEBSOCKET_HOST` — e.g. `127.0.0.1` (raw component)
-- `WEBSOCKET_PORT` — e.g. `8765` (raw component)
-- `FLASK_HOST_IP` / `FLASK_PORT` — also present if you need them
+- `HOST_SERVER` - REST host, e.g. `http://127.0.0.1:5000` (this is the canonical name in `.env`; **prefer this in your scripts**)
+- `WEBSOCKET_URL` - full WS URL, e.g. `ws://127.0.0.1:8765`
+- `WEBSOCKET_HOST` - e.g. `127.0.0.1` (raw component)
+- `WEBSOCKET_PORT` - e.g. `8765` (raw component)
+- `FLASK_HOST_IP` / `FLASK_PORT` - also present if you need them
 - Any other key you've defined in `.env`
 
 > **Recommended pattern in scripts:**
@@ -149,21 +149,158 @@ Strategies are launched with `os.environ.copy()`, so they inherit **every** vari
 >
 > Note: there is **no `HOST_URL` variable** anywhere in OpenAlgo. Only `HOST_SERVER` (REST), `OPENALGO_HOST` (injected fallback alias), and `WEBSOCKET_URL` (WS).
 
-### Per-strategy parameters
+### Per-strategy configuration
 
-Plus any custom parameters you define in the strategy upload form — these become additional environment variables.
+Strategy-specific inputs should use OCS declarations in the script. OpenAlgo stores those values per strategy and injects them at runtime.
+
+### OpenAlgo Configuration SDK (OCS)
+
+Python strategies can receive structured configuration from the OpenAlgo Configuration SDK. OCS keeps user-editable values outside source code, validates them against a schema, renders a generated React form, stores values per strategy, and injects the resolved values into the strategy process at launch.
+
+The preferred authoring style is explicit `ui.*` declarations:
+
+```python
+try:
+    from openalgo.config import ui
+except ModuleNotFoundError:
+    from openalgo_config import ui
+
+strategy = ui.string("strategy", default="EMA Crossover Python", label="Strategy Name")
+symbol = ui.symbol("symbol", default="RELIANCE", label="Symbol", required=True)
+exchange = ui.exchange("exchange", default="NSE", label="Exchange")
+product = ui.product("product", default="MIS", options=["MIS", "NRML", "CNC"])
+quantity = ui.quantity("quantity", default=1, min=1)
+
+fast_ema = ui.int("fast_ema", default=9, min=1, max=200)
+slow_ema = ui.int("slow_ema", default=21, min=2, max=500)
+debug = ui.bool("debug", default=False)
+```
+
+Use explicit keys such as `"symbol"` and `"fast_ema"`. Keyless calls are not used for upload-time schema discovery because the runtime helper reads values by key.
+
+Legacy scripts can still expose a literal `DEFAULT_OCS_SCHEMA` or `OCS_SCHEMA`, but new strategies should use `ui.*` instead of hand-writing schema JSON.
+
+Files are stored per strategy:
+
+```text
+strategies/
+`-- configs/
+    |-- schemas/<strategy_id>.json
+    `-- values/<strategy_id>.json
+```
+
+The runner injects:
+
+- `OPENALGO_CONFIG_JSON` - resolved config values after defaults and validation
+- `OPENALGO_CONFIG_SCHEMA_JSON` - normalized OCS schema
+- `OPENALGO_CONFIG_<KEY>` - convenience aliases for each config key
+
+Runtime values can be read from `ui.*` return values or directly from `OPENALGO_CONFIG_JSON`:
+
+```python
+import json
+import os
+
+config = json.loads(os.getenv("OPENALGO_CONFIG_JSON", "{}"))
+
+SYMBOL = config.get("symbol", "RELIANCE")
+FAST_EMA = int(config.get("fast_ema", 9))
+SLOW_EMA = int(config.get("slow_ema", 21))
+```
+
+OpenAlgo discovers explicit `ui.*` fields during upload without executing trading logic. The React UI renders the form at `/python/<strategy_id>/config`; upload/list responses include config metadata so the config icon appears from live API data, not from a frontend rebuild.
+
+Backend endpoints:
+
+- `GET /python/api/config/<strategy_id>`
+- `POST /python/api/config/<strategy_id>/schema`
+- `POST /python/api/config/<strategy_id>/values`
+- `POST /python/api/config/validate`
+
+`GET /python/api/config/<strategy_id>` returns editable draft `values`, runtime-valid `resolved_values`, and `validation_errors` when required fields still need user input.
+
+OCS validation supports defaults, required fields, min/max limits, select and multi-select options, numeric and boolean option values, regex syntax validation, stale-key pruning, and structured API errors for storage/runtime failures.
+
+For a complete system guide, see `docs/openalgo-configuration-sdk.md`.
+
+### OpenAlgo Configuration SDK (OCS)
+
+Python strategies can also receive structured configuration generated by the OpenAlgo Configuration SDK. OCS keeps user-editable values outside source code, validates them against a JSON schema, and injects the resolved values into the strategy process at launch.
+
+Files are stored per strategy:
+
+```
+strategies/
+└── configs/
+    ├── schemas/<strategy_id>.json
+    └── values/<strategy_id>.json
+```
+
+The runner injects:
+
+- `OPENALGO_CONFIG_JSON` — resolved config values after defaults and validation
+- `OPENALGO_CONFIG_SCHEMA_JSON` — normalized OCS schema
+- `OPENALGO_CONFIG_<KEY>` — convenience aliases for each config key
+
+Example:
+
+```python
+import json
+import os
+
+config = json.loads(os.getenv("OPENALGO_CONFIG_JSON", "{}"))
+
+SYMBOL = config.get("symbol", "RELIANCE")
+FAST_EMA = int(config.get("fast_ema", 9))
+SLOW_EMA = int(config.get("slow_ema", 21))
+```
+
+Minimal schema:
+
+```json
+{
+  "ocs_version": "1.0",
+  "strategy": "ema_crossover",
+  "title": "EMA Crossover",
+  "fields": [
+    {
+      "key": "symbol",
+      "type": "symbol",
+      "label": "Symbol",
+      "default": "RELIANCE",
+      "required": true
+    },
+    {
+      "key": "fast_ema",
+      "type": "int",
+      "label": "Fast EMA",
+      "default": 9,
+      "min": 1,
+      "max": 200
+    }
+  ]
+}
+```
+
+The React UI renders the form from this schema at `/python/<strategy_id>/config`. Backend endpoints:
+
+- `GET /python/api/config/<strategy_id>`
+- `POST /python/api/config/<strategy_id>/schema`
+- `POST /python/api/config/<strategy_id>/values`
+- `POST /python/api/config/validate`
 
 ## Directory Structure
 
 ```
 strategies/
-├── scripts/          # Uploaded strategy files
-├── examples/         # Example strategies
-├── configs.json      # Strategy configurations
-└── requirements.txt  # Python dependencies
+|-- scripts/          # Uploaded strategy files
+|-- examples/         # Example strategies
+|-- configs/          # OCS runtime schema/value files
+|-- configs.json      # Strategy configurations
+`-- requirements.txt  # Python dependencies
 
 logs/
-└── strategies/       # Strategy log files
+`-- strategies/       # Strategy log files
 ```
 
 ## API Integration
@@ -207,26 +344,26 @@ Strategies can be scheduled to run automatically:
 - **Stop Time**: When to stop the strategy (optional, IST)
 - **Days**: Which days to run (Mon-Sun)
 
-Example: NSE EMA strategy → Start 09:15, stop 15:30, Monday-Friday.
-Example: MCX evening strategy → exchange=MCX, start 17:00, stop 23:55, Monday-Friday.
-Example: CRYPTO arb → exchange=CRYPTO, start 00:00, stop 23:59, all 7 days.
+Example: NSE EMA strategy -> Start 09:15, stop 15:30, Monday-Friday.
+Example: MCX evening strategy -> exchange=MCX, start 17:00, stop 23:55, Monday-Friday.
+Example: CRYPTO arb -> exchange=CRYPTO, start 00:00, stop 23:59, all 7 days.
 
 ### How exchange-aware gating works
 
 Three things run on the host:
 
-1. **Cron job** — fires `start_<sid>` at your `start_time` on each day in `schedule_days`.
-2. **Daily check** at 00:01 IST — for each scheduled strategy, looks up `get_market_status(config["exchange"])`. If the exchange has no session today (closed weekend / full holiday), the strategy is stopped and marked `paused_reason=holiday|weekend`.
-3. **Per-minute enforcer** — same per-strategy check. When the exchange reopens (or a special session starts), previously-paused strategies are auto-resumed (unless `manually_stopped`).
+1. **Cron job** - fires `start_<sid>` at your `start_time` on each day in `schedule_days`.
+2. **Daily check** at 00:01 IST - for each scheduled strategy, looks up `get_market_status(config["exchange"])`. If the exchange has no session today (closed weekend / full holiday), the strategy is stopped and marked `paused_reason=holiday|weekend`.
+3. **Per-minute enforcer** - same per-strategy check. When the exchange reopens (or a special session starts), previously-paused strategies are auto-resumed (unless `manually_stopped`).
 
-The "session today" lookup uses the same calendar DB that powers `/api/v1/market/holidays` — see admin → Holidays to add SPECIAL_SESSION rows for events like Muhurat trading or NSE DR-drill weekends.
+The "session today" lookup uses the same calendar DB that powers `/api/v1/market/holidays` - see admin -> Holidays to add SPECIAL_SESSION rows for events like Muhurat trading or NSE DR-drill weekends.
 
 ### Worked example: 14-Apr-2026 (Ambedkar Jayanti)
 
 | Exchange | Calendar says | Strategy behavior |
 |---|---|---|
 | NSE / BSE / NFO / BFO / CDS / BCD | Closed all day | All scheduled strategies stopped at 00:01 IST |
-| MCX | Open 17:00-23:55 IST (partial holiday) | MCX strategies stay armed; auto-start at 17:00, run within user's `start..stop ∩ 17:00-23:55` |
+| MCX | Open 17:00-23:55 IST (partial holiday) | MCX strategies stay armed; auto-start at 17:00, run within the overlap of the user's `start..stop` window and `17:00-23:55` |
 | CRYPTO | 24/7 | Unaffected |
 
 ### Worked example: 8-Nov-2026 (Sunday Diwali Muhurat)
@@ -252,11 +389,11 @@ The "session today" lookup uses the same calendar DB that powers `/api/v1/market
 3. **Can't stop strategy**: Process may be stuck, use system task manager if needed
 4. **Parameters not working**: Ensure parameter names are valid environment variable names
 5. **Strategy didn't run on a partial holiday (e.g., MCX evening on NSE holiday)**:
-   - Open the strategy → Schedule → confirm `Exchange` is set to the right market (legacy strategies default to `NSE` after the upgrade and need a one-time edit if they trade MCX/CRYPTO/etc.)
-   - Confirm the date has a row in admin → Holidays with the partial-open window for your exchange
-   - Confirm your `schedule_start..schedule_stop` overlaps the calendar window — they intersect, so a 09:15-15:30 schedule will NOT fire during a 17:00-23:55 partial session
-6. **Strategy ran on a Sunday/Saturday (special session)**: that's by design — the calendar's SPECIAL_SESSION row overrides the weekend reject. To opt out, remove the day from `schedule_days`
-7. **Strategy paused with `paused_reason=holiday`** but you think today is open: check `get_market_status(exchange)` — the exchange's session may differ from another exchange's. Each strategy is gated by its own exchange
+   - Open the strategy -> Schedule -> confirm `Exchange` is set to the right market (legacy strategies default to `NSE` after the upgrade and need a one-time edit if they trade MCX/CRYPTO/etc.)
+   - Confirm the date has a row in admin -> Holidays with the partial-open window for your exchange
+   - Confirm your `schedule_start..schedule_stop` overlaps the calendar window - they intersect, so a 09:15-15:30 schedule will NOT fire during a 17:00-23:55 partial session
+6. **Strategy ran on a Sunday/Saturday (special session)**: that's by design - the calendar's SPECIAL_SESSION row overrides the weekend reject. To opt out, remove the day from `schedule_days`
+7. **Strategy paused with `paused_reason=holiday`** but you think today is open: check `get_market_status(exchange)` - the exchange's session may differ from another exchange's. Each strategy is gated by its own exchange
 8. **Orders rejected with "market closed" while host says strategy is running**: your script's hardcoded `exchange="NSE"` doesn't match the host's `exchange="MCX"`. Read `OPENALGO_STRATEGY_EXCHANGE` in your script (see Strategy Template)
 
 ## Migration notes (existing deployments)
@@ -265,14 +402,15 @@ When upgrading to the exchange-aware /python:
 
 - **No data migration required.** `load_configs()` writes `"exchange": "NSE"` into any legacy entry missing the field, on the first read after restart.
 - **No strategy is force-restarted or force-stopped by the upgrade itself.** Running PIDs are reaped and re-evaluated normally.
-- Strategies that should trade something other than NSE need a one-time UI edit (Schedule → pick exchange → Save). Otherwise they'll behave exactly as before, gated on NSE's calendar.
-- `manually_stopped` strategies stay manually stopped — the upgrade does not auto-resume them.
+- Strategies that should trade something other than NSE need a one-time UI edit (Schedule -> pick exchange -> Save). Otherwise they'll behave exactly as before, gated on NSE's calendar.
+- `manually_stopped` strategies stay manually stopped - the upgrade does not auto-resume them.
 - Forward-compatible: rolling back to the previous code reads the same JSON and ignores the new `exchange` field.
 
 ## Example Strategy
 
-See `examples/simple_ema_strategy.py` for a complete working example that:
+See `examples/simple_ema_strategy_config.py` for a complete OCS-powered example that:
 - Implements EMA crossover logic
 - Integrates with OpenAlgo API
 - Handles errors gracefully
-- Uses environment parameters
+- Declares editable inputs with explicit `ui.*` keys
+- Uses OpenAlgo runtime configuration instead of hardcoded parameters

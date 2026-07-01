@@ -167,8 +167,15 @@ export default function NewPythonStrategy() {
       })
 
       if (response.status === 'success') {
-        showToast.success('Strategy uploaded with schedule', 'pythonStrategy')
-        navigate('/python')
+        const strategyId = response.data?.strategy_id
+        const configFieldCount = response.data?.config_field_count || 0
+        showToast.success(
+          configFieldCount > 0
+            ? `Strategy uploaded with ${configFieldCount} config fields`
+            : 'Strategy uploaded with schedule',
+          'pythonStrategy'
+        )
+        navigate(strategyId && configFieldCount > 0 ? `/python/${strategyId}/config` : '/python')
       } else {
         showToast.error(response.message || 'Failed to upload strategy', 'pythonStrategy')
       }
@@ -236,9 +243,8 @@ export default function NewPythonStrategy() {
             <div className="space-y-2">
               <Label htmlFor="file">Python Script</Label>
               <div
-                className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary transition-colors ${
-                  errors.file ? 'border-red-500' : ''
-                }`}
+                className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary transition-colors ${errors.file ? 'border-red-500' : ''
+                  }`}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <input
@@ -342,19 +348,17 @@ export default function NewPythonStrategy() {
                     <button
                       type="button"
                       key={day.value}
-                      className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer transition-colors ${
-                        selectedDays.includes(day.value)
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'hover:bg-muted'
-                      }`}
+                      className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer transition-colors ${selectedDays.includes(day.value)
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'hover:bg-muted'
+                        }`}
                       onClick={() => handleDayToggle(day.value)}
                     >
                       <div
-                        className={`h-4 w-4 rounded border flex items-center justify-center ${
-                          selectedDays.includes(day.value)
-                            ? 'bg-primary-foreground border-primary-foreground'
-                            : 'border-current'
-                        }`}
+                        className={`h-4 w-4 rounded border flex items-center justify-center ${selectedDays.includes(day.value)
+                          ? 'bg-primary-foreground border-primary-foreground'
+                          : 'border-current'
+                          }`}
                       >
                         {selectedDays.includes(day.value) && (
                           <svg

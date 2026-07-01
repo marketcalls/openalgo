@@ -3,8 +3,11 @@ import type {
   LogContent,
   LogFile,
   MasterContractStatus,
+  OCSConfigResponse,
+  OCSSchema,
   PythonStrategy,
   PythonStrategyContent,
+  PythonStrategyUploadResult,
   ScheduleConfig,
 } from '@/types/python-strategy'
 import type { ApiResponse } from '@/types/trading'
@@ -51,7 +54,7 @@ export const pythonStrategyApi = {
       days: string[]
       exchange?: string
     }
-  ): Promise<ApiResponse<{ strategy_id: string }>> => {
+  ): Promise<ApiResponse<PythonStrategyUploadResult>> => {
     const formData = new FormData()
     formData.append('strategy_name', name)
     formData.append('strategy_file', file)
@@ -61,7 +64,7 @@ export const pythonStrategyApi = {
     formData.append('schedule_stop', schedule.stop_time)
     formData.append('schedule_days', JSON.stringify(schedule.days))
 
-    const response = await webClient.post<ApiResponse<{ strategy_id: string }>>(
+    const response = await webClient.post<ApiResponse<PythonStrategyUploadResult>>(
       '/python/new',
       formData,
       {
@@ -209,6 +212,42 @@ export const pythonStrategyApi = {
   checkAndStartPending: async (): Promise<ApiResponse<{ started: number }>> => {
     const response =
       await webClient.post<ApiResponse<{ started: number }>>('/python/check-contracts')
+    return response.data
+  },
+
+  /**
+   * Get OpenAlgo Configuration SDK schema and values
+   */
+  getConfig: async (strategyId: string): Promise<OCSConfigResponse> => {
+    const response = await webClient.get<OCSConfigResponse>(`/python/api/config/${strategyId}`)
+    return response.data
+  },
+
+  /**
+   * Save OpenAlgo Configuration SDK schema
+   */
+  saveConfigSchema: async (
+    strategyId: string,
+    schema: OCSSchema
+  ): Promise<ApiResponse<{ schema: OCSSchema }>> => {
+    const response = await webClient.post<ApiResponse<{ schema: OCSSchema }>>(
+      `/python/api/config/${strategyId}/schema`,
+      { schema }
+    )
+    return response.data
+  },
+
+  /**
+   * Save OpenAlgo Configuration SDK values
+   */
+  saveConfigValues: async (
+    strategyId: string,
+    values: Record<string, unknown>
+  ): Promise<ApiResponse<{ resolved_values: Record<string, unknown> }>> => {
+    const response = await webClient.post<ApiResponse<{ resolved_values: Record<string, unknown> }>>(
+      `/python/api/config/${strategyId}/values`,
+      { values }
+    )
     return response.data
   },
 }

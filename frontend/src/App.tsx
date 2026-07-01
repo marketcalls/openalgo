@@ -83,6 +83,7 @@ const ConfigureSymbols = lazy(() => import('@/pages/strategy/ConfigureSymbols'))
 const PythonStrategyIndex = lazy(() => import('@/pages/python-strategy/PythonStrategyIndex'))
 const NewPythonStrategy = lazy(() => import('@/pages/python-strategy/NewPythonStrategy'))
 const EditPythonStrategy = lazy(() => import('@/pages/python-strategy/EditPythonStrategy'))
+const ConfigPythonStrategy = lazy(() => import('@/pages/python-strategy/ConfigPythonStrategy'))
 const PythonStrategyLogs = lazy(() => import('@/pages/python-strategy/PythonStrategyLogs'))
 const SchedulePythonStrategy = lazy(() => import('@/pages/python-strategy/SchedulePythonStrategy'))
 const PythonStrategyGuide = lazy(() => import('@/pages/python-strategy/PythonStrategyGuide'))
@@ -235,6 +236,7 @@ function App() {
                 <Route path="/python" element={<PythonStrategyIndex />} />
                 <Route path="/python/new" element={<NewPythonStrategy />} />
                 <Route path="/python/:strategyId/edit" element={<EditPythonStrategy />} />
+                <Route path="/python/:strategyId/config" element={<ConfigPythonStrategy />} />
                 <Route path="/python/:strategyId/logs" element={<PythonStrategyLogs />} />
                 <Route path="/python/:strategyId/schedule" element={<SchedulePythonStrategy />} />
                 <Route path="/python/guide" element={<PythonStrategyGuide />} />
