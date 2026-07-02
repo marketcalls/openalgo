@@ -323,9 +323,10 @@ def get_available_strikes(
         _CACHE_STATS["misses"] += 1
         logger.debug(f"Cache MISS: Querying database for {base_symbol} {expiry_date} {option_type}")
 
-        # Convert expiry from DDMMMYY to DD-MMM-YY format used in database
-        # e.g., "28OCT25" -> "28-OCT-25"
-        expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}"
+        # Normalize expiry to DDMMMYY (strip hyphens if caller passed "DD-MMM-YY")
+        # then convert to DD-MMM-YY for the DB expiry column.
+        expiry_no_dashes = expiry_date.upper().replace("-", "")
+        expiry_formatted = f"{expiry_no_dashes[:2]}-{expiry_no_dashes[2:5]}-{expiry_no_dashes[5:]}"
 
         if exchange.upper() in CRYPTO_EXCHANGES:
             # CRYPTO canonical format: BTC28FEB2580000CE (Indian F&O-style, no dashes)
@@ -347,8 +348,7 @@ def get_available_strikes(
         else:
             # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
             # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
-            expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
-            symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
+            symbol_pattern = f"{base_symbol}{expiry_no_dashes}%{option_type.upper()}"
 
             # Query database for all strikes matching the criteria
             # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
