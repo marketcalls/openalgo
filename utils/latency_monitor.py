@@ -51,7 +51,7 @@ class LatencyTracker:
         """
         Initialize the LatencyTracker instance.
         """
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
         self.stage_times = {}
         self.current_stage = None
         self.stage_start = None
@@ -61,14 +61,14 @@ class LatencyTracker:
     def start_stage(self, stage_name):
         """Start timing a new stage"""
         self.current_stage = stage_name
-        self.stage_start = time.time()
+        self.stage_start = time.perf_counter()
         if stage_name == "broker_request":
             self.request_start = self.stage_start
 
     def end_stage(self):
         """End timing the current stage"""
         if self.current_stage and self.stage_start:
-            current_time = time.time()
+            current_time = time.perf_counter()
             duration = (current_time - self.stage_start) * 1000  # Convert to milliseconds
             self.stage_times[self.current_stage] = duration
             if self.current_stage == "broker_request":
@@ -78,7 +78,7 @@ class LatencyTracker:
 
     def get_total_time(self):
         """Get total time since tracker was created"""
-        return (time.time() - self.start_time) * 1000  # Convert to milliseconds
+        return (time.perf_counter() - self.start_time) * 1000  # Convert to milliseconds
 
     def get_rtt(self):
         """Get round-trip time (comparable to Postman/Bruno)"""
@@ -123,7 +123,7 @@ def track_latency(api_type):
             try:
                 # Record the actual start time for overhead calculation
                 # (after Flask routing/middleware has completed)
-                endpoint_start_time = time.time()
+                endpoint_start_time = time.perf_counter()
                 g.endpoint_start_time = endpoint_start_time
 
                 # Start validation stage
@@ -172,7 +172,7 @@ def track_latency(api_type):
                 if broker_api_time is not None and endpoint_start_time is not None:
                     # Calculate total time from when endpoint actually started executing
                     # (excludes Flask routing/middleware overhead)
-                    current_time = time.time()
+                    current_time = time.perf_counter()
                     total_time = (current_time - endpoint_start_time) * 1000  # ms
 
                     # Broker API time is what the httpx hook captured
@@ -223,7 +223,7 @@ def track_latency(api_type):
                 endpoint_start_time = getattr(g, "endpoint_start_time", None)
 
                 if broker_api_time is not None and endpoint_start_time is not None:
-                    current_time = time.time()
+                    current_time = time.perf_counter()
                     total_time = (current_time - endpoint_start_time) * 1000
                     rtt = broker_api_time
                     overhead = total_time - broker_api_time

@@ -36,9 +36,9 @@ ENDPOINTS = {
 
 
 def call(path, body):
-    t0 = time.time()
+    t0 = time.perf_counter()
     r = client.post(f"{BASE}/{path}", json={"apikey": APIKEY, **body})
-    dt = (time.time() - t0) * 1000
+    dt = (time.perf_counter() - t0) * 1000
     ok = False
     try:
         ok = r.status_code == 200 and r.json().get("status") == "success"
@@ -65,12 +65,12 @@ SAMPLES = {"intervals": 30, "quotes": 10, "history": 10, "multiquotes": 8}
 for ep, body in ENDPOINTS.items():
     n = SAMPLES[ep]
     times, ok = [], 0
-    t0 = time.time()
+    t0 = time.perf_counter()
     for _ in range(n):
         code, dt, good = call(ep, body)
         times.append(dt)
         ok += good
-    wall = time.time() - t0
+    wall = time.perf_counter() - t0
     print(f"  {ep:<14} {min(times):7.1f} {pct(times,50):7.1f} {pct(times,95):7.1f} "
           f"{pct(times,99):7.1f} {max(times):7.1f}  {ok:>2}/{n:<2}  {n/wall:5.2f}/s")
 
@@ -90,12 +90,12 @@ def burst(n):
             res[i] = "ERR"
 
     ts = [threading.Thread(target=fire, args=(i,)) for i in range(n)]
-    t0 = time.time()
+    t0 = time.perf_counter()
     for t in ts:
         t.start()
     for t in ts:
         t.join()
-    wall = time.time() - t0
+    wall = time.perf_counter() - t0
     ok = sum(1 for c in res if c == 200)
     rl = sum(1 for c in res if c == 429)
     other = sorted({str(c) for c in res if c not in (200, 429)})

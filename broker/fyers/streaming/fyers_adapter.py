@@ -108,8 +108,8 @@ class FyersAdapter:
 
             # Wait for authentication
             timeout = 15
-            start_time = time.time()
-            while not self.ws_client.is_connected() and time.time() - start_time < timeout:
+            start_time = time.perf_counter()
+            while not self.ws_client.is_connected() and time.perf_counter() - start_time < timeout:
                 time.sleep(0.1)
 
             if self.ws_client.is_connected():

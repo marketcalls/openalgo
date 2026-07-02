@@ -288,14 +288,14 @@ def main():
         print("🛑 Press Ctrl+C to stop\n")
 
         # Monitor with longer intervals for 1800 symbols
-        test_start_time = time.time()
+        test_start_time = time.perf_counter()
 
         while True:
             time.sleep(15)  # Print stats every 15 seconds for high volume
             print_statistics()
 
             # Check if we're receiving data
-            if update_count == 0 and time.time() - test_start_time > 60:
+            if update_count == 0 and time.perf_counter() - test_start_time > 60:
                 print("⚠️ No data received for 60 seconds.")
                 print("💡 This might be normal if market is closed or during low activity periods.")
 
@@ -304,7 +304,7 @@ def main():
                     response = input("Continue waiting? (y/n): ").lower().strip()
                     if response != "y":
                         break
-                    test_start_time = time.time()  # Reset timer
+                    test_start_time = time.perf_counter()  # Reset timer
                 except Exception:
                     break
 
@@ -319,7 +319,7 @@ def main():
 
     finally:
         print("\n🧹 Cleaning up...")
-        cleanup_start = time.time()
+        cleanup_start = time.perf_counter()
 
         try:
             print("📡 Unsubscribing from all symbols...")
@@ -335,7 +335,7 @@ def main():
         except Exception as e:
             print(f"❌ Error during disconnect: {e}")
 
-        cleanup_time = time.time() - cleanup_start
+        cleanup_time = time.perf_counter() - cleanup_start
 
         # Final comprehensive statistics
         print("\n" + "=" * 80)

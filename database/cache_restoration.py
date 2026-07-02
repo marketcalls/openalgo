@@ -43,7 +43,7 @@ def restore_symbol_cache() -> dict:
     """
     result = {"success": False, "symbols_loaded": 0, "broker": None, "time_ms": 0, "error": None}
 
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     try:
         from database.auth_db import Auth
@@ -67,7 +67,7 @@ def restore_symbol_cache() -> dict:
         if cache.cache_loaded and cache.stats.total_symbols > 0:
             result["success"] = True
             result["symbols_loaded"] = cache.stats.total_symbols
-            result["time_ms"] = (time.time() - start_time) * 1000
+            result["time_ms"] = (time.perf_counter() - start_time) * 1000
             logger.debug(f"Symbol cache already loaded: {cache.stats.total_symbols} symbols")
             return result
 
@@ -79,7 +79,7 @@ def restore_symbol_cache() -> dict:
             result["symbols_loaded"] = cache.stats.total_symbols
             logger.debug(
                 f"Symbol cache restored: {cache.stats.total_symbols} symbols "
-                f"for broker '{broker}' in {(time.time() - start_time) * 1000:.0f}ms"
+                f"for broker '{broker}' in {(time.perf_counter() - start_time) * 1000:.0f}ms"
             )
         else:
             result["error"] = "Failed to load symbols from database"
@@ -89,7 +89,7 @@ def restore_symbol_cache() -> dict:
         result["error"] = str(e)
         logger.exception(f"Error restoring symbol cache: {e}")
 
-    result["time_ms"] = (time.time() - start_time) * 1000
+    result["time_ms"] = (time.perf_counter() - start_time) * 1000
     return result
 
 
@@ -110,7 +110,7 @@ def restore_auth_cache() -> dict:
     """
     result = {"success": False, "tokens_loaded": 0, "users": [], "time_ms": 0, "error": None}
 
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     try:
         from database.auth_db import Auth, auth_cache, broker_cache, feed_token_cache
@@ -161,7 +161,7 @@ def restore_auth_cache() -> dict:
         result["error"] = str(e)
         logger.exception(f"Error restoring auth cache: {e}")
 
-    result["time_ms"] = (time.time() - start_time) * 1000
+    result["time_ms"] = (time.perf_counter() - start_time) * 1000
     return result
 
 
@@ -181,7 +181,7 @@ def restore_all_caches() -> dict:
     """
     logger.debug("Starting cache restoration from database...")
 
-    total_start = time.time()
+    total_start = time.perf_counter()
 
     result = {"success": False, "symbol_cache": None, "auth_cache": None, "total_time_ms": 0}
 
@@ -192,7 +192,7 @@ def restore_all_caches() -> dict:
     result["symbol_cache"] = restore_symbol_cache()
 
     # Calculate totals
-    result["total_time_ms"] = (time.time() - total_start) * 1000
+    result["total_time_ms"] = (time.perf_counter() - total_start) * 1000
 
     # Success if at least one cache was restored
     result["success"] = result["auth_cache"].get("success", False) or result["symbol_cache"].get(

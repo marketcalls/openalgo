@@ -207,9 +207,9 @@ class SamcoWebSocket:
 
     def _wait_for_connection(self) -> bool:
         """Wait for WebSocket connection to be established"""
-        start_time = time.time()
+        start_time = time.perf_counter()
 
-        while time.time() - start_time < self.CONNECTION_TIMEOUT:
+        while time.perf_counter() - start_time < self.CONNECTION_TIMEOUT:
             if self.connected:
                 self.logger.info("Samco WebSocket connected successfully")
                 return True

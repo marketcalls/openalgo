@@ -1176,7 +1176,7 @@ class BrokerData:
                     f"Requesting quote for {trading_symbol} on {groww_exchange} (segment: {segment})"
                 )
                 # Make direct API call to Groww quotes endpoint
-                start_time = time.time()
+                start_time = time.perf_counter()
 
                 # Safely convert values to float/int, handling None values
                 def safe_float(value, default=0.0):
@@ -1216,7 +1216,7 @@ class BrokerData:
                     )
 
                     logger.info(f"Groww API response: {response}")
-                    elapsed = time.time() - start_time
+                    elapsed = time.perf_counter() - start_time
                     logger.info(f"Got response from Groww API in {elapsed:.2f}s")
 
                     if response and not response.get("error"):

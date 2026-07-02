@@ -143,8 +143,8 @@ class FyersTbtWebSocket:
 
             # Wait for connection
             timeout = 15
-            start_time = time.time()
-            while not self.connected and time.time() - start_time < timeout:
+            start_time = time.perf_counter()
+            while not self.connected and time.perf_counter() - start_time < timeout:
                 time.sleep(0.1)
 
             return self.connected

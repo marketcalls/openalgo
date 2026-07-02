@@ -6,7 +6,7 @@ echo "[OpenAlgo] Starting up..."
 # ============================================
 
 # Determine writable .env location
-ENV_FILE="/app/.env"
+ENV_FILE="./.env"
 
 # Check if .env exists, is readable, and has content (not empty)
 if [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ] && [ -s "$ENV_FILE" ]; then

@@ -46,14 +46,14 @@ class TrafficLoggerMiddleware:
             return self.app(environ, start_response)
 
         # Record start time
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         def log_request(status_code, error=None):
             if not has_request_context():
                 return
 
             try:
-                duration_ms = (time.time() - start_time) * 1000
+                duration_ms = (time.perf_counter() - start_time) * 1000
                 # Capture request-context values now; the DB write happens on
                 # the executor thread where the Flask context is gone.
                 payload = {

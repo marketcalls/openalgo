@@ -413,7 +413,7 @@ class BrokerData:
             return skipped_symbols
 
         # Step 2: Make concurrent API calls
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
         # if called from within an already-running event loop
@@ -458,7 +458,7 @@ class BrokerData:
                             }
                         )
 
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         logger.debug(
             f"Batch of {len(prepared_symbols)} symbols completed in {elapsed:.2f}s ({len(prepared_symbols) / max(elapsed, 0.001):.1f} symbols/sec)"
         )

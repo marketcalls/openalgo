@@ -186,7 +186,7 @@ class BrokerSymbolCache:
         try:
             from database.symbol import SymToken
 
-            start_time = time.time()
+            start_time = time.perf_counter()
             logger.debug(f"Loading all symbols for broker: {broker}")
 
             # Clear existing cache
@@ -291,7 +291,7 @@ class BrokerSymbolCache:
                 len(self.symbols) * 500  # ~500 bytes per symbol
             ) / (1024 * 1024)
 
-            load_time = time.time() - start_time
+            load_time = time.perf_counter() - start_time
             logger.debug(
                 f"Successfully loaded {self.stats.total_symbols} symbols "
                 f"in {load_time:.2f} seconds. "

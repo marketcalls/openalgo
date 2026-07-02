@@ -73,9 +73,9 @@ def test_cache_performance():
             broker = "angel"  # Default broker for testing
             print(f"Loading cache for broker: {broker}")
 
-            start_time = time.time()
+            start_time = time.perf_counter()
             success = load_cache_for_broker(broker)
-            load_time = time.time() - start_time
+            load_time = time.perf_counter() - start_time
 
             if success:
                 print(f"[SUCCESS] Cache loaded in {load_time:.2f} seconds")
@@ -115,10 +115,10 @@ def test_cache_performance():
         cache_times = []
 
         for _ in range(3):  # Run 3 rounds
-            start = time.time()
+            start = time.perf_counter()
             for sym in test_symbols:
                 result = token_db.get_token(sym.symbol, sym.exchange)
-            end = time.time()
+            end = time.perf_counter()
             cache_times.append(end - start)
             print(f"  Round {_ + 1}: {cache_times[-1]:.4f} seconds")
 
@@ -162,9 +162,9 @@ def test_cache_performance():
         symbol_exchange_pairs = [(sym.symbol, sym.exchange) for sym in test_symbols[:50]]
 
         # Test bulk retrieval
-        start = time.time()
+        start = time.perf_counter()
         results = token_db.get_tokens_bulk(symbol_exchange_pairs)
-        bulk_time = time.time() - start
+        bulk_time = time.perf_counter() - start
 
         valid_results = [r for r in results if r is not None]
         print(f"Bulk retrieval of {len(symbol_exchange_pairs)} symbols")
@@ -180,9 +180,9 @@ def test_cache_performance():
         search_queries = ["RELIANCE", "NIFTY", "BANK", "TCS", "INFY"]
 
         for query in search_queries[:3]:  # Test first 3
-            start = time.time()
+            start = time.perf_counter()
             results = token_db.search_symbols(query, limit=10)
-            search_time = time.time() - start
+            search_time = time.perf_counter() - start
             print(f"Search '{query}': {len(results)} results in {search_time:.4f} seconds")
 
             if results and len(results) > 0:

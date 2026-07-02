@@ -801,14 +801,14 @@ class BrokerData:
         max_wait_time = min(
             max(num_instruments * 0.5, 3), 15
         )  # Between 3-15 seconds based on instrument count
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         logger.debug(
             f"Collecting data for up to {max_wait_time:.1f}s for {num_instruments} instruments..."
         )
 
         # Read continuously until we have all data or timeout
-        while time.time() - start_time < max_wait_time:
+        while time.perf_counter() - start_time < max_wait_time:
             detailed_data = self.ws_connection.read_detailed_marketdata()
 
             if detailed_data and isinstance(detailed_data, dict):
