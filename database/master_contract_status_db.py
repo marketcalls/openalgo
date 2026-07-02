@@ -296,6 +296,28 @@ def mark_status_ready_without_download(broker):
         session.close()
 
 
+def reset_all_stuck_statuses():
+    """Reset all brokers that are stuck in 'downloading' state to 'error' or 'pending'.
+    This should be called during application startup to clear any persistent states
+    from a previous session that crashed or was stopped.
+    """
+    session = SessionLocal()
+    try:
+        stuck_brokers = session.query(MasterContractStatus).filter_by(status="downloading").all()
+        for status in stuck_brokers:
+            logger.info(f"Resetting stuck 'downloading' status for {status.broker} on startup")
+            status.status = "error"
+            status.message = "Interrupted by server restart. Click Force Download to retry."
+            status.last_updated = datetime.now()
+            status.is_ready = False
+        session.commit()
+    except Exception as e:
+        logger.exception(f"Error resetting stuck statuses: {str(e)}")
+        session.rollback()
+    finally:
+        session.close()
+
+
 def get_exchange_stats_from_db():
     """Get exchange-wise symbol counts from symtoken table"""
     try:
