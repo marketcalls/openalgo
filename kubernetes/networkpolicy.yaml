@@ -1,0 +1,65 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openalgo-netpol
+  namespace: openalgo
+  labels:
+    app: openalgo
+spec:
+  podSelector:
+    matchLabels:
+      app: openalgo
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Allow incoming traffic from ingress controller
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 5000  # Web UI
+    - protocol: TCP
+      port: 8765  # WebSocket
+  
+  # Allow all pods in the same namespace to communicate
+  - from:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 5000
+    - protocol: TCP
+      port: 8765
+
+  # Allow outgoing traffic
+  egress:
+  # DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # External API calls (broker APIs, etc.)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS
+    - protocol: TCP
+      port: 80   # HTTP
+  
+  # Allow outbound to any IP (for broker APIs)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
