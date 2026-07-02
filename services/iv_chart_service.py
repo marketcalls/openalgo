@@ -29,26 +29,13 @@ from services.option_symbol_service import (
 )
 from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_quotes
-from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT, NSE_INDEX_SYMBOLS, BSE_INDEX_SYMBOLS
 from utils.logging import get_logger
 
 # opengreeks is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data().
 
 logger = get_logger(__name__)
 
-# Index symbols that need NSE_INDEX/BSE_INDEX for quotes
-NSE_INDEX_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    "NIFTYNXT50",
-    "NIFTYIT",
-    "NIFTYPHARMA",
-    "NIFTYBANK",
-}
-
-BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
 
 
 def calculate_time_to_expiry_at(candle_time, expiry):

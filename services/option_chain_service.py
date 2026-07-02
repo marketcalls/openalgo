@@ -58,7 +58,7 @@ from services.option_symbol_service import (
     parse_underlying_symbol,
 )
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
-from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT, NSE_INDEX_SYMBOLS, BSE_INDEX_SYMBOLS
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -253,16 +253,9 @@ def get_option_chain(
         # Step 2: Determine quote exchange for underlying LTP
         quote_exchange = exchange
         if exchange.upper() in ["NFO", "BFO"]:
-            if base_symbol in [
-                "NIFTY",
-                "BANKNIFTY",
-                "FINNIFTY",
-                "MIDCPNIFTY",
-                "NIFTYNXT50",
-                "INDIAVIX",
-            ]:
+            if base_symbol in NSE_INDEX_SYMBOLS:
                 quote_exchange = "NSE_INDEX"
-            elif base_symbol in ["SENSEX", "BANKEX", "SENSEX50"]:
+            elif base_symbol in BSE_INDEX_SYMBOLS:
                 quote_exchange = "BSE_INDEX"
             else:
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"

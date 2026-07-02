@@ -26,6 +26,7 @@ import pytz
 
 from services.history_service import get_history
 from services.quotes_service import get_quotes
+from utils.constants import NSE_INDEX_SYMBOLS, BSE_INDEX_SYMBOLS
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -71,18 +72,6 @@ def _cap_last_n_trading_dates(series: list[dict], n: int, ist_tz: pytz.BaseTzInf
     return [r for d, r in tagged if d in keep]
 
 
-NSE_INDEX_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    "NIFTYNXT50",
-    "NIFTYIT",
-    "NIFTYPHARMA",
-    "NIFTYBANK",
-}
-
-BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
 
 
 def _get_quote_exchange(base_symbol: str, underlying_exchange: str) -> str:

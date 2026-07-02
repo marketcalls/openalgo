@@ -24,21 +24,11 @@ from services.strategy_chart_service import (
     _cap_last_n_trading_dates,
     _resolve_trading_window,
 )
-from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT, NSE_INDEX_SYMBOLS, BSE_INDEX_SYMBOLS
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Index symbols that need special exchange for quotes
-NSE_INDEX_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    "NIFTYNXT50",
-}
-
-BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
 
 
 def _find_futures_symbol(

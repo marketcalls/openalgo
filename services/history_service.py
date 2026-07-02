@@ -1,4 +1,5 @@
 import importlib
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -15,17 +16,27 @@ logger = get_logger(__name__)
 # Rate limiter: max 3 broker history API requests per second
 # Uses minimum interval between calls to prevent burst requests
 _last_history_call: float = 0.0
+_last_history_call_lock = threading.Lock()
 _MIN_HISTORY_INTERVAL = 0.35  # 350ms between calls (~3 req/sec, evenly spaced)
 
 
 def _enforce_rate_limit():
-    """Block until enough time has passed since the last request (~3 per second)."""
+    """Block until enough time has passed since the last request (~3 per second).
+
+    Thread-safe via _last_history_call_lock to prevent burst races when
+    multiple workers call get_history concurrently.  Uses a spin-retry
+    pattern so the lock is held only during the read-compare-update, not
+    across the sleep — avoiding serialization of parallel workers.
+    """
     global _last_history_call
-    now = time.monotonic()
-    elapsed = now - _last_history_call
-    if elapsed < _MIN_HISTORY_INTERVAL:
-        time.sleep(_MIN_HISTORY_INTERVAL - elapsed)
-    _last_history_call = time.monotonic()
+    while True:
+        with _last_history_call_lock:
+            now = time.monotonic()
+            elapsed = now - _last_history_call
+            if elapsed >= _MIN_HISTORY_INTERVAL:
+                _last_history_call = now
+                return
+        time.sleep(min(_MIN_HISTORY_INTERVAL - elapsed, 0.05))
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
