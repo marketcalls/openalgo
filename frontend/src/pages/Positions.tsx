@@ -50,6 +50,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
@@ -830,19 +831,25 @@ export default function Positions() {
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Open Positions</CardDescription>
-            <CardTitle className="text-2xl">{stats.total}</CardTitle>
+            <CardTitle className="text-2xl">
+              {isLoading ? <Skeleton className="h-7 w-16" /> : stats.total}
+            </CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Long</CardDescription>
-            <CardTitle className="text-2xl text-green-600">{stats.long}</CardTitle>
+            <CardTitle className="text-2xl text-green-600">
+              {isLoading ? <Skeleton className="h-7 w-16" /> : stats.long}
+            </CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Short</CardDescription>
-            <CardTitle className="text-2xl text-red-600">{stats.short}</CardTitle>
+            <CardTitle className="text-2xl text-red-600">
+              {isLoading ? <Skeleton className="h-7 w-16" /> : stats.short}
+            </CardTitle>
           </CardHeader>
         </Card>
         <Card>
@@ -851,10 +858,10 @@ export default function Positions() {
             <CardTitle
               className={cn(
                 'text-2xl',
-                isProfit(stats.totalPnl) ? 'text-green-600' : 'text-red-600'
+                !isLoading && isProfit(stats.totalPnl) ? 'text-green-600' : !isLoading ? 'text-red-600' : ''
               )}
             >
-              {formatCurrency(stats.totalPnl)}
+              {isLoading ? <Skeleton className="h-7 w-28" /> : formatCurrency(stats.totalPnl)}
             </CardTitle>
           </CardHeader>
         </Card>
