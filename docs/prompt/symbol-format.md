@@ -72,6 +72,14 @@ Options symbols in OpenAlgo are structured to include the base symbol, the expir
 
 * **Example:** For an Goverent bond (726GS2032) put option with a strike price of 97, expiring on 25th April 2024, the symbol would be `726GS203225APR2497PE`.
 
+**Crypto Options (Delta Exchange):**
+
+Delta Exchange instruments use OpenAlgo's broker-agnostic `CRYPTO` exchange code. Option symbols follow the same canonical OpenAlgo format as other options, while the broker-native Delta symbol is stored separately as `brsymbol`.
+
+* **Example:** For a BTC call option with a strike price of 80,000, expiring on 28th February 2025, the OpenAlgo symbol would be `BTC28FEB2580000CE` and the Delta-native symbol would be `C-BTC-80000-280225`.
+* **Example:** For a BTC put option with a strike price of 80,000, expiring on 28th February 2025, the OpenAlgo symbol would be `BTC28FEB2580000PE` and the Delta-native symbol would be `P-BTC-80000-280225`.
+* **Example:** For an ETH put option with a strike price of 2,500, expiring on 28th February 2025, the OpenAlgo symbol would be `ETH28FEB252500PE` and the Delta-native symbol would be `P-ETH-2500-280225`.
+
 ### Common NSE Index Symbols (Exchange Code : NSE\_INDEX)
 
 {% columns %}
@@ -275,10 +283,24 @@ The supported exchange symbol formats in OpenAlgo allow for an identification sy
 * **CDS:** `CDS` for NSE Currency Derivatives.
 * **MCX:** `MCX` for commodities traded on the Multi Commodity Exchange.
 * **NCO:** `NCO` for NSE Commodities (futures + options). Zerodha only.
+* **CRYPTO:** `CRYPTO` for crypto futures, perpetual futures, spot, and options through the Delta Exchange plugin.
 * **NSE\_INDEX:** `NSE_INDEX` for indices on the National Stock Exchange.
 * **BSE\_INDEX:** `BSE_INDEX` for indices on the Bombay Stock Exchange.
 * **MCX\_INDEX:** `MCX_INDEX` for MCX commodity sectoral indices (MCXBULLDEX, MCXMETLDEX, MCXAGRI, ...). Quote-only.
 * **GLOBAL\_INDEX:** `GLOBAL_INDEX` for global indices (US30, JAPAN225, HANGSENG, FRANCE40, AUS200, GIFTNIFTY, ...). Quote-only. Zerodha only.
+
+### Crypto Symbol Examples (Exchange Code : CRYPTO)
+
+Delta Exchange symbols are stored in OpenAlgo's canonical format for `symbol`, with the exchange's native symbol stored in `brsymbol`.
+
+| Instrument | OpenAlgo Symbol | Delta-native brsymbol |
+| ---------- | --------------- | --------------------- |
+| BTC perpetual future | `BTCUSDFUT` | `BTCUSD` |
+| BTC dated future, 28th Feb 2025 | `BTC28FEB25FUT` | `BTCUSD28Feb2025` |
+| BTC 80000 Call, 28th Feb 2025 | `BTC28FEB2580000CE` | `C-BTC-80000-280225` |
+| BTC 80000 Put, 28th Feb 2025 | `BTC28FEB2580000PE` | `P-BTC-80000-280225` |
+
+When placing orders or calling APIs, use the OpenAlgo symbol with `exchange: "CRYPTO"` rather than the Delta-native `brsymbol`.
 
 ### Database Schema (Common Symbols)
 
