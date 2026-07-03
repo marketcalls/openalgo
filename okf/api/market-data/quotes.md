@@ -11,110 +11,12 @@ tags:
 timestamp: '2026-07-03T00:00:00+00:00'
 ---
 
-# Quotes
+> **Map entry — no duplicated content.** The authoritative text lives in the
+> source doc linked below; this OKF concept exists only to index, tag, and
+> cross-link it. Edit the source, never this file.
 
-Get real-time market quotes for a single [symbol](../../sdk/symbol-format.md) including OHLC, LTP, bid/ask, and volume.
+Get market quotes for a symbol.
 
-## Endpoint URL
+**Source:** [docs/api/market-data/quotes.md](../../../docs/api/market-data/quotes.md)
 
-```http
-Local Host   :  POST http://127.0.0.1:5000/api/v1/quotes
-Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/quotes
-Custom Domain:  POST https://<your-custom-domain>/api/v1/quotes
-```
-
-## Sample API Request
-
-```json
-{
-  "apikey": "<your_app_apikey>",
-  "symbol": "RELIANCE",
-  "exchange": "NSE"
-}
-```
-
-## Sample cURL Request
-
-```bash
-curl -X POST http://127.0.0.1:5000/api/v1/quotes \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "apikey": "<your_app_apikey>",
-  "symbol": "RELIANCE",
-  "exchange": "NSE"
-}'
-```
-
-## Sample API Response
-
-```json
-{
-  "status": "success",
-  "data": {
-    "open": 1172.0,
-    "high": 1196.6,
-    "low": 1163.3,
-    "ltp": 1187.75,
-    "ask": 1188.0,
-    "bid": 1187.85,
-    "prev_close": 1165.7,
-    "volume": 14414545
-  }
-}
-```
-
-## Request Body
-
-| Parameter | Description | Mandatory/Optional | Default Value |
-|-----------|-------------|-------------------|---------------|
-| apikey | Your OpenAlgo API key | Mandatory | - |
-| symbol | Trading symbol | Mandatory | - |
-| exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Mandatory | - |
-
-Valid `exchange` values are documented in [Order Constants](../../sdk/order-constants.md).
-
-## Response Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| status | string | "success" or "error" |
-| data | object | Quote data object |
-
-### Data Object Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| open | number | Day's open price |
-| high | number | Day's high price |
-| low | number | Day's low price |
-| ltp | number | Last traded price |
-| ask | number | Best ask price |
-| bid | number | Best bid price |
-| prev_close | number | Previous day's close price |
-| volume | number | Total traded volume |
-
-## Notes
-
-- Quotes are **real-time** and refresh with each trade
-- For **F&O symbols**, use the OpenAlgo [standard symbol format](../../sdk/symbol-format.md) (e.g., NIFTY30JAN25FUT)
-- For **multiple symbols**, use the [MultiQuotes](multiquotes.md) endpoint
-- The **bid/ask** spread indicates liquidity
-
-## Example: F&O Quote
-
-```json
-{
-  "apikey": "<your_app_apikey>",
-  "symbol": "NIFTY30JAN25FUT",
-  "exchange": "NFO"
-}
-```
-
-## Related Endpoints
-
-- [MultiQuotes](multiquotes.md) - Get quotes for multiple symbols
-- [Depth](depth.md) - Get market depth (Level 2)
-
-# Citations
-- Official docs: https://docs.openalgo.in
-- Source: https://github.com/marketcalls/openalgo/blob/main/docs/api/market-data/quotes.md
+**Related:** [overview](../../overview.md) · [order constants](../../sdk/order-constants.md) · [symbol format](../../sdk/symbol-format.md)

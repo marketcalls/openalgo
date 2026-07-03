@@ -18,6 +18,18 @@ All surfaces share the Sandbox engine (₹1 Crore sandbox capital, exchange-alig
 **Repository**: https://github.com/marketcalls/openalgo
 **Documentation**: https://docs.openalgo.in
 
+## Documentation Map
+
+All project documentation lives under `docs/` as markdown (the single source of
+truth). **Start from [`docs/INDEX.md`](docs/INDEX.md)** — it maps every area
+(REST API, Python SDK, indicators, user guide, BDD specs, PRDs, design, scalping,
+installation, audits) to its entry file.
+
+When answering a question, read `docs/INDEX.md` first, then open only the
+specific doc you need (progressive disclosure) instead of scanning the whole
+tree. Do **not** copy or restate docs into a second location — edit the source
+file in `docs/` and every reader sees the change.
+
 ## Security and Deployment Model
 
 - **Single user per deployment** — no multi-user, no privilege escalation. One user, one broker session per instance.
