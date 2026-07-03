@@ -652,8 +652,14 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
 # Storage intervals - only these are physically stored
 STORAGE_INTERVALS = {"1m", "D"}
 
-# Standard computed intervals - these are aggregated from 1m data on-the-fly
-COMPUTED_INTERVALS = {"5m", "15m", "30m", "1h", "D", "W", "M", "Q", "Y"}
+# Standard intraday computed intervals - aggregated from 1m data on-the-fly
+INTRADAY_COMPUTED_INTERVALS = {"5m", "15m", "30m", "1h"}
+
+# Standard daily-aggregated intervals - aggregated from D data on-the-fly
+DAILY_COMPUTED_INTERVALS = {"W", "M", "Q", "Y"}
+
+# All standard computed intervals
+COMPUTED_INTERVALS = INTRADAY_COMPUTED_INTERVALS | DAILY_COMPUTED_INTERVALS
 
 # Interval to minutes mapping for standard intervals
 INTERVAL_MINUTES = {
@@ -894,7 +900,7 @@ def get_ohlcv(
             return result
 
         # Intraday computed intervals (5m, 15m, 30m, 1h, custom like 25m, 2h)
-        if interval in COMPUTED_INTERVALS or is_custom_interval(interval):
+        if interval in INTRADAY_COMPUTED_INTERVALS or is_custom_interval(interval):
             return _get_aggregated_ohlcv(
                 symbol=symbol,
                 exchange=exchange,
@@ -1176,37 +1182,62 @@ def _get_daily_aggregated_ohlcv(
                 f"WHERE symbol = ? AND exchange = ? AND interval = 'D'{time_filter}"
             )
             params = [sym_upper, exch_upper] + time_params
-            cte_prefix = ""
-        else:
-            # Fallback: compute daily candles from 1m via CTE, then aggregate
-            logger.info(
-                f"No stored daily data for {sym_upper}:{exch_upper}, "
-                f"computing {target_interval} from 1m data"
-            )
-            day_expr = (
-                f"(FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset})"
-            )
-
-            cte_prefix = f"""
-                WITH daily_data AS (
-                    SELECT
-                        {day_expr} as timestamp,
-                        FIRST(open ORDER BY timestamp) as open,
-                        MAX(high) as high,
-                        MIN(low) as low,
-                        LAST(close ORDER BY timestamp) as close,
-                        SUM(volume) as volume,
-                        LAST(oi ORDER BY timestamp) as oi
-                    FROM market_data
-                    WHERE symbol = ? AND exchange = ? AND interval = '1m'{time_filter}
-                    GROUP BY {day_expr}
-                )
+            query = f"""
+                SELECT
+                    EPOCH({group_expr}) as timestamp,
+                    FIRST(open ORDER BY timestamp) as open,
+                    MAX(high) as high,
+                    MIN(low) as low,
+                    LAST(close ORDER BY timestamp) as close,
+                    SUM(volume) as volume,
+                    LAST(oi ORDER BY timestamp) as oi
+                FROM {source_table}
+                {source_filter}
+                GROUP BY {group_expr}
+                ORDER BY timestamp ASC
             """
-            source_table = "daily_data"
-            source_filter = ""
-            params = [sym_upper, exch_upper] + time_params
+            with get_connection() as conn:
+                result = conn.execute(query, params).fetchdf()
 
-        # Single aggregation query applied to either source
+            if not result.empty:
+                return result
+
+            # If result is empty, fall back to computing from 1m data (stale catalog or range mismatch)
+            logger.info(
+                f"Stored daily data exists in catalog but returned empty for range "
+                f"{start_timestamp or 'any'} to {end_timestamp or 'any'} for {sym_upper}:{exch_upper}. "
+                f"Falling back to 1m data."
+            )
+
+        # Fallback: compute daily candles from 1m via CTE, then aggregate
+        logger.info(
+            f"No stored daily data for {sym_upper}:{exch_upper} in the requested range, "
+            f"computing {target_interval} from 1m data"
+        )
+        day_expr = (
+            f"(FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset})"
+        )
+
+        cte_prefix = f"""
+            WITH daily_data AS (
+                SELECT
+                    {day_expr} as timestamp,
+                    FIRST(open ORDER BY timestamp) as open,
+                    MAX(high) as high,
+                    MIN(low) as low,
+                    LAST(close ORDER BY timestamp) as close,
+                    SUM(volume) as volume,
+                    LAST(oi ORDER BY timestamp) as oi
+                FROM market_data
+                WHERE symbol = ? AND exchange = ? AND interval = '1m'{time_filter}
+                GROUP BY {day_expr}
+            )
+        """
+        source_table = "daily_data"
+        source_filter = ""
+        params = [sym_upper, exch_upper] + time_params
+
+        # Single aggregation query applied to 1m source
         query = (
             cte_prefix
             + f"""
@@ -2460,7 +2491,7 @@ def export_to_parquet(
 
             is_daily_agg = is_daily_aggregated_interval(target_interval)
             is_intraday_computed = (
-                target_interval in COMPUTED_INTERVALS or is_custom_interval(target_interval)
+                target_interval in INTRADAY_COMPUTED_INTERVALS or is_custom_interval(target_interval)
             )
 
             for sym, exch in symbols_list:
@@ -2795,7 +2826,7 @@ def export_to_zip(
                         is_daily_agg = is_daily_aggregated_interval(interval)
 
                         # Determine if this is an intraday computed interval (standard or custom)
-                        is_intraday_computed = interval in COMPUTED_INTERVALS or is_custom_interval(
+                        is_intraday_computed = interval in INTRADAY_COMPUTED_INTERVALS or is_custom_interval(
                             interval
                         )
 
