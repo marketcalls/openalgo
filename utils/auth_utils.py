@@ -298,13 +298,28 @@ def async_master_contract_download(broker):
         # Most brokers return the socketio.emit result, we need to check completion
         # by looking at the module's actual completion
 
-        # Try to get the symbol count from the database
+        # Verify the download actually populated the symbol table. Distinguish two
+        # distinct failure modes so incident response isn't misled:
+        #   - the count query itself failed  -> we can't verify; error out, but say so
+        #   - the count is genuinely 0        -> the download produced no symbols
+        # Either way we must NOT mark this success/is_ready=True: that would leave
+        # every symbol->token lookup (quotes, order placement) silently broken with
+        # nothing signalling the contract is empty. Fail closed so the smart-download
+        # logic re-fetches next time. (A False is_ready self-heals via re-download; a
+        # wrong True does not.)
         try:
             from database.token_db import get_symbol_count
 
             total_symbols = get_symbol_count()
-        except Exception:
-            total_symbols = None
+        except Exception as count_error:
+            logger.exception(f"Failed to verify symbol count for {broker}: {count_error}")
+            update_status(broker, "error", f"Failed to verify master contract symbol count: {count_error}")
+            return {"status": "error", "message": "Failed to verify master contract symbol count"}
+
+        if total_symbols == 0:
+            logger.error(f"Master contract download for {broker} produced 0 symbols")
+            update_status(broker, "error", "Master contract download produced 0 symbols", 0)
+            return {"status": "error", "message": "Master contract download produced 0 symbols"}
 
         # Since socketio.emit doesn't return a meaningful value, we check if no exception was raised
         update_status(
