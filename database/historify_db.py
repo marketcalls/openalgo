@@ -653,7 +653,7 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
 STORAGE_INTERVALS = {"1m", "D"}
 
 # Standard computed intervals - these are aggregated from 1m data on-the-fly
-COMPUTED_INTERVALS = {"5m", "15m", "30m", "1h"}
+COMPUTED_INTERVALS = {"5m", "15m", "30m", "1h", "D", "W", "M", "Q", "Y"}
 
 # Interval to minutes mapping for standard intervals
 INTERVAL_MINUTES = {
@@ -662,6 +662,7 @@ INTERVAL_MINUTES = {
     "15m": 15,
     "30m": 30,
     "1h": 60,
+    "D": 1440,
 }
 
 
@@ -792,6 +793,47 @@ def is_daily_aggregated_interval(interval: str) -> bool:
     return parsed["type"] in ("weekly", "monthly", "quarterly", "yearly")
 
 
+def _query_stored_ohlcv(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> pd.DataFrame:
+    """
+    Query stored OHLCV data directly from the database.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange code
+        interval: Storage interval (e.g., '1m', 'D')
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+
+    Returns:
+        DataFrame with columns: timestamp, open, high, low, close, volume, oi
+    """
+    query = """
+        SELECT timestamp, open, high, low, close, volume, oi
+        FROM market_data
+        WHERE symbol = ? AND exchange = ? AND interval = ?
+    """
+    params = [symbol.upper(), exchange.upper(), interval]
+
+    if start_timestamp:
+        query += " AND timestamp >= ?"
+        params.append(start_timestamp)
+
+    if end_timestamp:
+        query += " AND timestamp <= ?"
+        params.append(end_timestamp)
+
+    query += " ORDER BY timestamp ASC"
+
+    with get_connection() as conn:
+        return conn.execute(query, params).fetchdf()
+
+
 def get_ohlcv(
     symbol: str,
     exchange: str,
@@ -819,7 +861,7 @@ def get_ohlcv(
         DataFrame with columns: timestamp, open, high, low, close, volume, oi
     """
     try:
-        # Check if this is a daily-aggregated interval (W, MO, Q, Y)
+        # Check if this is a daily-aggregated interval (W, M, Q, Y)
         if is_daily_aggregated_interval(interval):
             return _get_daily_aggregated_ohlcv(
                 symbol=symbol,
@@ -829,7 +871,29 @@ def get_ohlcv(
                 end_timestamp=end_timestamp,
             )
 
-        # Check if this is an intraday computed interval (standard or custom)
+        # For storage intervals (1m, D), try stored data first
+        if interval in STORAGE_INTERVALS:
+            result = _query_stored_ohlcv(
+                symbol, exchange, interval, start_timestamp, end_timestamp
+            )
+
+            if not result.empty:
+                return result
+
+            # D with no stored data: fall back to computing from 1m
+            if interval == "D":
+                return _get_aggregated_ohlcv(
+                    symbol=symbol,
+                    exchange=exchange,
+                    target_interval=interval,
+                    start_timestamp=start_timestamp,
+                    end_timestamp=end_timestamp,
+                )
+
+            # 1m with no data: nothing to fall back to
+            return result
+
+        # Intraday computed intervals (5m, 15m, 30m, 1h, custom like 25m, 2h)
         if interval in COMPUTED_INTERVALS or is_custom_interval(interval):
             return _get_aggregated_ohlcv(
                 symbol=symbol,
@@ -839,28 +903,10 @@ def get_ohlcv(
                 end_timestamp=end_timestamp,
             )
 
-        # Standard query for stored intervals (1m, D)
-        query = """
-            SELECT timestamp, open, high, low, close, volume, oi
-            FROM market_data
-            WHERE symbol = ? AND exchange = ? AND interval = ?
-        """
-        params = [symbol.upper(), exchange.upper(), interval]
-
-        if start_timestamp:
-            query += " AND timestamp >= ?"
-            params.append(start_timestamp)
-
-        if end_timestamp:
-            query += " AND timestamp <= ?"
-            params.append(end_timestamp)
-
-        query += " ORDER BY timestamp ASC"
-
-        with get_connection() as conn:
-            result = conn.execute(query, params).fetchdf()
-
-        return result
+        # Unknown interval - try direct query as last resort
+        return _query_stored_ohlcv(
+            symbol, exchange, interval, start_timestamp, end_timestamp
+        )
 
     except Exception as e:
         logger.exception(f"Error fetching OHLCV data: {e}")
@@ -1097,13 +1143,73 @@ def _get_daily_aggregated_ohlcv(
                     INTERVAL ((EXTRACT(YEAR FROM to_timestamp(timestamp + {ist_offset})) % {interval_value})) YEAR
                 """
         else:
-            logger.error(f"Unsupported interval type for daily aggregation: {interval_type}")
+            logger.error(
+                f"Unsupported interval type for daily aggregation: {interval_type}"
+            )
             return pd.DataFrame()
 
-        # Build the query - aggregate from D (daily) data
-        # Return timestamp as UTC epoch representing the IST date
-        # (frontend will interpret as UTC which visually shows the IST date)
-        query = f"""
+        # Try stored D data first, fall back to aggregating from 1m if unavailable
+        sym_upper = symbol.upper()
+        exch_upper = exchange.upper()
+
+        # Build timestamp filter clause (shared by both paths)
+        time_filter = ""
+        time_params = []
+        if start_timestamp:
+            time_filter += " AND timestamp >= ?"
+            time_params.append(start_timestamp)
+        if end_timestamp:
+            time_filter += " AND timestamp <= ?"
+            time_params.append(end_timestamp)
+
+        # Check if stored daily data exists for this symbol
+        with get_connection() as conn:
+            has_daily = conn.execute(
+                "SELECT 1 FROM data_catalog WHERE symbol = ? AND exchange = ? AND interval = 'D' AND record_count > 0 LIMIT 1",
+                [sym_upper, exch_upper],
+            ).fetchone()
+
+        if has_daily:
+            # Aggregate directly from stored D (daily) data
+            source_table = "market_data"
+            source_filter = (
+                f"WHERE symbol = ? AND exchange = ? AND interval = 'D'{time_filter}"
+            )
+            params = [sym_upper, exch_upper] + time_params
+            cte_prefix = ""
+        else:
+            # Fallback: compute daily candles from 1m via CTE, then aggregate
+            logger.info(
+                f"No stored daily data for {sym_upper}:{exch_upper}, "
+                f"computing {target_interval} from 1m data"
+            )
+            day_expr = (
+                f"(FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset})"
+            )
+
+            cte_prefix = f"""
+                WITH daily_data AS (
+                    SELECT
+                        {day_expr} as timestamp,
+                        FIRST(open ORDER BY timestamp) as open,
+                        MAX(high) as high,
+                        MIN(low) as low,
+                        LAST(close ORDER BY timestamp) as close,
+                        SUM(volume) as volume,
+                        LAST(oi ORDER BY timestamp) as oi
+                    FROM market_data
+                    WHERE symbol = ? AND exchange = ? AND interval = '1m'{time_filter}
+                    GROUP BY {day_expr}
+                )
+            """
+            source_table = "daily_data"
+            source_filter = ""
+            params = [sym_upper, exch_upper] + time_params
+
+        # Single aggregation query applied to either source
+        query = (
+            cte_prefix
+            + f"""
             SELECT
                 EPOCH({group_expr}) as timestamp,
                 FIRST(open ORDER BY timestamp) as open,
@@ -1112,23 +1218,12 @@ def _get_daily_aggregated_ohlcv(
                 LAST(close ORDER BY timestamp) as close,
                 SUM(volume) as volume,
                 LAST(oi ORDER BY timestamp) as oi
-            FROM market_data
-            WHERE symbol = ? AND exchange = ? AND interval = 'D'
-        """
-        params = [symbol.upper(), exchange.upper()]
-
-        if start_timestamp:
-            query += " AND timestamp >= ?"
-            params.append(start_timestamp)
-
-        if end_timestamp:
-            query += " AND timestamp <= ?"
-            params.append(end_timestamp)
-
-        query += f"""
+            FROM {source_table}
+            {source_filter}
             GROUP BY {group_expr}
             ORDER BY timestamp ASC
         """
+        )
 
         with get_connection() as conn:
             result = conn.execute(query, params).fetchdf()
@@ -1136,7 +1231,9 @@ def _get_daily_aggregated_ohlcv(
         return result
 
     except Exception as e:
-        logger.exception(f"Error aggregating daily OHLCV data to {target_interval}: {e}")
+        logger.exception(
+            f"Error aggregating daily OHLCV data to {target_interval}: {e}"
+        )
         return pd.DataFrame()
 
 
