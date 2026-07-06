@@ -157,13 +157,13 @@ interface DownloadJob {
   id: string
   job_type: string
   status:
-    | 'pending'
-    | 'running'
-    | 'paused'
-    | 'completed'
-    | 'completed_with_errors'
-    | 'failed'
-    | 'cancelled'
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'completed_with_errors'
+  | 'failed'
+  | 'cancelled'
   total_symbols: number
   completed_symbols: number
   failed_symbols: number
@@ -638,7 +638,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/watchlist', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setWatchlist(data.data || [])
-    } catch (_error) {}
+    } catch (_error) { }
   }
 
   const loadCatalog = async () => {
@@ -646,7 +646,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/catalog', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setCatalog(data.data || [])
-    } catch (_error) {}
+    } catch (_error) { }
   }
 
   const loadIntervals = async () => {
@@ -654,7 +654,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/intervals', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setIntervals(data.data)
-    } catch (_error) {}
+    } catch (_error) { }
   }
 
   const loadHistorifyIntervals = async () => {
@@ -668,7 +668,7 @@ export default function Historify() {
           all_intervals: data.all_intervals,
         })
       }
-    } catch (_error) {}
+    } catch (_error) { }
   }
 
   const loadStats = async () => {
@@ -676,7 +676,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/stats', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success') setStats(data.data)
-    } catch (_error) {}
+    } catch (_error) { }
   }
 
   const loadExchanges = async () => {
@@ -684,7 +684,7 @@ export default function Historify() {
       const response = await fetch('/historify/api/exchanges', { credentials: 'include' })
       const data = await response.json()
       if (data.status === 'success' && data.data?.length > 0) setExchanges(data.data)
-    } catch (_error) {}
+    } catch (_error) { }
   }
 
   const loadJobs = async () => {
@@ -721,7 +721,7 @@ export default function Historify() {
       if (data.status === 'success') {
         setScheduleExecutions((prev) => ({ ...prev, [scheduleId]: data.data || [] }))
       }
-    } catch (_error) {}
+    } catch (_error) { }
   }
 
   const resetScheduleForm = () => {
@@ -992,7 +992,7 @@ export default function Historify() {
     const lines = bulkAddText.trim().split('\n')
     const symbols = lines
       .map((line) => {
-        const [symbol, exchange] = line.split(',').map((s) => s.trim().toUpperCase())
+        const [symbol, exchange] = line.split('.').map((s) => s.trim().toUpperCase())
         return { symbol, exchange: exchange || 'NSE' }
       })
       .filter((s) => s.symbol)
@@ -1394,9 +1394,9 @@ export default function Historify() {
       const symbols =
         exportSymbols === 'selected'
           ? Array.from(catalogSelectedSymbols).map((key) => {
-              const [symbol, exchange] = key.split(':')
-              return { symbol, exchange }
-            })
+            const [symbol, exchange] = key.split(':')
+            return { symbol, exchange }
+          })
           : null // null means export all symbols
 
       // Convert Set to array for API
@@ -2100,7 +2100,7 @@ export default function Historify() {
                                 className={cn(
                                   'h-8 min-w-[3rem]',
                                   isSelected &&
-                                    'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                                  'ring-2 ring-primary ring-offset-2 ring-offset-background'
                                 )}
                                 onClick={() => {
                                   setStartDate(getDateFromPreset(preset.months))
@@ -2294,7 +2294,7 @@ export default function Historify() {
                                 key={item.id}
                                 className={cn(
                                   watchlistSelectedSymbols.has(`${item.symbol}:${item.exchange}`) &&
-                                    'bg-muted/50'
+                                  'bg-muted/50'
                                 )}
                               >
                                 <TableCell>
@@ -2691,7 +2691,7 @@ export default function Historify() {
                               <div className="mt-4 pt-4 border-t border-border">
                                 <h4 className="text-sm font-medium mb-2">Recent Executions</h4>
                                 {!scheduleExecutions[schedule.id] ||
-                                scheduleExecutions[schedule.id].length === 0 ? (
+                                  scheduleExecutions[schedule.id].length === 0 ? (
                                   <p className="text-sm text-muted-foreground">No executions yet</p>
                                 ) : (
                                   <Table>
@@ -3251,30 +3251,30 @@ NIFTY24DEC25000CE,NFO"
                 {Array.from(exportIntervals).filter(
                   (int) => !['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M', 'Q', 'Y'].includes(int)
                 ).length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {Array.from(exportIntervals)
-                      .filter(
-                        (int) =>
-                          !['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M', 'Q', 'Y'].includes(int)
-                      )
-                      .map((int) => (
-                        <Badge
-                          key={int}
-                          variant="secondary"
-                          className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground"
-                          onClick={() => {
-                            setExportIntervals((prev) => {
-                              const next = new Set(prev)
-                              next.delete(int)
-                              return next
-                            })
-                          }}
-                        >
-                          {int} <X className="h-3 w-3 ml-1" />
-                        </Badge>
-                      ))}
-                  </div>
-                )}
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {Array.from(exportIntervals)
+                        .filter(
+                          (int) =>
+                            !['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M', 'Q', 'Y'].includes(int)
+                        )
+                        .map((int) => (
+                          <Badge
+                            key={int}
+                            variant="secondary"
+                            className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground"
+                            onClick={() => {
+                              setExportIntervals((prev) => {
+                                const next = new Set(prev)
+                                next.delete(int)
+                                return next
+                              })
+                            }}
+                          >
+                            {int} <X className="h-3 w-3 ml-1" />
+                          </Badge>
+                        ))}
+                    </div>
+                  )}
               </div>
             </div>
 
