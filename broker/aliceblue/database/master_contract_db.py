@@ -276,6 +276,12 @@ def process_aliceblue_nfo_csv(path):
 
         return f"{row['Symbol']}{date_str}{Strike_price}"
 
+    # Futures rows in the NFO master carry Instrument Type 'FUTSTK'/'FUTIDX'
+    # with a NaN Option Type. Map them to 'XX' so the futures symbol logic
+    # below picks them up (mirrors the BFO/MCX processors).
+    df.loc[df["Instrument Type"] == "FUTSTK", "Option Type"] = "XX"
+    df.loc[df["Instrument Type"] == "FUTIDX", "Option Type"] = "XX"
+
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df["Option Type"] == "XX", "symbol"] = df["Trading Symbol"] + "UT"
 
@@ -339,6 +345,10 @@ def process_aliceblue_cds_csv(path):
             date_str = "NOEXP"  # Use a placeholder for missing dates
 
         return f"{row['Symbol']}{date_str}{Strike_price}"
+
+    # Currency futures carry Instrument Type 'FUTCUR' with a NaN Option Type.
+    # Map them to 'XX' so the futures symbol logic below picks them up.
+    df.loc[df["Instrument Type"] == "FUTCUR", "Option Type"] = "XX"
 
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df["Option Type"] == "XX", "symbol"] = df["Trading Symbol"] + "UT"
