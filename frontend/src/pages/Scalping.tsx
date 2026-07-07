@@ -50,6 +50,12 @@ const DEFAULT_STRIKE_COUNT = 10
 const MAX_LOTS = 20
 const ORDER_COOLDOWN_MS = 120 // min gap between two order fires (anti double-fire)
 const ARMED_STORAGE_KEY = 'scalping.armed'
+// Live charts are OFF by default (opt-in). Three live candlestick charts each
+// open their own market-data subscription and poll broker history, so keeping
+// them off unless wanted spares CPU/network. The choice persists across reloads.
+const CHARTS_STORAGE_KEY = 'scalping.showCharts'
+const CHART_TF_STORAGE_KEY = 'scalping.chartTf'
+const CHART_TIMEFRAMES = ['1m', '5m', '15m'] as const
 
 // NSE/BSE = equity; NFO/BFO/MCX/CDS = derivatives (options + futures).
 type ScalpingExchange = 'NSE' | 'BSE' | 'NFO' | 'BFO' | 'MCX' | 'CDS'
@@ -110,6 +116,27 @@ function loadArmed(): boolean {
   } catch {
     return false
   }
+}
+
+// Read the persisted charts on/off preference. Defaults to OFF (charts are
+// opt-in) — a missing key reads as off.
+function loadShowCharts(): boolean {
+  try {
+    return localStorage.getItem(CHARTS_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+// Read the persisted chart timeframe, falling back to 1m if unset/invalid.
+function loadChartTf(): string {
+  try {
+    const v = localStorage.getItem(CHART_TF_STORAGE_KEY)
+    if (v && (CHART_TIMEFRAMES as readonly string[]).includes(v)) return v
+  } catch {
+    // ignore storage failures (private mode, etc.)
+  }
+  return '1m'
 }
 
 // Pull the trader-friendly reason out of an API error (e.g. the broker/sandbox
@@ -271,9 +298,15 @@ export default function Scalping() {
   const [product, setProduct] = useState<ScalpingProduct>('NRML')
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
 
+  // Live charts are opt-in (default off) and heavy — when off, the ScalpChart
+  // components don't mount, so they open no feed subscriptions. Both this toggle
+  // and the timeframe below persist browser-side so the terminal reopens the way
+  // you left it.
+  const [showCharts, setShowCharts] = useState<boolean>(loadShowCharts)
+
   // Shared timeframe for the live charts (OpenAlgo interval format). One switch
   // flips every chart (CE / underlying / PE, or the single instrument) at once.
-  const [chartTf, setChartTf] = useState('1m')
+  const [chartTf, setChartTf] = useState<string>(loadChartTf)
 
   // Global predefined SL / Target — when enabled, auto-attached to every new entry.
   // Value is in points or percent of entry (default points).
@@ -291,6 +324,23 @@ export default function Scalping() {
       // ignore storage failures (private mode, etc.)
     }
   }, [armed])
+
+  // Persist the charts on/off and timeframe choices browser-side.
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHARTS_STORAGE_KEY, showCharts ? '1' : '0')
+    } catch {
+      // ignore storage failures (private mode, etc.)
+    }
+  }, [showCharts])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHART_TF_STORAGE_KEY, chartTf)
+    } catch {
+      // ignore storage failures (private mode, etc.)
+    }
+  }, [chartTf])
 
   // Exchange change: equity → EQUITY segment; F&O → keep Options/Futures (default
   // Options) + default underlying. Reset transient selections.
@@ -1271,66 +1321,77 @@ export default function Scalping() {
         </div>
       )}
 
-      {/* Live charts (candles + volume + OHLC legend), shared timeframe */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-xs text-muted-foreground">Timeframe</span>
-        <div className="inline-flex items-center rounded-md border p-0.5">
-          {['1m', '5m', '15m'].map((tf) => (
-            <button
-              type="button"
-              key={tf}
-              onClick={() => setChartTf(tf)}
-              className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                chartTf === tf
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {tf}
-            </button>
-          ))}
-        </div>
+      {/* Live charts (candles + volume + OHLC legend), shared timeframe. Charts
+          are off by default and only mount when toggled on — off means no chart
+          feed subscriptions. The Charts switch + timeframe both persist. */}
+      <div className="flex flex-wrap items-center gap-4">
+        <label className="flex items-center gap-2">
+          <Switch checked={showCharts} onCheckedChange={setShowCharts} />
+          <span className="text-sm font-medium">Charts</span>
+        </label>
+        {showCharts && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">Timeframe</span>
+            <div className="inline-flex items-center rounded-md border p-0.5">
+              {CHART_TIMEFRAMES.map((tf) => (
+                <button
+                  type="button"
+                  key={tf}
+                  onClick={() => setChartTf(tf)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                    chartTf === tf
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {tf}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      {isSingle ? (
-        <div className="grid grid-cols-1 gap-3">
-          <div className="h-[340px]">
-            <ScalpChart
-              symbol={singleLeg?.symbol ?? ''}
-              exchange={singleLeg?.exchange ?? ''}
-              interval={chartTf}
-              title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
-            />
+      {showCharts &&
+        (isSingle ? (
+          <div className="grid grid-cols-1 gap-3">
+            <div className="h-[340px]">
+              <ScalpChart
+                symbol={singleLeg?.symbol ?? ''}
+                exchange={singleLeg?.exchange ?? ''}
+                interval={chartTf}
+                title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
+              />
+            </div>
           </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="h-[340px]">
-            <ScalpChart
-              symbol={ceLeg?.symbol ?? ''}
-              exchange={ceLeg?.exchange ?? ''}
-              interval={chartTf}
-              title="Call (CE)"
-            />
+        ) : (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="h-[340px]">
+              <ScalpChart
+                symbol={ceLeg?.symbol ?? ''}
+                exchange={ceLeg?.exchange ?? ''}
+                interval={chartTf}
+                title="Call (CE)"
+              />
+            </div>
+            <div className="h-[340px]">
+              <ScalpChart
+                symbol={underlyingSym}
+                exchange={underlyingExch}
+                interval={chartTf}
+                title={underlying || 'Underlying'}
+              />
+            </div>
+            <div className="h-[340px]">
+              <ScalpChart
+                symbol={peLeg?.symbol ?? ''}
+                exchange={peLeg?.exchange ?? ''}
+                interval={chartTf}
+                title="Put (PE)"
+              />
+            </div>
           </div>
-          <div className="h-[340px]">
-            <ScalpChart
-              symbol={underlyingSym}
-              exchange={underlyingExch}
-              interval={chartTf}
-              title={underlying || 'Underlying'}
-            />
-          </div>
-          <div className="h-[340px]">
-            <ScalpChart
-              symbol={peLeg?.symbol ?? ''}
-              exchange={peLeg?.exchange ?? ''}
-              interval={chartTf}
-              title="Put (PE)"
-            />
-          </div>
-        </div>
-      )}
+        ))}
 
       {/* Order entry */}
       <Card>
