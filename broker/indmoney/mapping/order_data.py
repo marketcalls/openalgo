@@ -7,6 +7,49 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Indmoney order status values (docs 09-order-management) normalized to the
+# OpenAlgo canonical statuses used by other brokers (e.g. Zerodha):
+# complete / open / trigger pending / rejected / cancelled.
+COMPLETED_STATUSES = {"SUCCESS", "TRADED", "COMPLETE", "EXECUTED"}
+OPEN_STATUSES = {
+    "QUEUED",
+    "O-PENDING",
+    "PENDING",
+    "PROCESSING",
+    "INITIATED",
+    "MODIFIED",
+    "PARTIALLY FILLED",
+}
+TRIGGER_PENDING_STATUSES = {"SL-PENDING"}
+REJECTED_STATUSES = {"REJECTED", "FAILED", "ABORTED"}
+CANCELLED_STATUSES = {
+    "CANCELLED",
+    "EXPIRED",
+    "PARTIALLY FILLED - CANCELLED",
+    "PARTIALLY FILLED - EXPIRED",
+}
+
+
+def normalize_order_status(status):
+    """
+    Normalize an Indmoney order status to an OpenAlgo canonical status.
+    Returns one of: complete, open, trigger pending, rejected, cancelled.
+    Unknown values are returned lower-cased unchanged.
+    """
+    status = str(status or "").upper().strip()
+    if status in COMPLETED_STATUSES:
+        return "complete"
+    if status in TRIGGER_PENDING_STATUSES:
+        return "trigger pending"
+    if status in OPEN_STATUSES:
+        return "open"
+    if status in REJECTED_STATUSES:
+        return "rejected"
+    if status in CANCELLED_STATUSES:
+        return "cancelled"
+    return status.lower()
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -139,19 +182,15 @@ def calculate_order_statistics(order_data):
             elif order.get("transactionType") == "SELL":
                 total_sell_orders += 1
 
-            # Count orders based on their status - handle new Indmoney status values
-            status = order.get("orderStatus", "").upper()
-            if status in ["SUCCESS", "TRADED"]:
+            # Normalize status to OpenAlgo canonical value and count it
+            normalized = normalize_order_status(order.get("orderStatus", ""))
+            order["orderStatus"] = normalized
+            if normalized == "complete":
                 total_completed_orders += 1
-                order["orderStatus"] = "complete"
-            elif status in ["O-PENDING", "PENDING"]:
+            elif normalized in ("open", "trigger pending"):
                 total_open_orders += 1
-                order["orderStatus"] = "open"
-            elif status in ["REJECTED"]:
+            elif normalized == "rejected":
                 total_rejected_orders += 1
-                order["orderStatus"] = "rejected"
-            elif status in ["CANCELLED"]:
-                order["orderStatus"] = "cancelled"
 
         # Compile and return the statistics
         return {
@@ -221,7 +260,7 @@ def transform_order_data(orders):
                 "pricetype": order.get("orderType", ""),
                 "product": order.get("productType", ""),
                 "orderid": order.get("orderId", ""),
-                "order_status": order.get("orderStatus", ""),
+                "order_status": normalize_order_status(order.get("orderStatus", "")),
                 "timestamp": order.get("updateTime", ""),
             }
 
