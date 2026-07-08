@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -12,6 +13,71 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# --- Poison scrip-code cache ---------------------------------------------
+# IndStocks' /market/quotes/full 400-rejects the ENTIRE comma-separated batch
+# if any single scrip code is unquotable (e.g. a deep-ITM option strike the
+# server won't price). We isolate the offending code(s) via bisection and cache
+# them here so subsequent quote calls skip them and stay a single fast batch.
+# Cached codes are re-tested after a TTL in case they become quotable again.
+_BAD_SCRIP_CODES = {}          # scrip_code -> monotonic() time it was marked bad
+_BAD_SCRIP_TTL = 300.0         # seconds before a bad code is retried
+_bad_scrip_lock = threading.Lock()
+
+
+def _is_known_bad(scrip_code):
+    """True if scrip_code is currently cached as unquotable (within TTL)."""
+    with _bad_scrip_lock:
+        ts = _BAD_SCRIP_CODES.get(scrip_code)
+        if ts is None:
+            return False
+        if time.monotonic() - ts > _BAD_SCRIP_TTL:
+            _BAD_SCRIP_CODES.pop(scrip_code, None)
+            return False
+        return True
+
+
+def _mark_bad(scrip_code):
+    """Cache scrip_code as unquotable so future batches skip it."""
+    with _bad_scrip_lock:
+        _BAD_SCRIP_CODES[scrip_code] = time.monotonic()
+
+# 429 (rate-limit) retry configuration. IndStocks enforces per-category rate
+# limits (Data/Quote 5/s) and returns 429 on breach (docs 03-conventions /
+# 14-errors), so requests retry with backoff.
+_MAX_RETRIES = 3
+_RATE_LIMIT_BASE_DELAY = 1.0  # seconds; doubled each attempt (1s, 2s, 4s)
+
+
+def request_with_retry(client, method, url, **kwargs):
+    """
+    Perform an httpx request, retrying HTTP 429 with exponential backoff
+    (honouring Retry-After when present). Sets ``.status`` for compatibility
+    with the existing codebase.
+    """
+    response = None
+    for attempt in range(_MAX_RETRIES):
+        response = client.request(method.upper(), url, **kwargs)
+        if response.status_code == 429 and attempt < _MAX_RETRIES - 1:
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = (
+                    min(float(retry_after), 30.0)
+                    if retry_after
+                    else _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+                )
+            except (TypeError, ValueError):
+                delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Rate limit hit (429) on {url}, retrying in {delay:.1f}s "
+                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            continue
+        break
+    if response is not None:
+        response.status = response.status_code
+    return response
 
 
 def get_api_response(endpoint, auth, method="GET", params=None):
@@ -49,12 +115,13 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         logger.debug(f"Full URL: {url}")
 
     try:
+        # request_with_retry handles HTTP 429 with backoff and sets .status
         if method == "GET":
-            res = client.get(url, headers=headers, params=params)
+            res = request_with_retry(client, "GET", url, headers=headers, params=params)
         elif method == "POST":
-            res = client.post(url, headers=headers, json=params)
+            res = request_with_retry(client, "POST", url, headers=headers, json=params)
         else:
-            res = client.request(method, url, headers=headers, params=params)
+            res = request_with_retry(client, method, url, headers=headers, params=params)
 
         logger.debug(f"Request completed. Status code: {res.status_code}")
         logger.info(f"Actual request URL: {res.url}")
@@ -62,9 +129,6 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     except Exception as req_error:
         logger.error(f"Request failed: {str(req_error)}")
         raise Exception(f"Failed to make request to Indmoney API: {str(req_error)}")
-
-    # Add status attribute for compatibility with existing codebase
-    res.status = res.status_code
 
     logger.debug(f"Response status: {res.status}")
     logger.debug(f"Raw response text: {res.text}")
@@ -453,6 +517,54 @@ class BrokerData:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
 
+    def _fetch_full_quotes_map(self, scrip_codes):
+        """
+        Fetch /market/quotes/full for a list of scrip codes, tolerating
+        'poison' codes. IndStocks 400-rejects the whole batch if ANY single
+        code is unquotable, so on a 400 we bisect to isolate and drop the bad
+        code(s); valid codes still return data. Bad codes are cached (with TTL)
+        so later calls skip them and stay a single fast request.
+
+        Returns: {scrip_code: raw_quote_dict} for the codes that returned data.
+        """
+        if not scrip_codes:
+            return {}
+
+        # Skip codes already known to poison the batch (re-tested after TTL)
+        codes = [c for c in scrip_codes if not _is_known_bad(c)]
+        if not codes:
+            return {}
+
+        try:
+            params = {"scrip-codes": ",".join(codes)}
+            response = get_api_response("/market/quotes/full", self.auth_token, "GET", params)
+            return response.get("data", {}) or {}
+        except Exception as e:
+            msg = str(e)
+            # A 400 "Invalid scrip codes" means at least one code in this batch
+            # is unquotable. Only these are worth bisecting.
+            bad_batch = "400" in msg or "Invalid scrip" in msg
+
+            if len(codes) == 1:
+                if bad_batch:
+                    logger.warning(f"Marking unquotable scrip code as bad: {codes[0]}")
+                    _mark_bad(codes[0])
+                else:
+                    logger.error(f"Quote fetch failed for {codes[0]}: {e}")
+                return {}
+
+            if not bad_batch:
+                # Network/auth/other error - don't hammer the API by bisecting
+                logger.error(f"Quote fetch failed for {len(codes)} codes: {e}")
+                return {}
+
+            # Bisect to isolate the poison code(s)
+            mid = len(codes) // 2
+            left = self._fetch_full_quotes_map(codes[:mid])
+            right = self._fetch_full_quotes_map(codes[mid:])
+            left.update(right)
+            return left
+
     def _process_multiquotes_batch(self, symbols: list) -> list:
         """
         Process a single batch of symbols (internal method)
@@ -476,7 +588,6 @@ class BrokerData:
                     {
                         "symbol": symbol,
                         "exchange": exchange,
-                        "data": None,
                         "error": "Missing required symbol or exchange",
                     }
                 )
@@ -489,7 +600,7 @@ class BrokerData:
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
                 skipped_symbols.append(
-                    {"symbol": symbol, "exchange": exchange, "data": None, "error": str(e)}
+                    {"symbol": symbol, "exchange": exchange, "error": str(e)}
                 )
 
         # Return skipped symbols if no valid symbols
@@ -497,76 +608,53 @@ class BrokerData:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
-        # Join all scrip codes with comma
-        scrip_codes_param = ",".join(scrip_codes)
+        # Fetch quotes, tolerating poison codes that would otherwise 400 the
+        # whole batch. Returns {scrip_code: raw_quote} for codes with data.
+        quotes_data = self._fetch_full_quotes_map(scrip_codes)
+        logger.debug(f"Multiquotes returned data for {len(quotes_data)} of {len(scrip_codes)} codes")
 
-        try:
-            params = {"scrip-codes": scrip_codes_param}
-            response = get_api_response("/market/quotes/full", self.auth_token, "GET", params)
-            logger.debug("Indmoney multiquotes API response received")
+        succeeded = 0
+        for scrip_code, original in symbol_map.items():
+            quote = quotes_data.get(scrip_code, {})
 
-            quotes_data = response.get("data", {})
-            logger.debug(f"Multiquotes response keys: {list(quotes_data.keys())}")
-
-            # Process each scrip code in the response
-            for scrip_code, original in symbol_map.items():
-                quote = quotes_data.get(scrip_code, {})
-                logger.debug(
-                    f"Quote for {scrip_code}: keys={list(quote.keys()) if quote else 'None'}"
-                )
-
-                if quote and any(
-                    key in quote for key in ["ltp", "live_price", "day_open", "day_high", "day_low"]
-                ):
-                    results.append(
-                        {
-                            "symbol": original["symbol"],
-                            "exchange": original["exchange"],
-                            "data": {
-                                "bid": 0,  # Will be 0 unless we fetch depth
-                                "ask": 0,
-                                "open": self._clean_number(quote.get("day_open", 0)),
-                                "high": self._clean_number(quote.get("day_high", 0)),
-                                "low": self._clean_number(quote.get("day_low", 0)),
-                                "ltp": self._clean_number(
-                                    quote.get("live_price", quote.get("ltp", 0))
-                                ),
-                                "prev_close": self._clean_number(
-                                    quote.get("prev_close", quote.get("close", 0))
-                                ),
-                                "volume": self._clean_number(quote.get("volume", 0)),
-                                "oi": self._clean_number(
-                                    quote.get("oi", quote.get("open_interest", 0))
-                                ),
-                            },
-                        }
-                    )
-                else:
-                    results.append(
-                        {
-                            "symbol": original["symbol"],
-                            "exchange": original["exchange"],
-                            "data": None,
-                            "error": "No data received",
-                        }
-                    )
-
-        except Exception as e:
-            logger.error(f"Error calling quotes API: {str(e)}")
-            # Return error for all symbols in the batch
-            for scrip_code, original in symbol_map.items():
+            if quote and any(
+                key in quote for key in ["ltp", "live_price", "day_open", "day_high", "day_low"]
+            ):
+                succeeded += 1
                 results.append(
                     {
                         "symbol": original["symbol"],
                         "exchange": original["exchange"],
-                        "data": None,
-                        "error": str(e),
+                        "data": {
+                            "bid": 0,  # Will be 0 unless we fetch depth
+                            "ask": 0,
+                            "open": self._clean_number(quote.get("day_open", 0)),
+                            "high": self._clean_number(quote.get("day_high", 0)),
+                            "low": self._clean_number(quote.get("day_low", 0)),
+                            "ltp": self._clean_number(
+                                quote.get("live_price", quote.get("ltp", 0))
+                            ),
+                            "prev_close": self._clean_number(
+                                quote.get("prev_close", quote.get("close", 0))
+                            ),
+                            "volume": self._clean_number(quote.get("volume", 0)),
+                            "oi": self._clean_number(quote.get("oi", quote.get("open_interest", 0))),
+                        },
+                    }
+                )
+            else:
+                # No quote for this symbol (e.g. an unquotable strike). Omit the
+                # "data" key (and include "error") so downstream consumers treat
+                # it as missing and default to {} rather than hitting a None.
+                results.append(
+                    {
+                        "symbol": original["symbol"],
+                        "exchange": original["exchange"],
+                        "error": "No data received",
                     }
                 )
 
-        logger.info(
-            f"Retrieved quotes for {len([r for r in results if r.get('data')])} / {len(symbols)} symbols"
-        )
+        logger.info(f"Retrieved quotes for {succeeded} / {len(symbols)} symbols")
         return skipped_symbols + results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
