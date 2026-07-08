@@ -2,12 +2,50 @@
 
 import json
 import logging
+import time
 
 from broker.indmoney.api.baseurl import get_url
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 429 (rate-limit) retry configuration. IndStocks enforces per-category rate
+# limits (Non-Trading 15/s) and returns 429 on breach (docs 03-conventions /
+# 14-errors), so requests retry with backoff.
+_MAX_RETRIES = 3
+_RATE_LIMIT_BASE_DELAY = 1.0  # seconds; doubled each attempt (1s, 2s, 4s)
+
+
+def request_with_retry(client, method, url, **kwargs):
+    """
+    Perform an httpx request, retrying HTTP 429 with exponential backoff
+    (honouring Retry-After when present). Sets ``.status`` for compatibility
+    with the existing codebase.
+    """
+    response = None
+    for attempt in range(_MAX_RETRIES):
+        response = client.request(method.upper(), url, **kwargs)
+        if response.status_code == 429 and attempt < _MAX_RETRIES - 1:
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = (
+                    min(float(retry_after), 30.0)
+                    if retry_after
+                    else _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+                )
+            except (TypeError, ValueError):
+                delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Rate limit hit (429) on {url}, retrying in {delay:.1f}s "
+                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            continue
+        break
+    if response is not None:
+        response.status = response.status_code
+    return response
 
 # Default response format for margin data (OpenAlgo standard format)
 DEFAULT_MARGIN_RESPONSE = {
@@ -43,8 +81,8 @@ def get_margin_data(auth_token):
 
         logger.info(f"Making request to: {url}")
 
-        # Make the API request with standard timeout
-        response = client.get(url, headers=headers, timeout=30.0)
+        # Make the API request with standard timeout (429-aware)
+        response = request_with_retry(client, "GET", url, headers=headers, timeout=30.0)
 
         # Check if the request was successful
         if response.status_code != 200:

@@ -38,45 +38,61 @@ def transform_data(data, token):
     action = data["action"].upper()
 
     if data["pricetype"] == "MARKET":
-        # Get username from Flask session
+        # Get username from Flask session (never fall back to a hard-coded user
+        # — that would borrow another account's token). Without a session user
+        # we cannot fetch a quote, so send a native MARKET order instead.
         username = None
         if session and hasattr(session, "get"):
             username = session.get("username")
 
-        # Get auth token for market data using username
-        auth_token = get_auth_token(username if username else "kalaivani")
+        auth_token = get_auth_token(username) if username else None
 
-        logger.info(f"Using auth token for user: {username if username else 'kalaivani'}")
+        if not auth_token:
+            logger.warning(
+                "No session user/auth token available for market-order price "
+                "adjustment; sending a native MARKET order."
+            )
+        else:
+            logger.info(f"Using auth token for user: {username}")
 
-        # Create BrokerData instance to use get_quotes - only need auth_token
-        broker_data = BrokerData(auth_token)
+            # Create BrokerData instance to use get_quotes - only need auth_token
+            broker_data = BrokerData(auth_token)
 
-        # Fetch quotes for the symbol
-        quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
-        logger.info(f"Quote data for market order adjustment: {quote_data}")
+            # Fetch quotes for the symbol
+            quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
+            logger.info(f"Quote data for market order adjustment: {quote_data}")
 
-        # Adjust price based on action (BUY or SELL) using LTP
-        ltp = float(quote_data.get("ltp", 0))
-        if action == "BUY":
-            # Add 0.1% to LTP for BUY orders
-            adjusted_price = ltp * 1.001
-            price = str(round(adjusted_price, 2))
-            logger.info(f"Adjusted BUY price: LTP {ltp} + 0.1% = {price}")
-            # Change order type to LIMIT (uppercase required by API)
-            order_type = "LIMIT"
-        elif action == "SELL":
-            # Subtract 0.1% from LTP for SELL orders
-            adjusted_price = ltp * 0.999
-            price = str(round(adjusted_price, 2))
-            logger.info(f"Adjusted SELL price: LTP {ltp} - 0.1% = {price}")
-            # Change order type to LIMIT (uppercase required by API)
-            order_type = "LIMIT"
+            # Adjust price based on action (BUY or SELL) using LTP
+            ltp = float(quote_data.get("ltp", 0))
+            if ltp <= 0:
+                logger.warning(
+                    "LTP unavailable for market-order adjustment; sending a native MARKET order."
+                )
+            elif action == "BUY":
+                # Add 0.1% to LTP for BUY orders
+                adjusted_price = ltp * 1.001
+                price = str(round(adjusted_price, 2))
+                logger.info(f"Adjusted BUY price: LTP {ltp} + 0.1% = {price}")
+                # Change order type to LIMIT (uppercase required by API)
+                order_type = "LIMIT"
+            elif action == "SELL":
+                # Subtract 0.1% from LTP for SELL orders
+                adjusted_price = ltp * 0.999
+                price = str(round(adjusted_price, 2))
+                logger.info(f"Adjusted SELL price: LTP {ltp} - 0.1% = {price}")
+                # Change order type to LIMIT (uppercase required by API)
+                order_type = "LIMIT"
 
     # Basic mapping from OpenAlgo to Indmoney
     segment = map_segment(data["exchange"])
+    # Indmoney order API only accepts NSE/BSE for the exchange field; F&O
+    # exchanges (NFO/BFO/CDS/BCD) map to their NSE/BSE parent + DERIVATIVE segment.
+    api_exchange = map_exchange_type(data["exchange"].upper())
+    # algo_id is exchange-specific: 99999 for NSE, 9999999999999999 for BSE.
+    algo_id = "9999999999999999" if api_exchange == "BSE" else "99999"
     transformed = {
         "txn_type": action,  # BUY/SELL
-        "exchange": data["exchange"].upper(),  # NSE/BSE
+        "exchange": api_exchange,  # NSE/BSE
         "segment": segment,  # DERIVATIVE/EQUITY
         "product": map_product_type(data["product"]),  # MARGIN/INTRADAY/CNC
         "order_type": order_type,  # LIMIT/MARKET
@@ -84,7 +100,7 @@ def transform_data(data, token):
         "security_id": token,  # Security ID from token
         "qty": int(data["quantity"]),  # Order quantity
         "is_amo": data.get("is_amo", False),  # After market order flag
-        "algo_id": "99999",  # Required by API - use 99999 for regular orders
+        "algo_id": algo_id,  # Required by API - NSE: 99999, BSE: 9999999999999999
     }
 
     # Log the segment mapping for debugging
