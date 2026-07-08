@@ -30,6 +30,12 @@ class IndWebSocket:
     LTP_MODE = "ltp"
     QUOTE_MODE = "quote"
 
+    # Subscription batching. INDstocks allows up to 3000 instruments per
+    # connection; a single subscribe frame is chunked so a large subscription
+    # (e.g. a full option chain) is split across several frames.
+    MAX_INSTRUMENTS_PER_SUBSCRIBE = 1000
+    MAX_INSTRUMENTS_PER_CONNECTION = 3000
+
     def __init__(
         self,
         access_token,
@@ -167,32 +173,35 @@ class IndWebSocket:
                 logger.error(error_message)
                 raise ValueError(error_message)
 
-            request_data = {
-                "action": self.SUBSCRIBE_ACTION,
-                "mode": mode,
-                "instruments": instruments,
-            }
+            if not instruments:
+                return
 
-            # Log the subscription request for debugging
-            logger.info(">> SENDING SUBSCRIPTION REQUEST:")
-            logger.info(f"   Action: {request_data['action']}")
-            logger.info(f"   Mode: {request_data['mode']}")
-            logger.info(f"   Instruments: {request_data['instruments']}")
-            logger.info(f"   Full JSON: {json.dumps(request_data)}")
-
-            # Store subscription for reconnection
+            # Store subscription for reconnection (dedup)
             if mode not in self.input_request_dict:
                 self.input_request_dict[mode] = []
 
-            # Add instruments to subscription list (avoid duplicates)
-            for instrument in instruments:
-                if instrument not in self.input_request_dict[mode]:
-                    self.input_request_dict[mode].append(instrument)
+            new_instruments = [
+                i for i in instruments if i not in self.input_request_dict[mode]
+            ]
+            if not new_instruments:
+                logger.debug(f"All {len(instruments)} instruments already subscribed in {mode} mode")
+                return
 
-            # Send subscription request
+            # Enforce the per-connection instrument cap
+            current_total = sum(len(v) for v in self.input_request_dict.values())
+            if current_total + len(new_instruments) > self.MAX_INSTRUMENTS_PER_CONNECTION:
+                logger.error(
+                    f"Cannot subscribe {len(new_instruments)} instruments: would exceed the "
+                    f"{self.MAX_INSTRUMENTS_PER_CONNECTION}-instrument per-connection limit "
+                    f"(currently {current_total})"
+                )
+                raise ValueError("Per-connection instrument limit exceeded")
+
+            self.input_request_dict[mode].extend(new_instruments)
+
+            # Send the subscription in chunks
             if self.wsapp:
-                self.wsapp.send(json.dumps(request_data))
-                logger.info(f"[OK] Subscribed to {len(instruments)} instruments in {mode} mode")
+                self._send_subscribe_chunks(new_instruments, mode)
                 self.RESUBSCRIBE_FLAG = True
             else:
                 logger.warning(
@@ -202,6 +211,24 @@ class IndWebSocket:
         except Exception as e:
             logger.error(f"Error during subscribe: {e}")
             raise e
+
+    def _send_subscribe_chunks(self, instruments, mode):
+        """Send a subscribe request in chunks of MAX_INSTRUMENTS_PER_SUBSCRIBE."""
+        if not self.wsapp:
+            return
+        total = len(instruments)
+        for start in range(0, total, self.MAX_INSTRUMENTS_PER_SUBSCRIBE):
+            chunk = instruments[start : start + self.MAX_INSTRUMENTS_PER_SUBSCRIBE]
+            request_data = {
+                "action": self.SUBSCRIBE_ACTION,
+                "mode": mode,
+                "instruments": chunk,
+            }
+            self.wsapp.send(json.dumps(request_data))
+            logger.info(
+                f"[OK] Subscribed to {len(chunk)} instruments in {mode} mode "
+                f"(chunk {start // self.MAX_INSTRUMENTS_PER_SUBSCRIBE + 1}, {total} total)"
+            )
 
     def unsubscribe(self, instruments, mode="ltp"):
         """
@@ -237,16 +264,11 @@ class IndWebSocket:
             raise e
 
     def resubscribe(self):
-        """Resubscribe to all previously subscribed instruments"""
+        """Resubscribe to all previously subscribed instruments (chunked)."""
         try:
             for mode, instruments in self.input_request_dict.items():
                 if instruments:
-                    request_data = {
-                        "action": self.SUBSCRIBE_ACTION,
-                        "mode": mode,
-                        "instruments": instruments,
-                    }
-                    self.wsapp.send(json.dumps(request_data))
+                    self._send_subscribe_chunks(instruments, mode)
                     logger.info(f"Resubscribed to {len(instruments)} instruments in {mode} mode")
         except Exception as e:
             logger.error(f"Error during resubscribe: {e}")
