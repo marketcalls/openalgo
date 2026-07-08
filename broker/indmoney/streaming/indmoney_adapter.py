@@ -39,6 +39,9 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # accumulating threads and sockets on a flapping feed.
         self._reconnect_lock = threading.Lock()
         self._reconnecting = False
+        # Set on disconnect so the reconnect backoff sleep is interruptible and
+        # the loop exits promptly instead of lingering up to max_reconnect_delay.
+        self._stop_event = threading.Event()
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -56,6 +59,18 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         self.user_id = user_id
         self.broker_name = broker_name
+
+        # If re-initializing a live adapter, tear down the previous client first
+        # so we don't orphan its open socket and reconnect thread.
+        if self.ws_client is not None:
+            self.logger.info("Re-initializing: closing previous WebSocket client")
+            self.running = False
+            self._stop_event.set()
+            try:
+                self.ws_client.close_connection()
+            except Exception as e:
+                self.logger.warning(f"Error closing previous ws_client on re-init: {e}")
+            self.ws_client = None
 
         # Get access token from database if not provided
         if not auth_data:
@@ -126,6 +141,8 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug("Reconnect loop already running; not starting another")
                 return
             self._reconnecting = True
+            # Fresh loop: clear any stop signal left by a previous disconnect.
+            self._stop_event.clear()
 
         threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
@@ -166,7 +183,11 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self.max_reconnect_delay,
                     )
                     self.logger.warning(f"Disconnected; reconnecting in {delay} seconds...")
-                    time.sleep(delay)
+                    # Interruptible sleep: returns immediately if disconnect()
+                    # signals a stop, so the thread doesn't linger for up to
+                    # max_reconnect_delay after shutdown.
+                    if self._stop_event.wait(delay):
+                        break
 
             if self.running and self.reconnect_attempts >= self.max_reconnect_attempts:
                 self.logger.error("Max reconnection attempts reached. Giving up.")
@@ -177,6 +198,8 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from INDmoney WebSocket"""
         self.running = False
+        # Wake an in-progress reconnect backoff so the loop exits promptly.
+        self._stop_event.set()
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
 
