@@ -1,12 +1,12 @@
 import json
-import logging
-import os
 import ssl
 import time
 
-import logzero
 import websocket
-from logzero import logger
+
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class IndWebSocket:
@@ -20,7 +20,7 @@ class IndWebSocket:
 
     HEART_BEAT_MESSAGE = "ping"
     HEART_BEAT_INTERVAL = 30  # 30 seconds
-    RESUBSCRIBE_FLAG = False
+    HEART_BEAT_TIMEOUT = 10  # seconds to wait for a pong before dropping the socket
 
     # Available Actions
     SUBSCRIBE_ACTION = "subscribe"
@@ -29,10 +29,6 @@ class IndWebSocket:
     # Subscription Modes
     LTP_MODE = "ltp"
     QUOTE_MODE = "quote"
-
-    wsapp = None
-    input_request_dict = {}
-    current_retry_attempt = 0
 
     def __init__(
         self,
@@ -76,12 +72,13 @@ class IndWebSocket:
         self.retry_multiplier = retry_multiplier
         self.retry_duration = retry_duration
 
-        # Create log folder based on current date
-        log_folder = time.strftime("%Y-%m-%d", time.localtime())
-        log_folder_path = os.path.join("logs", log_folder)
-        os.makedirs(log_folder_path, exist_ok=True)
-        log_path = os.path.join(log_folder_path, "indmoney_ws.log")
-        logzero.logfile(log_path, loglevel=logging.INFO)
+        # Per-instance state (previously class-level mutable attrs, which leaked
+        # subscription state across users). Each client owns its own socket,
+        # subscription list, retry counter and resubscribe flag.
+        self.wsapp = None
+        self.input_request_dict = {}
+        self.current_retry_attempt = 0
+        self.RESUBSCRIBE_FLAG = False
 
         if not self._sanity_check():
             logger.error("Invalid initialization parameters. Provide valid access token.")
@@ -276,6 +273,15 @@ class IndWebSocket:
         """Establish WebSocket connection to price feed"""
         headers = {"Authorization": self.access_token}
 
+        # Close any existing socket first so we never leak an orphaned
+        # run_forever/socket by overwriting self.wsapp.
+        if self.wsapp is not None:
+            try:
+                self.wsapp.close()
+            except Exception as e:
+                logger.warning(f"Error closing previous WebSocket before reconnect: {e}")
+            self.wsapp = None
+
         try:
             self.wsapp = websocket.WebSocketApp(
                 self.PRICE_FEED_URI,
@@ -289,9 +295,13 @@ class IndWebSocket:
             )
 
             logger.info("Connecting to INDmoney WebSocket...")
+            # ping_timeout (< ping_interval) lets websocket-client detect a
+            # half-open connection and close the socket promptly instead of
+            # holding the FD until the OS TCP timeout.
             self.wsapp.run_forever(
                 sslopt={"cert_reqs": ssl.CERT_NONE},
                 ping_interval=self.HEART_BEAT_INTERVAL,
+                ping_timeout=self.HEART_BEAT_TIMEOUT,
                 ping_payload=self.HEART_BEAT_MESSAGE,
             )
 
@@ -304,53 +314,31 @@ class IndWebSocket:
         self.RESUBSCRIBE_FLAG = False
         self.DISCONNECT_FLAG = True
         if self.wsapp:
-            self.wsapp.close()
-            logger.info("WebSocket connection closed")
+            try:
+                self.wsapp.close()
+                logger.info("WebSocket connection closed")
+            except Exception as e:
+                logger.warning(f"Error closing WebSocket: {e}")
+            finally:
+                # Drop the reference so the socket/thread can be GC'd and a
+                # later connect() starts clean.
+                self.wsapp = None
 
     def _on_error(self, wsapp, error):
-        """Handle WebSocket errors with retry logic"""
+        """Handle WebSocket errors.
+
+        This callback runs *inside* run_forever's dispatch, so it must NOT call
+        connect()/run_forever() itself — doing so nested the run loops and
+        stacked live sockets on every error. Reconnection is owned by the
+        adapter (driven by the on_close callback); here we only flag the need
+        to resubscribe and surface the error to the adapter.
+        """
         self.RESUBSCRIBE_FLAG = True
         logger.error(f"WebSocket error: {error}")
-
-        if self.current_retry_attempt < self.MAX_RETRY_ATTEMPT:
-            logger.warning(f"Attempting to reconnect (Attempt {self.current_retry_attempt + 1})...")
-            self.current_retry_attempt += 1
-
-            # Calculate delay based on retry strategy
-            if self.retry_strategy == 0:  # Simple retry
-                time.sleep(self.retry_delay)
-            elif self.retry_strategy == 1:  # Exponential backoff
-                delay = self.retry_delay * (
-                    self.retry_multiplier ** (self.current_retry_attempt - 1)
-                )
-                time.sleep(delay)
-            else:
-                logger.error(f"Invalid retry strategy {self.retry_strategy}")
-                raise Exception(f"Invalid retry strategy {self.retry_strategy}")
-
-            try:
-                # Re-read a fresh token before reconnecting so a daily-rolled
-                # token (~3 AM IST) is used instead of the dead one.
-                self._refresh_access_token()
-                self.close_connection()
-                self.connect()
-            except Exception as e:
-                logger.error(f"Error during reconnect: {e}")
-                if hasattr(self, "on_error"):
-                    self.on_error("Reconnect Error", str(e) if str(e) else "Unknown error")
-        else:
-            self.close_connection()
-            if hasattr(self, "on_error"):
-                self.on_error("Max retry attempt reached", "Connection closed")
-
-            if (
-                self.retry_duration is not None
-                and self.last_pong_timestamp is not None
-                and time.time() - self.last_pong_timestamp > self.retry_duration * 60
-            ):
-                logger.warning("Connection closed due to inactivity.")
-            else:
-                logger.warning("Connection closed due to max retry attempts reached.")
+        try:
+            self.on_error(wsapp, error)
+        except Exception as e:
+            logger.error(f"Error in on_error callback: {e}")
 
     def _on_close(self, wsapp, close_status_code=None, close_msg=None):
         """Handle WebSocket connection close event"""

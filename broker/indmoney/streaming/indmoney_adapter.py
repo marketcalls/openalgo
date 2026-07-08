@@ -34,6 +34,11 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.lock = threading.Lock()
         self.last_values = {}  # Cache for retaining last known values
+        # Guard so only one reconnect loop runs at a time. Without it, every
+        # on_close spawns a fresh thread (each blocking in its own run_forever),
+        # accumulating threads and sockets on a flapping feed.
+        self._reconnect_lock = threading.Lock()
+        self._reconnecting = False
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -104,34 +109,70 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
+        self._start_reconnect_thread()
+
+    def _start_reconnect_thread(self) -> None:
+        """Start the single (re)connect loop, ensuring only one runs at a time.
+
+        ws_client.connect() blocks in run_forever until the socket drops, so a
+        single thread owns the whole connect -> drop -> reconnect lifecycle. The
+        _reconnecting guard stops any second thread (and thus a second socket)
+        from ever being started.
+        """
+        with self._reconnect_lock:
+            if not self.running:
+                return
+            if self._reconnecting:
+                self.logger.debug("Reconnect loop already running; not starting another")
+                return
+            self._reconnecting = True
+
         threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to INDmoney WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                # Refresh the client's token before connecting so a reconnect
-                # after the daily token rollover uses a live token.
-                if self.ws_client:
-                    self.ws_client._refresh_access_token()
+        """Own the connect/reconnect lifecycle in a single thread.
 
-                self.logger.info(
-                    f"Connecting to INDmoney WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
+        connect() blocks until the socket drops; when it returns we reconnect
+        here (rather than spawning a new thread from on_close) so there is never
+        more than one live socket. reconnect_attempts is reset in _on_open when
+        a connection successfully opens.
+        """
+        try:
+            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                try:
+                    # Refresh the client's token before connecting so a reconnect
+                    # after the daily token rollover uses a live token.
+                    if self.ws_client:
+                        self.ws_client._refresh_access_token()
 
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-                )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                    self.logger.info(
+                        f"Connecting to INDmoney WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    # Blocks until the socket drops or an error is raised.
+                    self.ws_client.connect()
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+                    # connect() returned => socket closed. If we're shutting
+                    # down, exit; otherwise treat as an unexpected drop.
+                    if not self.running:
+                        break
+                    self.reconnect_attempts += 1
+                except Exception as e:
+                    self.reconnect_attempts += 1
+                    self.logger.error(f"Connection error: {e}")
+
+                if self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                    delay = min(
+                        self.reconnect_delay * (2**self.reconnect_attempts),
+                        self.max_reconnect_delay,
+                    )
+                    self.logger.warning(f"Disconnected; reconnecting in {delay} seconds...")
+                    time.sleep(delay)
+
+            if self.running and self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Max reconnection attempts reached. Giving up.")
+        finally:
+            with self._reconnect_lock:
+                self._reconnecting = False
 
     def disconnect(self) -> None:
         """Disconnect from INDmoney WebSocket"""
@@ -290,6 +331,9 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("==================== WEBSOCKET OPENED ====================")
         self.logger.info("Connection established to INDmoney WebSocket")
         self.connected = True
+        # A healthy open resets the retry budget so a long-lived connection that
+        # drops occasionally doesn't eventually exhaust max_reconnect_attempts.
+        self.reconnect_attempts = 0
 
         # Resubscribe to existing subscriptions if reconnecting
         with self.lock:
@@ -346,13 +390,19 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.error(f"INDmoney WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
-        """Callback when connection is closed"""
+        """Callback when connection is closed.
+
+        Do NOT spawn a reconnect thread here — that produced a second socket
+        while the connect loop was still active. The single _connect_with_retry
+        loop reconnects on its own when ws_client.connect() returns. If for any
+        reason no loop is running (e.g. connect() raised before blocking), the
+        guarded starter is a safe no-op when one is already active.
+        """
         self.logger.info("INDmoney WebSocket connection closed")
         self.connected = False
 
-        # Attempt to reconnect if we're still running
         if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
+            self._start_reconnect_thread()
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""
