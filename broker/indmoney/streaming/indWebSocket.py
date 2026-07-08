@@ -16,7 +16,7 @@ class IndWebSocket:
 
     # WebSocket endpoints
     PRICE_FEED_URI = "wss://ws-prices.indstocks.com/api/v1/ws/prices"
-    ORDER_UPDATES_URI = "wss://ws-order-updates.indstocks.com"
+    ORDER_UPDATES_URI = "wss://ws-order-updates.indstocks.com/api/v1/ws/trades"
 
     HEART_BEAT_MESSAGE = "ping"
     HEART_BEAT_INTERVAL = 30  # 30 seconds
