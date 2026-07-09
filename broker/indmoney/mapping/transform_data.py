@@ -87,7 +87,19 @@ def transform_data(data, token):
     segment = map_segment(data["exchange"])
     # Indmoney order API only accepts NSE/BSE for the exchange field; F&O
     # exchanges (NFO/BFO/CDS/BCD) map to their NSE/BSE parent + DERIVATIVE segment.
-    api_exchange = map_exchange_type(data["exchange"].upper())
+    raw_exchange = data["exchange"].upper()
+    api_exchange = map_exchange_type(raw_exchange)
+    # Fail fast on exchanges the order API can't place, instead of letting the
+    # default NSE mapping silently misroute the order. Only NSE/BSE and the F&O
+    # exchanges that map onto them are placeable; MCX (maps to MCX) and any
+    # unrecognised code are rejected.
+    if raw_exchange not in {"NSE", "BSE", "NFO", "BFO", "CDS", "BCD"} or api_exchange not in {
+        "NSE",
+        "BSE",
+    }:
+        raise ValueError(
+            f"Unsupported exchange for IndMoney order placement: {data['exchange']}"
+        )
     # algo_id is exchange-specific: 99999 for NSE, 9999999999999999 for BSE.
     algo_id = "9999999999999999" if api_exchange == "BSE" else "99999"
     transformed = {
