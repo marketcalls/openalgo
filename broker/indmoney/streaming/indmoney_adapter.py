@@ -39,6 +39,9 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # accumulating threads and sockets on a flapping feed.
         self._reconnect_lock = threading.Lock()
         self._reconnecting = False
+        # Handle to the running reconnect loop so a re-initialize can wait for
+        # it to finish (and clear _reconnecting) before starting a fresh one.
+        self._reconnect_thread = None
         # Set on disconnect so the reconnect backoff sleep is interruptible and
         # the loop exits promptly instead of lingering up to max_reconnect_delay.
         self._stop_event = threading.Event()
@@ -80,6 +83,14 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.warning(f"Error closing previous ws_client on re-init: {e}")
             self.ws_client = None
+            # Wait for the previous reconnect loop to unwind so its _reconnecting
+            # guard is cleared before a fresh connect() starts a new loop.
+            # Otherwise the next connect() would see the guard still set, no-op,
+            # and leave the new client permanently unconnected.
+            prev_thread = self._reconnect_thread
+            if prev_thread is not None and prev_thread.is_alive():
+                prev_thread.join(timeout=10)
+            self._reconnect_thread = None
 
         # Get access token from database if not provided
         if not auth_data:
@@ -152,8 +163,10 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self._reconnecting = True
             # Fresh loop: clear any stop signal left by a previous disconnect.
             self._stop_event.clear()
-
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+            self._reconnect_thread = threading.Thread(
+                target=self._connect_with_retry, daemon=True
+            )
+            self._reconnect_thread.start()
 
     def _connect_with_retry(self) -> None:
         """Own the connect/reconnect lifecycle in a single thread.
@@ -380,6 +393,16 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
+            # Drop any still-queued (not-yet-flushed) subscription for this
+            # instrument+mode so a subscribe→unsubscribe within the 500ms batch
+            # window doesn't end up subscribing after the unsubscribe.
+            self.subscription_queue = [
+                s
+                for s in self.subscription_queue
+                if not (
+                    s["instrument_token"] == instrument_token and s["mode"] == indmoney_mode
+                )
+            ]
             # Check if all subscriptions are removed
             if len(self.subscriptions) == 0:
                 should_disconnect = True
