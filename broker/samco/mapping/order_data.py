@@ -370,6 +370,7 @@ def transform_holdings_data(holdings_data):
     for holding in holdings:
         # Get quantity and pnl
         quantity = int(holding.get("holdingsQuantity", 0) or 0)
+        pledged_quantity = int(holding.get("collateralQuantity", 0) or 0)
         pnl = float(holding.get("totalGainAndLoss", 0) or 0)
 
         # Calculate pnl percentage from holdingsValue and pnl
@@ -383,11 +384,18 @@ def transform_holdings_data(holdings_data):
         else:
             pnl_percent = 0.0
 
+        # Samco doesn't expose a direct LTP field in holdings; holdingsValue
+        # is quantity * ltp, so derive it from values already trusted above.
+        total_qty = quantity + pledged_quantity
+        ltp = round(holdings_value / total_qty, 2) if total_qty else 0.0
+
         transformed_holding = {
             "symbol": holding.get("tradingSymbol", ""),
             "exchange": holding.get("exchange", "NSE"),
             "quantity": quantity,
+            "pledged_quantity": pledged_quantity,
             "product": holding.get("product", "CNC"),
+            "ltp": ltp,
             "pnl": round(pnl, 2),
             "pnlpercent": pnl_percent,
         }

@@ -20,7 +20,9 @@ def format_holdings_data(holdings_data):
     if isinstance(holdings_data, list):
         return [
             {
-                key: format_decimal(value) if key in ["pnl", "pnlpercent"] else value
+                key: format_decimal(value)
+                if key in ["pnl", "pnlpercent", "t1_quantity", "pledged_quantity"]
+                else value
                 for key, value in item.items()
             }
             for item in holdings_data

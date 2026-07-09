@@ -266,6 +266,8 @@ def transform_holdings_data(holdings_data):
             "symbol": holdings.get("tradingSymbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": holdings.get("totalQty", 0),
+            "t1_quantity": holdings.get("t1Qty", 0),
+            "pledged_quantity": holdings.get("collateralQty", 0),
             "product": "CNC",
             "pnl": 0.0,
             "pnlpercent": 0.0,

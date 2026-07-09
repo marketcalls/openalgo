@@ -216,6 +216,9 @@ def transform_holdings_data(holdings_data):
                 "symbol": holding.get("_oa_symbol", ""),
                 "exchange": holding.get("_exchange", ""),
                 "quantity": holding.get("qty", 0),
+                "t1_quantity": holding.get("t1Qty", 0),
+                "pledged_quantity": holding.get("collateralQty", 0)
+                + holding.get("brokerCollateralQty", 0),
                 "product": holding.get("_product", "CNC"),
                 "average_price": average_price,
                 # TODO(arrow): confirm holdings PnL field name (`pnl`).
@@ -226,12 +229,21 @@ def transform_holdings_data(holdings_data):
     return transformed
 
 
+def _total_qty(item):
+    return (
+        float(item.get("qty") or 0.0)
+        + float(item.get("t1Qty") or 0.0)
+        + float(item.get("collateralQty") or 0.0)
+        + float(item.get("brokerCollateralQty") or 0.0)
+    )
+
+
 def calculate_portfolio_statistics(holdings_data):
     totalholdingvalue = sum(
-        float(item.get("ltp") or 0.0) * float(item.get("qty") or 0.0) for item in holdings_data
+        float(item.get("ltp") or 0.0) * _total_qty(item) for item in holdings_data
     )
     totalinvvalue = sum(
-        float(item.get("avgPrice") or 0.0) * float(item.get("qty") or 0.0) for item in holdings_data
+        float(item.get("avgPrice") or 0.0) * _total_qty(item) for item in holdings_data
     )
     totalprofitandloss = sum(float(item.get("pnl") or 0.0) for item in holdings_data)
     totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0

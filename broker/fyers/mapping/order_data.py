@@ -370,6 +370,10 @@ def transform_holdings_data(holdings_data):
             "symbol": holdings.get("symbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": holdings.get("quantity", 0),
+            # Field names are medium-confidence (SDK-corroborated, not from a
+            # rendered official doc page) - verify against a live response.
+            "t1_quantity": holdings.get("qty_t1", 0),
+            "pledged_quantity": holdings.get("collateralQuantity", 0),
             "product": holdings.get("holdingType", ""),
             "average_price": round(float(cost_price), 2),
             "ltp": round(float(ltp), 2),

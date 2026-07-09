@@ -212,7 +212,10 @@ def transform_holdings_data(holdings_data):
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": holdings.get("quantity", 0),
+            "t1_quantity": holdings.get("t1_quantity", 0),
+            "pledged_quantity": holdings.get("collateral_quantity", 0),
             "product": holdings.get("product", ""),
+            "ltp": holdings.get("last_price", 0.0),
             "pnl": holdings.get("pnl", 0.0),
             "pnlpercent": (holdings.get("last_price", 0) - holdings.get("average_price", 0.0))
             / holdings.get("average_price", 0.0)
@@ -256,8 +259,19 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item["last_price"] * item["quantity"] for item in holdings_data)
-    totalinvvalue = sum(item["average_price"] * item["quantity"] for item in holdings_data)
+    def total_quantity(item):
+        return (
+            item.get("quantity", 0)
+            + item.get("t1_quantity", 0)
+            + item.get("collateral_quantity", 0)
+        )
+
+    totalholdingvalue = sum(
+        item["last_price"] * total_quantity(item) for item in holdings_data
+    )
+    totalinvvalue = sum(
+        item["average_price"] * total_quantity(item) for item in holdings_data
+    )
     totalprofitandloss = sum(item["pnl"] for item in holdings_data)
 
     # To avoid division by zero in the case when total_investment_value is 0

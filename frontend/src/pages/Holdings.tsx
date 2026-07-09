@@ -338,6 +338,8 @@ export default function Holdings() {
                     <TableHead>Trading Symbol</TableHead>
                     <TableHead>Exchange</TableHead>
                     <TableHead className="text-right">Quantity</TableHead>
+                    <TableHead className="text-right">T1 Qty</TableHead>
+                    <TableHead className="text-right">Pledged Qty</TableHead>
                     <TableHead className="text-right">Avg Price</TableHead>
                     <TableHead className="text-right">LTP</TableHead>
                     <TableHead>Product</TableHead>
@@ -353,6 +355,12 @@ export default function Holdings() {
                         <Badge variant="outline">{holding.exchange}</Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono">{holding.quantity}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        {holding.t1_quantity ?? 0}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {holding.pledged_quantity ?? 0}
+                      </TableCell>
                       <TableCell className="text-right font-mono">
                         {holding.average_price !== undefined
                           ? formatCurrency(holding.average_price)
