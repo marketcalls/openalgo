@@ -1,10 +1,11 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.fyers.api.rate_limiter import MAX_RETRIES, apply_rate_limit, retry_delay_from_headers
 from broker.fyers.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -18,9 +19,15 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+def get_api_response(endpoint, auth, method="GET", payload="", _retry_count=0):
     """
     Make API requests to Fyers API using shared connection pooling.
+
+    Rate limited process-wide (broker.fyers.api.rate_limiter) since Fyers
+    caps all endpoints combined -- orders, data, funds -- at 10 req/sec per
+    API key. On HTTP 429 this retries with backoff (honoring the
+    Retry-After / X-Retry-After-Ms headers when present) instead of
+    immediately surfacing the failure to the caller.
 
     Args:
         endpoint: API endpoint (e.g., /api/v3/orders)
@@ -40,6 +47,8 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
         url = f"https://api-t1.fyers.in{endpoint}"
         headers = {"Authorization": f"{api_key}:{AUTH_TOKEN}", "Content-Type": "application/json"}
+
+        apply_rate_limit()
 
         logger.debug(f"Making {method} request to Fyers API: {url}")
 
@@ -71,6 +80,17 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
         return response_data
 
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429 and _retry_count < MAX_RETRIES:
+            delay = retry_delay_from_headers(e.response.headers, _retry_count)
+            logger.warning(
+                f"Fyers API rate limited (429) on {endpoint}. Retrying in "
+                f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            return get_api_response(endpoint, auth, method, payload, _retry_count + 1)
+        logger.error(f"HTTP error during API request: {e}")
+        return {"s": "error", "message": f"HTTP error: {e}"}
     except httpx.HTTPError as e:
         logger.error(f"HTTP error during API request: {e}")
         return {"s": "error", "message": f"HTTP error: {e}"}
