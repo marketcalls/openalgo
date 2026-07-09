@@ -282,14 +282,16 @@ class TelegramAlertService:
             logger.error(f"Failed to get bot token: {e}")
         return None
 
-    def _is_bot_active(self) -> bool:
+    def is_bot_active(self) -> bool:
         """Whether the Telegram bot is currently started.
 
         The persisted bot config (`is_active`) is the source of truth — it is set
-        True on start_bot() and False on stop_bot(). Order alerts are sent through
-        a separate HTTP path that does not depend on the polling bot, so without
-        this gate alerts would still fire while the bot is stopped
-        (GitHub issue #1577).
+        True on start_bot() and False on stop_bot(). Automatic alerts (order
+        events, Flow alerts) are sent through a separate HTTP path that does not
+        depend on the polling bot, so without this gate they would keep firing
+        while the bot is stopped (GitHub issue #1577). Explicit, human-initiated
+        sends (the /telegram admin test/broadcast buttons, the /notify API) do
+        not use this gate.
         """
         try:
             config = get_bot_config()
@@ -379,7 +381,7 @@ class TelegramAlertService:
 
             # Skip if the bot is stopped — stopping the bot must also stop
             # outbound order alerts (GitHub issue #1577).
-            if not self._is_bot_active():
+            if not self.is_bot_active():
                 logger.debug("Telegram bot is stopped; skipping order alert")
                 return
 

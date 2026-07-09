@@ -533,6 +533,13 @@ class FlowOpenAlgoClient:
         from services.telegram_alert_service import alert_executor, telegram_alert_service
 
         try:
+            # Respect the Telegram bot's on/off state. A running Flow strategy
+            # must not keep emitting alerts after the bot has been stopped
+            # (GitHub issue #1577).
+            if not telegram_alert_service.is_bot_active():
+                logger.info("Telegram bot is stopped; skipping Flow alert")
+                return {"status": "error", "error": "Telegram bot is stopped"}
+
             # Get username from API key
             from database.auth_db import verify_api_key
 
