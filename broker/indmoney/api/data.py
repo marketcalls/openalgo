@@ -40,7 +40,13 @@ def _is_known_bad(scrip_code):
 def _mark_bad(scrip_code):
     """Cache scrip_code as unquotable so future batches skip it."""
     with _bad_scrip_lock:
-        _BAD_SCRIP_CODES[scrip_code] = time.monotonic()
+        now = time.monotonic()
+        _BAD_SCRIP_CODES[scrip_code] = now
+        # Prune expired entries so the cache stays bounded on a long-running
+        # worker that sees many one-off unquotable strikes over the day.
+        for code, ts in list(_BAD_SCRIP_CODES.items()):
+            if now - ts > _BAD_SCRIP_TTL:
+                _BAD_SCRIP_CODES.pop(code, None)
 
 # 429 (rate-limit) retry configuration. IndStocks enforces per-category rate
 # limits (Data/Quote 5/s) and returns 429 on breach (docs 03-conventions /
@@ -541,9 +547,12 @@ class BrokerData:
             return response.get("data", {}) or {}
         except Exception as e:
             msg = str(e)
-            # A 400 "Invalid scrip codes" means at least one code in this batch
-            # is unquotable. Only these are worth bisecting.
-            bad_batch = "400" in msg or "Invalid scrip" in msg
+            # A 400 carrying the server's "Invalid scrip codes or mode" text
+            # means at least one code in this batch is unquotable — only those
+            # are worth bisecting. Match the phrase specifically (not any "400")
+            # so an unrelated 400 (bad param, etc.) doesn't blacklist valid
+            # codes for the whole TTL.
+            bad_batch = "Invalid scrip" in msg
 
             if len(codes) == 1:
                 if bad_batch:
