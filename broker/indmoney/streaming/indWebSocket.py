@@ -136,10 +136,15 @@ class IndWebSocket:
     def _on_open(self, wsapp):
         """Handle WebSocket connection open event"""
         logger.info("WebSocket connection opened")
+        # Always notify the adapter's on_open so it marks the socket connected
+        # and resets its reconnect budget on EVERY open, not just the first.
+        # (Previously a reconnect took the resubscribe-only branch, so the
+        # adapter never saw the open: connected stayed False and the retry
+        # budget was never replenished, eventually exhausting the reconnect
+        # attempts on a long-lived but occasionally-flapping feed.)
+        self.on_open(wsapp)
         if self.RESUBSCRIBE_FLAG:
             self.resubscribe()
-        else:
-            self.on_open(wsapp)
 
     def _on_pong(self, wsapp, data):
         """Handle pong response from heartbeat"""
@@ -180,8 +185,13 @@ class IndWebSocket:
             if mode not in self.input_request_dict:
                 self.input_request_dict[mode] = []
 
+            # Collapse duplicates within this batch (dict.fromkeys preserves
+            # order) as well as against already-subscribed instruments, so a
+            # repeated token isn't sent twice or double-counted against the
+            # per-connection cap.
+            existing = set(self.input_request_dict[mode])
             new_instruments = [
-                i for i in instruments if i not in self.input_request_dict[mode]
+                i for i in dict.fromkeys(instruments) if i not in existing
             ]
             if not new_instruments:
                 logger.debug(f"All {len(instruments)} instruments already subscribed in {mode} mode")
