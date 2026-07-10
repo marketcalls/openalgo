@@ -3,7 +3,11 @@
 Adapted from the Zerodha client. Uses sync `websocket-client` in a daemon
 thread (NOT asyncio) to stay compatible with gunicorn+eventlet. Implements the
 same resilience patterns:
-  - keepalive via run_forever ping/pong + a data-stall health-check watchdog
+  - keepalive via an app-level text "PONG" heartbeat + a data-stall watchdog.
+    Arrow's server tracks client liveness through the text heartbeat (the
+    official pyarrow-client SDK sends "PONG" every 3s and never uses
+    protocol-level ping frames); a client that stays silent gets no tick
+    delivery and is reaped without a close frame (close code 1006).
   - automatic reconnection with interruptible exponential backoff
   - bounded auth-refresh on token failure (re-reads a fresh JWT from the DB for
     the ~3 AM IST daily token rollover) instead of dying until a restart
@@ -58,9 +62,12 @@ class ArrowWebSocket:
     # layout; the parser handles both (per the official pyarrow-client SDK).
     _SIZE_TO_MODE = {13: MODE_LTP, 17: MODE_LTPC, 93: MODE_QUOTE, 249: MODE_FULL, 241: MODE_FULL}
 
-    PING_INTERVAL = 30
-    PING_TIMEOUT = 10
-    KEEPALIVE_INTERVAL = 30
+    # App-level heartbeat: the server expects the literal text "PONG" every
+    # few seconds (official SDK: ping_interval=3). Protocol ping frames are
+    # NOT honored by the server, so a websocket-client ping_timeout would
+    # kill healthy connections -- do not reintroduce run_forever ping args.
+    HEARTBEAT_INTERVAL = 3
+    HEARTBEAT_TEXT = "PONG"
     DATA_TIMEOUT = 90  # force reconnect if no data for this long
 
     # Batching. Standard-stream per-connection / per-request caps are not
@@ -195,10 +202,12 @@ class ArrowWebSocket:
                 # CERT_REQUIRED: credentials (appID + JWT) ride in the WS URL,
                 # so accepting arbitrary certificates would hand them to any
                 # MITM. Matches the deltaexchange adapter's verification.
+                # No ping_interval/ping_timeout: Arrow's server does not answer
+                # protocol-level pings (liveness is the text heartbeat sent by
+                # _health_check_loop), so a pong timeout here would tear down
+                # healthy connections ~40s after connect.
                 self.ws.run_forever(
                     sslopt={"cert_reqs": ssl.CERT_REQUIRED},
-                    ping_interval=self.PING_INTERVAL,
-                    ping_timeout=self.PING_TIMEOUT,
                 )
             except Exception as e:
                 self.logger.error(f"WebSocket run_forever error: {e}")
@@ -462,10 +471,17 @@ class ArrowWebSocket:
 
     def _health_check_loop(self):
         while self.running and self.connected:
-            if self._stop_event.wait(self.KEEPALIVE_INTERVAL):
+            if self._stop_event.wait(self.HEARTBEAT_INTERVAL):
                 break
             if not self.running or not self.connected:
                 break
+            # Server-liveness heartbeat: without this text frame the server
+            # delivers no ticks and drops the connection (1006).
+            try:
+                if self.ws:
+                    self.ws.send(self.HEARTBEAT_TEXT)
+            except Exception as e:
+                self.logger.debug(f"Heartbeat send failed: {e}")
             if (
                 self.last_message_time
                 and (time.time() - self.last_message_time) > self.DATA_TIMEOUT
