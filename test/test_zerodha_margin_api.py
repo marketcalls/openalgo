@@ -38,15 +38,9 @@ def test_basket_response_exposes_pre_credit_total_alongside_optimized_total():
     data = result["data"]
     assert data["total_margin_required"] == 191119.0
     assert data["initial_total_margin"] == 258139.0
-    assert data["option_premium_credit"] == 67020.0
-    # The relationship the fix is built on: initial - final == option_premium
-    assert (
-        data["initial_total_margin"] - data["total_margin_required"]
-        == data["option_premium_credit"]
-    )
 
 
-def test_non_basket_response_uses_total_as_initial_with_zero_credit():
+def test_non_basket_response_uses_total_as_initial():
     """Single/aggregated-order responses have no initial/final split, so
     initial_total_margin should just fall back to total_margin_required."""
     response = {
@@ -62,7 +56,6 @@ def test_non_basket_response_uses_total_as_initial_with_zero_credit():
     data = result["data"]
     assert data["total_margin_required"] == 80000.0
     assert data["initial_total_margin"] == 80000.0
-    assert data["option_premium_credit"] == 0
 
 
 def test_error_response_passes_through_unchanged():

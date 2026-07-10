@@ -164,7 +164,6 @@ def parse_margin_response(response_data):
         exposure_margin = 0
         margin_benefit = 0
         initial_total_margin = 0
-        option_premium_credit = 0
 
         if isinstance(data, dict) and "final" in data:
             # Basket response - use final values which include spread benefit
@@ -202,7 +201,6 @@ def parse_margin_response(response_data):
             # a position ahead of placing orders (see total_margin_required's docstring
             # note above: initial.total - final.total = option_premium).
             initial_total_margin = initial_total
-            option_premium_credit = option_premium
 
             # Calculate margin benefit (savings from spread/hedge recognition)
             # Formula: Margin Benefit = Sum of Individual Margins - Optimized Combined Margin
@@ -298,7 +296,6 @@ def parse_margin_response(response_data):
                 "span_margin": span_margin,
                 "exposure_margin": exposure_margin,
                 "initial_total_margin": initial_total_margin,
-                "option_premium_credit": option_premium_credit,
             },
         }
 
