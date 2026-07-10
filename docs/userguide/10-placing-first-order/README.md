@@ -10,7 +10,7 @@ Ensure you have:
 - [ ] OpenAlgo running
 - [ ] Logged into your broker
 - [ ] API key generated
-- [ ] Understand order types (review [Module 02](../02-key-concepts/README.md) if needed)
+- [ ] Understand order types (review [Module 03](../03-key-concepts/README.md) if needed)
 
 ## Method 1: Using the Playground (Easiest)
 

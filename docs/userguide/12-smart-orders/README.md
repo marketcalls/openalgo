@@ -164,7 +164,7 @@ Result: Flat (no position)
 ### API Call
 
 ```
-POST /api/v1/smartorder
+POST /api/v1/placesmartorder
 Content-Type: application/json
 
 {

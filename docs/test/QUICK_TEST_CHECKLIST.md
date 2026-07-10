@@ -235,7 +235,6 @@ MCX:      CRUDEOIL17JAN26FUT, GOLD05FEB26FUT
 ## Platform Quick Check
 
 ### Python Versions
-- [ ] 3.11: `python3.11 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && python app.py`
 - [ ] 3.12: `python3.12 -m venv venv && ...`
 - [ ] 3.13: `python3.13 -m venv venv && ...`
 
@@ -362,4 +361,3 @@ Run this sequence to verify basic functionality:
 _______________________________
 _______________________________
 _______________________________
-

@@ -215,7 +215,7 @@ OpenAlgo uses standardized exchange codes to identify trading venues.
 
 ## Common Index Symbols
 
-OpenAlgo has rolled out a **standardized index symbol set across all supported brokers**. Use exchange code `NSE_INDEX` or `BSE_INDEX` when placing orders or fetching quotes for these symbols — the same symbol works identically on every broker.
+OpenAlgo uses standardized index symbols with exchange code `NSE_INDEX` or `BSE_INDEX`. Use only index exchanges declared by the active plugin; some plugins expose one index exchange, both, or neither.
 
 ### NSE Indices (Exchange: `NSE_INDEX`)
 

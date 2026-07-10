@@ -13,8 +13,9 @@ This comprehensive user guide is designed for **traders of all levels** - from c
 | # | Module | Status | Difficulty |
 |---|--------|--------|------------|
 | 01 | What is OpenAlgo | ✅ Complete | Beginner |
-| 02 | Key Concepts | ✅ Complete | Beginner |
-| 03 | System Requirements | ✅ Complete | Beginner |
+| 02 | Why Build with OpenAlgo | Complete | Beginner |
+| 03 | Key Concepts | Complete | Beginner |
+| 03A | System Requirements | Complete | Beginner |
 | 04 | Installation Guide | ✅ Complete | Beginner |
 | 05 | First-Time Setup | ✅ Complete | Beginner |
 | 06 | Broker Connection | ✅ Complete | Beginner |

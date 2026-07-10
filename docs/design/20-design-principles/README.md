@@ -1,322 +1,84 @@
 # 20 - Design Principles
 
-## Overview
+## Code Is Authoritative
 
-OpenAlgo follows specific design patterns and architectural principles to maintain code quality, extensibility, and reliability across the trading platform.
+Registered routes, schemas, service behavior, and broker capability metadata are the source of truth. [`docs/api`](../../api/README.md) records the public contract because Flask-RESTX Swagger UI is intentionally disabled.
 
-## Core Design Principles
+Examples in design pages explain boundaries; they are not substitute implementations.
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                          OpenAlgo Design Principles                          │
-└──────────────────────────────────────────────────────────────────────────────┘
+## Broker-Agnostic Contract
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                                                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │  Broker         │  │  Separation     │  │  Async          │             │
-│  │  Agnostic       │  │  of Concerns    │  │  Operations     │             │
-│  │                 │  │                 │  │                 │             │
-│  │  Single API for │  │  API → Service  │  │  Non-blocking   │             │
-│  │  34 plugins    │  │  → Broker       │  │  logging/alerts │             │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
-│                                                                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │  Plugin         │  │  Fail-Safe      │  │  Security       │             │
-│  │  Architecture   │  │  Operations     │  │  First          │             │
-│  │                 │  │                 │  │                 │             │
-│  │  Dynamic broker │  │  Graceful       │  │  Encryption at  │             │
-│  │  loading        │  │  degradation    │  │  rest & transit │             │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+The public API remains stable across the current 34 broker plugins. Each plugin maps OpenAlgo symbols, products, actions, and price types into its broker's contract, then normalizes broker responses back into OpenAlgo shapes.
+
+Plugin presence does not imply that every optional operation, exchange, or WebSocket depth level is supported. `plugin.json` capability metadata and the broker implementation determine the available subset.
+
+## Layer Ownership
+
+```text
+REST resource or session blueprint
+        -> schema/session validation
+        -> service orchestration
+        -> broker, sandbox, database, or calculation module
+        -> normalized response
 ```
 
-## 1. Broker-Agnostic API
+- Routes own transport concerns: request parsing, authentication, schema errors, and HTTP status.
+- Services own mode selection, policy, business sequencing, and normalized results.
+- Broker modules own broker-specific request mapping and response transformation.
+- Database modules own persistence and query behavior.
+- Subscribers own best-effort side effects such as event logging and notifications.
 
-### Principle
-One unified API backed by the current 34 broker plugins.
+Do not move broker-specific conditionals into shared resources when a plugin mapping or capability can express the difference.
 
-### Implementation
+## Mode And Risk Boundaries
 
-```python
-# All brokers implement the same interface
-def place_order_api(data, auth):
-    """Every broker module implements this signature"""
-    pass
+Analyzer mode routes supported execution and account state into the sandbox subsystem. Live mode resolves the active broker session. The two persistence domains remain isolated.
 
-# Dynamic module loading
-def import_broker_module(broker_name):
-    module_path = f'broker.{broker_name}.api.order_api'
-    return importlib.import_module(module_path)
-```
+Semi-auto mode can queue eligible operations in Action Center instead of executing them immediately. Destructive and unsupported operations must follow each service's explicit policy rather than assuming every order route can be deferred.
 
-### Benefits
-- Users switch brokers without code changes
-- Consistent response formats
-- Single learning curve
+Risk-reducing workflows must not create exposure. Close-position and scalping exits derive the opposite action from current position state, and server validation remains authoritative even when the UI has already validated the request.
 
-## 2. Layered Architecture
+## Process-Aware State
 
-### Layer Structure
+OpenAlgo's production deployment uses Gunicorn with one eventlet worker per instance, while some components run in a child process or OS thread. Process-local caches, singletons, and the EventBus are not cross-process coordination mechanisms.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Layer 1: REST API (restx_api/)                                  │
-│  - Request validation                                            │
-│  - Rate limiting                                                 │
-│  - Maintained docs/api contract (Swagger UI disabled)            │
-├─────────────────────────────────────────────────────────────────┤
-│  Layer 2: Service Layer (services/)                              │
-│  - Business logic                                                │
-│  - Order routing                                                 │
-│  - Mode handling (live/analyzer)                                 │
-├─────────────────────────────────────────────────────────────────┤
-│  Layer 3: Broker Layer (broker/)                                 │
-│  - API integration                                               │
-│  - Symbol mapping                                                │
-│  - Data transformation                                           │
-├─────────────────────────────────────────────────────────────────┤
-│  Layer 4: Database Layer (database/)                             │
-│  - Data persistence                                              │
-│  - Caching                                                       │
-│  - Query optimization                                            │
-└─────────────────────────────────────────────────────────────────┘
-```
+Cross-process market data and selected cache invalidation use a fixed ZeroMQ fan-in topology: the proxy SUB socket binds, and publisher sockets connect. Persisted state is used when behavior must survive navigation, restart, or process boundaries.
 
-## 3. Dual Authentication Pattern
+## Persistence Discipline
 
-### Support Both API Key and Direct Auth
+OpenAlgo uses six primary configured stores: five SQLite workloads and Historify DuckDB. SQLAlchemy engines use `NullPool`, and known scoped sessions are removed during request teardown. New persistence modules must either join that teardown inventory or use a context-managed lifecycle that closes every connection.
 
-```python
-def service_function(data, api_key=None, auth_token=None, broker=None):
-    """
-    Case 1: External API call (api_key provided)
-    Case 2: Internal call (auth_token + broker provided)
-    """
-    if api_key:
-        auth_token, broker = get_auth_token_broker(api_key)
+Schema changes use idempotent initialization and targeted migrations rather than a general Alembic layer. Changes must work for both fresh and existing databases.
 
-    if not auth_token:
-        return error_response()
+## Security Defaults
 
-    return broker_module.execute(auth_token)
-```
+- API keys are verified with Argon2 plus `API_KEY_PEPPER`; retrievable key material and broker tokens are encrypted with Fernet-derived helpers.
+- Session routes retain CSRF protection except for reviewed callbacks, webhooks, and health/logout exemptions.
+- Public `/api/v1` routes are CSRF-exempt because they authenticate with the OpenAlgo API key.
+- CORS, CSP, cookie security, proxy trust, IP bans, and rate limits are explicit configuration boundaries.
+- Secrets, tokens, and full sensitive arguments must not enter normal logs.
+- Remote MCP is opt-in, refuses debug mode, and enforces OAuth scopes for each tool.
 
-## 4. Analyzer Mode Routing
+## Failure Behavior
 
-### Transparent Sandbox Integration
+Validation and policy errors should be returned before broker execution. Broker failures remain visible as normalized errors; they must not be converted into false success. Best-effort notifications or event subscribers may fail without changing an already-determined trading result, but persistence required by the operation is not treated as optional background work.
 
-```python
-def process_order(data, api_key):
-    if get_analyze_mode():
-        # Route to sandbox (sandbox trading)
-        return sandbox_place_order(api_key, data)
-    else:
-        # Route to live broker
-        return live_place_order(api_key, data)
-```
+Background services need explicit start, stop, retry, and cleanup behavior. A task should not be launched from request code when application startup owns its lifecycle.
 
-### Benefits
-- Same API for both modes
-- Risk-free testing
-- Isolated sandbox capital
+## Change Rules
 
-## 5. Async Non-Blocking Operations
+1. Add or change schemas before relying on new request fields.
+2. Keep the REST inventory and endpoint page synchronized with route registration.
+3. Update broker capability metadata when behavior varies by plugin.
+4. Cover shared service or schema changes across live and analyzer paths where both apply.
+5. Verify teardown and process ownership when introducing caches, sockets, schedulers, or database sessions.
+6. Preserve sensitive-field redaction in logs, events, audits, and exceptions.
 
-### Never Block the Request Thread
+## Related Pages
 
-```python
-# Async logging
-executor.submit(async_log_order, 'placeorder', data, response)
-
-# Background socket events
-socketio.start_background_task(socketio.emit, 'order_event', data)
-
-# Background Telegram alerts
-socketio.start_background_task(send_telegram_alert, order_data)
-```
-
-### Operations Made Async
-- Order logging
-- Socket.IO events
-- Telegram notifications
-- Database writes (non-critical)
-
-## 6. Plugin Architecture
-
-### Dynamic Broker Loading
-
-```
-broker/
-├── zerodha/
-│   ├── api/
-│   │   ├── auth_api.py
-│   │   ├── order_api.py
-│   │   └── data.py
-│   ├── mapping/
-│   │   └── transform_data.py
-│   └── plugin.json
-├── dhan/
-│   └── ... (same structure)
-└── angel/
-    └── ... (same structure)
-```
-
-### Plugin Discovery
-
-```python
-def load_broker_auth_functions(broker_directory):
-    """Dynamically imports all broker modules"""
-    for broker in os.listdir(broker_directory):
-        module = import_module(f'broker.{broker}.api.auth_api')
-        yield broker, module
-```
-
-## 7. Consistent Response Format
-
-### Standard Response Structure
-
-```python
-# Success Response
-{
-    "status": "success",
-    "message": "Order placed successfully",
-    "orderid": "123456789",
-    "data": {...}  # Optional
-}
-
-# Error Response
-{
-    "status": "error",
-    "message": "Insufficient margin"
-}
-```
-
-### HTTP Status Codes
-
-| Status | Meaning |
-|--------|---------|
-| 200 | Success |
-| 400 | Validation error |
-| 403 | Authentication failed |
-| 404 | Resource not found |
-| 429 | Rate limit exceeded |
-| 500 | Server error |
-
-## 8. Caching Strategy
-
-### Multi-Level Caching
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Caching Architecture                          │
-├─────────────────────────────────────────────────────────────────┤
-│  Level 1: In-Memory (TTL Cache)                                  │
-│  - API key verification (10 hours)                               │
-│  - Settings (1 hour)                                             │
-│  - Strategies (5-10 minutes)                                     │
-├─────────────────────────────────────────────────────────────────┤
-│  Level 2: Database (SQLite/PostgreSQL)                           │
-│  - Persistent data                                               │
-│  - Transaction logs                                              │
-├─────────────────────────────────────────────────────────────────┤
-│  Level 3: DuckDB (Columnar)                                      │
-│  - Historical market data                                        │
-│  - Analytics queries                                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## 9. Security Layers
-
-### Defense in Depth
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Layer 1: IP-based Security                                      │
-│  - IP bans for abuse                                             │
-│  - Rate limiting                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│  Layer 2: Authentication                                         │
-│  - API key verification (Argon2 + pepper)                        │
-│  - Session validation                                            │
-├─────────────────────────────────────────────────────────────────┤
-│  Layer 3: Encryption                                             │
-│  - Auth tokens (Fernet)                                          │
-│  - API keys (Argon2 hash + Fernet)                               │
-├─────────────────────────────────────────────────────────────────┤
-│  Layer 4: Data Isolation                                         │
-│  - 5 separate databases                                          │
-│  - Sandbox isolation                                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## 10. Error Handling
-
-### Graceful Degradation
-
-```python
-try:
-    result = broker_api.place_order(data)
-except ConnectionError:
-    return {"status": "error", "message": "Broker unavailable"}
-except ValidationError as e:
-    return {"status": "error", "message": str(e)}
-except Exception as e:
-    logger.error(f"Unexpected error: {e}")
-    return {"status": "error", "message": "Internal error"}
-```
-
-## 11. Singleton Pattern
-
-### Thread-Safe Singleton
-
-```python
-class MarketDataService:
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-        return cls._instance
-```
-
-### Used For
-- Market data service
-- WebSocket connections
-- HTTP client pools
-
-## 12. Data Transformation
-
-### Broker Mapping Pattern
-
-```python
-# OpenAlgo → Broker format
-def transform_data(data):
-    return {
-        "tradingsymbol": get_broker_symbol(data['symbol']),
-        "transaction_type": data['action'],
-        "order_type": map_price_type(data['pricetype']),
-        # ... more mappings
-    }
-
-# Broker → OpenAlgo format
-def transform_response(response):
-    return {
-        "orderid": response['data']['order_id'],
-        "status": "success" if response['status'] == True else "error"
-    }
-```
-
-## Key Files Reference
-
-| Pattern | Implementation |
-|---------|----------------|
-| Plugin loader | `utils/plugin_loader.py` |
-| Service layer | `services/*.py` |
-| Broker interface | `broker/*/api/*.py` |
-| Data transform | `broker/*/mapping/*.py` |
-| Database layer | `database/*.py` |
-| Constants | `utils/constants.py` |
+- [Backend Architecture](../02-backend/)
+- [Service Layer](../27-service-layer/)
+- [Security Architecture](../05-security-architecture/)
+- [Database Structure](../18-database-structure/)
+- [WebSockets Architecture](../06-websockets/)
+- [Event Bus](../53-event-bus/)

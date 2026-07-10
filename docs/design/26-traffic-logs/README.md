@@ -1,322 +1,59 @@
 # 26 - Traffic Logs
 
-## Overview
+## Purpose
 
-OpenAlgo logs all HTTP traffic for monitoring, debugging, and security analysis. Traffic logs capture request/response metadata without sensitive data.
+OpenAlgo records HTTP request metadata for monitoring, latency review, and security analysis. It does not store request bodies, response bodies, headers, user agents, or a per-request processing timeline in the traffic table.
 
-## Architecture Diagram
+## Capture Flow
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Traffic Logging Architecture                          │
-└──────────────────────────────────────────────────────────────────────────────┘
+`utils/traffic_logger.py` wraps the Flask WSGI application. For each included request it captures context before submitting a serialized write to a single-worker executor:
 
-                              HTTP Request
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       Traffic Logger Middleware                              │
-│                              (WSGI)                                          │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Capture Request Data:                                               │   │
-│  │  - Timestamp                                                         │   │
-│  │  - Client IP (from proxy headers)                                    │   │
-│  │  - HTTP Method                                                       │   │
-│  │  - Request Path                                                      │   │
-│  │  - Host Header                                                       │   │
-│  │  - User ID (if authenticated)                                        │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                   │                                          │
-│                                   ▼                                          │
-│                           Flask Application                                  │
-│                                   │                                          │
-│                                   ▼                                          │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Capture Response Data:                                              │   │
-│  │  - Status Code                                                       │   │
-│  │  - Response Duration (ms)                                            │   │
-│  │  - Error Message (if any)                                            │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                   │                                          │
-│                                   ▼                                          │
-│                          Write to logs.db                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| Field | Source |
+|---|---|
+| `timestamp` | Database default |
+| `client_ip` | Trusted client-IP helper |
+| `method` | Flask request method |
+| `path` | Flask request path |
+| `status_code` | WSGI response status |
+| `duration_ms` | Middleware wall time |
+| `host` | Request host |
+| `error` | Unhandled middleware exception, when present |
+| `user_id` | `flask.g`, when populated |
 
-## Database Schema
+Writes go to `logs.db` through `database/traffic_db.py`. The executor has one worker so SQLite commits remain serialized and do not delay the HTTP response. The worker removes its scoped session after every write.
 
-### traffic_logs Table
-
-```
-┌────────────────────────────────────────────────────┐
-│               traffic_logs table                    │
-├──────────────┬──────────────┬──────────────────────┤
-│ Column       │ Type         │ Description          │
-├──────────────┼──────────────┼──────────────────────┤
-│ id           │ INTEGER PK   │ Auto-increment       │
-│ timestamp    │ DATETIME     │ Request time         │
-│ client_ip    │ VARCHAR(50)  │ Client IP address    │
-│ method       │ VARCHAR(10)  │ GET/POST/PUT/DELETE  │
-│ path         │ VARCHAR(500) │ Request path         │
-│ status_code  │ INTEGER      │ HTTP status code     │
-│ duration_ms  │ FLOAT        │ Response time        │
-│ host         │ VARCHAR(500) │ Host header          │
-│ error        │ VARCHAR(500) │ Error message        │
-│ user_id      │ INTEGER      │ User ID (nullable)   │
-└──────────────┴──────────────┴──────────────────────┘
-```
-
-### Indexes
-
-```sql
-CREATE INDEX idx_traffic_timestamp ON traffic_logs(timestamp);
-CREATE INDEX idx_traffic_client_ip ON traffic_logs(client_ip);
-CREATE INDEX idx_traffic_status_code ON traffic_logs(status_code);
-CREATE INDEX idx_traffic_user_id ON traffic_logs(user_id);
-CREATE INDEX idx_traffic_ip_timestamp ON traffic_logs(client_ip, timestamp);
-```
-
-## Implementation
-
-### WSGI Middleware
-
-```python
-class TrafficLoggerMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    def __call__(self, environ, start_response):
-        start_time = time.perf_counter()
-        client_ip = get_real_ip_from_environ(environ)
-
-        captured_status = [None]
-
-        def custom_start_response(status, headers, exc_info=None):
-            captured_status[0] = int(status.split()[0])
-            return start_response(status, headers, exc_info)
-
-        response = self.app(environ, custom_start_response)
-
-        duration = (time.perf_counter() - start_time) * 1000
-
-        log_traffic(
-            client_ip=client_ip,
-            method=environ.get('REQUEST_METHOD'),
-            path=environ.get('PATH_INFO'),
-            status_code=captured_status[0],
-            duration_ms=duration,
-            host=environ.get('HTTP_HOST')
-        )
-
-        return response
-```
-
-### Initialization
-
-```python
-from utils.traffic_logger import init_traffic_logging
-
-app = Flask(__name__)
-init_traffic_logging(app)
-```
+Static assets, the favicon, latency-log reads, and the traffic dashboard's own routes are excluded to avoid noise and recursion.
 
 ## Dashboard
 
-### Access
-```
-/logs/traffic
-```
+The supported React page is `/logs/traffic` (with `/traffic` retained as an alias). It calls session-authenticated routes under `/traffic`:
 
-### Dashboard View
+| Route | Behavior |
+|---|---|
+| `GET /traffic/api/logs` | Return recent entries; `limit` defaults to 100 and is capped at 1,000 |
+| `GET /traffic/api/stats` | Return overall, `/api/v1`-only, and selected endpoint statistics |
+| `GET /traffic/export` | Export the current log set as CSV |
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                         Traffic Dashboard                                   │
-│                                                                             │
-│  Total Requests: 15,234     Errors: 123 (0.8%)     Avg Response: 45ms      │
-│                                                                             │
-│ ┌─────────────────────────────────────────────────────────────────────────┐│
-│ │ Requests per Hour (Last 24h)                                             ││
-│ │                                                                          ││
-│ │  1000 ┤                      ╭╮                                          ││
-│ │   800 ┤                   ╭──╯╰──╮                                       ││
-│ │   600 ┤               ╭───╯      ╰───╮                                   ││
-│ │   400 ┤           ╭───╯              ╰───╮                               ││
-│ │   200 ┤       ╭───╯                      ╰───╮                           ││
-│ │     0 ┼───────────────────────────────────────────────────────           ││
-│ │       00:00   06:00   12:00   18:00   24:00                              ││
-│ └─────────────────────────────────────────────────────────────────────────┘│
-│                                                                             │
-│ ┌─────────────────────────────────────────────────────────────────────────┐│
-│ │ Status Code Distribution                                                 ││
-│ │                                                                          ││
-│ │  200 OK         ████████████████████████████████  85%                   ││
-│ │  301 Redirect   ██████  8%                                              ││
-│ │  404 Not Found  ███  4%                                                 ││
-│ │  500 Error      █  2%                                                   ││
-│ │  Other          █  1%                                                   ││
-│ └─────────────────────────────────────────────────────────────────────────┘│
-│                                                                             │
-│ ┌─────────────────────────────────────────────────────────────────────────┐│
-│ │ Recent Requests                                                          ││
-│ │                                                                          ││
-│ │ Time      │ Method │ Path              │ Status │ Duration │ IP         ││
-│ ├───────────┼────────┼───────────────────┼────────┼──────────┼────────────┤│
-│ │ 09:30:15  │ POST   │ /api/v1/placeorder│ 200    │ 85ms     │ 192.168.1.5││
-│ │ 09:30:16  │ GET    │ /dashboard        │ 200    │ 15ms     │ 192.168.1.5││
-│ │ 09:30:20  │ POST   │ /api/v1/positionbook │ 200  │ 45ms     │ 10.0.0.25  ││
-│ │ 09:30:25  │ GET    │ /api/v1/invalid   │ 404    │ 5ms      │ 172.16.0.1 ││
-│ └─────────────────────────────────────────────────────────────────────────┘│
-└────────────────────────────────────────────────────────────────────────────┘
-```
+The page shows total requests, error requests, average duration, a recent-request table, and per-endpoint totals/errors/average duration. UI filters select all versus `/api/v1` traffic and all, successful, or error status.
 
-## Filtering Options
-
-### By Status Code
-
-```python
-# Filter 5xx errors
-logs = TrafficLog.query.filter(
-    TrafficLog.status_code >= 500
-).all()
-
-# Filter client errors
-logs = TrafficLog.query.filter(
-    TrafficLog.status_code.between(400, 499)
-).all()
-```
-
-### By Time Range
-
-```python
-from datetime import datetime, timedelta
-
-# Last 24 hours
-since = datetime.now() - timedelta(hours=24)
-logs = TrafficLog.query.filter(
-    TrafficLog.timestamp >= since
-).all()
-```
-
-### By IP Address
-
-```python
-# Specific IP
-logs = TrafficLog.query.filter(
-    TrafficLog.client_ip == '192.168.1.100'
-).all()
-```
-
-## Analytics Queries
-
-### Request Volume by Hour
-
-```sql
-SELECT
-    DATE_TRUNC('hour', timestamp) as hour,
-    COUNT(*) as requests
-FROM traffic_logs
-WHERE timestamp > NOW() - INTERVAL '24 hours'
-GROUP BY hour
-ORDER BY hour
-```
-
-### Top Endpoints
-
-```sql
-SELECT
-    path,
-    COUNT(*) as hits,
-    AVG(duration_ms) as avg_duration
-FROM traffic_logs
-GROUP BY path
-ORDER BY hits DESC
-LIMIT 10
-```
-
-### Error Rate
-
-```sql
-SELECT
-    DATE_TRUNC('hour', timestamp) as hour,
-    COUNT(*) as total,
-    SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) as errors,
-    (SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END)::float / COUNT(*)) * 100 as error_rate
-FROM traffic_logs
-GROUP BY hour
-ORDER BY hour
-```
-
-### Slowest Endpoints
-
-```sql
-SELECT
-    path,
-    AVG(duration_ms) as avg_duration,
-    MAX(duration_ms) as max_duration
-FROM traffic_logs
-GROUP BY path
-ORDER BY avg_duration DESC
-LIMIT 10
-```
-
-## Data Exclusions
-
-### Not Logged
-
-To protect privacy and reduce noise:
-
-```python
-EXCLUDED_PATHS = [
-    '/static/',
-    '/favicon.ico',
-    '/health',
-    '/_ping'
-]
-
-def should_log(path):
-    return not any(path.startswith(p) for p in EXCLUDED_PATHS)
-```
-
-### Sensitive Data
-
-- Request body NOT logged
-- Response body NOT logged
-- Headers NOT logged (except Host)
-- Cookies NOT logged
+The table displays timestamp, method, path, status, duration, client IP, and host. It deliberately does not expose stored request/response payloads because none are collected.
 
 ## Retention
 
-### Automatic Cleanup
+`init_traffic_logging()` initializes the store, purges rows beyond the configured retention policy, and then installs the middleware. Retention comes from security settings rather than a documented multi-tier archive scheme.
 
-```python
-def cleanup_old_logs(days=30):
-    cutoff = datetime.now() - timedelta(days=days)
-    TrafficLog.query.filter(
-        TrafficLog.timestamp < cutoff
-    ).delete()
-    db.session.commit()
-```
+## Security
 
-### Scheduled Task
+- Proxy-derived IP headers are trusted only when `TRUST_PROXY_HEADERS` is enabled for a controlled reverse proxy.
+- API keys and tokens are not captured because traffic logging stores metadata only.
+- Dashboard, stats, logs, and export routes require a valid application session and have explicit rate limits.
+- `logs.db` also contains IP-ban and invalid-attempt security data; it is separate from `openalgo.db`.
 
-```python
-# Run daily cleanup
-scheduler.add_job(
-    cleanup_old_logs,
-    'cron',
-    hour=2,
-    minute=0
-)
-```
+## Key Files
 
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `utils/traffic_logger.py` | WSGI middleware |
-| `database/traffic_db.py` | Traffic model |
-| `utils/ip_helper.py` | IP resolution |
-| `blueprints/traffic.py` | Dashboard, stats, and export routes |
-| `frontend/src/pages/monitoring/TrafficDashboard.tsx` | React dashboard |
+| File | Responsibility |
+|---|---|
+| `utils/traffic_logger.py` | Middleware, exclusions, asynchronous write dispatch |
+| `database/traffic_db.py` | Traffic schema, queries, retention, IP/security tables |
+| `blueprints/traffic.py` | Logs, stats, CSV export, legacy template route |
+| `frontend/src/pages/monitoring/TrafficDashboard.tsx` | Current dashboard |
