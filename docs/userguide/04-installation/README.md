@@ -282,11 +282,9 @@ Open browser → Go to `http://127.0.0.1:5000`
 
 You should see the OpenAlgo login page.
 
-### Check 2: API Docs
+### Check 2: REST API
 
-Go to `http://127.0.0.1:5000/api/docs`
-
-You should see Swagger API documentation.
+Use the maintained [REST API documentation](../../api/README.md) to send a test request. Interactive Swagger documentation is intentionally disabled in the application.
 
 ### Check 3: No Errors
 

@@ -167,7 +167,7 @@ CREATE INDEX idx_user_status ON pending_orders(user_id, status);
 CREATE INDEX idx_created_at ON pending_orders(created_at);
 ```
 
-## Supported Order Types
+## Executor-Supported Queued Types
 
 | API Type | Description |
 |----------|-------------|
@@ -177,21 +177,25 @@ CREATE INDEX idx_created_at ON pending_orders(created_at);
 | splitorder | Split large orders |
 | optionsorder | Options contracts |
 
+Approval dispatch in `services/pending_order_execution_service.py` currently handles only these five API types.
+
+`optionsmultiorder` and `placegttorder` services can currently call `queue_order()` in semi-auto mode, but the approval executor has no matching dispatch branch. Such rows are stored, then approval reports `Unknown order type` and marks broker execution rejected. This is a known implementation conflict, not supported Action Center behavior.
+
 ## Restricted Operations
 
-These operations ALWAYS execute immediately, even in semi-auto mode:
+These operations are never queued. Read-only operations execute immediately; destructive operations apply their own service policy and are blocked in semi-auto mode unless analyzer behavior explicitly permits them.
 
 | Operation | Reason |
 |-----------|--------|
-| closeposition | Prevent stuck positions |
-| closeallpositions | Emergency close |
-| cancelorder | Order management |
-| cancelallorder | Bulk cancel |
-| modifyorder | Order adjustment |
+| closeposition | Blocked by close-position service in semi-auto live mode |
+| cancelorder | Blocked by cancel-order service in semi-auto live mode |
+| cancelallorder | Blocked by cancel-all service in semi-auto live mode |
+| modifyorder | Blocked by modify-order service in semi-auto live mode |
+| modifygttorder / cancelgttorder | Blocked because a delayed change may target a stale trigger |
 | orderstatus | Status query |
 | orderbook | Data retrieval |
 | tradebook | Data retrieval |
-| positions | Data retrieval |
+| positionbook / openposition | Data retrieval |
 | holdings | Data retrieval |
 | funds | Data retrieval |
 
@@ -378,16 +382,11 @@ Click chevron to view raw order data:
 
 ```python
 def should_route_to_pending(api_key, api_type=None):
-    """Check if order should be queued"""
-    # Skip restricted operations
+    """Return True only for queue-eligible requests in semi-auto mode."""
     if api_type in IMMEDIATE_EXECUTION_OPERATIONS:
         return False
-
-    # Check user's order mode
-    user_id = get_user_id_from_api_key(api_key)
-    order_mode = get_order_mode(user_id)
-
-    return order_mode == 'semi_auto'
+    user_id = verify_api_key(api_key)
+    return bool(user_id and get_order_mode(user_id) == 'semi_auto')
 ```
 
 ### Queue Order
@@ -403,11 +402,8 @@ def queue_order(api_key, order_data, api_type):
         order_data=order_data
     )
 
-    # Emit real-time event
-    socketio.emit('pending_order_created', {
-        'order_id': pending_order_id,
-        'user_id': user_id
-    })
+    # Emit best-effort UI notification after persistence.
+    socketio.emit('pending_order_created', {'order_id': pending_order_id, 'user_id': user_id})
 
     return True, {
         'status': 'success',

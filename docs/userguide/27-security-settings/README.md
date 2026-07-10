@@ -1,393 +1,70 @@
 # 27 - Security Settings
 
-## Introduction
-
-Security is critical when dealing with automated trading systems. OpenAlgo provides multiple layers of security to protect your account, API keys, and trading activities.
-
-## Security Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        OpenAlgo Security Layers                             │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Layer 1: Authentication                                             │   │
-│  │  • Username/Password login                                           │   │
-│  │  • Two-Factor Authentication (TOTP)                                  │   │
-│  │  • Session management                                                │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                            │                                                │
-│                            ▼                                                │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Layer 2: API Security                                               │   │
-│  │  • API key authentication                                            │   │
-│  │  • Key hashing with pepper                                           │   │
-│  │  • Rate limiting                                                     │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                            │                                                │
-│                            ▼                                                │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Layer 3: Network Security                                           │   │
-│  │  • HTTPS encryption                                                  │   │
-│  │  • IP whitelisting (optional)                                        │   │
-│  │  • Firewall configuration                                            │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                            │                                                │
-│                            ▼                                                │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Layer 4: Broker Security                                            │   │
-│  │  • OAuth2 authentication                                             │   │
-│  │  • Encrypted credential storage                                      │   │
-│  │  • Session token management                                          │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Accessing Security Settings
-
-Navigate to **Settings** → **Security** in OpenAlgo.
-
-## Password Security
-
-### Strong Password Requirements
-
-| Requirement | Minimum |
-|-------------|---------|
-| Length | 8 characters |
-| Uppercase | 1 character |
-| Lowercase | 1 character |
-| Numbers | 1 digit |
-| Special characters | Recommended |
-
-### Changing Password
-
-1. Go to **Settings** → **Security**
-2. Click **Change Password**
-3. Enter current password
-4. Enter new password
-5. Confirm new password
-6. Click **Update**
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Change Password                                                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Current Password:                                                          │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ ••••••••••••                                                         │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                              │
-│  New Password:                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ ••••••••••••••                                                       │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│  Strength: ████████░░ Strong                                                │
-│                                                                              │
-│  Confirm New Password:                                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ ••••••••••••••                                                       │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│  ✓ Passwords match                                                          │
-│                                                                              │
-│  ┌──────────────────┐                                                       │
-│  │  Update Password │                                                       │
-│  └──────────────────┘                                                       │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Password Best Practices
-
-1. **Use unique password** - Don't reuse from other sites
-2. **Use password manager** - Generate and store securely
-3. **Don't share** - Never share your password
-4. **Regular updates** - Change periodically
+## Overview
 
-## API Key Security
+OpenAlgo combines application authentication, hashed API keys, request rate limits, IP-ban middleware, and optional TOTP. The Security dashboard manages abuse thresholds and IP bans; it is not a general firewall or CIDR whitelist.
 
-### How API Keys Work
+Open **Logs > Security** or visit `/logs/security` after signing in.
 
-```
-Your API Key: abc123xyz789...
+## Security Dashboard
 
-Stored in database as:
-Hash: sha256(apikey + pepper)
+The dashboard displays active bans, 404 attempts, invalid API-key attempts, login activity, active application sessions, and aggregate security statistics. It can:
 
-Pepper stored in: .env file (APP_KEY_PEPPER)
-```
+- ban or unban one validated IPv4 or IPv6 address;
+- resolve a recently observed host and ban matching addresses;
+- clear an IP's 404 tracker;
+- update automatic-ban thresholds;
+- clear login activity records.
 
-### Protecting API Keys
+All supporting routes under `/security` require a valid application session and are rate limited.
 
-| Do | Don't |
-|-----|-------|
-| Store securely | Commit to Git |
-| Use environment variables | Share publicly |
-| Regenerate if compromised | Embed in code |
-| Use separate keys per integration | Use same key everywhere |
-
-### Regenerating API Key
+## Automatic Ban Defaults
 
-If you suspect your API key is compromised:
+Security thresholds are persisted in the settings database. Current defaults are:
 
-1. Go to **API Key** page
-2. Click **Regenerate**
-3. Confirm action
-4. Update all integrations with new key
+| Setting | Default |
+|---|---:|
+| Automatic banning | Off |
+| 404 attempts in 24 hours | 100 |
+| 404 ban duration | 0 hours (permanent) |
+| Invalid API-key attempts in 24 hours | 100 |
+| Invalid API-key ban duration | 0 hours (permanent) |
+| Repeat-offender limit | 2 bans |
 
-### API Key Permissions
-
-Configure what each key can do:
-
-| Permission | Description |
-|------------|-------------|
-| Place Orders | Allow order placement |
-| View Positions | Read position data |
-| View Holdings | Read holdings data |
-| View Orders | Read order book |
-| Cancel Orders | Allow order cancellation |
-
-## Session Security
-
-### Session Management
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Active Sessions                                                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Device          │ Location       │ Last Active    │ Action                │
-│  ────────────────│────────────────│────────────────│───────                │
-│  Chrome/Windows  │ Mumbai, IN     │ Now (current)  │ [This device]         │
-│  Safari/macOS    │ Delhi, IN      │ 2 hours ago    │ [Revoke]              │
-│  Mobile App      │ Bangalore, IN  │ 1 day ago      │ [Revoke]              │
-│                                                                              │
-│  ┌──────────────────────┐                                                   │
-│  │  Revoke All Sessions │                                                   │
-│  └──────────────────────┘                                                   │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Session Timeout
-
-Configure automatic logout:
-
-| Setting | Options |
-|---------|---------|
-| Session Timeout | 15min, 30min, 1hr, 4hr, 8hr |
-| Remember Me | Enable/Disable |
-| Auto-logout on close | Enable/Disable |
-
-## Network Security
-
-### Production Deployment Security
-
-When deploying via `install.sh` on Ubuntu server, most network security is **automatically configured**:
-
-| Security Feature | Status |
-|-----------------|--------|
-| SSL/TLS (Let's Encrypt) | Auto-configured |
-| Security Headers (HSTS, X-Frame-Options) | Auto-configured |
-| Firewall (UFW - ports 22, 80, 443 only) | Auto-configured |
-| Strong SSL ciphers (TLS 1.2/1.3) | Auto-configured |
-
-The `install.sh` script handles:
-- SSL certificate installation and auto-renewal
-- Nginx security headers
-- UFW firewall configuration
-- File permissions
-
-See [Installation Guide](../04-installation/README.md) for detailed production setup.
-
-### HTTPS Configuration (Local Development)
-
-For local development without `install.sh`:
-
-```
-# .env configuration
-FLASK_ENV=production
-USE_HTTPS=true
-SSL_CERT_PATH=/path/to/cert.pem
-SSL_KEY_PATH=/path/to/key.pem
-```
-
-### IP Whitelisting (Optional)
-
-Restrict access to specific IPs:
-
-1. Go to **Settings** → **Security**
-2. Enable **IP Whitelisting**
-3. Add allowed IPs:
-   ```
-   192.168.1.100
-   10.0.0.0/24
-   52.89.214.238 (TradingView)
-   ```
-4. Save changes
-
-### Firewall Rules (Auto-Configured)
-
-The `install.sh` script configures these automatically:
-
-```bash
-# Configured by install.sh
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow ssh
-sudo ufw allow 'Nginx Full'
-sudo ufw --force enable
-```
-
-For manual configuration:
-```bash
-# Allow HTTPS
-sudo ufw allow 443/tcp
-
-# Allow HTTP (redirect to HTTPS)
-sudo ufw allow 80/tcp
-
-# Deny all other incoming
-sudo ufw default deny incoming
-```
-
-## Broker Security
-
-### Credential Storage
-
-Broker credentials are:
-- Encrypted at rest
-- Never logged
-- Session-based (not stored long-term)
-
-### OAuth2 Flow
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   OpenAlgo  │────▶│   Broker    │────▶│  Exchange   │
-│             │     │   OAuth     │     │             │
-└─────────────┘     └─────────────┘     └─────────────┘
-       │                   │
-       │   1. Redirect     │
-       │──────────────────▶│
-       │                   │
-       │   2. User Login   │
-       │                   │
-       │   3. Auth Code    │
-       │◀──────────────────│
-       │                   │
-       │   4. Access Token │
-       │◀──────────────────│
-```
-
-### Daily Re-authentication
-
-Most brokers require daily login:
-- OAuth tokens expire daily
-- Manual re-login required
-- Automated login not supported (security)
-
-## Security Checklist
-
-### Initial Setup
-
-- [ ] Set strong password
-- [ ] Enable Two-Factor Authentication
-- [ ] Generate unique API key
-- [ ] Configure HTTPS
-- [ ] Set session timeout
-
-### Ongoing
-
-- [ ] Review active sessions
-- [ ] Check API key usage
-- [ ] Monitor traffic logs
-- [ ] Update password regularly
-- [ ] Review IP whitelist
-
-### If Compromised
-
-- [ ] Change password immediately
-- [ ] Regenerate API key
-- [ ] Revoke all sessions
-- [ ] Check for unauthorized trades
-- [ ] Review broker activity
-- [ ] Contact support if needed
-
-## Security Alerts
-
-### Configuring Alerts
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Security Alerts                                                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ☑ Login from new device                                                   │
-│  ☑ Login from new location                                                 │
-│  ☑ Multiple failed login attempts                                          │
-│  ☑ API key used from unknown IP                                            │
-│  ☑ Password changed                                                        │
-│  ☑ 2FA disabled                                                            │
-│                                                                              │
-│  Alert channels:                                                            │
-│  ☑ Email                                                                   │
-│  ☑ Telegram                                                                │
-│  ☐ SMS                                                                     │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Example Alert
-
-```
-⚠️ SECURITY ALERT
-
-New login detected
-
-Device: Chrome on Windows
-Location: New York, USA
-IP: 203.45.67.89
-Time: 2025-01-21 10:30:15 IST
-
-If this wasn't you, please:
-1. Change your password immediately
-2. Review active sessions
-3. Check for unauthorized activity
-```
-
-## Best Practices Summary
-
-### 1. Use Strong Authentication
-
-- Strong, unique password
-- Enable 2FA
-- Use password manager
-
-### 2. Protect API Keys
-
-- Don't share or commit to Git
-- Use environment variables
-- Regenerate if suspected compromise
-
-### 3. Secure Your Network
-
-- Always use HTTPS
-- Configure firewall
-- Consider IP whitelisting
-
-### 4. Monitor Activity
-
-- Review logs regularly
-- Check active sessions
-- Set up security alerts
-
-### 5. Keep Updated
-
-- Update OpenAlgo regularly
-- Apply security patches
-- Follow security advisories
+When automatic banning is enabled, localhost addresses are excluded. A zero-hour duration means permanent. Reaching the repeat-offender limit also makes the ban permanent.
+
+The invalid-key tracker stores hashes, not raw API keys. A 404 tracker retains a bounded set of attempted paths for investigation.
+
+## Client IP Trust
+
+By default, OpenAlgo uses the immediate network peer as the client IP. Set `TRUST_PROXY_HEADERS=True` only when a controlled reverse proxy is the sole route to the application. In that mode OpenAlgo can use headers such as `CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP`, and `X-Forwarded-For`.
+
+Exposing Flask directly while trusting proxy headers allows clients to spoof the address used by rate limits and bans.
+
+## API Keys and Credentials
+
+- OpenAlgo API keys are stored as hashes with the installation's pepper.
+- Broker configuration values live in `.env`; protect that file and never commit it.
+- Broker session tokens use the application's encrypted token store.
+- Regenerate an OpenAlgo API key if it is exposed, then update every client that used it.
+
+API keys do not have per-key permission checkboxes in the current application. Possession of a valid key authorizes the REST operations exposed by that instance, subject to endpoint validation, mode, Action Center policy, and rate limits.
+
+## Network Controls
+
+Production installers configure the reverse proxy, TLS, and host firewall for their supported deployment path. Review the generated configuration before exposing an instance publicly.
+
+The current OpenAlgo middleware has no CIDR allowlist feature. Use a host firewall, cloud security group, VPN, or reverse-proxy access policy when network allowlisting is required.
+
+## Recommended Baseline
+
+1. Use a unique application password and enable OpenAlgo TOTP.
+2. Keep `.env`, database files, signing keys, and backups private.
+3. Terminate TLS at a maintained reverse proxy for public deployments.
+4. Keep `TRUST_PROXY_HEADERS` disabled unless the proxy boundary is enforced.
+5. Review Traffic and Security dashboards after authentication failures or unexpected routes.
+6. Test threshold changes before enabling automatic permanent bans.
+7. Update with `bash install/update.sh` and review the release notes and migration output.
 
 ---
 

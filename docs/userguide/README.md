@@ -10,7 +10,8 @@ This guide takes you from zero to automated trading, covering everything from ba
 
 ### Getting Started (Modules 01-05)
 - [01 - What is OpenAlgo](./01-what-is-openalgo/README.md)
-- [02 - Key Concepts](./02-key-concepts/README.md)
+- [02 - Why Build with OpenAlgo](./02-why-build-with-openalgo/README.md)
+- [03 - Key Concepts](./03-key-concepts/README.md)
 - [03 - System Requirements](./03-system-requirements/README.md)
 - [04 - Installation Guide](./04-installation/README.md)
 - [05 - First-Time Setup](./05-first-time-setup/README.md)

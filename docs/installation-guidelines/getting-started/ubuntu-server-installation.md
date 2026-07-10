@@ -85,7 +85,7 @@ sudo ./install.sh
 The script will interactively prompt you for:
 
 * Your domain name (root domains and subdomains both supported)
-* Broker selection (30+ brokers — see the prompt for the full list)
+* Broker selection from the 34 installed plugins
 * Broker API credentials (Key + Secret)
 * For XTS-based brokers (5paisa XTS, Compositedge, IIFL, etc.): additional market-data API key/secret
 * **Enable Remote MCP?** (y/N) — opt-in to expose `/mcp` and `/oauth/*` for hosted AI clients (Claude.ai, ChatGPT) at the same domain. You can also enable this later from the admin UI

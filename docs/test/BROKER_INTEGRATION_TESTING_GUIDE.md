@@ -38,7 +38,7 @@ BROKER_API_SECRET_MARKET = '<market_secret>'
 cd openalgo
 uv run app.py
 # UI:        http://127.0.0.1:5000
-# Swagger:   http://127.0.0.1:5000/api/docs
+# REST reference: docs/api/README.md (Swagger is disabled)
 # API logs:  http://127.0.0.1:5000/analyzer
 # WS test:   http://127.0.0.1:5000/websocket/test
 ```
