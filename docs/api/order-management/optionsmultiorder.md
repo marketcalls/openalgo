@@ -152,7 +152,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
 | Parameter | Description | Mandatory/Optional | Default Value |
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
-| strategy | Strategy identifier | Optional | - |
+| strategy | Strategy identifier | Mandatory | - |
 | underlying | Underlying symbol (NIFTY, BANKNIFTY, etc.) | Mandatory | - |
 | exchange | Exchange: NSE_INDEX, BSE_INDEX | Mandatory | - |
 | expiry_date | Common expiry date (can be overridden per leg) | Optional | - |
@@ -167,8 +167,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
 | action | Order action: BUY or SELL | Mandatory | - |
 | quantity | Order quantity | Mandatory | - |
 | expiry_date | Leg-specific expiry (for diagonal spreads) | Optional | Uses common expiry |
-| pricetype | Price type: MARKET, LIMIT | Optional | MARKET |
-| product | Product type: MIS, NRML | Optional | NRML |
+| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Optional | MARKET |
+| product | Product type: MIS, NRML | Optional | MIS |
 | splitsize | Split size for this leg | Optional | 0 |
 
 ## Response Fields
@@ -211,7 +211,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsmultiorder \
 - Each leg can have its own **expiry_date** for calendar/diagonal spreads
 - If a leg fails, subsequent legs are still attempted
 - The **underlying_ltp** is used for all legs to ensure consistent ATM calculation
-- Maximum legs per request depends on broker limits
+- The request schema accepts 1 to 20 legs; broker limits can be stricter.
 
 ---
 

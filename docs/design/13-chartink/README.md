@@ -325,5 +325,7 @@ OpenAlgo: Auto-sell to close positions
 |------|---------|
 | `blueprints/chartink.py` | Chartink blueprint |
 | `database/chartink_db.py` | Database models |
-| `templates/chartink/` | UI templates |
-| `frontend/src/pages/Chartink.tsx` | React UI |
+| `frontend/src/pages/chartink/ChartinkIndex.tsx` | Strategy list UI |
+| `frontend/src/pages/chartink/NewChartinkStrategy.tsx` | Creation UI |
+| `frontend/src/pages/chartink/ViewChartinkStrategy.tsx` | Detail UI |
+| `frontend/src/pages/chartink/ConfigureChartinkSymbols.tsx` | Symbol mapping UI |

@@ -47,7 +47,7 @@ BROKER_API_SECRET_MARKET = 'YOUR_BROKER_MARKET_API_SECRET'
 REDIRECT_URL = 'http://127.0.0.1:5000/<broker>/callback'
 
 # Enabled brokers (comma-separated)
-VALID_BROKERS = 'fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,definedge,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha'
+VALID_BROKERS = 'fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,dhan,dhan_sandbox,definedge,deltaexchange,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha'
 ```
 
 ### Database Configuration
@@ -59,9 +59,12 @@ DATABASE_URL = 'sqlite:///db/openalgo.db'
 # Additional databases
 LATENCY_DATABASE_URL = 'sqlite:///db/latency.db'
 LOGS_DATABASE_URL = 'sqlite:///db/logs.db'
+HEALTH_DATABASE_URL = 'sqlite:///db/health.db'
 SANDBOX_DATABASE_URL = 'sqlite:///db/sandbox.db'
 HISTORIFY_DATABASE_URL = 'db/historify.duckdb'
 ```
+
+`HISTORIFY_DATABASE_URL` is the sample-env name, but the current implementation reads `HISTORIFY_DATABASE_PATH`. Do not assume they are aliases; this mismatch is tracked in `docs/prd/CONFLICTS.md`.
 
 ### Flask Application
 

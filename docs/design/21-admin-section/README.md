@@ -383,6 +383,6 @@ GET /api/system
 | `database/market_calendar_db.py` | Holidays/timings |
 | `database/settings_db.py` | Settings table |
 | `database/traffic_db.py` | Security tables |
-| `services/security.py` | Security service |
+| `utils/security_middleware.py` | Request-time IP enforcement |
 | `frontend/src/pages/admin/` | React components |
 | `frontend/src/api/admin.ts` | API client |

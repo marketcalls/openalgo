@@ -1,468 +1,63 @@
-# 43 - Telegram Bot Configuration
-
-## Overview
-
-OpenAlgo integrates with Telegram to provide real-time trading notifications, account information, and bot commands. Users can configure their Telegram bot to receive order alerts, position updates, and execute queries.
-
-## Architecture Diagram
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                       Telegram Bot Architecture                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Telegram Cloud                                     │
-│                                                                              │
-│  ┌─────────────────┐              ┌─────────────────┐                       │
-│  │  User's         │              │   Bot Father    │                       │
-│  │  Telegram App   │              │   @BotFather    │                       │
-│  └────────┬────────┘              └────────┬────────┘                       │
-│           │                                │                                 │
-│           │  Messages/Commands             │  Create Bot Token              │
-│           │                                │                                 │
-│           └────────────────┬───────────────┘                                │
-│                            │                                                 │
-│                    Bot API Gateway                                          │
-│                            │                                                 │
-└────────────────────────────┼────────────────────────────────────────────────┘
-                             │
-                             │ Webhook / Long Polling
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        OpenAlgo Backend                                      │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Telegram Blueprint                                │   │
-│  │                    /telegram/*                                       │   │
-│  │                                                                      │   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │   │
-│  │  │ /settings    │  │ /webhook     │  │ /test        │              │   │
-│  │  │ Configure    │  │ Receive      │  │ Send test    │              │   │
-│  │  │ bot token    │  │ updates      │  │ message      │              │   │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘              │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                         │
-│                                    ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Telegram Service                                  │   │
-│  │                                                                      │   │
-│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
-│  │  │  Command Handler                                              │  │   │
-│  │  │                                                               │  │   │
-│  │  │  /start      - Initialize bot                                 │  │   │
-│  │  │  /help       - Show commands                                  │  │   │
-│  │  │  /funds      - Account balance                                │  │   │
-│  │  │  /positions  - Open positions                                 │  │   │
-│  │  │  /orderbook  - Order book                                     │  │   │
-│  │  │  /holdings   - Portfolio holdings                             │  │   │
-│  │  │  /tradebook  - Trade book                                     │  │   │
-│  │  │  /pnl        - P&L summary                                    │  │   │
-│  │  │  /quote      - Get LTP                                        │  │   │
-│  │  │  /chart      - Render symbol chart                            │  │   │
-│  │  │  /status     - Connection status                              │  │   │
-│  │  │  /closeall   - Close all positions (with confirmation)        │  │   │
-│  │  │  /stoppython - Stop running Python strategies                 │  │   │
-│  │  │  /mode       - Toggle Live / Analyze mode                     │  │   │
-│  │  │  /menu       - Interactive menu                               │  │   │
-│  │  │  /link       - Link OpenAlgo account                          │  │   │
-│  │  │  /unlink     - Unlink account                                 │  │   │
-│  │  └──────────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                         │
-│                                    ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Database Layer                                    │   │
-│  │                                                                      │   │
-│  │  telegram_users │ bot_config │ command_log │ notification_queue     │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Database Schema
-
-### telegram_users Table
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                    telegram_users table                         │
-├──────────────────┬──────────────┬──────────────────────────────┤
-│ Column           │ Type         │ Description                  │
-├──────────────────┼──────────────┼──────────────────────────────┤
-│ id               │ INTEGER PK   │ Auto-increment               │
-│ user_id          │ VARCHAR(255) │ OpenAlgo user ID             │
-│ telegram_id      │ BIGINT       │ Telegram chat ID             │
-│ username         │ VARCHAR(255) │ Telegram username            │
-│ first_name       │ VARCHAR(255) │ User's first name            │
-│ is_active        │ BOOLEAN      │ Bot active status            │
-│ linked_at        │ DATETIME     │ When linked                  │
-│ last_activity    │ DATETIME     │ Last command time            │
-└──────────────────┴──────────────┴──────────────────────────────┘
-```
-
-### bot_config Table
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                      bot_config table                           │
-├──────────────────┬──────────────┬──────────────────────────────┤
-│ Column           │ Type         │ Description                  │
-├──────────────────┼──────────────┼──────────────────────────────┤
-│ id               │ INTEGER PK   │ Auto-increment               │
-│ user_id          │ VARCHAR(255) │ OpenAlgo user ID (unique)    │
-│ bot_token        │ TEXT         │ Encrypted bot token          │
-│ webhook_url      │ VARCHAR(500) │ Webhook endpoint             │
-│ is_enabled       │ BOOLEAN      │ Bot enabled status           │
-│ created_at       │ DATETIME     │ Configuration created        │
-│ updated_at       │ DATETIME     │ Last modified                │
-└──────────────────┴──────────────┴──────────────────────────────┘
-```
-
-### notification_queue Table
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                  notification_queue table                       │
-├──────────────────┬──────────────┬──────────────────────────────┤
-│ Column           │ Type         │ Description                  │
-├──────────────────┼──────────────┼──────────────────────────────┤
-│ id               │ INTEGER PK   │ Auto-increment               │
-│ user_id          │ VARCHAR(255) │ Target user                  │
-│ message_type     │ VARCHAR(50)  │ order/position/alert         │
-│ message          │ TEXT         │ Message content              │
-│ status           │ VARCHAR(20)  │ pending/sent/failed          │
-│ created_at       │ DATETIME     │ Queue time                   │
-│ sent_at          │ DATETIME     │ Delivery time                │
-│ retry_count      │ INTEGER      │ Retry attempts               │
-└──────────────────┴──────────────┴──────────────────────────────┘
-```
-
-### user_preferences Table
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                   user_preferences table                        │
-├──────────────────┬──────────────┬──────────────────────────────┤
-│ Column           │ Type         │ Description                  │
-├──────────────────┼──────────────┼──────────────────────────────┤
-│ id               │ INTEGER PK   │ Auto-increment               │
-│ user_id          │ VARCHAR(255) │ User ID (unique)             │
-│ order_alerts     │ BOOLEAN      │ Order notifications          │
-│ position_alerts  │ BOOLEAN      │ Position updates             │
-│ pnl_alerts       │ BOOLEAN      │ P&L notifications            │
-│ daily_summary    │ BOOLEAN      │ End of day summary           │
-│ alert_threshold  │ DECIMAL      │ P&L alert threshold          │
-└──────────────────┴──────────────┴──────────────────────────────┘
-```
-
-## Bot Commands
-
-### Command Reference
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| /start | Initialize bot and link account | /start |
-| /help | Display available commands | /help |
-| /link `<api_key> <host_url>` | Link your OpenAlgo account | /link abc123 http://127.0.0.1:5000 |
-| /unlink | Unlink your account | /unlink |
-| /status | Check broker connection | /status |
-| /funds | Get account balance and margin | /funds |
-| /positions | View open positions with P&L | /positions |
-| /orderbook | Get today's order book | /orderbook |
-| /tradebook | Get executed trades | /tradebook |
-| /holdings | View portfolio holdings | /holdings |
-| /pnl | Get P&L summary | /pnl |
-| /quote `<symbol> [exchange]` | Get last traded price | /quote SBIN |
-| /chart `<symbol> [exchange] [type] [interval] [days]` | Render chart image | /chart RELIANCE NSE intraday 15m 10 |
-| /closeall | Close all open positions (with confirmation, with optional "Close all + Stop strategies" action) | /closeall |
-| /stoppython | List and stop running Python strategies (single or all, with confirmation) | /stoppython |
-| /mode | View or toggle trading mode (Live / Analyze) | /mode |
-| /menu | Show interactive menu | /menu |
-
-#### `/closeall` — close all positions (and optionally stop strategies)
-
-Replies with an inline keyboard offering three choices:
-
-| Button | Action |
-|--------|--------|
-| ✅ Yes, close all | Calls `closeposition` via the SDK to flatten every open position. |
-| ⚠️ Close all + Stop strategies | Closes all positions, then iterates `RUNNING_STRATEGIES` and terminates each via `stop_strategy_process()`. Reports a combined summary (positions closed, strategies stopped, failures). |
-| ❌ Cancel | No-op. |
-
-#### `/stoppython` — stop running Python strategies
-
-Snapshots the live `RUNNING_STRATEGIES` registry from `blueprints/python_strategy.py` at the moment of invocation and renders one inline button per running strategy plus a "Stop All" button. Per-strategy and bulk actions both prompt for confirmation before terminating processes.
-
-The selection map is held in `context.user_data["stoppy_list"]` so the inline `callback_data` payload stays under Telegram's 64-byte cap regardless of how long strategy IDs are.
-
-If no strategies are running, the bot replies `ℹ️ No Python strategies running.` and exits cleanly.
-
-## Configuration Flow
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                     Telegram Bot Setup Flow                                 │
-│                                                                             │
-│  1. Create Bot with BotFather ─────────────────────────────────────────►   │
-│           │                                                                 │
-│           ├──► Message @BotFather                                          │
-│           ├──► /newbot command                                             │
-│           ├──► Set bot name and username                                   │
-│           └──► Receive bot token                                           │
-│                       │                                                     │
-│                       ▼                                                     │
-│  2. Configure in OpenAlgo ─────────────────────────────────────────────►   │
-│           │                                                                 │
-│           ├──► Go to Settings > Telegram                                   │
-│           ├──► Enter bot token                                             │
-│           ├──► Set webhook URL (optional)                                  │
-│           └──► Save configuration                                          │
-│                       │                                                     │
-│                       ▼                                                     │
-│  3. Link Telegram Account ─────────────────────────────────────────────►   │
-│           │                                                                 │
-│           ├──► Open bot in Telegram                                        │
-│           ├──► Send /start command                                         │
-│           ├──► Enter verification code                                     │
-│           └──► Account linked                                              │
-│                       │                                                     │
-│                       ▼                                                     │
-│  4. Configure Notifications ───────────────────────────────────────────►   │
-│           │                                                                 │
-│           ├──► /settings in Telegram                                       │
-│           ├──► Select notification types                                   │
-│           └──► Set thresholds                                              │
-│                                                                             │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Service Implementation
-
-### Bot Token Security
-
-```python
-from cryptography.fernet import Fernet
-from utils.env_utils import get_fernet_key
-
-def encrypt_bot_token(token):
-    """Encrypt bot token before storage"""
-    key = get_fernet_key()
-    fernet = Fernet(key)
-    return fernet.encrypt(token.encode()).decode()
-
-def decrypt_bot_token(encrypted_token):
-    """Decrypt bot token for use"""
-    key = get_fernet_key()
-    fernet = Fernet(key)
-    return fernet.decrypt(encrypted_token.encode()).decode()
-```
-
-### Command Handler
-
-```python
-def handle_telegram_command(update):
-    """Process incoming Telegram command"""
-    chat_id = update['message']['chat']['id']
-    text = update['message'].get('text', '')
-
-    # Parse command
-    if text.startswith('/'):
-        command = text.split()[0].lower()
-        args = text.split()[1:] if len(text.split()) > 1 else []
-
-        handlers = {
-            '/start': handle_start,
-            '/help': handle_help,
-            '/link': handle_link,
-            '/unlink': handle_unlink,
-            '/status': handle_status,
-            '/funds': handle_funds,
-            '/positions': handle_positions,
-            '/orderbook': handle_orderbook,
-            '/tradebook': handle_tradebook,
-            '/holdings': handle_holdings,
-            '/pnl': handle_pnl,
-            '/quote': handle_quote,
-            '/chart': handle_chart,
-            '/closeall': handle_closeall,           # confirmation + optional "stop strategies"
-            '/stoppython': handle_stoppython,       # list+stop running Python strategies
-            '/mode': handle_mode,
-            '/menu': handle_menu,
-        }
-
-        handler = handlers.get(command, handle_unknown)
-        return handler(chat_id, args)
-```
-
-### Order Alert Integration (via Event Bus)
-
-Order-related Telegram alerts are dispatched through the Event Bus. The `telegram_subscriber` receives all order events and calls `telegram_alert_service.send_order_alert()` for each one.
-
-```python
-# subscribers/telegram_subscriber.py
-def on_order_placed(event):
-    socketio.start_background_task(
-        telegram_alert_service.send_order_alert,
-        event.api_type, event.request_data, event.response_data, event.api_key,
-    )
-```
-
-The alert service formats messages per order type and handles both live and analyze mode:
-
-| Order Type | Template |
-|------------|----------|
-| `placeorder` | Order Placed (symbol, action, qty, price) |
-| `placesmartorder` | Smart Order Placed (symbol, position_size) |
-| `basketorder` | Basket Order (success/fail counts, symbols) |
-| `splitorder` | Split Order (total qty, split size, success/fail) |
-| `optionsorder` | Options Order (underlying, legs, results) |
-| `optionsmultiorder` | Options Multi-Order (underlying, all legs with symbols) |
-| `modifyorder` | Order Modified (orderid, new qty/price) |
-| `cancelorder` | Order Cancelled (orderid) |
-| `cancelallorder` | All Orders Cancelled (counts) |
-| `closeposition` | Position Closed (symbol or count of positions) |
-
-See [53-event-bus](../53-event-bus/README.md) for the full event bus architecture.
-
-## API Endpoints
-
-### Save Configuration
-
-```
-POST /telegram/settings
-Content-Type: application/json
-
-{
-    "bot_token": "123456:ABC-DEF...",
-    "webhook_url": "https://example.com/webhook",
-    "is_enabled": true
-}
-```
-
-### Test Connection
-
-```
-POST /telegram/test
-```
-
-**Response:**
-```json
-{
-    "status": "success",
-    "message": "Test message sent successfully"
-}
-```
-
-### Webhook Endpoint
-
-```
-POST /telegram/webhook
-Content-Type: application/json
-
-{
-    "update_id": 123456789,
-    "message": {
-        "chat": {"id": 987654321},
-        "text": "/funds"
-    }
-}
-```
-
-## Notification Types
-
-### Order Notifications
-
-```
-📊 Order Executed
-
-Symbol: SBIN
-Action: BUY
-Quantity: 100
-Price: ₹625.50
-Status: COMPLETE
-
-Order ID: 230125000123
-Time: 10:30:15 IST
-```
-
-### Position Alerts
-
-```
-📈 Position Update
-
-Symbol: SBIN
-Quantity: 100
-Entry: ₹625.50
-LTP: ₹630.00
-P&L: +₹450.00 (+0.72%)
-
-Time: 10:45:00 IST
-```
-
-### P&L Summary
-
-```
-📊 Daily P&L Summary
-
-Realized: +₹2,500.00
-Unrealized: +₹1,250.00
-Total: +₹3,750.00
-
-Trades: 5
-Win Rate: 80%
-
-Date: 25-Jan-2025
-```
-
-## Error Handling
-
-### Rate Limiting
-
-```python
-TELEGRAM_RATE_LIMIT = 30  # messages per second
-
-def check_rate_limit(user_id):
-    """Ensure rate limit compliance"""
-    key = f"telegram_rate:{user_id}"
-    count = cache.get(key, 0)
-
-    if count >= TELEGRAM_RATE_LIMIT:
-        return False
-
-    cache.set(key, count + 1, ttl=1)
-    return True
-```
-
-### Retry Logic
-
-```python
-MAX_RETRIES = 3
-RETRY_DELAY = [1, 5, 15]  # seconds
-
-def send_with_retry(bot_token, chat_id, message):
-    """Send message with retry on failure"""
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = send_telegram_message(bot_token, chat_id, message)
-            if response.ok:
-                return True
-        except Exception as e:
-            logger.error(f"Telegram send failed: {e}")
-
-        if attempt < MAX_RETRIES - 1:
-            time.sleep(RETRY_DELAY[attempt])
-
-    return False
-```
-
-## Key Files Reference
+# 43 - Telegram Bot
+
+## Components
+
+| Component | Responsibility |
+|---|---|
+| `blueprints/telegram.py` | Session-authenticated React UI APIs for config, lifecycle, users, analytics, explicit sends |
+| `restx_api/telegram_bot.py` | API-key REST management and direct notification resources |
+| `services/telegram_bot_service.py` | Bot initialization, polling, commands, lifecycle |
+| `services/telegram_alert_service.py` | Synchronous HTTP delivery, async executor, retry queue, formatting |
+| `database/telegram_db.py` | Encrypted config, linked users, preferences, notifications/stats |
+| `subscribers/telegram_subscriber.py` | EventBus-to-alert mapping |
+
+The React pages live under `frontend/src/pages/telegram/` and use `frontend/src/api/telegram.ts`.
+
+## Lifecycle
+
+The bot configuration persists an encrypted token, polling/webhook settings, and `is_active`. Start initializes the bot and starts polling when configured. Stop updates the persisted active state and stops the service.
+
+`is_active` is the source of truth for automatic-alert gating. Order-event alerts and Flow Telegram nodes skip delivery when the bot is stopped. Explicit UI test/send/broadcast actions and `/api/v1/telegram/notify` intentionally bypass this gate because they are direct human/API requests.
+
+## EventBus Alerts
+
+Successful order-related topics are mapped through `telegram_subscriber.py` to `send_order_alert()`. Failure events and analyzer errors are deliberately not sent to chat. Batch operations produce one summary event, avoiding one notification per child order.
+
+Alerts resolve the local username from the API key, verify that a Telegram user is linked and notifications are enabled, then enqueue delivery on the shared five-worker alert executor.
+
+## Explicit Delivery
+
+`send_alert_sync()` calls Telegram's HTTP API through `httpx`. It supports Markdown formatting fallback to plain text and queues failed/timeout deliveries in the notification store. The REST notify endpoint can use fire-and-forget or wait for one immediate delivery attempt.
+
+## RESTX Surface And Limitations
+
+The `/api/v1/telegram` namespace registers config GET/POST, start, stop, webhook, users, broadcast, notify, stats, and preferences GET/POST.
+
+Current limitations must remain explicit:
+
+- The REST webhook validates `X-Telegram-Bot-Api-Secret-Token` and acknowledges valid updates, but its command dispatch call is not implemented.
+- The REST broadcast handler validates input/config but currently returns zero successful and zero failed deliveries.
+- These limitations do not apply to the session-authenticated blueprint broadcast path, which iterates linked users and attempts delivery.
+
+## Webhook Security
+
+The expected secret comes from `TELEGRAM_WEBHOOK_SECRET`; if absent, the handler derives a fallback from the stored bot token. Missing and incorrect headers return 401 and 403. Payloads must be objects containing `update_id`.
+
+## Rate Limits
+
+REST Telegram calls normally use `TELEGRAM_RATE_LIMIT` (default 30 per minute). REST broadcast uses 5 per minute. Telegram's upstream limits and transient errors are handled separately by delivery/retry behavior.
+
+## Commands And Charts
+
+Bot commands query normalized order/account data, control supported automation actions, and can render charts using Plotly/Kaleido. Chart rendering requires the Chromium/Kaleido runtime verified by Docker CI. The exact command registry belongs to `telegram_bot_service.py`, not a copied static list in this architecture page.
+
+## Key Files
 
 | File | Purpose |
-|------|---------|
-| `blueprints/telegram.py` | Telegram routes and webhook |
-| `services/telegram_bot_service.py` | Bot command handlers |
-| `services/telegram_alert_service.py` | Alert/notification service |
-| `database/telegram_db.py` | Database models |
-| `restx_api/telegram_bot.py` | REST API endpoints |
-| `frontend/src/pages/TelegramSettings.tsx` | Configuration UI |
+|---|---|
+| `blueprints/telegram.py` | Authenticated web management |
+| `restx_api/telegram_bot.py` | External REST resources |
+| `services/telegram_bot_service.py` | Command and bot lifecycle |
+| `services/telegram_alert_service.py` | Delivery and gating |
+| `database/telegram_db.py` | Persistent state |
+| `frontend/src/pages/telegram/TelegramConfig.tsx` | React configuration page |

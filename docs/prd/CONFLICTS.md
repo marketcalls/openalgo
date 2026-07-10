@@ -1,45 +1,42 @@
-# PRD Conflicts And Coverage Gaps
+# PRD Conflicts And Coverage Notes
 
-This file lists places where the PRD had to avoid silently choosing between Discovery Map, BDD, and code-level evidence. Items marked as coverage gaps are not direct contradictions, but they are claims the PRD must make even though the BDD suite does not exercise them exhaustively.
+This file records unresolved implementation/documentation conflicts and deliberate limits. Resolved audit items remain listed separately so they are not reintroduced by later edits.
 
 ## Open Items
 
-1. REST and blueprint endpoint inventory is broader than BDD coverage.
-   - Evidence: `DISCOVERY_MAP.md` lists 57 RESTX endpoints, 459 Flask blueprint routes, and 1 app-level route in `Discovery Summary`, `RESTX Endpoint Inventory`, and `Flask Blueprint Route Inventory`; `docs/bdd` contains 56 scenarios across 12 feature files.
-   - Impact: PRD FR-022 covers endpoint groups that are not individually scenario-covered.
-   - Question: Should BDD stay representative, or should endpoint-level scenarios be added for every public endpoint?
+1. Historify uses two environment variable names.
+   - `.sample.env` and `blueprints/system_permissions.py` read `HISTORIFY_DATABASE_URL`.
+   - `database/historify_db.py` reads `HISTORIFY_DATABASE_PATH`.
+   - Public documentation must describe the mismatch until the implementation standardizes one name.
 
-2. Broker matrix is not individually covered by BDD scenarios.
-   - Evidence: `DISCOVERY_MAP.md` `Broker Matrix` lists 34 brokers; `docs/bdd/broker_sessions.feature` covers generic broker session and capability behavior, not one scenario per broker.
-   - Impact: The PRD can document the 34-broker matrix from discovery, but BDD does not prove every broker row behavior.
-   - Question: Should broker support be treated as inventory documentation, or should broker-specific BDD scenarios be added?
+2. TradingView JSON and GoCharting JSON have registered automation routes but no fully specified payload contract in the current discovery set.
+   - `blueprints/tv_json.py` and `blueprints/gc_json.py` are authoritative.
+   - The PRD treats them as automation entry points without claiming that every payload variant is documented.
 
-3. Positions, holdings, funds, margin, and depth have REST endpoints in discovery but partial BDD coverage.
-   - Evidence: `DISCOVERY_MAP.md` `RESTX Endpoint Inventory` lists `/api/v1/positionbook`, `/api/v1/openposition`, `/api/v1/holdings`, `/api/v1/funds`, `/api/v1/margin`, and `/api/v1/depth`; `docs/bdd/sandbox_analyzer.feature` mentions sandbox positions, holdings, and funds, but no dedicated live account or depth scenarios exist.
-   - Impact: PRD FR-033, FR-034, FR-035, and FR-044 are discovery-backed but only partially BDD-covered.
-   - Question: Should the BDD suite add account-state and depth feature files?
+3. `/pnltracker/legacy` references an absent template.
+   - `blueprints/pnltracker.py` renders `templates/pnltracker.html`.
+   - That template does not exist in the current tree, so the legacy route is unavailable. The React `/pnltracker` page is the supported surface.
 
-4. WebSocket BDD source comments mix HTTP helper routes with WebSocket proxy actions.
-   - Evidence: `DISCOVERY_MAP.md` `WebSocket Streaming` documents WebSocket actions from `websocket_proxy/server.py`; `docs/bdd/websocket_streaming.feature` scenarios cite `blueprints/websocket_example.py` helper routes alongside proxy lines.
-   - Impact: PRD WebSocket requirements use the proxy behavior as authoritative and treat helper routes as example and diagnostics routes.
-   - Question: Should BDD source comments be adjusted to cite only proxy action handlers where the scenario is about WebSocket messages?
+4. Two Telegram REST routes are registered placeholders.
+   - The webhook validates its secret and update ID, then acknowledges without dispatching the update.
+   - Broadcast returns zero successful and zero failed deliveries without fan-out.
+   - Documentation must preserve these limitations until the handlers implement delivery.
 
-5. TradingView JSON and GoCharting JSON behavior is route-backed in discovery but only lightly described.
-   - Evidence: `DISCOVERY_MAP.md` route inventory lists `blueprints/tv_json.py:22` and `blueprints/gc_json.py:22`; `docs/bdd/automation_webhooks.feature` says these routes can call OpenAlgo order placement behavior.
-   - Impact: PRD FR-063 states these are automation entry points but does not claim a full payload contract.
-   - Question: Should the discovery map be expanded with route internals for TradingView JSON and GoCharting JSON before a fuller PRD requirement is written?
+5. Remote MCP is conditional.
+   - Static discovery includes its routes, but runtime registration occurs only with `MCP_HTTP_ENABLED=True`, debug disabled, and `MCP_PUBLIC_URL` configured.
+   - Endpoint totals are static source-tree totals, not a guarantee that Remote MCP appears in the default runtime URL map.
 
-6. Remote MCP has source routes but conditional runtime registration.
-   - Evidence: `DISCOVERY_MAP.md` `Conditional Surfaces` says MCP routes register only when `MCP_HTTP_ENABLED=True`; `docs/bdd/admin_and_security.feature` assumes Remote MCP is enabled for the kill-switch scenario.
-   - Impact: PRD treats Remote MCP as opt-in and does not count it as always active at runtime.
-   - Question: Should BDD include disabled-mode scenarios for Remote MCP?
+## Deliberate Product Decisions
 
-7. Historify database env var naming is inconsistent.
-   - Evidence: `DISCOVERY_MAP.md` `Data Stores` and `Unverified` note that `.sample.env` names `HISTORIFY_DATABASE_URL`, while implementation reads `HISTORIFY_DATABASE_PATH`.
-   - Impact: PRD avoids declaring one Historify env var authoritative.
-   - Question: Which env var name should public documentation use?
+- RESTX Swagger is disabled with `doc=False`. `/api/docs` is intentionally absent and must not be treated as a broken route.
+- Analyzer GTT place, modify, cancel, and orderbook return 501 even though sandbox GTT tables exist.
+- Blueprint-route BDD coverage is representative. The complete 57-method RESTX inventory and all 34 broker plugins have explicit scenario-outline rows.
 
-8. Analyzer GTT tables exist, but analyzer GTT services return 501.
-   - Evidence: `DISCOVERY_MAP.md` `GTT Orders` and `Unverified` say sandbox GTT tables exist and GTT services return 501 in analyzer mode; `docs/bdd/gtt_orders.feature` covers analyzer modify GTT unsupported but not every analyzer GTT operation.
-   - Impact: PRD states analyzer GTT service behavior as unsupported.
-   - Question: Should BDD include analyzer place, cancel, and orderbook GTT unsupported scenarios?
+## Resolved During This Sweep
+
+- Added a complete RESTX method/path inventory in `docs/bdd/rest_api_inventory.feature`.
+- Added a 34-plugin broker inventory in `docs/bdd/broker_plugin_inventory.feature`.
+- Added live account, margin, open-position, and REST depth behavior in `docs/bdd/account_and_depth.feature`.
+- Corrected WebSocket source attribution and documented the ZeroMQ bind/connect topology.
+- Expanded analyzer GTT unsupported coverage to place, modify, cancel, and orderbook.
+- Added session lifecycle, scalping, analytics-tool, Telegram placeholder, startup, and traffic-log behaviors.
