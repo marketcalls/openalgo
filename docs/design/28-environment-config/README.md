@@ -161,12 +161,9 @@ WEBHOOK_RATE_LIMIT = '100 per minute'
 STRATEGY_RATE_LIMIT = '200 per minute'
 ```
 
-### API Configuration
+### Session Configuration
 
 ```bash
-# Delay between multi-leg option orders (seconds)
-SMART_ORDER_DELAY = '0.5'
-
 # Session expiry time (24-hour format, IST)
 SESSION_EXPIRY_TIME = '03:00'
 ```

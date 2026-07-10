@@ -1,363 +1,137 @@
-# 30 - Frequently Asked Questions (FAQs)
+# 30 - Frequently Asked Questions
 
-## General Questions
+## General
 
 ### What is OpenAlgo?
 
-OpenAlgo is an open-source algorithmic trading platform that connects various trading platforms (TradingView, Amibroker, Python) to Indian stock brokers through a unified API.
+OpenAlgo is a self-hosted, open-source trading automation platform. It connects external strategies and applications to broker adapters through a common REST API and normalized market-data interfaces.
 
 ### Is OpenAlgo free?
 
-Yes, OpenAlgo is completely free and open-source. You can download, use, and modify it without any cost.
+Yes. OpenAlgo is released under the AGPL v3.0 license. Broker API access, market-data subscriptions, hosting, domains, and third-party services can have separate costs.
 
 ### Which brokers are supported?
 
-OpenAlgo supports 29 Indian brokers including:
-- Zerodha
-- Angel One
-- Dhan
-- Upstox
-- Fyers
-- And many more (see full list in documentation)
+The current repository contains 34 plugin directories: 33 securities integrations and Delta Exchange for crypto derivatives. See [Broker Connection](../06-broker-connection/README.md) for the authoritative plugin identifiers. Supported exchanges and features vary by plugin.
 
-### Can I use OpenAlgo for live trading?
+### Can I use live trading?
 
-Yes, OpenAlgo supports live trading with real money. However, we strongly recommend:
-1. Testing in Analyzer Mode first
-2. Starting with small quantities
-3. Monitoring your first few trades closely
+Yes, after a broker is configured and authenticated. Test the same workflow in Analyzer Mode first, start with small quantities, and keep direct access to the broker terminal.
 
 ### Do I need programming knowledge?
 
-- **Basic usage**: No, you can use TradingView alerts without coding
-- **Advanced features**: Basic understanding helps
-- **Custom strategies**: Programming knowledge required
+The dashboard, TradingView webhooks, Analyzer Mode, and Flow builder cover workflows that need little or no code. Custom Python strategies and direct API integrations require development experience.
 
-## Setup Questions
+## Installation and Updates
 
-### What are the system requirements?
+### What does the current build require?
 
-| Requirement | Minimum |
-|-------------|---------|
-| Python | 3.12+ |
-| RAM | 4 GB |
-| Storage | 1 GB |
-| OS | Windows 10+, Ubuntu 20+, macOS 11+ |
-| Internet | Stable broadband |
+OpenAlgo requires Python 3.12 or newer. Resource needs depend on market-data subscriptions, strategy count, Historify data volume, and deployment topology. See [System Requirements](../03-system-requirements/README.md) and the platform-specific installation guide.
 
-### How do I install OpenAlgo?
+### How do I update an installed instance?
+
+From the repository root run:
 
 ```bash
-# Clone repository
-git clone https://github.com/marketcalls/openalgo.git
-cd openalgo
-
-# Setup environment
-cp .sample.env .env
-
-# Run
-uv run app.py
+bash install/update.sh
 ```
 
-See [Installation Guide](../04-installation/README.md) for details.
+The updater backs up its configured data set, synchronizes code and dependencies, runs `upgrade/migrate_all.py`, rebuilds the frontend, and restarts services where applicable. Back up `db/health.db` separately because the current automatic backup list does not include it.
 
-### Can I run OpenAlgo on a VPS/Cloud?
+### Can I run OpenAlgo on a VPS?
 
-Yes, OpenAlgo can run on:
-- AWS EC2/Lightsail
-- Google Cloud
-- DigitalOcean
-- Azure
-- Any Linux VPS
+Yes. Use a supported production installer, TLS, a controlled reverse proxy, host firewall rules, and persistent backups. Broker static-IP and callback requirements are broker policies; verify the current rules in that broker's developer portal.
 
-### How do I update OpenAlgo?
+## Broker Sessions
 
-```bash
-cd openalgo
-git pull origin main
-uv sync
-```
+### Why am I asked to reconnect?
 
-## Broker Questions
+Broker authentication lifetimes are controlled by the adapter and broker. If a broker token expires while the OpenAlgo session remains active, OpenAlgo redirects to `/broker` so the connection can be re-established.
 
-### Why do I need to login daily?
+### Can one instance use multiple brokers at once?
 
-Most Indian brokers require daily authentication for security. This is a broker requirement, not an OpenAlgo limitation.
+No. One instance has one configured broker. Run isolated instances with separate configuration, ports, databases, and service definitions for concurrent brokers.
 
-### Can I use multiple brokers?
+### Why does broker login fail?
 
-Currently, OpenAlgo supports one broker at a time. You can switch between brokers by changing the configuration.
+Check the broker-specific key format, callback URL, app status, credential expiry, and whether the broker requires a current token, consent, TOTP, or registered IP. Application and broker logs usually contain the adapter's error response.
 
-### Why is my broker not connecting?
+## Trading and Data
 
-Common reasons:
-1. Incorrect API credentials
-2. API not enabled in broker account
-3. IP not whitelisted
-4. Broker service is down
+### What latency should I expect?
 
-See [Troubleshooting](../29-troubleshooting/README.md) for solutions.
-
-### Do I need to pay for broker API access?
-
-Most brokers provide API access free or at minimal cost. Check with your specific broker.
-
-## Trading Questions
-
-### What is the latency for order execution?
-
-Typical latency:
-- OpenAlgo processing: 5-20ms
-- Broker API: 50-200ms
-- Total: 100-500ms
-
-See [Latency Monitor](../25-latency-monitor/README.md) for details.
-
-### Can I trade F&O (Futures & Options)?
-
-Yes, OpenAlgo fully supports F&O trading. Use correct symbol format:
-- Futures: `NIFTY30JAN25FUT`
-- Options: `NIFTY30JAN2521500CE`
+There is no universal value. Network distance, broker response time, connection reuse, exchange load, order type, and the host all contribute. Use OpenAlgo's [Latency Monitor](../25-latency-monitor/README.md) on the actual deployment instead of relying on a fixed benchmark.
 
 ### What is Analyzer Mode?
 
-Analyzer Mode is OpenAlgo's sandbox testing environment. It simulates trading with ₹1 Crore sandbox capital using real market prices but no real money.
+Analyzer Mode routes supported order workflows to the sandbox database instead of the live broker. It starts with configured sandbox capital and is intended for API and strategy validation, not exchange-accurate backtesting.
 
-### Can I backtest strategies?
+### Does OpenAlgo provide backtesting?
 
-OpenAlgo is primarily for live trading and walkforward testing strategies. For backtesting:
-- Use TradingView's strategy tester
-- Use Amibroker's backtesting
-- Use Python backtesting libraries
+Historify stores historical data and OpenAlgo supports live or walk-forward strategy execution. Use a dedicated backtesting engine or the testing tools in your charting platform for portfolio backtests.
 
-### What happens if OpenAlgo crashes during a trade?
+### What happens if OpenAlgo stops while a position is open?
 
-- Open positions remain with your broker
-- You can manage them through broker terminal
-- Always have access to broker's trading platform
+The position remains at the broker. Use the broker terminal to monitor or close it. Process supervision and health monitoring reduce downtime but do not replace broker-side risk controls.
 
-## API Questions
+## REST API
+
+### Where is the API reference?
+
+Use the maintained [REST API documentation](../../api/README.md). Interactive Swagger is intentionally disabled (`doc=False`), so `/api/docs` is not a supported route.
 
 ### How do I get an API key?
 
-1. Login to OpenAlgo
-2. Go to API Key page
-3. Click Generate New Key
-4. Copy and store securely
+Sign in, open the API Key page, and generate or regenerate the instance key. Store it as a secret. The database keeps a hash rather than the raw value.
 
-### Can I use multiple API keys?
+### What are the rate limits?
 
-Yes, you can generate multiple API keys for different integrations.
+Limits are endpoint-specific and configurable through environment variables such as `API_RATE_LIMIT`, `ORDER_RATE_LIMIT`, `SMART_ORDER_RATE_LIMIT`, and the webhook and strategy limits. A deployment's `.env` is authoritative.
 
-### What is the rate limit?
+### Does an API key have per-operation permissions?
 
-Default rate limits:
-- 10 requests per second
-- 1000 requests per day
+Not currently. A valid key can call the public REST operations exposed by the instance, subject to request validation, mode, Action Center behavior, and rate limits.
 
-These can be configured in settings.
+## Security
 
-### Is the API secure?
+### What should be protected?
 
-Yes:
-- API keys are hashed
-- HTTPS encryption supported
-- IP whitelisting available
-- Rate limiting prevents abuse
+Protect `.env`, database files, MCP signing keys, backups, and the raw OpenAlgo API key. Use TLS for remote access, enable TOTP, and do not expose Flask directly to the internet.
 
-## TradingView Questions
+### Does OpenAlgo support IP whitelisting?
 
-### How do I connect TradingView to OpenAlgo?
+The application supports individual IP bans and automatic abuse thresholds, but it does not currently implement a CIDR allowlist. Use a firewall, cloud security group, VPN, or reverse-proxy policy for allowlisting.
 
-1. Enable OpenAlgo accessible via internet (ngrok/cloud)
-2. Create webhook alert in TradingView
-3. Use OpenAlgo endpoint URL
-4. Configure JSON payload
+### Does Traffic Logs store order payloads?
 
-See [TradingView Integration](../16-tradingview-integration/README.md).
+No. It stores metadata such as timestamp, method, path, status, duration, IP, host, and an unhandled error field. Request and response bodies are not captured.
 
-### What TradingView plan do I need?
+## Integrations
 
-- Essential or higher for webhooks
-- Free plan doesn't support webhooks
+### How do I connect TradingView?
 
-### Why aren't my TradingView alerts working?
+Expose OpenAlgo through HTTPS, create an alert with a valid OpenAlgo JSON payload, and use the webhook URL documented in [TradingView Integration](../16-tradingview-integration/README.md). Webhook availability depends on the TradingView plan and current TradingView policy.
 
-Check:
-1. Webhook URL is correct and accessible
-2. JSON payload format is valid
-3. API key is correct
-4. Broker is logged in
-5. Market is open
-
-### Can I use TradingView variables?
-
-Yes:
-- `{{ticker}}` - Symbol
-- `{{strategy.order.action}}` - BUY/SELL
-- `{{strategy.position_size}}` - Position
-- See TradingView documentation for more
-
-## Python Questions
-
-### How do I install the Python library?
+### How do I install the Python SDK?
 
 ```bash
 pip install openalgo
 ```
 
-### Can I run multiple strategies?
+The SDK can connect to any reachable OpenAlgo instance when given its host URL and API key.
 
-Yes, you can run multiple Python scripts simultaneously with different strategy names.
+### Can multiple strategies run concurrently?
 
-### Where can I find example strategies?
+Yes. Strategy isolation and host capacity still matter; use unique strategy names, review schedules, and monitor logs and resource usage.
 
-- Check the `examples/` folder in repository
-- See [Python Strategies](../20-python-strategies/README.md)
-- GitHub discussions and community
+## Support
 
-## Security Questions
+- Documentation: [docs.openalgo.in](https://docs.openalgo.in)
+- GitHub issues: [github.com/marketcalls/openalgo/issues](https://github.com/marketcalls/openalgo/issues)
+- GitHub discussions: [github.com/marketcalls/openalgo/discussions](https://github.com/marketcalls/openalgo/discussions)
+- Community: [openalgo.in/discord](https://openalgo.in/discord)
 
-### Is my data safe?
-
-- Credentials encrypted at rest
-- API keys hashed
-- Local database (your control)
-- Open-source (auditable code)
-
-### Should I enable 2FA?
-
-Yes, we strongly recommend enabling Two-Factor Authentication for additional security.
-
-### What if I lose my 2FA device?
-
-Use recovery codes to regain access. Store them safely when setting up 2FA.
-
-### How do I report a security issue?
-
-Report security vulnerabilities to: security@openalgo.in (or via GitHub private advisory)
-
-## Static IP Questions
-
-### Do I need a static IP for algo trading?
-
-Some brokers require static IP registration for API access, especially when placing orders. Check your broker's API developer portal for requirements.
-
-### Can I deploy on cloud services without static IP registration?
-
-No. Even on cloud platforms (AWS, GCP, Azure), you need to register your static IP with your broker. However, VPS providers like DigitalOcean, Vultr, and OVH provide static IPs by default.
-
-### What if I travel or work from different locations?
-
-You can update your registered IP, but most brokers only allow changes once a week through their API developer portal. Daily switching isn't feasible.
-
-### Can I register more than one static IP?
-
-Yes, most brokers allow a primary and backup IP per app. However, changing IPs frequently goes against broker guidelines.
-
-### Do I need a static IP for streaming market data only?
-
-No. If your app only receives data and doesn't place or modify orders, static IP registration may not be required. Check your specific broker's requirements.
-
-### Can I use an IP from any country?
-
-Yes, as long as the country is not on the broker's restricted list. You can host from India, US, Europe, or other approved regions.
-
-### Can I use one static IP for multiple trading accounts?
-
-You can use the same IP across different brokers. But for multiple accounts with the same broker, each may require its own registered IP.
-
-### What if my strategy places many orders?
-
-If your strategy consistently places over 10 orders per second, you may need formal registration with your broker. Occasional spikes are typically okay.
-
-## Support Questions
-
-### Where can I get help?
-
-OpenAlgo is community-driven. Get help through:
-
-1. Documentation: [https://docs.openalgo.in](https://docs.openalgo.in)
-2. Discord Community: [http://openalgo.in/discord](http://openalgo.in/discord)
-3. GitHub Issues: [https://github.com/marketcalls/openalgo/issues](https://github.com/marketcalls/openalgo/issues)
-4. YouTube tutorials: For video guides
-
-### How do I report a bug?
-
-1. Go to GitHub Issues
-2. Use the bug report template
-3. Include:
-   - OpenAlgo version
-   - Steps to reproduce
-   - Error messages
-   - Screenshots
-
-### Can I request features?
-
-Yes! Submit feature requests on GitHub Issues with the "enhancement" label.
-
-### How can I contribute?
-
-- Report bugs
-- Submit feature requests
-- Contribute code (PRs welcome)
-- Improve documentation
-- Help other users
-
-## Pricing Questions
-
-### Is OpenAlgo really free?
-
-Yes, OpenAlgo is 100% free and open-source under the AGPL license.
-
-### Are there any hidden costs?
-
-No hidden costs from OpenAlgo. You may have:
-- Broker API charges (varies by broker)
-- Cloud hosting costs (if using cloud)
-- TradingView subscription (for webhooks)
-
-### Do you offer paid support?
-
-Currently, support is community-based. For enterprise needs, contact the maintainers.
-
-## Common Misconceptions
-
-### "OpenAlgo is a trading bot"
-
-OpenAlgo is a **bridge/platform**, not a trading bot. It connects your strategy signals to your broker. You still need to create or use existing strategies.
-
-### "I can make guaranteed profits"
-
-No trading system guarantees profits. OpenAlgo is a tool - your results depend on your strategy.
-
-### "It works without internet"
-
-OpenAlgo requires internet connection to communicate with brokers and receive signals.
-
-### "I can trade after market hours"
-
-OpenAlgo follows exchange timings. F&O can be traded during extended hours as per exchange rules.
-
-## Symbol Format Quick Reference
-
-```
-Equity:   SBIN
-Futures:  NIFTY30JAN25FUT  (Symbol + DD + MMM + YY + FUT)
-Options:  NIFTY30JAN2521500CE  (Symbol + DD + MMM + YY + Strike + CE/PE)
-
-Exchanges: NSE, BSE, NFO, BFO, CDS, MCX
-Products:  MIS (intraday), CNC (delivery), NRML (F&O overnight)
-```
-
-## Still Have Questions?
-
-If your question isn't answered here:
-
-1. Search the [documentation](../README.md)
-2. Check [GitHub Discussions](https://github.com/marketcalls/openalgo/discussions)
-3. Ask in community forums
-4. Create a GitHub issue
+When reporting a bug, include the OpenAlgo version, deployment method, reproduction steps, relevant redacted logs, and the expected versus actual behavior. Never attach `.env`, API keys, broker credentials, or session tokens.
 
 ---
 

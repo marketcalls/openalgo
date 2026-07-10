@@ -1,345 +1,96 @@
 # 09 - API Key Management
 
-## Introduction
+## Overview
 
-Your API key is the authentication token that allows external systems (TradingView, Amibroker, Python scripts) to place orders through OpenAlgo. Managing it properly is crucial for both functionality and security.
+An OpenAlgo API key authenticates external REST clients such as TradingView alerts, Amibroker, and SDK scripts. It is separate from the web password and broker credentials.
 
-## What is an API Key?
+Each user has one current OpenAlgo API key. Generating another key replaces the existing record, so clients using the old key stop authenticating.
 
-Think of your API key as a special password:
+## Generate or View the Key
 
-```
-API Key: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
-         └─────────────────────────────────┘
-              32 character unique identifier
-```
+1. Sign in to OpenAlgo.
+2. Open **API Key** or visit `/apikey`.
+3. Generate a key if one does not exist, or copy the current key shown on the page.
 
-**It allows**:
-- External platforms to send orders
-- Your scripts to communicate with OpenAlgo
-- Webhooks to trigger trades
+The server generates 32 random bytes and hex-encodes them, producing a 64-character hexadecimal key. The database stores both an Argon2 hash for verification and an encrypted copy for authenticated UI and integration use.
 
-**It does NOT**:
-- Give access to OpenAlgo web interface (that's your password)
-- Give direct access to your broker (that's broker credentials)
+Treat the displayed value as a trading credential:
 
-## Generating Your API Key
+- keep it in a password manager or secret store;
+- pass it to scripts through an environment variable;
+- never commit it, paste it into an issue, or include it in screenshots;
+- regenerate it immediately after suspected exposure.
 
-### Step 1: Navigate to API Key Page
+## Use the Key
 
-1. Login to OpenAlgo
-2. Go to **API Key** in sidebar
-3. Or visit: `http://127.0.0.1:5000/apikey`
-
-### Step 2: Generate New Key
-
-1. Click **Generate New Key**
-2. Your key appears:
-   ```
-   ┌────────────────────────────────────────────────────────────┐
-   │  a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6            [Copy] [👁️]   │
-   └────────────────────────────────────────────────────────────┘
-   ```
-3. Click **Copy** to copy to clipboard
-
-### Step 3: Save Your Key
-
-**Important**: The full key is only shown once!
-
-Save it somewhere secure:
-- Password manager (recommended)
-- Secure notes app
-- Encrypted document
-
-## API Key Settings
-
-### Order Mode
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Order Mode                                                      │
-│                                                                  │
-│  ◉ Auto Mode                                                    │
-│    Orders execute immediately with your broker                  │
-│                                                                  │
-│  ○ Semi-Auto Mode                                               │
-│    Orders wait in Action Center for your approval               │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-| Mode | Behavior | Best For |
-|------|----------|----------|
-| **Auto** | Instant execution | Personal trading, fast strategies |
-| **Semi-Auto** | Requires approval | Managed accounts, review trades |
-
-### Changing Order Mode
-
-1. Go to API Key page
-2. Select desired mode
-3. Click **Save**
-
-Orders in-flight continue with their original mode.
-
-## Using Your API Key
-
-### In Webhooks (TradingView, ChartInk)
-
-Include your API key in the JSON body:
+Most `/api/v1` request schemas require an `apikey` field in the JSON body:
 
 ```json
 {
-  "apikey": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+  "apikey": "<your-64-character-key>",
   "strategy": "MyStrategy",
   "symbol": "SBIN",
+  "exchange": "NSE",
   "action": "BUY",
-  "quantity": "100"
+  "quantity": 1,
+  "pricetype": "MARKET",
+  "product": "MIS"
 }
 ```
 
-### In HTTP Headers
+Do not assume that `Authorization` or `X-API-KEY` works for every endpoint. A small number of Telegram and WhatsApp service endpoints explicitly accept `X-API-KEY`, but the maintained [REST API documentation](../../api/README.md) defines authentication for each public route.
 
-For API calls, include in X-API-KEY header:
+### Python SDK
 
-```
-X-API-KEY: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
-```
-
-Or include in request body (recommended):
-
-```json
-{
-    "apikey": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
-    "symbol": "SBIN",
-    "exchange": "NSE"
-}
-```
-
-**Note:** Bearer token authentication is NOT supported.
-
-### In Python Scripts
-
-```python
-from openalgo import api
-
-# Initialize with your API key
-client = api(
-    api_key="a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
-    host="http://127.0.0.1:5000"
-)
-
-# Place an order
-result = client.place_order(
-    symbol="SBIN",
-    exchange="NSE",
-    action="BUY",
-    quantity=100,
-    price_type="MARKET",
-    product="MIS"
-)
-```
-
-### In Node.js Scripts
-
-```javascript
-const OpenAlgo = require('openalgo-node');
-
-const client = new OpenAlgo({
-  apiKey: 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6',
-  host: 'http://127.0.0.1:5000'
-});
-
-// Place an order
-const result = await client.placeOrder({
-  symbol: 'SBIN',
-  exchange: 'NSE',
-  action: 'BUY',
-  quantity: 100,
-  priceType: 'MARKET',
-  product: 'MIS'
-});
-```
-
-## Regenerating Your API Key
-
-If your key is compromised or you want a fresh one:
-
-### Step 1: Revoke Old Key
-
-1. Go to API Key page
-2. Click **Regenerate Key**
-3. Confirm the action
-
-### Step 2: Update All Integrations
-
-After regenerating, update your key in:
-- [ ] TradingView webhooks
-- [ ] Amibroker settings
-- [ ] Python scripts
-- [ ] Any other integrations
-
-**Warning**: Old key stops working immediately!
-
-## Security Best Practices
-
-### DO ✅
-
-| Practice | Why |
-|----------|-----|
-| Store securely | Prevent unauthorized access |
-| Use environment variables | Don't hardcode in scripts |
-| Regenerate periodically | Limit exposure time |
-| Use HTTPS | Encrypt in transit |
-| Monitor traffic logs | Detect misuse |
-
-### DON'T ❌
-
-| Practice | Risk |
-|----------|------|
-| Share publicly | Anyone can trade your account |
-| Commit to Git | Exposed in repository |
-| Send via email | Insecure transmission |
-| Use on untrusted systems | Key theft |
-| Ignore suspicious activity | Ongoing misuse |
-
-### Environment Variables (Recommended)
-
-Instead of hardcoding:
-
-**Bad**:
-```python
-api_key = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
-```
-
-**Good**:
 ```python
 import os
-api_key = os.environ.get('OPENALGO_API_KEY')
+from openalgo import api
+
+client = api(
+    api_key=os.environ["OPENALGO_API_KEY"],
+    host="http://127.0.0.1:5000",
+)
 ```
 
-Then set the environment variable:
-```bash
-export OPENALGO_API_KEY="a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
-```
+## Order Mode
 
-## API Key Permissions
+The API Key page also stores the user's order mode:
 
-Your API key allows these operations:
+| Mode | Behavior |
+|---|---|
+| `auto` | Supported requests execute immediately in the active live or analyzer path |
+| `semi_auto` | Eligible live order types are queued in Action Center for approval |
 
-### Full Access
-- Place orders
-- Modify orders
-- Cancel orders
-- View positions
-- View holdings
-- View order book
-- View trade book
-- Get funds
-- Get quotes
-- Get market depth
+The current approval executor dispatches regular, smart, basket, split, and options orders. `optionsmultiorder` and `placegttorder` can currently be queued by their services but cannot be dispatched by the approval executor; approval rejects them as an unknown order type. Destructive close, cancel, cancel-all, modify, modify-GTT, and cancel-GTT operations are blocked by their services in semi-auto live mode.
 
-### Not Accessible via API Key
-- Change OpenAlgo password
-- Change broker credentials
-- Access admin settings
-- View other users' data
+Read-only account and market-data calls are not approval jobs.
+
+## Regenerate a Key
+
+1. Open `/apikey` while signed in.
+2. Generate a replacement key.
+3. Update every webhook, strategy, SDK client, and MCP configuration that used the old value.
+4. Test a read-only call, then test order behavior in Analyzer Mode.
+
+Replacement is immediate; there is no grace period and no collection of concurrently active keys for one user.
+
+## Scope and Security Boundary
+
+A valid API key maps to the user's active broker session and can call the public REST operations exposed by that instance. The application does not currently provide per-key scopes or operation checkboxes. Request schemas, Analyzer Mode, Action Center mode, service-level restrictions, and rate limits still apply.
+
+The key does not authenticate the web administration routes, change the application password, or edit broker credentials. Remote MCP uses a separate OAuth scope and token system even though it calls OpenAlgo tools on the server side.
 
 ## Troubleshooting
 
-### Issue: "Invalid API key"
+| Error | Check |
+|---|---|
+| Invalid API key | Exact value, surrounding whitespace, and whether the key was regenerated |
+| Broker session not found | Reconnect the broker from `/broker` |
+| Validation error | Use the exact request fields in `docs/api`; most routes require body authentication |
+| Order waits for approval | Check whether order mode is `semi_auto` and open Action Center |
+| Rate-limit response | Review the endpoint-specific limit configured in `.env` |
 
-**Causes**:
-- Typo in API key
-- Key was regenerated
-- Extra spaces
-
-**Solution**:
-- Copy key directly from OpenAlgo
-- Ensure no spaces before/after
-- Check if key was regenerated
-
-### Issue: "API key not authorized"
-
-**Causes**:
-- Wrong key for this instance
-- Key revoked
-
-**Solution**:
-- Verify key matches your OpenAlgo instance
-- Generate new key if needed
-
-### Issue: "Rate limit exceeded"
-
-**Causes**:
-- Too many requests per second
-- Possible script loop
-
-**Solution**:
-- Add delays between requests
-- Check for infinite loops
-- Review rate limits
-
-## Rate Limits
-
-OpenAlgo applies rate limits to prevent abuse:
-
-| Endpoint Type | Default Limit |
-|---------------|---------------|
-| Order placement | 10/second |
-| Data queries | 30/second |
-| Webhook | 20/minute |
-
-Exceeding limits returns HTTP 429 error.
-
-## Monitoring API Key Usage
-
-### Traffic Logs
-
-View all API activity at **Traffic Logs**:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Recent API Calls                                                           │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Time     │ Endpoint      │ Status │ IP Address   │ Response Time          │
-│───────────│───────────────│────────│──────────────│────────────────────────│
-│  10:30:15 │ /placeorder   │ 200    │ 192.168.1.10 │ 125ms                  │
-│  10:30:16 │ /positions    │ 200    │ 192.168.1.10 │ 85ms                   │
-│  10:30:45 │ /placeorder   │ 400    │ 103.25.x.x   │ 15ms                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### What to Watch For
-
-| Indicator | Possible Issue |
-|-----------|---------------|
-| Unknown IP addresses | Unauthorized access |
-| High error rate | Misconfiguration or attack |
-| Unusual times | Unauthorized use |
-| High volume | Script errors or abuse |
-
-## Quick Reference
-
-### API Key Checklist
-
-Before going live:
-
-- [ ] API key generated
-- [ ] Key stored securely
-- [ ] Key configured in external platforms
-- [ ] Order mode set correctly (Auto/Semi-Auto)
-- [ ] Test order placed (in Analyzer mode)
-- [ ] Traffic logs reviewed
-
-### Key Information
-
-| Property | Details |
-|----------|---------|
-| Length | 32 characters |
-| Format | Alphanumeric |
-| Validity | Until regenerated |
-| Scope | Single OpenAlgo instance |
-| Regeneration | Manual only |
+Traffic Logs records request metadata but not the API-key-bearing request body.
 
 ---
 
