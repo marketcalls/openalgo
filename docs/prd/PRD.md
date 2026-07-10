@@ -4,7 +4,7 @@ This document describes OpenAlgo as it exists in the current source tree. It is 
 
 ## Product Overview And Purpose
 
-OpenAlgo is a self-hosted trading application for retail algo traders. It exposes a Flask and Flask-RESTX backend, a React frontend when `frontend/dist` exists, broker plugins, REST APIs, webhook automation, a Flow workflow builder, Python strategy hosting, analyzer/sandbox mode, market data APIs, and a separate WebSocket proxy. The documented HTTP surface is 57 RESTX `/api/v1` endpoints, 452 Flask blueprint routes, and 1 app-level route, for 510 documented HTTP endpoints. Discovery source: `DISCOVERY_MAP.md` sections `Discovery Summary`, `Entry Points And Runtime`, `RESTX API V1`, and `Flask Blueprint Route Inventory`.
+OpenAlgo is a self-hosted trading application for retail algo traders. It exposes a Flask and Flask-RESTX backend, a React frontend when `frontend/dist` exists, broker plugins, REST APIs, webhook automation, a Flow workflow builder, Python strategy hosting, analyzer/sandbox mode, market data APIs, and a separate WebSocket proxy. The documented HTTP surface is 57 RESTX `/api/v1` endpoints, 459 Flask blueprint routes, and 1 app-level route, for 517 documented HTTP endpoints. Discovery source: `DISCOVERY_MAP.md` sections `Discovery Summary`, `Entry Points And Runtime`, `RESTX API V1`, and `Flask Blueprint Route Inventory`.
 
 The product purpose is to let a local trader connect a broker session, issue normalized trading and market-data requests, run automation workflows, test behavior in analyzer mode, and monitor operational state from one self-hosted installation.
 
@@ -136,7 +136,7 @@ The product purpose is to let a local trader connect a broker session, issue nor
 
 ## Broker Support
 
-Current broker count is 33. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules were found only for Dhan and Zerodha. Trace: `DISCOVERY_MAP.md` `Broker Plugins`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
+Current broker count is 34. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules were found only for Dhan and Zerodha. Trace: `DISCOVERY_MAP.md` `Broker Plugins`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
 
 | Broker key | Plugin name | Type | Leverage config | Exchanges |
 |---|---|---|---|---|
@@ -169,6 +169,7 @@ Current broker count is 33. Broker support is plugin-based and loaded from `brok
 | samco | samco | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | shoonya | Shoonya | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | tradejini | Tradejini | IN_stock | false | NSE, BSE, NFO, BFO, CDS, BCD, MCX, NSE_INDEX, BSE_INDEX |
+| tradesmart | TradeSmart | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | upstox | upstox | IN_stock | false | NSE, BSE, NFO, BFO, CDS, BCD, MCX, NSE_INDEX, BSE_INDEX, GLOBAL_INDEX |
 | wisdom | Wisdom Capital (XTS) | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | zebu | Zebu | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX |
@@ -215,9 +216,9 @@ OpenAlgo is configured as a self-hosted application with session routes and API-
 
 ## Out Of Scope And Known Gaps
 
-- Broker-specific response payload shapes are not exhaustively verified for all 33 brokers.
+- Broker-specific response payload shapes are not exhaustively verified for all 34 brokers.
 - Static route inventory may differ from runtime registration when Remote MCP is disabled or `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in implementation need review before one env var is documented as authoritative.
 - Sandbox GTT tables exist, but analyzer GTT services return 501.
-- The old broker integration guide still says 29 brokers, while the code and sample env show 33.
+- `docs/broker-integration-guide.md` gives a deliberately vague "(24+)" broker count rather than an exact figure, so it does not need to track the plugin count precisely; the code and sample env show 34.
 - Full BDD coverage does not exist for every documented RESTX endpoint, blueprint route, broker row, or account endpoint. See `CONFLICTS.md`.

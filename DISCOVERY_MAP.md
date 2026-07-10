@@ -6,8 +6,8 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 
 - Backend runtime: Flask app with Flask-RESTX, Flask-SocketIO, SQLAlchemy, APScheduler, DuckDB, ZeroMQ, and a separate asyncio WebSocket proxy. Entry point is `app.py:134`.
 - Frontend runtime: React 19, Vite 8, TypeScript 5.9, served from `frontend/dist` by `blueprints/react_app.py` when available. React routes are registered before the REST/UI blueprints at `app.py:236`.
-- API surface documented here: 57 RESTX `/api/v1` endpoints, 452 Flask blueprint routes, and 1 app-level route. Total documented HTTP endpoints: 510.
-- Broker plugins: 33 broker plugin directories with `plugin.json`, matching `VALID_BROKERS` in `.sample.env:22`.
+- API surface documented here: 57 RESTX `/api/v1` endpoints, 459 Flask blueprint routes, and 1 app-level route. Total documented HTTP endpoints: 517.
+- Broker plugins: 34 broker plugin directories with `plugin.json`, matching `VALID_BROKERS` in `.sample.env:22`.
 - Primary data stores: main `openalgo.db`, traffic `logs.db`, latency `latency.db`, health `health.db`, sandbox `sandbox.db`, and Historify `historify.duckdb`, configured in `.sample.env:54` through `.sample.env:61`.
 - Security baseline: `APP_KEY` and `API_KEY_PEPPER` are required and placeholder-rotated, API keys are Argon2-hashed plus encrypted for retrieval, broker tokens are Fernet-encrypted, CSRF is enabled for session routes, and `/api/v1` is CSRF-exempt for external callers. Sources: `.sample.env:24`, `database/auth_db.py:36`, `database/auth_db.py:761`, `app.py:171`, `app.py:248`.
 
@@ -44,7 +44,7 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 - Latency logs use `LATENCY_DATABASE_URL`, default `sqlite:///db/latency.db`. Source: `.sample.env:57`.
 - Health metrics use `HEALTH_DATABASE_URL`, default `sqlite:///db/health.db`, and store FD, memory, DB, WebSocket, and thread metrics. Sources: `.sample.env:59`, `database/health_db.py:1` through `database/health_db.py:80`.
 - Sandbox/analyzer trading state uses `SANDBOX_DATABASE_URL`, default `sqlite:///db/sandbox.db`. Source: `.sample.env:60`, `database/sandbox_db.py:35` through `database/sandbox_db.py:49`.
-- Historify uses a DuckDB file for columnar historical data. The sample env names `HISTORIFY_DATABASE_URL` at `.sample.env:61`, while the implementation reads `HISTORIFY_DATABASE_PATH` at `database/historify_db.py:27`. This mismatch is in the review queue.
+- Historify uses a DuckDB file for columnar historical data. The sample env names `HISTORIFY_DATABASE_URL` at `.sample.env:61`, while the implementation reads `HISTORIFY_DATABASE_PATH` at `database/historify_db.py:27`. This mismatch is tracked as open item 7 in `docs/prd/CONFLICTS.md`.
 - SQLite engines use `NullPool`, not `StaticPool`, to prevent long-lived file descriptors and shared-cursor corruption. Source: `database/engine_factory.py:1` through `database/engine_factory.py:58`.
 - Historify creates `market_data`, `watchlist`, `data_catalog`, download job tables, symbol metadata, schedules, schedule executions, and indexes. Source: `database/historify_db.py:94` through `database/historify_db.py:260`.
 
@@ -144,8 +144,8 @@ The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` throug
 
 - Broker capabilities are loaded from every `broker/*/plugin.json` with `supported_exchanges`, `broker_name`, `broker_type`, and `leverage_config`. Source: `utils/plugin_loader.py:17` through `utils/plugin_loader.py:54`.
 - Broker auth modules are lazy-loaded from `broker.{broker}.api.auth_api`. Source: `utils/plugin_loader.py:65` through `utils/plugin_loader.py:128`.
-- Current broker count is 33. Current `VALID_BROKERS` is `.sample.env:22`.
-- The old broker integration guide says 29 brokers at `docs/broker-integration-guide.md:1443`. Current code adds `arrow`, `deltaexchange`, `iiflcapital`, and `rmoney`.
+- Current broker count is 34. Current `VALID_BROKERS` is `.sample.env:22`.
+- `docs/broker-integration-guide.md:1011` gives a deliberately vague "(24+)" broker count rather than an exact figure, so it no longer numerically conflicts with the plugin count.
 - Live GTT broker modules exist only for Dhan and Zerodha: `broker/dhan/api/gtt_api.py`, `broker/zerodha/api/gtt_api.py`.
 
 ### Broker Matrix
@@ -181,6 +181,7 @@ The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` throug
 | samco | samco | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | shoonya | Shoonya | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | tradejini | Tradejini | IN_stock | false | NSE, BSE, NFO, BFO, CDS, BCD, MCX, NSE_INDEX, BSE_INDEX |
+| tradesmart | TradeSmart | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | upstox | upstox | IN_stock | false | NSE, BSE, NFO, BFO, CDS, BCD, MCX, NSE_INDEX, BSE_INDEX, GLOBAL_INDEX |
 | wisdom | Wisdom Capital (XTS) | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | zebu | Zebu | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX |
@@ -269,7 +270,7 @@ The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` throug
 
 ## Flask Blueprint Route Inventory
 
-The following inventory is static source discovery of `@blueprint.route` decorators. Count: 452 routes.
+The following inventory is static source discovery of `@blueprint.route` decorators. Count: 459 routes.
 
 ```text
 blueprints/admin.py:112 GET /admin/api/stats api_stats
@@ -306,6 +307,7 @@ blueprints/analyzer.py:319 GET /analyzer/clear clear_logs
 blueprints/analyzer.py:336 GET /analyzer/export export_requests
 blueprints/apikey.py:47 GET,POST /apikey manage_api_key
 blueprints/apikey.py:105 POST /apikey/mode update_api_key_mode
+blueprints/arbitrage.py:24 GET /arbitrage/api/universe arbitrage_universe
 blueprints/auth.py:85 GET /auth/csrf-token get_csrf_token
 blueprints/auth.py:92 GET /auth/broker-config get_broker_config
 blueprints/auth.py:131 GET /auth/check-setup check_setup_required
@@ -339,6 +341,7 @@ blueprints/brlogin.py:1058 POST /samco/update-ip samco_update_ip
 blueprints/broker_credentials.py:121 GET /api/broker/credentials get_credentials
 blueprints/broker_credentials.py:183 POST /api/broker/credentials update_credentials
 blueprints/broker_credentials.py:358 GET /api/broker/capabilities get_capabilities
+blueprints/chart_test.py:49 GET /chart/test/api/history chart_test_history
 blueprints/chartink.py:285 GET /chartink index
 blueprints/chartink.py:299 GET,POST /chartink/new new_strategy
 blueprints/chartink.py:368 GET /chartink/<int:strategy_id> view_strategy
@@ -378,6 +381,7 @@ blueprints/flow.py:631 GET /flow/api/monitor/status get_monitor_status
 blueprints/flow.py:644 GET /flow/api/workflows/<int:workflow_id>/export export_workflow
 blueprints/flow.py:666 POST /flow/api/workflows/import import_workflow
 blueprints/flow.py:693 GET /flow/api/index-symbols get_index_symbols_lot_sizes
+blueprints/gamma_density.py:31 POST /gammadensity/api/gamma-data gamma_data
 blueprints/gc_json.py:22 GET,POST /gocharting gocharting_json
 blueprints/gex.py:27 POST /gex/api/gex-data gex_data
 blueprints/health.py:57 GET /health/status simple_health
@@ -544,71 +548,74 @@ blueprints/react_app.py:135 GET /positions react_positions
 blueprints/react_app.py:140 GET /orderbook react_orderbook
 blueprints/react_app.py:145 GET /tradebook react_tradebook
 blueprints/react_app.py:150 GET /holdings react_holdings
-blueprints/react_app.py:156 GET /search/token react_search_token
-blueprints/react_app.py:161 GET /search react_search
-blueprints/react_app.py:170 GET /playground react_playground
-blueprints/react_app.py:181 GET /platforms react_platforms
-blueprints/react_app.py:187 GET /tradingview react_tradingview
-blueprints/react_app.py:193 GET /gocharting react_gocharting
-blueprints/react_app.py:199 GET /pnl-tracker react_pnltracker
-blueprints/react_app.py:205 GET /tools react_tools
-blueprints/react_app.py:211 GET /ivchart react_ivchart
-blueprints/react_app.py:217 GET /oitracker react_oitracker
-blueprints/react_app.py:223 GET /maxpain react_maxpain
-blueprints/react_app.py:229 GET /straddle react_straddle
-blueprints/react_app.py:235 GET /volsurface react_volsurface
-blueprints/react_app.py:241 GET /gex react_gex
-blueprints/react_app.py:247 GET /ivsmile react_ivsmile
-blueprints/react_app.py:253 GET /oiprofile react_oiprofile
-blueprints/react_app.py:259 GET /websocket/test react_websocket_test
-blueprints/react_app.py:265 GET /websocket/test/20 react_websocket_test_20
-blueprints/react_app.py:270 GET /websocket/test/30 react_websocket_test_30
-blueprints/react_app.py:275 GET /websocket/test/50 react_websocket_test_50
-blueprints/react_app.py:281 GET /sandbox react_sandbox
-blueprints/react_app.py:287 GET /sandbox/mypnl react_sandbox_mypnl
-blueprints/react_app.py:293 GET /analyzer react_analyzer
-blueprints/react_app.py:305 GET /strategy react_strategy_index
-blueprints/react_app.py:310 GET /strategy/new react_strategy_new
-blueprints/react_app.py:315 GET /strategy/<int:strategy_id> react_strategy_view
-blueprints/react_app.py:320 GET /strategy/<int:strategy_id>/configure react_strategy_configure
-blueprints/react_app.py:327 GET /python react_python_index
-blueprints/react_app.py:332 GET /python/new react_python_new
-blueprints/react_app.py:337 GET /python/<strategy_id>/edit react_python_edit
-blueprints/react_app.py:342 GET /python/<strategy_id>/logs react_python_logs
-blueprints/react_app.py:349 GET /chartink react_chartink_index
-blueprints/react_app.py:354 GET /chartink/new react_chartink_new
-blueprints/react_app.py:359 GET /chartink/<int:strategy_id> react_chartink_view
-blueprints/react_app.py:364 GET /chartink/<int:strategy_id>/configure react_chartink_configure
-blueprints/react_app.py:375 GET /admin react_admin_index
-blueprints/react_app.py:381 GET /admin/freeze react_admin_freeze
-blueprints/react_app.py:387 GET /admin/holidays react_admin_holidays
-blueprints/react_app.py:393 GET /admin/timings react_admin_timings
-blueprints/react_app.py:399 GET /leverage react_leverage
-blueprints/react_app.py:405 GET /telegram react_telegram_index
-blueprints/react_app.py:411 GET /telegram/config react_telegram_config
-blueprints/react_app.py:417 GET /telegram/users react_telegram_users
-blueprints/react_app.py:423 GET /telegram/analytics react_telegram_analytics
-blueprints/react_app.py:434 GET /security react_security
-blueprints/react_app.py:440 GET /traffic react_traffic
-blueprints/react_app.py:446 GET /latency react_latency
-blueprints/react_app.py:457 GET /logs react_logs
-blueprints/react_app.py:463 GET /logs/live react_logs_live
-blueprints/react_app.py:469 GET /logs/sandbox react_logs_sandbox
-blueprints/react_app.py:475 GET /logs/security react_logs_security
-blueprints/react_app.py:481 GET /logs/traffic react_logs_traffic
-blueprints/react_app.py:487 GET /logs/latency react_logs_latency
-blueprints/react_app.py:493 GET /profile react_profile
-blueprints/react_app.py:499 GET /action-center react_action_center
-blueprints/react_app.py:505 GET /historify react_historify
-blueprints/react_app.py:516 GET /flow react_flow_index
-blueprints/react_app.py:522 GET /flow/editor/<int:workflow_id> react_flow_editor
-blueprints/react_app.py:532 GET /assets/<path:filename> serve_assets
-blueprints/react_app.py:569 GET /favicon.ico serve_favicon
-blueprints/react_app.py:577 GET /logo.png serve_logo
-blueprints/react_app.py:585 GET /apple-touch-icon.png serve_apple_touch_icon
-blueprints/react_app.py:593 GET /images/<path:filename> serve_images
-blueprints/react_app.py:602 GET /sounds/<path:filename> serve_sounds
-blueprints/react_app.py:611 GET /docs/<path:filename> serve_docs
+blueprints/react_app.py:156 GET /scalping react_scalping
+blueprints/react_app.py:162 GET /search/token react_search_token
+blueprints/react_app.py:167 GET /search react_search
+blueprints/react_app.py:176 GET /playground react_playground
+blueprints/react_app.py:187 GET /platforms react_platforms
+blueprints/react_app.py:193 GET /tradingview react_tradingview
+blueprints/react_app.py:199 GET /gocharting react_gocharting
+blueprints/react_app.py:205 GET /pnl-tracker react_pnltracker
+blueprints/react_app.py:211 GET /tools react_tools
+blueprints/react_app.py:217 GET /ivchart react_ivchart
+blueprints/react_app.py:223 GET /oitracker react_oitracker
+blueprints/react_app.py:230 GET /chart/test react_chart_test
+blueprints/react_app.py:236 GET /maxpain react_maxpain
+blueprints/react_app.py:242 GET /straddle react_straddle
+blueprints/react_app.py:248 GET /volsurface react_volsurface
+blueprints/react_app.py:254 GET /gex react_gex
+blueprints/react_app.py:260 GET /ivsmile react_ivsmile
+blueprints/react_app.py:266 GET /oiprofile react_oiprofile
+blueprints/react_app.py:272 GET /arbitrage react_arbitrage
+blueprints/react_app.py:278 GET /websocket/test react_websocket_test
+blueprints/react_app.py:284 GET /websocket/test/20 react_websocket_test_20
+blueprints/react_app.py:289 GET /websocket/test/30 react_websocket_test_30
+blueprints/react_app.py:294 GET /websocket/test/50 react_websocket_test_50
+blueprints/react_app.py:300 GET /sandbox react_sandbox
+blueprints/react_app.py:306 GET /sandbox/mypnl react_sandbox_mypnl
+blueprints/react_app.py:312 GET /analyzer react_analyzer
+blueprints/react_app.py:324 GET /strategy react_strategy_index
+blueprints/react_app.py:329 GET /strategy/new react_strategy_new
+blueprints/react_app.py:334 GET /strategy/<int:strategy_id> react_strategy_view
+blueprints/react_app.py:339 GET /strategy/<int:strategy_id>/configure react_strategy_configure
+blueprints/react_app.py:346 GET /python react_python_index
+blueprints/react_app.py:351 GET /python/new react_python_new
+blueprints/react_app.py:356 GET /python/<strategy_id>/edit react_python_edit
+blueprints/react_app.py:361 GET /python/<strategy_id>/logs react_python_logs
+blueprints/react_app.py:368 GET /chartink react_chartink_index
+blueprints/react_app.py:373 GET /chartink/new react_chartink_new
+blueprints/react_app.py:378 GET /chartink/<int:strategy_id> react_chartink_view
+blueprints/react_app.py:383 GET /chartink/<int:strategy_id>/configure react_chartink_configure
+blueprints/react_app.py:394 GET /admin react_admin_index
+blueprints/react_app.py:400 GET /admin/freeze react_admin_freeze
+blueprints/react_app.py:406 GET /admin/holidays react_admin_holidays
+blueprints/react_app.py:412 GET /admin/timings react_admin_timings
+blueprints/react_app.py:418 GET /leverage react_leverage
+blueprints/react_app.py:424 GET /telegram react_telegram_index
+blueprints/react_app.py:430 GET /telegram/config react_telegram_config
+blueprints/react_app.py:436 GET /telegram/users react_telegram_users
+blueprints/react_app.py:442 GET /telegram/analytics react_telegram_analytics
+blueprints/react_app.py:453 GET /security react_security
+blueprints/react_app.py:459 GET /traffic react_traffic
+blueprints/react_app.py:465 GET /latency react_latency
+blueprints/react_app.py:476 GET /logs react_logs
+blueprints/react_app.py:482 GET /logs/live react_logs_live
+blueprints/react_app.py:488 GET /logs/sandbox react_logs_sandbox
+blueprints/react_app.py:494 GET /logs/security react_logs_security
+blueprints/react_app.py:500 GET /logs/traffic react_logs_traffic
+blueprints/react_app.py:506 GET /logs/latency react_logs_latency
+blueprints/react_app.py:512 GET /profile react_profile
+blueprints/react_app.py:518 GET /action-center react_action_center
+blueprints/react_app.py:524 GET /historify react_historify
+blueprints/react_app.py:535 GET /flow react_flow_index
+blueprints/react_app.py:541 GET /flow/editor/<int:workflow_id> react_flow_editor
+blueprints/react_app.py:551 GET /assets/<path:filename> serve_assets
+blueprints/react_app.py:588 GET /favicon.ico serve_favicon
+blueprints/react_app.py:596 GET /logo.png serve_logo
+blueprints/react_app.py:604 GET /apple-touch-icon.png serve_apple_touch_icon
+blueprints/react_app.py:612 GET /images/<path:filename> serve_images
+blueprints/react_app.py:621 GET /sounds/<path:filename> serve_sounds
+blueprints/react_app.py:630 GET /docs/<path:filename> serve_docs
 blueprints/sandbox.py:42 GET /sandbox sandbox_config
 blueprints/sandbox.py:96 GET /sandbox/api/configs api_get_configs
 blueprints/sandbox.py:197 POST /sandbox/update update_config
@@ -623,6 +630,7 @@ blueprints/sandbox.py:1111 GET /sandbox/mypnl/export/holdings export_holdings
 blueprints/sandbox.py:1141 GET /sandbox/mypnl/export/trades export_trades
 blueprints/scalping.py:124 GET /scalping/api/underlyings underlyings
 blueprints/scalping.py:139 GET /scalping/api/all_underlyings all_underlyings
+blueprints/scalping.py:150 GET /scalping/api/history chart_history
 blueprints/scalping.py:171 GET /scalping/api/expiry expiry
 blueprints/scalping.py:304 GET /scalping/api/strikes strikes
 blueprints/scalping.py:353 GET /scalping/api/search search
@@ -734,7 +742,7 @@ blueprints/whatsapp.py:388 GET /whatsapp/stats stats
 
 ## Unverified
 
-- Broker-specific response payload shape is not exhaustively verified for all 33 brokers. The services dynamically import broker modules and normalize only the wrapper-level response.
+- Broker-specific response payload shape is not exhaustively verified for all 34 brokers. The services dynamically import broker modules and normalize only the wrapper-level response.
 - The static route inventory lists all blueprint decorators in source. Runtime registration may omit Remote MCP unless enabled and may omit React routes when `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in `database/historify_db.py` need review before documenting a single env var as authoritative.
 - Sandbox GTT tables exist, but all GTT services return 501 in analyzer mode. The current behavior is "not implemented" for analyzer GTT, not the sandbox table state machine.
