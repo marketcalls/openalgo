@@ -2,7 +2,7 @@
 
 ## Introduction
 
-**OpenAlgo** is a free, open-source algorithmic trading platform that bridges your trading ideas with execution. Built with Python Flask and a modern React frontend, it provides a unified API layer across 29 Indian brokers, enabling seamless automation from TradingView, Amibroker, Python scripts, Excel, and AI agents.
+**OpenAlgo** is a free, open-source algorithmic trading platform that bridges your trading ideas with execution. Built with Python Flask and a modern React frontend, it provides a unified API layer across 34 broker plugins: 33 securities integrations and Delta Exchange for crypto derivatives. Strategies can connect through TradingView, Amibroker, Python scripts, Excel, and AI agents.
 
 **Website**: [https://openalgo.in](https://openalgo.in)
 **GitHub**: [https://github.com/marketcalls/openalgo](https://github.com/marketcalls/openalgo)
@@ -72,7 +72,7 @@ All in under 1 second!
 | Feature | Description |
 |---------|-------------|
 | **Smart Order Placement** | Execute trades with position sizing, split orders, and bracket orders |
-| **Multi-Broker Support** | Connect to 29 Indian brokers through a unified API |
+| **Multi-Broker Support** | Connect through 34 broker plugins using a unified API |
 | **Multi-Exchange Trading** | NSE, NFO, BSE, BFO, MCX, CDS, BCD, NCDEX |
 | **Real-Time Streaming** | WebSocket-based live quotes, depth, and order updates |
 | **Auto Square-Off** | Time-based and one-click position square-off |
@@ -95,7 +95,7 @@ All in under 1 second!
 | **Historify** | Download and store historical market data (DuckDB) |
 | **P&L Tracker** | Real-time profit/loss tracking with charts |
 | **Latency Monitor** | Track API and order execution latency |
-| **Traffic Logs** | Comprehensive API request/response logging |
+| **Traffic Logs** | Request metadata, status, and latency monitoring without payload capture |
 
 ### Risk & Security
 
@@ -156,13 +156,9 @@ All in under 1 second!
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Supported Brokers (29)
+## Supported Brokers (34 plugins)
 
-| Category | Brokers |
-|----------|---------|
-| **Tier 1** | Zerodha, Angel One, Dhan, Fyers, Upstox |
-| **Banks** | ICICI Direct, HDFC Securities, Kotak Neo |
-| **Others** | 5paisa, Finvasia, Flattrade, Firstock, Nubra, and more |
+The repository contains 34 broker plugin directories: 33 securities integrations and one Delta Exchange crypto-derivatives integration. The runtime broker selector is generated from these installed plugins, so it remains the authoritative list for a deployed version.
 
 **Benefit**: Switch brokers without changing your strategy code - OpenAlgo's unified API handles the translation.
 
@@ -189,7 +185,7 @@ Test strategies with ₹1 Crore sandbox capital:
 - Realistic margin calculations
 - Position and holdings tracking
 - Auto square-off at exchange timings
-- Complete isolation from live trading
+- Simulated orders and account state isolated from live broker execution
 - Perfect for strategy testing and validation
 
 ## Platform Integration
@@ -290,15 +286,15 @@ Ready to begin? Here's your path:
 |----------|------|
 | **GitHub** | [github.com/marketcalls/openalgo](https://github.com/marketcalls/openalgo) |
 | **Documentation** | [docs.openalgo.in](https://docs.openalgo.in) |
-| **API Reference** | [/api/docs](http://localhost:5000/api/docs) (after installation) |
+| **API Reference** | [Maintained REST API documentation](../../api/README.md) |
 | **Discord Community** | Join for support and discussions |
 
 ## Summary
 
 | Aspect | OpenAlgo |
 |--------|----------|
-| **Cost** | Free (Open Source, MIT License) |
-| **Brokers** | 29 Indian brokers |
+| **Cost** | Free and open source (AGPL v3.0) |
+| **Brokers** | 34 plugins: 33 securities integrations and Delta Exchange crypto |
 | **Exchanges** | NSE, NFO, BSE, BFO, MCX, CDS, BCD, NCDEX |
 | **Signal Sources** | TradingView, Amibroker, ChartInk, Python, AI |
 | **Strategy Building** | Flow (Visual), Python Hosting, External Webhooks |

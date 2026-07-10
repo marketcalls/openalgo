@@ -12,20 +12,20 @@
 
 ## What is OpenAlgo?
 
-OpenAlgo is a free, open source, self-hosted **trading platform** — not just a broker bridge. Built on Python Flask + React 19, it gives traders a full-stack environment to **design, host, and execute strategies** across **30+ Indian brokers** through a single unified API. Whether you write Python, prefer drag-and-drop, or trade options exclusively, OpenAlgo gives you a first-class workflow without tying you to any single broker or vendor.
+OpenAlgo is a free, open source, self-hosted **trading platform** — not just a broker bridge. Built on Python Flask + React 19, it gives traders a full-stack environment to **design, host, and execute strategies** through **34 broker plugins**: 33 securities integrations and Delta Exchange for crypto derivatives. Whether you write Python, prefer drag-and-drop, or trade options, OpenAlgo provides a common interface without tying strategy code to one adapter.
 
-OpenAlgo is no longer just "an API layer in front of your broker." Today it is **four products in one self-hosted instance** — sharing one broker session, one WebSocket feed, and one database — covering the complete journey from idea → backtest → live trade.
+OpenAlgo is no longer just "an API layer in front of your broker." Today it combines four trading surfaces in one self-hosted instance, sharing the active broker session, market-data infrastructure, and six operational data stores across the journey from idea to testing and live execution.
 
 ## Four Ways to Trade with OpenAlgo
 
 | Surface | Route | Who it's for |
 | --- | --- | --- |
-| **Unified Broker API** | `/api/v1/` | External platforms — TradingView, Amibroker, ChartInk, Excel, Google Sheets, Python, Java, Go, .NET, Node.js, MetaTrader, GoCharting, N8N. One API, 30+ brokers. |
+| **Unified Broker API** | `/api/v1/` | External platforms — TradingView, Amibroker, ChartInk, Excel, Google Sheets, Python, Java, Go, .NET, Node.js, MetaTrader, GoCharting, N8N. One contract across 34 plugins, with optional operations varying by adapter. |
 | **Python Strategy Host** | `/python` | Traders who code — paste any Python script into the in-browser CodeMirror editor, schedule it on IST start/stop times, run multiple strategies in parallel with process isolation, watch real-time logs. No external server, no Docker, no cron. |
 | **Flow — No-Code Strategy Builder** | `/flow` | Traders who don't code — drag-and-drop nodes for market data, indicators, conditions, order execution, and notifications. Webhook triggers for TradingView and external signals built in. JSON import/export for sharing strategies. |
 | **Options Trading Suite** | `/tools` | Options traders — twelve built-in analytical tools (Strategy Builder with payoff diagrams & live Greeks, Option Chain, IV Smile, Max Pain, Vol Surface, GEX dashboard, OI Tracker, OI Profile, Straddle Chart, Straddle PnL simulator, Option Greeks history). Each one streams from your connected broker. |
 
-Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital, exchange-aligned auto square-off) so you can sandbox-trade *any* of these flows before going live. Real-time dashboards, PnL tracker, latency monitor, Telegram alerts, and the AI / MCP server work uniformly across all four.
+Order workflows from the REST API, hosted strategies, and Flow can use Analyzer Mode before live execution. Analytics pages, dashboards, PnL tracking, latency monitoring, notifications, and MCP reuse the same application services where their specific capabilities apply.
 
 ## Video Tutorial
 
@@ -41,9 +41,9 @@ Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital,
 
 ## Python Compatibility
 
-**Supports Python 3.11, 3.12, 3.13, and 3.14**
+**Requires Python 3.12 or newer.**
 
-## Supported Brokers (30+)
+## Supported Brokers (34 plugins)
 
 <details>
 <summary>View All Supported Brokers</summary>
@@ -83,19 +83,19 @@ Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital,
 
 </details>
 
-All brokers share a unified API interface, making it easy to switch between brokers without changing your code.
+Plugins share OpenAlgo's normalized API shapes. Exchange coverage, authentication, market-data entitlement, GTT support, and other optional capabilities still vary by adapter and broker account.
 
 ## Core Features
 
 ### Unified REST API Layer (`/api/v1/`)
-A single, standardized API across all brokers with 30+ endpoints:
+A maintained contract with 57 REST method/path pairs under `/api/v1`:
 - **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing
 - **Portfolio**: Get positions, holdings, order book, trade book, funds
 - **Market Data**: Real-time quotes, historical data, market depth (Level 5), symbol search
 - **Advanced**: Option Greeks calculator, margin calculator, synthetic futures, auto-split orders
 
 ### Real-Time WebSocket Streaming
-- Unified WebSocket proxy server for all brokers (port 8765)
+- Unified WebSocket proxy server (port 8765 by default)
 - Common WebSocket implementation using ZMQ for normalized data across brokers
 - Subscribe to LTP, Quote, or Market Depth for any symbol
 - ZeroMQ-based message bus for high-performance data distribution
@@ -112,7 +112,7 @@ Build trading strategies visually without writing code:
 - **Visual debugging** with execution flow highlighting
 
 ### Options & Strategy Analytics Tools (`/tools`)
-A complete suite of twelve built-in analytical tools for options trading and market analysis — no external subscriptions required. Accessible from the **Tools** page in the sidebar:
+A suite of twelve built-in analytical tools for options trading and market analysis. The pages use the active broker connection; broker market-data entitlements and exchange coverage still apply. Accessible from the **Tools** page in the sidebar:
 
 | Tool | Route | What it does |
 |------|-------|--------------|
@@ -129,15 +129,15 @@ A complete suite of twelve built-in analytical tools for options trading and mar
 | **IV Smile** | `/ivsmile` | Implied Volatility smile with Call/Put IV curves, ATM IV, and skew analysis |
 | **OI Profile** | `/oiprofile` | Futures candlestick with OI butterfly and daily OI change across strikes |
 
-All tools stream live from your connected broker via the unified WebSocket feed and work identically across every supported broker.
+Tools use the active broker's REST and WebSocket capabilities. Data availability and supported exchanges vary by plugin and account entitlement.
 
 ### API Analyzer Mode
 Complete testing environment with ₹1 Crore sandbox capital:
 - Test strategies with real market data without risking money
 - Pre-deployment testing for strategy validation
-- Supports all order types (Market, Limit, SL, SL-M)
+- Supports the core MARKET, LIMIT, SL, and SL-M price types
 - Realistic margin system with leverage
-- Auto square-off at exchange timings
+- Configurable sandbox square-off schedules
 - Separate database for complete isolation
 
 [API Analyzer Documentation](https://docs.openalgo.in/new-features/api-analyzer)
@@ -273,8 +273,8 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 - **axe-core** - Accessibility testing
 
 ### Databases
-- **SQLite** - 4 separate databases (main, logs, latency, sandbox)
-- **DuckDB** - Historical market data (Historify)
+- **SQLite** - 5 databases (main, logs, latency, health, sandbox)
+- **DuckDB** - 1 historical market-data store (Historify)
 
 ## Official SDKs
 
@@ -309,7 +309,7 @@ OpenAlgo is part of a larger open-source trading ecosystem:
 - **RAM**: 2GB (or 0.5GB + 2GB swap)
 - **Disk**: 1GB
 - **CPU**: 1 vCPU
-- **Python**: 3.11, 3.12, 3.13, or 3.14
+- **Python**: 3.12 or newer
 - **Node.js**: 20.20+, 22.22+, or 24.13+ (for frontend development)
 
 ### Quick Start with UV
@@ -344,7 +344,7 @@ Complete API reference and examples:
 
 ## Key Benefits
 
-- **Zero-Config Installation**: One-command setup with UV
+- **Guided Installation**: UV and production install scripts with explicit broker configuration
 - **Single API, Multiple Brokers**: Switch brokers without code changes
 - **No Data Collection**: Complete privacy - your data stays on your server
 - **Visual Strategy Builder**: Create strategies with drag-and-drop Flow editor
@@ -385,7 +385,7 @@ We welcome contributions! To contribute:
 
 ## License
 
-OpenAlgo is released under the **AGPL V3.0 License**. See [LICENSE](LICENSE) for details.
+OpenAlgo is released under the **AGPL V3.0 License**. See [License.md](License.md) for details.
 
 ## Credits & Acknowledgments
 

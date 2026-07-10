@@ -2,9 +2,9 @@
 
 ## Introduction
 
-OpenAlgo ships with a complete suite of **twelve built-in analytical tools** for options trading and market analysis. They all live under the `/tools` page in the sidebar and stream live data from your connected broker via the unified WebSocket feed — no external subscriptions, no third-party data vendors.
+OpenAlgo ships with **twelve built-in analytical tools** for options trading and market analysis. They live under the `/tools` page and use the active broker's REST and WebSocket market data where each tool requires it.
 
-All tools work identically across every supported broker. Switch brokers and the same tools keep working without any configuration change.
+Availability depends on the plugin's supported exchanges, broker response fields, account market-data entitlement, and the symbols or expiries requested. A plugin being installed does not guarantee that every analytical page has the data it needs.
 
 ## Accessing the Tools Page
 
@@ -40,7 +40,7 @@ Real-time option chain with full order capability.
 - Live Greeks per strike (Delta, Gamma, Theta, Vega, IV)
 - OI, OI change, Volume, LTP, bid/ask — all streaming
 - Quick order placement inline from the chain (click-to-trade)
-- Supports weekly and monthly expiries across all index and stock options
+- Supports the option expiries returned for the selected underlying and broker
 
 ### 4. Option Greeks (`/ivchart`)
 

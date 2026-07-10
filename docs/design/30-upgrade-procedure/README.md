@@ -1,312 +1,90 @@
 # 30 - Upgrade Procedure
 
-## Overview
+## Supported Update Path
 
-Guidelines for upgrading OpenAlgo to new versions while preserving data and configurations.
-
-## Pre-Upgrade Checklist
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                        Pre-Upgrade Checklist                                │
-│                                                                             │
-│  □ 1. Backup databases (db/*.db)                                           │
-│  □ 2. Backup .env file                                                     │
-│  □ 3. Backup custom strategies                                             │
-│  □ 4. Note current version                                                 │
-│  □ 5. Stop running OpenAlgo instance                                       │
-│  □ 6. Read release notes for breaking changes                              │
-│                                                                             │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Backup Procedure
-
-### Database Backup
+Use `install/update.sh` for an existing native/server installation or a local checkout. The script detects the current deployment layout and branch; do not replace it with ad hoc database initialization commands.
 
 ```bash
-# Create backup directory
-mkdir -p backups/$(date +%Y%m%d)
-
-# Backup all databases
-cp db/openalgo.db backups/$(date +%Y%m%d)/
-cp db/logs.db backups/$(date +%Y%m%d)/
-cp db/latency.db backups/$(date +%Y%m%d)/
-cp db/sandbox.db backups/$(date +%Y%m%d)/
-cp db/historify.duckdb backups/$(date +%Y%m%d)/
+cd /path/to/openalgo
+bash install/update.sh
 ```
 
-### Configuration Backup
+For Docker deployments, use the update procedure that belongs to the installed Compose layout. Preserve the bind-mounted `.env` and `db/` volume.
 
-```bash
-# Backup environment file
-cp .env backups/$(date +%Y%m%d)/
+## What The Native Script Does
 
-# Backup strategies (if any)
-cp -r strategies/ backups/$(date +%Y%m%d)/
+`install/update.sh` performs seven phases:
+
+1. Stop the systemd service for a detected server deployment.
+2. Copy known database files into `db/backup_<timestamp>/`.
+3. Stash tracked local modifications and pull the current Git branch.
+4. Compare `.env` with `.sample.env`, preserve existing secrets, and harden older installs.
+5. Update Python dependencies with `uv` and ensure Gunicorn/eventlet for server mode.
+6. Fix server permissions and run `upgrade/migrate_all.py`.
+7. Restart systemd/nginx, or finish local development setup.
+
+The migration runner executes an ordered, idempotent list of targeted scripts. Database modules also use idempotent table initialization during application startup. OpenAlgo does not expose a `database.init_all_databases()` helper.
+
+## Backup Requirements
+
+Before an upgrade, back up `.env`, signing keys, strategy files, and all six configured stores:
+
+```text
+db/openalgo.db
+db/logs.db
+db/latency.db
+db/health.db
+db/sandbox.db
+db/historify.duckdb
 ```
 
-## Upgrade Steps
+The current updater's automatic loop copies `openalgo.db`, `logs.db`, `latency.db`, `sandbox.db`, and `historify.duckdb`; it does not include `health.db`. Copy `health.db` separately when retaining health history matters. This limitation should remain explicit until the updater is changed.
 
-### Step 1: Stop OpenAlgo
+## Environment Review
 
-```bash
-# Stop running instance
-# Press Ctrl+C if running in terminal
+The updater keeps an existing `.env` and reports names that are present in `.sample.env` but missing locally. Review those values after every upgrade. Never replace production `APP_KEY`, `API_KEY_PEPPER`, `FERNET_SALT`, OAuth signing keys, or broker credentials with sample placeholders.
 
-# Or if running as service
-sudo systemctl stop openalgo
-```
+If no `.env` exists, the script creates one from `.sample.env` and generates fresh `APP_KEY` and `API_KEY_PEPPER` values. That is recovery behavior, not a way to rotate secrets on an existing installation.
 
-### Step 2: Pull Latest Changes
+## Frontend Build
+
+Local mode builds the React bundle only when `frontend/dist` is absent and npm is available. Server operators should verify the bundle after frontend changes and build explicitly when needed:
 
 ```bash
-# Update from repository
-git fetch origin
-git pull origin main
-```
-
-### Step 3: Update Dependencies
-
-```bash
-# Sync Python dependencies
-uv sync
-
-# Update frontend dependencies
 cd frontend
-npm install
+npm ci
 npm run build
-cd ..
 ```
 
-### Step 4: Update Environment
+Then restart the application service.
+
+## Migration Runner
+
+Run the migration set directly only when diagnosing or completing an interrupted update:
 
 ```bash
-# Compare with sample.env
-diff .env .sample.env
-
-# Add any new variables from .sample.env to .env
+uv run upgrade/migrate_all.py
 ```
 
-### Step 5: Database Initialization
+The runner continues past scripts that report warnings and summarizes failures. Inspect its complete output rather than treating the final line alone as proof that every migration applied.
 
-OpenAlgo uses automatic database initialization on startup. New tables are created automatically when the application starts - no manual migrations are required.
+`upgrade/rotate_pepper.py` is deliberately excluded from automatic migration because rotating `API_KEY_PEPPER` has authentication and ciphertext consequences. It is an explicit operator action.
 
-```bash
-# Start the app to initialize any new database tables
-# Tables are created if they don't exist (safe - won't overwrite existing data)
-uv run app.py
-```
+## Verification
 
-> **Note**: There is no `migrations/` directory. Database schema updates are handled automatically by SQLAlchemy's `create_all()` during app startup.
+After updating:
 
-### Step 6: Start OpenAlgo
+1. Confirm the systemd/container process is healthy.
+2. Open `/auth/app-info` and verify the expected application version.
+3. Sign in, reconnect the broker if needed, and confirm master-contract readiness.
+4. Exercise a read-only API call and a WebSocket authentication/subscription in the intended mode.
+5. Review `log/errors.jsonl`, service logs, and migration output.
+6. Confirm the React bundle loads without stale-chunk errors.
 
-```bash
-# Start application
-uv run app.py
-```
+Swagger UI is disabled; `/api/docs` is not a verification endpoint. Use [`docs/api`](../../api/README.md) for maintained request contracts.
 
-## Version-Specific Upgrades
+## Rollback
 
-### Upgrading to v2.0.0
+Stop the service, restore the exact pre-upgrade Git revision and the matching backup files, restore `.env`/keys if they changed, reinstall dependencies for that revision, and restart. Do not restore one database selectively when a migration changed related state across stores.
 
-**CRITICAL**: v2.0.0 requires building the React frontend. The `frontend/dist/` directory is gitignored and must be built locally.
-
-Major changes:
-- React 19 frontend replaces Jinja2 templates for most UIs
-- New database tables (flow_workflows, action_center, etc.)
-- 40+ new environment variables (CORS, CSP, ZeroMQ, etc.)
-- Flow Visual Builder with 53 node types
-- Historify (DuckDB-based historical data)
-
-```bash
-# REQUIRED: Build React frontend
-cd frontend
-npm install
-npm run build
-cd ..
-
-# Compare environment variables with new sample
-diff .env .sample.env
-
-# Add missing variables from .sample.env (especially CORS, ZeroMQ settings)
-# See docs/design/28-environment-config/ for full variable list
-```
-
-> **Important**: Check `docs/CHANGELOG.md` for detailed v2.0.0 release notes.
-
-### Database Schema Changes
-
-```python
-# Check if tables need updates
-from database import init_all_databases
-
-# Initialize new tables (safe - won't overwrite existing)
-init_all_databases()
-```
-
-## Rollback Procedure
-
-### If Upgrade Fails
-
-```bash
-# Stop current version
-# Press Ctrl+C
-
-# Restore previous version
-git checkout v1.x.x  # Previous version tag
-
-# Restore databases
-cp backups/YYYYMMDD/openalgo.db db/
-cp backups/YYYYMMDD/.env ./
-
-# Restart
-uv run app.py
-```
-
-## Docker Upgrade
-
-### Pull New Image
-
-```bash
-# Stop container
-docker-compose down
-
-# Pull latest image
-docker-compose pull
-
-# Start with new image
-docker-compose up -d
-```
-
-### Volume Preservation
-
-```yaml
-# docker-compose.yaml
-volumes:
-  - ./db:/app/db          # Database persisted
-  - ./.env:/app/.env      # Config persisted
-```
-
-## Systemd Service Update
-
-### For Ubuntu Server
-
-```bash
-# Stop service
-sudo systemctl stop openalgo
-
-# Update code
-git pull origin main
-uv sync
-
-# Restart service
-sudo systemctl start openalgo
-
-# Check status
-sudo systemctl status openalgo
-```
-
-## Post-Upgrade Verification
-
-### Health Checks
-
-```bash
-# Check application logs
-tail -f log/openalgo.log
-
-# Verify web access
-curl http://127.0.0.1:5000/health
-
-# Check database connectivity
-uv run python -c "from database import init_all_databases; print('OK')"
-```
-
-### Functional Tests
-
-1. Log in to web interface
-2. Check broker connection
-3. Place test order (analyzer mode)
-4. Verify WebSocket connection
-5. Check API endpoint
-
-## Changelog Review
-
-### Check Release Notes
-
-```bash
-# View release tags
-git tag -l
-
-# View changelog
-cat CHANGELOG.md
-
-# View specific release
-git show v2.0.0
-```
-
-## Troubleshooting
-
-### Common Upgrade Issues
-
-| Issue | Solution |
-|-------|----------|
-| Missing dependency | Run `uv sync` |
-| Database error | Check schema migration |
-| Frontend not loading | Run `npm run build` |
-| .env missing vars | Compare with .sample.env |
-| Permission errors | Check file ownership |
-
-### Reset to Clean State
-
-```bash
-# CAUTION: This removes all data
-
-# Remove databases
-rm -rf db/*.db
-
-# Reinitialize
-uv run python -c "from database import init_all_databases; init_all_databases()"
-```
-
-## Automated Upgrade Script
-
-### upgrade.sh
-
-```bash
-#!/bin/bash
-set -e
-
-echo "Starting OpenAlgo upgrade..."
-
-# Backup
-BACKUP_DIR="backups/$(date +%Y%m%d_%H%M%S)"
-mkdir -p $BACKUP_DIR
-cp db/*.db $BACKUP_DIR/
-cp .env $BACKUP_DIR/
-
-# Update code
-git pull origin main
-
-# Update dependencies
-uv sync
-
-# Build frontend
-cd frontend
-npm install
-npm run build
-cd ..
-
-echo "Upgrade complete!"
-echo "Backup stored in: $BACKUP_DIR"
-```
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `.sample.env` | Reference for new variables |
-| `CHANGELOG.md` | Version changes |
-| `pyproject.toml` | Python dependencies |
-| `frontend/package.json` | Frontend dependencies |
+Local changes stashed by the updater are not restored automatically. Review `git stash list` and apply them deliberately after the upgraded tree is stable.

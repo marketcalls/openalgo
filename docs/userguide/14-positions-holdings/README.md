@@ -188,7 +188,7 @@ Navigate to **Holdings** in sidebar:
 
 **Method 2: API**
 ```
-POST /api/v1/closeallpositions
+POST /api/v1/closeposition
 {
   "apikey": "your-key",
   "strategy": "SquareOff"
@@ -220,7 +220,7 @@ client.place_order(
 ### Get Positions
 
 ```
-POST /api/v1/positions
+POST /api/v1/positionbook
 {
   "apikey": "your-key"
 }
@@ -315,16 +315,7 @@ P&L % = ((1650 - 1500) / 1500) × 100 = +10%
 
 ## Auto Square-Off (MIS)
 
-MIS positions are automatically squared off:
-
-| Segment | Auto Square-Off Time |
-|---------|---------------------|
-| Equity | 3:15 PM |
-| F&O | 3:25 PM |
-| Currency | 4:55 PM |
-| Commodity | 11:30 PM |
-
-**Tip**: Close positions yourself before auto square-off for better prices.
+Broker and exchange square-off rules vary by segment and can change. Check the current cut-off times published by your broker, and close positions manually when your strategy requires a deterministic exit.
 
 ## Converting Positions
 
@@ -335,19 +326,7 @@ Convert intraday to overnight:
 - Additional margin required
 - Check broker-specific rules
 
-### Product Conversion API
-
-```
-POST /api/v1/convertposition
-{
-  "apikey": "your-key",
-  "symbol": "SBIN",
-  "exchange": "NSE",
-  "quantity": "100",
-  "from_product": "MIS",
-  "to_product": "CNC"
-}
-```
+OpenAlgo does not currently expose a public REST endpoint for product conversion. Use your broker terminal when the broker supports conversion, and follow its current margin and cut-off rules.
 
 ## Best Practices
 

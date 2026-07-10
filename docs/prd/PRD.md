@@ -234,7 +234,7 @@ OpenAlgo is configured as a self-hosted application with session routes and API-
 - Static route inventory may differ from runtime registration when Remote MCP is disabled or `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in implementation need review before one env var is documented as authoritative.
 - Sandbox GTT tables exist, but analyzer GTT services return 501.
-- `docs/broker-integration-guide.md` gives a deliberately vague "(24+)" broker count rather than an exact figure, so it does not need to track the plugin count precisely; the code and sample env show 34.
+- `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 34 plugin directories.
 - Blueprint-route BDD coverage remains representative rather than one scenario per route. The RESTX method/path inventory and broker-plugin inventory are explicitly covered by scenario outlines.
 - `/pnltracker/legacy` references a template that is absent from the current source tree and is not a supported fallback UI.
 - Telegram REST webhook dispatch and broadcast fan-out are registered placeholders, not completed delivery paths.
