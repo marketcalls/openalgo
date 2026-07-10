@@ -29,13 +29,13 @@ This file records unresolved implementation/documentation conflicts and delibera
 ## Deliberate Product Decisions
 
 - RESTX Swagger is disabled with `doc=False`. `/api/docs` is intentionally absent and must not be treated as a broken route.
-- `services/options_multiorder_service.py` and `services/place_gtt_order_service.py` can queue `optionsmultiorder` and `placegttorder` rows in semi-auto mode, but `services/pending_order_execution_service.py` dispatches neither type. Approval therefore returns `Unknown order type` and rejects broker execution. Documentation must not claim those types are Action Center-supported until the executor is extended or routing is blocked.
 - `mcp/mcpserver.py::check_holiday` is registered as an MCP tool but calls the absent `/api/v1/checkholiday` route. The internal `services.market_calendar_service.check_holiday()` function exists; the public REST contract does not. MCP/user documentation omits this tool until its implementation uses a supported path or service.
 - Analyzer GTT place, modify, cancel, and orderbook return 501 even though sandbox GTT tables exist.
 - Blueprint-route BDD coverage is representative. The complete 57-method RESTX inventory and all 34 broker plugins have explicit scenario-outline rows.
 
 ## Resolved During This Sweep
 
+- Added Action Center dispatch and broker-result tracking for `optionsmultiorder` and `placegttorder`; unsupported GTT brokers still fail through the service's HTTP 501 capability gate.
 - Added a complete RESTX method/path inventory in `docs/bdd/rest_api_inventory.feature`.
 - Added a 34-plugin broker inventory in `docs/bdd/broker_plugin_inventory.feature`.
 - Added live account, margin, open-position, and REST depth behavior in `docs/bdd/account_and_depth.feature`.

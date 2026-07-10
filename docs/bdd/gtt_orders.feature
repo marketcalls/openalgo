@@ -2,11 +2,23 @@ Feature: GTT orders
   GTT APIs are available through RESTX and depend on broker-specific GTT modules.
 
   # Source: restx_api/place_gtt_order.py:25, services/place_gtt_order_service.py:34
-  Scenario: Place GTT uses broker GTT API when available
-    Given the active broker has a GTT module
+  Scenario Outline: Place GTT uses each pilot broker GTT API
+    Given the active broker is "<broker>"
     When an API client submits a place GTT request
     Then the request is validated
     And the broker GTT placement API is called
+
+    Examples:
+      | broker |
+      | dhan |
+      | zerodha |
+
+  # Source: services/place_gtt_order_service.py:63
+  Scenario: Place GTT rejects a broker without a GTT module
+    Given the active broker is neither Dhan nor Zerodha
+    When an API client submits a place GTT request
+    Then the service returns HTTP 501
+    And no unsupported broker order API is called
 
   # Source: restx_api/modify_gtt_order.py:25, services/modify_gtt_order_service.py:51
   Scenario: Modify GTT returns analyzer unsupported in analyzer mode

@@ -18,7 +18,7 @@ from database.action_center_db import (
     reject_pending_order,
     update_broker_status,
 )
-from database.auth_db import get_order_mode, update_order_mode
+from database.auth_db import get_order_mode, update_order_mode, upsert_api_key
 from services.action_center_service import get_action_center_data
 from services.order_router_service import queue_order, should_route_to_pending
 
@@ -26,31 +26,37 @@ from services.order_router_service import queue_order, should_route_to_pending
 class TestOrderModeDatabase:
     """Test order mode database functions"""
 
+    user_id = "action_center_mode_test"
+
+    def setup_method(self):
+        upsert_api_key(self.user_id, "action-center-test-api-key")
+        update_order_mode(self.user_id, "auto")
+
     def test_get_order_mode_default(self):
         """Test default order mode is 'auto'"""
-        mode = get_order_mode("test_user")
+        mode = get_order_mode(self.user_id)
         assert mode == "auto", "Default order mode should be 'auto'"
 
     def test_update_order_mode_to_semi_auto(self):
         """Test updating order mode to semi_auto"""
-        success = update_order_mode("test_user", "semi_auto")
+        success = update_order_mode(self.user_id, "semi_auto")
         assert success is True, "Should successfully update to semi_auto"
 
-        mode = get_order_mode("test_user")
+        mode = get_order_mode(self.user_id)
         assert mode == "semi_auto", "Order mode should be updated to semi_auto"
 
     def test_update_order_mode_to_auto(self):
         """Test updating order mode back to auto"""
-        update_order_mode("test_user", "semi_auto")
-        success = update_order_mode("test_user", "auto")
+        update_order_mode(self.user_id, "semi_auto")
+        success = update_order_mode(self.user_id, "auto")
         assert success is True, "Should successfully update to auto"
 
-        mode = get_order_mode("test_user")
+        mode = get_order_mode(self.user_id)
         assert mode == "auto", "Order mode should be updated to auto"
 
     def test_update_order_mode_invalid(self):
         """Test updating order mode with invalid value"""
-        success = update_order_mode("test_user", "invalid_mode")
+        success = update_order_mode(self.user_id, "invalid_mode")
         assert success is False, "Should fail with invalid mode"
 
 
@@ -97,7 +103,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "HDFC", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        success = approve_pending_order(order_id, approved_by="test_approver")
+        success = approve_pending_order(order_id, approved_by="test_approver", user_id="test_user")
         assert success is True, "Should successfully approve order"
 
         order = get_pending_order_by_id(order_id)
@@ -111,7 +117,9 @@ class TestPendingOrdersDatabase:
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
         reason = "Market conditions unfavorable"
-        success = reject_pending_order(order_id, reason, rejected_by="test_rejector")
+        success = reject_pending_order(
+            order_id, reason, rejected_by="test_rejector", user_id="test_user"
+        )
         assert success is True, "Should successfully reject order"
 
         order = get_pending_order_by_id(order_id)
@@ -126,10 +134,10 @@ class TestPendingOrdersDatabase:
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
         # Approve first
-        approve_pending_order(order_id, approved_by="test_user")
+        approve_pending_order(order_id, approved_by="test_user", user_id="test_user")
 
         # Delete
-        success = delete_pending_order(order_id)
+        success = delete_pending_order(order_id, user_id="test_user")
         assert success is True, "Should successfully delete approved order"
 
         order = get_pending_order_by_id(order_id)
@@ -140,7 +148,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "WIPRO", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        success = delete_pending_order(order_id)
+        success = delete_pending_order(order_id, user_id="test_user")
         assert success is False, "Should not delete order in pending status"
 
     def test_update_broker_status(self):
@@ -148,7 +156,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "TCS", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        approve_pending_order(order_id, approved_by="test_user")
+        approve_pending_order(order_id, approved_by="test_user", user_id="test_user")
 
         success = update_broker_status(order_id, "BROKER123456", "open")
         assert success is True, "Should successfully update broker status"
