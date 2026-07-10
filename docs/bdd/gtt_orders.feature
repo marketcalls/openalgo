@@ -29,3 +29,17 @@ Feature: GTT orders
     When an API client requests the GTT orderbook
     Then the service imports the broker GTT API
     And a missing broker GTT module produces a not implemented response
+
+  # Source: services/place_gtt_order_service.py:34, services/modify_gtt_order_service.py:51, services/cancel_gtt_order_service.py:34, services/gtt_orderbook_service.py:13
+  Scenario Outline: Analyzer mode does not implement GTT operations
+    Given analyzer mode is enabled
+    When the client requests "<operation>"
+    Then the GTT service returns HTTP 501
+    And sandbox GTT tables do not imply an implemented API path
+
+    Examples:
+      | operation |
+      | place |
+      | modify |
+      | cancel |
+      | orderbook |

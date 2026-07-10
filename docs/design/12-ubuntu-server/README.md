@@ -120,7 +120,7 @@ cd ..
 
 ### 5. Create Systemd Service
 
-**Note:** The WebSocket server runs as a thread inside the main app (port 8765), so only ONE systemd service is needed.
+**Note:** One systemd service is sufficient. Under Gunicorn/eventlet, `websocket_proxy.app_integration` spawns the WebSocket proxy as an isolated child process on port 8765; it is not an in-process daemon thread.
 
 ```bash
 sudo nano /etc/systemd/system/openalgo.service
@@ -319,4 +319,4 @@ sudo systemctl start openalgo
 | `/opt/openalgo/.env` | Application config |
 | `/var/log/nginx/` | Nginx logs |
 
-**Note:** There is no separate `openalgo-ws.service`. The WebSocket server runs as a thread inside the main Flask application on port 8765.
+**Note:** There is no separate `openalgo-ws.service`. The Gunicorn-managed application starts the WebSocket proxy as a child process on port 8765, and systemd's service cgroup owns both processes.

@@ -302,5 +302,5 @@ Features:
 | `blueprints/gc_json.py` | GoCharting JSON generator |
 | `restx_api/place_order.py` | Order placement API |
 | `restx_api/place_smart_order.py` | Smart order API |
-| `templates/tv_json.html` | TV JSON generator UI |
-| `templates/gc_json.html` | GC JSON generator UI |
+| `frontend/src/pages/TradingView.tsx` | TradingView JSON helper UI |
+| `frontend/src/pages/GoCharting.tsx` | GoCharting JSON helper UI |

@@ -20,7 +20,7 @@ A comprehensive GitHub Actions-based pipeline that:
 - Validates both backend (Python) and frontend (React) code
 - Scans for security vulnerabilities
 - Builds and validates Docker images
-- Provides fast feedback (< 5 minutes)
+- Runs independent jobs concurrently and uses dependency/build caches where configured
 
 ## Target Users
 
@@ -93,16 +93,15 @@ A comprehensive GitHub Actions-based pipeline that:
 │                    └──────────────┘                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
 │  │ backend-test │  │ frontend-    │  │    docker-build      │  │
-│  │   (pytest)   │  │    build     │  │   (Buildx + Trivy)   │  │
+│  │   (pytest)   │  │    build     │  │ (native multi-arch)  │  │
 │  └──────────────┘  │   (Vite)     │  └──────────────────────┘  │
 │                    └──────────────┘                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ root-css-    │  │ frontend-    │  │    frontend-e2e      │  │
-│  │    build     │  │    test      │  │    (Playwright)      │  │
+│  │ commit-dist  │  │ frontend-    │  │    frontend-e2e      │  │
+│  │ (main only)  │  │    test      │  │    (Playwright)      │  │
 │  └──────────────┘  │  (Vitest)    │  └──────────────────────┘  │
 │                    └──────────────┘                              │
-│                                                                  │
-│  All jobs run in PARALLEL (~3-4 minutes total)                  │
+│  docker-build: native amd64 + arm64; docker-manifest on main    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -131,7 +130,7 @@ cd frontend && npm run e2e
 ```
 .github/
   workflows/
-    ci.yml              # Main CI workflow (9 parallel jobs)
+    ci.yml              # Main CI workflow and conditional publish jobs
     security.yml        # Weekly security scan
   dependabot.yml        # Automated dependency updates
 

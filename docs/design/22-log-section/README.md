@@ -18,7 +18,7 @@ OpenAlgo provides comprehensive log viewing and management through the web inter
 │  │   API Logs      │  │  Analyzer Logs  │  │  Application    │             │
 │  │   /logs         │  │                 │  │  Logs           │             │
 │  │                 │  │                 │  │                 │             │
-│  │  - placeorder   │  │  - Virtual      │  │  - log/*.log    │             │
+│  │  - placeorder   │  │  - Analyzer     │  │  - log/*.log    │             │
 │  │  - cancelorder  │  │    orders       │  │  - Console      │             │
 │  │  - modifyorder  │  │  - Sandbox      │  │  - Rotating     │             │
 │  │  - Response     │  │    trades       │  │                 │             │
@@ -28,7 +28,7 @@ OpenAlgo provides comprehensive log viewing and management through the web inter
 │                                │                                             │
 │                                ▼                                             │
 │           ┌─────────────────────────────────────────────────────────┐       │
-│           │               Logs Database (logs.db)                    │       │
+│           │               Main Database (openalgo.db)                │       │
 │           │               order_logs / analyzer_logs                 │       │
 │           └─────────────────────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -302,7 +302,7 @@ def sanitize_log_data(request_data):
 
 | File | Purpose |
 |------|---------|
-| `blueprints/logs.py` | Log viewer routes |
+| `blueprints/log.py` | Log viewer routes |
 | `database/apilog_db.py` | Order logs model |
 | `database/analyzer_db.py` | Analyzer logs model |
 | `utils/logging.py` | Logging configuration |

@@ -22,8 +22,10 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/modifyorder
   "exchange": "NSE",
   "pricetype": "LIMIT",
   "product": "CNC",
-  "quantity": "1",
-  "price": "16.5"
+  "quantity": 1,
+  "price": 16.5,
+  "trigger_price": 0,
+  "disclosed_quantity": 0
 }
 ```
 
@@ -41,8 +43,10 @@ curl -X POST http://127.0.0.1:5000/api/v1/modifyorder \
   "exchange": "NSE",
   "pricetype": "LIMIT",
   "product": "CNC",
-  "quantity": "1",
-  "price": "16.5"
+  "quantity": 1,
+  "price": 16.5,
+  "trigger_price": 0,
+  "disclosed_quantity": 0
 }'
 ```
 
@@ -61,16 +65,16 @@ curl -X POST http://127.0.0.1:5000/api/v1/modifyorder \
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
 | orderid | Order ID to modify | Mandatory | - |
-| strategy | Strategy identifier | Optional | - |
+| strategy | Strategy identifier | Mandatory | - |
 | symbol | Trading symbol | Mandatory | - |
 | action | Order action: BUY or SELL | Mandatory | - |
-| exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Mandatory | - |
+| exchange | Any value in the shared `VALID_EXCHANGES` list | Mandatory | - |
 | pricetype | Price type: MARKET, LIMIT, SL, SL-M | Mandatory | - |
 | product | Product type: MIS, CNC, NRML | Mandatory | - |
 | quantity | New order quantity | Mandatory | - |
 | price | New order price | Mandatory | - |
-| trigger_price | New trigger price (for SL orders) | Optional | 0 |
-| disclosed_quantity | New disclosed quantity | Optional | 0 |
+| trigger_price | New trigger price; send `0` when unused | Mandatory | - |
+| disclosed_quantity | New disclosed quantity; send `0` when unused | Mandatory | - |
 
 ## Response Fields
 
@@ -101,6 +105,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/modifyorder \
 - The order must be in a **modifiable state** (not in transit)
 - If you need to change action (BUY/SELL), cancel and place a new order
 - For F&O orders, ensure the modified quantity is a valid lot size
+- Fractional quantities are accepted only for `CRYPTO`; non-crypto quantities must be whole numbers.
+- `strategy`, `trigger_price`, and `disclosed_quantity` are schema-required even when the broker does not use their values for the requested modification.
 
 ## Error Scenarios
 

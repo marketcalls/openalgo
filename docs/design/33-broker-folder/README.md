@@ -30,7 +30,7 @@ broker/
 │   └── ... (same structure)
 ├── angel/
 │   └── ... (same structure)
-└── ... (29 brokers total)
+└── ... (34 broker plugins total)
 ```
 
 ## File Explanations
@@ -239,7 +239,7 @@ touch broker/newbroker/{api,mapping,database,streaming}/__init__.py
 3. `api/data.py` - Market data
 4. `api/funds.py` - Account data
 5. `mapping/transform_data.py` - Data mapping
-6. `database/master_contract_db.py` - Symbol DB
+6. `database/token_db.py` and `database/symbol.py` - Master-contract storage and queries
 7. `plugin.json` - Metadata
 
 ### Step 3: Register Broker

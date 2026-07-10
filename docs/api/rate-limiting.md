@@ -21,23 +21,25 @@ OpenAlgo implements differentiated rate limiting for various types of operations
 
 | Scope | Limit | Description |
 |-------|-------|-------------|
-| Per Second | 10 per second | Order placement, modification, and cancellation |
+| Per Second | 10 per second | Order placement, modification, cancellation, and GTT writes |
 
 **Applies to:**
 - `/api/v1/placeorder` - Place new orders
 - `/api/v1/modifyorder` - Modify existing orders
 - `/api/v1/cancelorder` - Cancel orders
+- `/api/v1/optionsorder` and `/api/v1/optionsmultiorder` - Options execution
+- `/api/v1/placegttorder`, `/api/v1/modifygttorder`, and `/api/v1/cancelgttorder` - GTT writes
 
 ### Smart Order API
 
 | Scope | Limit | Description |
 |-------|-------|-------------|
-| Per Second | 2 per second | Multi-leg smart order placement operations |
+| Per Second | 10 per second | Position-aware smart order operations |
 
 **Applies to:**
-- `/api/v1/placesmartorder` - Place multi-leg smart orders
+- `/api/v1/placesmartorder` - Reconcile a symbol position to a target size
 
-Smart orders have the most restrictive limit due to their complexity and additional processing requirements.
+`SMART_ORDER_RATE_LIMIT` is independent from `ORDER_RATE_LIMIT`, even though both currently default to 10 per second.
 
 ### General APIs
 
@@ -105,8 +107,9 @@ These limits follow [Flask-Limiter syntax](https://flask-limiter.readthedocs.io/
 If a client exceeds any configured rate limit:
 
 1. The server will respond with HTTP status `429 Too Many Requests`
-2. A `Retry-After` header will be sent with the time to wait before retrying
-3. Further requests will be blocked until the rate window resets
+2. Further requests will be blocked until the moving window permits another request
+
+Clients should not require a `Retry-After` header because header emission is not explicitly enabled in `limiter.py`.
 
 ## Error Response
 
@@ -216,4 +219,4 @@ ORDER_RATE_LIMIT="20 per second"
 
 ---
 
-**Back to**: [API Documentation](../README.md)
+**Back to**: [API Documentation](./README.md)

@@ -16,19 +16,18 @@ This document details all GitHub Actions workflows in the OpenAlgo CI/CD pipelin
 
 ### Jobs Summary
 
-| Job | Runtime | Purpose |
-|-----|---------|---------|
-| backend-lint | ~30s | Python code quality |
-| backend-test | ~60s | Python unit tests |
-| frontend-lint | ~30s | TypeScript/React linting |
-| frontend-build | ~90s | Production build verification |
-| frontend-test | ~45s | React unit tests |
-| frontend-e2e | ~120s | Browser automation tests |
-| security-scan | ~45s | Vulnerability detection |
-| docker-build | ~180s | Container build + scan |
-| root-css-build | ~30s | Tailwind CSS compilation |
-
-**Total Runtime:** ~3-4 minutes (all jobs run in parallel)
+| Job | Purpose |
+|-----|---------|
+| backend-lint | Python Ruff checks (currently informational through `continue-on-error`) |
+| backend-test | CI-safe pytest subset |
+| frontend-lint | TypeScript/React linting |
+| frontend-build | Production build and `frontend-dist` artifact |
+| frontend-test | Vitest and coverage artifact |
+| frontend-e2e | Chromium Playwright checks |
+| security-scan | Informational Bandit and pip-audit checks |
+| commit-dist | Rebuild and commit `frontend/dist` on main pushes |
+| docker-build | Native amd64/arm64 image builds and PR smoke tests |
+| docker-manifest | Main-push multi-arch manifest assembly and Trivy scan |
 
 ---
 
@@ -163,29 +162,26 @@ steps:
 - `continue-on-error: true` - Findings are informational
 - Results visible in job logs
 
-### docker-build
+### docker-build And docker-manifest
 
-Builds and scans the Docker image.
+Builds the Docker image natively for `linux/amd64` and `linux/arm64`.
 
 ```yaml
 steps:
-  - docker/build-push-action (with GHA cache)
-  - trivy scan for CRITICAL,HIGH vulnerabilities
+  - docker/build-push-action with per-architecture GHA cache
+  - on pull requests, load the native image and run a Kaleido/Chromium PNG smoke test
+  - on main pushes, push each architecture by digest
+  - assemble the digest artifacts into `latest` and SHA-tagged manifest lists
+  - run informational Trivy CRITICAL/HIGH scanning on the assembled image
 ```
 
 **Caching:**
 - Uses GitHub Actions cache (`type=gha`)
 - Layer caching for fast rebuilds
 
-### root-css-build
+### commit-dist
 
-Builds the Tailwind CSS for Jinja templates.
-
-```yaml
-steps:
-  - npm ci
-  - npm run build  # PostCSS + Tailwind
-```
+After frontend build, lint, and unit tests pass on a main push, this job rebuilds `frontend/dist`, commits a changed artifact with `[skip ci]`, and pushes it with the workflow token.
 
 ---
 

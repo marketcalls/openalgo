@@ -2,381 +2,80 @@
 
 ## Overview
 
-OpenAlgo backend is a production-ready Flask application providing a unified API layer across **29 Indian brokers**. It features a plugin-based broker system, multi-database architecture, real-time WebSocket streaming, and comprehensive security layers.
+OpenAlgo uses Flask 3.1 with Flask-RESTX, Flask-SocketIO, Flask-Limiter, Flask-WTF CSRF, SQLAlchemy, APScheduler, DuckDB, ZeroMQ, and a separate asyncio WebSocket proxy. Python `>=3.12` is required.
 
-## Technology Stack
+The backend is a single-user application, but production can run multiple Flask workers. Process-local components such as caches and the EventBus are therefore per worker. Cross-process market-data and selected cache invalidation paths use ZeroMQ.
 
-| Technology | Purpose |
-|------------|---------|
-| Flask | Web framework |
-| Flask-RESTX | REST API with Swagger |
-| Flask-SocketIO | Real-time events |
-| SQLAlchemy | ORM for SQLite databases |
-| DuckDB | Historical data storage |
-| ZeroMQ | High-performance message bus |
-| Argon2 | Password hashing |
-| Fernet | Token encryption |
+## Request Surfaces
 
-## Architecture Diagram
+| Surface | Registration | Authentication |
+|---|---|---|
+| REST v1 | `restx_api/__init__.py`, prefix `/api/v1` | OpenAlgo API key; CSRF exempt |
+| Session APIs and webhooks | `blueprints/*.py` | Flask session, webhook secret, or explicit exemption |
+| React bundle | `blueprints/react_app.py` | Route-specific frontend/auth gates |
+| Socket.IO | `extensions.py` and subscribers | Flask/Socket.IO lifecycle |
+| Market-data WebSocket | `websocket_proxy/server.py`, port 8765 | Authenticate action with API key |
+| Remote MCP | Conditional in `app.py` | OAuth 2.1 bearer tokens |
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                              Flask Application                                │
-│                                                                               │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                         Middleware Stack                                │  │
-│  │                                                                         │  │
-│  │   CSRF Protection → Rate Limiting → Security → Traffic Logging → CSP   │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-│                                      │                                        │
-│          ┌───────────────────────────┼───────────────────────────┐           │
-│          ▼                           ▼                           ▼           │
-│  ┌───────────────┐         ┌─────────────────┐         ┌───────────────────┐ │
-│  │  Blueprints   │         │   REST API v1   │         │    WebSocket      │ │
-│  │  (41 routes)  │         │   /api/v1/*     │         │    Proxy :8765    │ │
-│  └───────┬───────┘         └────────┬────────┘         └─────────┬─────────┘ │
-│          │                          │                            │           │
-│          └──────────────────────────┼────────────────────────────┘           │
-│                                     ▼                                         │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                         Service Layer (58+)                             │  │
-│  │                                                                         │  │
-│  │   place_order_service   │   quotes_service   │   funds_service         │  │
-│  │   cancel_order_service  │   depth_service    │   holdings_service      │  │
-│  │   modify_order_service  │   history_service  │   positionbook_service  │  │
-│  └────────────────────────────────┬───────────────────────────────────────┘  │
-│                                   │                                           │
-│                                   ▼                                           │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                      Broker Plugin System (29)                          │  │
-│  │                                                                         │  │
-│  │   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │  │
-│  │   │ Zerodha │ │  Dhan   │ │  Angel  │ │  Fyers  │ │ Upstox  │          │  │
-│  │   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘          │  │
-│  │   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │  │
-│  │   │  Kotak  │ │  Nubra  │ │  IIFL   │ │ Shoonya │ │ AliceB  │  ...     │  │
-│  │   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘          │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                           Database Layer (5 DBs)                              │
-│                                                                               │
-│  ┌──────────────┐  ┌──────────┐  ┌────────────┐  ┌───────────┐  ┌─────────┐ │
-│  │ openalgo.db  │  │ logs.db  │  │ latency.db │  │sandbox.db │  │historify│ │
-│  │   (main)     │  │(traffic) │  │ (metrics)  │  │  (paper)  │  │ .duckdb │ │
-│  └──────────────┘  └──────────┘  └────────────┘  └───────────┘  └─────────┘ │
-└──────────────────────────────────────────────────────────────────────────────┘
+Flask-RESTX's Swagger UI is intentionally disabled through `doc=False`. `docs/api` is the maintained external contract.
+
+## Application Factory
+
+`create_app()` initializes Flask, Socket.IO, EventBus subscribers, CSRF, limiter, CORS, CSP, security middleware, traffic/latency/health hooks, React routes, RESTX, feature blueprints, and teardown handlers. Remote MCP blueprints are imported and registered only when `MCP_HTTP_ENABLED=True` passes startup safety checks.
+
+## Service Flow
+
+```text
+HTTP resource or blueprint
+        |
+        v
+schema/session validation
+        |
+        v
+service orchestration
+   |          |          |
+   v          v          v
+live broker  sandbox   Action Center
+module       manager   pending execution
+        |
+        v
+typed EventBus events -> log / Socket.IO / Telegram / WhatsApp subscribers
 ```
 
-## Directory Structure
+Order services strip sensitive fields before logging events. Analyzer mode routes supported operations to sandbox managers. Semi-auto mode queues eligible operations in Action Center and blocks specific destructive calls according to each service's policy.
 
-```
-openalgo/
-├── app.py                      # Application entry point
-├── extensions.py               # Flask extensions (SocketIO)
-├── limiter.py                  # Rate limiting configuration
-├── cors.py                     # CORS configuration
-├── csp.py                      # Content Security Policy
-│
-├── blueprints/                 # Route handlers (41 files)
-│   ├── auth.py                 # Login, logout, CSRF
-│   ├── core.py                 # Home, setup, download
-│   ├── dashboard.py            # Dashboard UI
-│   ├── orders.py               # Order management UI
-│   ├── brlogin.py              # Broker OAuth callbacks
-│   ├── strategy.py             # Strategy webhooks
-│   ├── flow.py                 # Flow workflows
-│   ├── analyzer.py             # Analyzer mode
-│   ├── gex.py                  # GEX Dashboard
-│   ├── ivchart.py              # IV Chart
-│   ├── ivsmile.py              # IV Smile
-│   ├── oiprofile.py            # OI Profile
-│   ├── oitracker.py            # OI Tracker
-│   ├── straddle_chart.py       # ATM Straddle Chart
-│   ├── vol_surface.py          # Volatility Surface
-│   ├── health.py               # Health monitoring
-│   ├── react_app.py            # React SPA serving
-│   └── ...
-│
-├── restx_api/                  # REST API endpoints
-│   ├── __init__.py             # API namespace registry
-│   ├── place_order.py          # POST /placeorder
-│   ├── quotes.py               # POST /quotes
-│   └── ...
-│
-├── services/                   # Business logic (58+ files)
-│   ├── place_order_service.py
-│   ├── quotes_service.py
-│   ├── order_router_service.py
-│   └── ...
-│
-├── broker/                     # Broker plugins (29 brokers)
-│   ├── zerodha/
-│   ├── dhan/
-│   ├── angel/
-│   └── ...
-│
-├── database/                   # Database models & utilities
-│   ├── auth_db.py              # Auth tables
-│   ├── user_db.py              # User tables
-│   ├── analyzer_db.py          # Analyzer tables
-│   └── ...
-│
-├── websocket_proxy/            # WebSocket server
-│   ├── server.py               # Main server (port 8765)
-│   ├── base_adapter.py         # Broker adapter base class
-│   └── app_integration.py      # Flask integration
-│
-├── sandbox/                    # Sandbox trading engine
-│   ├── execution_engine.py
-│   ├── fund_manager.py
-│   └── ...
-│
-└── utils/                      # Shared utilities
-    ├── plugin_loader.py        # Broker plugin discovery
-    ├── security_middleware.py
-    └── ...
-```
+## Persistence
 
-## Application Startup Flow
+SQLAlchemy modules use scoped sessions and `NullPool` for SQLite. `app.py` removes known scoped sessions after every request. Historify owns a separate DuckDB file and its own connection discipline. See [18 Database Structure](../18-database-structure/).
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│                     Application Startup                         │
-└────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│  1. Environment Check                                           │
-│     - Validate APP_KEY (required)                               │
-│     - Validate API_KEY_PEPPER (min 32 chars)                   │
-└────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│  2. Flask App Creation                                          │
-│     - Initialize SocketIO (threading mode)                      │
-│     - Configure CSRF protection                                 │
-│     - Setup rate limiting                                       │
-│     - Configure CORS                                            │
-│     - Apply CSP middleware                                      │
-└────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│  3. Blueprint Registration (41 blueprints)                      │
-│     - React frontend (if available)                             │
-│     - REST API v1                                               │
-│     - Auth, Dashboard, Orders, Search...                        │
-└────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│  4. Environment Setup (Parallel - ThreadPoolExecutor)           │
-│     - Initialize 5 databases                                    │
-│     - Load broker plugins                                       │
-│     - Start Flow scheduler                                      │
-│     - Restore caches                                            │
-│     - Start Analyzer engine (if enabled)                        │
-└────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│  5. Start Servers                                               │
-│     - Flask on port 5000                                        │
-│     - WebSocket proxy on port 8765                              │
-└────────────────────────────────────────────────────────────────┘
-```
+## Background Components
 
-## Broker Plugin System
+- APScheduler jobs for Flow, Python strategies, Historify, and maintenance paths.
+- Sandbox execution, square-off, and settlement workers.
+- Broker keepalive service.
+- Scalping risk monitor that subscribes to live ticks and survives browser navigation.
+- Telegram/WhatsApp service startup when configured.
+- WebSocket proxy process under eventlet/gunicorn, or OS thread in direct development startup.
+- Health metrics and database initialization work.
 
-### Plugin Structure
+## Security Boundaries
 
-Each broker follows a standardized directory structure:
+- `APP_KEY` and `API_KEY_PEPPER` are startup requirements.
+- Broker tokens and retrievable API keys are Fernet-encrypted; API-key verification uses Argon2 plus a pepper.
+- Session routes retain CSRF except explicit callbacks/webhooks/logout/health exemptions.
+- `/api/v1` is CSRF-exempt because it uses API-key authentication.
+- CORS, CSP, proxy-header trust, IP bans, cookie security, and session expiry are environment controlled.
+- Debug mode on a non-loopback host is refused unless explicitly overridden; Remote MCP refuses debug mode.
 
-```
-broker/zerodha/
-├── plugin.json                 # Broker metadata
-│
-├── api/
-│   ├── __init__.py
-│   ├── auth_api.py             # authenticate_broker()
-│   ├── order_api.py            # place_order(), modify_order(), cancel_order()
-│   ├── data.py                 # get_quotes(), get_depth(), get_history()
-│   ├── funds.py                # get_funds()
-│   └── margin_api.py           # get_margin()
-│
-├── mapping/
-│   ├── transform_data.py       # Symbol format conversion
-│   ├── order_data.py           # Order field mapping
-│   └── margin_data.py          # Margin field mapping
-│
-├── streaming/
-│   ├── zerodha_adapter.py      # WebSocket adapter
-│   ├── zerodha_websocket.py    # Broker WebSocket client
-│   └── zerodha_mapping.py      # Data normalization
-│
-└── database/
-    └── master_contract_db.py   # Symbol master download
-```
-
-### Plugin Metadata (plugin.json)
-
-```json
-{
-    "Plugin Name": "zerodha",
-    "Plugin URI": "https://openalgo.in",
-    "Description": "Zerodha OpenAlgo Plugin",
-    "Version": "1.0",
-    "Author": "Rajandran R"
-}
-```
-
-### Dynamic Plugin Loading
-
-```python
-# utils/plugin_loader.py
-def load_broker_auth_functions():
-    broker_auth_functions = {}
-    broker_dir = Path(__file__).parent.parent / 'broker'
-
-    for broker_path in broker_dir.iterdir():
-        if broker_path.is_dir():
-            plugin_json = broker_path / 'plugin.json'
-            if plugin_json.exists():
-                module = importlib.import_module(
-                    f'broker.{broker_path.name}.api.auth_api'
-                )
-                broker_auth_functions[broker_path.name] = module.authenticate_broker
-
-    return broker_auth_functions
-```
-
-## Service Layer Pattern
-
-Services encapsulate business logic, keeping routes thin:
-
-```python
-# services/place_order_service.py
-def place_order_service(data, auth_token, api_key=None):
-    """
-    1. Validate order data
-    2. Get broker from auth
-    3. Import broker module dynamically
-    4. Call broker API
-    5. Log to analyzer (async)
-    6. Emit SocketIO event
-    7. Return response
-    """
-    broker = get_broker_from_auth()
-    module_path = f'broker.{broker}.api.order_api'
-    broker_module = importlib.import_module(module_path)
-
-    response = broker_module.place_order(order_data, auth_token)
-
-    # Async logging (non-blocking)
-    executor.submit(async_log_analyzer, data, response, 'placeorder')
-
-    # Real-time UI update
-    socketio.start_background_task(
-        socketio.emit, 'order_event', response
-    )
-
-    return response
-```
-
-## Blueprint Categories
-
-| Category | Blueprints | Purpose |
-|----------|------------|---------|
-| Core | auth, core, dashboard | Authentication, home, setup |
-| Trading | orders, search, apikey | Order management, symbol search |
-| Strategies | strategy, chartink, python_strategy, flow | Webhook strategies |
-| Data | tv_json, gc_json, historify | Chart data, historical data |
-| Analytics | gex, ivchart, ivsmile, oiprofile, oitracker, straddle_chart, vol_surface | Options analytics tools |
-| Monitoring | log, traffic, latency, security, health | Logs, metrics, health |
-| Admin | admin, settings, telegram | Configuration |
-| Sandbox | analyzer, sandbox | Sandbox trading |
-| Frontend | react_app, platforms | UI serving |
-
-## Request Flow
-
-```
-HTTP Request
-     │
-     ▼
-┌─────────────────┐
-│  Middleware     │
-│  - CSRF check   │
-│  - Rate limit   │
-│  - IP ban check │
-│  - Traffic log  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     ┌─────────────────┐
-│   Blueprint     │────▶│    Service      │
-│   (Route)       │     │  (Business)     │
-└─────────────────┘     └────────┬────────┘
-                                 │
-         ┌───────────────────────┼───────────────────────┐
-         ▼                       ▼                       ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ Broker Plugin   │     │    Database     │     │    SocketIO     │
-│ (External API)  │     │   (SQLAlchemy)  │     │  (Real-time)    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
-
-## Running the Application
-
-```bash
-# Development (auto-reload)
-uv run app.py
-
-# Production with Gunicorn (Linux only)
-uv run gunicorn --worker-class eventlet -w 1 app:app
-
-# IMPORTANT: Use -w 1 for WebSocket compatibility
-```
-
-## Access Points
-
-| URL | Purpose |
-|-----|---------|
-| http://127.0.0.1:5000 | Main application |
-| http://127.0.0.1:5000/api/docs | Swagger API documentation |
-| ws://127.0.0.1:8765 | WebSocket market data |
-
-## Key Files Reference
+## Key Files
 
 | File | Purpose |
-|------|---------|
-| `app.py` | Application entry point, startup orchestration |
-| `extensions.py` | SocketIO configuration |
-| `restx_api/__init__.py` | API namespace registry |
-| `utils/plugin_loader.py` | Broker plugin discovery |
-| `database/auth_db.py` | Authentication database operations |
-
-## Environment Variables
-
-```bash
-# Required
-APP_KEY=<32+ char secret>
-API_KEY_PEPPER=<32+ char pepper>
-
-# Broker
-VALID_BROKERS=zerodha,dhan,angel
-
-# Database
-DATABASE_URL=sqlite:///db/openalgo.db
-
-# WebSocket
-WEBSOCKET_HOST=127.0.0.1
-WEBSOCKET_PORT=8765
-
-# Security
-CSRF_ENABLED=TRUE
-FLASK_DEBUG=FALSE
-```
+|---|---|
+| `app.py` | Factory, registration, setup, startup |
+| `restx_api/__init__.py` | Public v1 namespace registry |
+| `blueprints/react_app.py` | SPA serving and route aliases |
+| `services/order_router_service.py` | Auto/semi-auto routing |
+| `utils/plugin_loader.py` | Broker discovery and lazy auth imports |
+| `database/engine_factory.py` | SQLite engine policy |
+| `utils/event_bus.py` | Per-process async event dispatch |
+| `websocket_proxy/app_integration.py` | Proxy lifecycle selection |

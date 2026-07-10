@@ -1,145 +1,73 @@
 # Instruments
 
-Get the complete list of instruments/symbols available for trading. Can be filtered by exchange.
+Download the locally stored instrument master for every exchange or for one exchange. This is the only v1 market-data resource that returns CSV as an alternative to JSON.
 
-## Endpoint URL
+## Endpoint
 
 ```http
-Local Host   :  POST http://127.0.0.1:5000/api/v1/instruments
-Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/instruments
-Custom Domain:  POST https://<your-custom-domain>/api/v1/instruments
+GET /api/v1/instruments?apikey=<key>&exchange=NFO&format=json
 ```
 
-## Sample API Request
+## Query Parameters
 
-```json
-{
-  "apikey": "<your_app_apikey>",
-  "exchange": "NSE"
-}
-```
+| Parameter | Required | Values | Default |
+|---|---:|---|---|
+| `apikey` | Yes | OpenAlgo API key | - |
+| `exchange` | No | Any exchange accepted by `VALID_EXCHANGES` | all exchanges |
+| `format` | No | `json`, `csv` | `json` |
 
-## Sample cURL Request
+## JSON Example
 
 ```bash
-curl -X POST http://127.0.0.1:5000/api/v1/instruments \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "apikey": "<your_app_apikey>",
-  "exchange": "NSE"
-}'
+curl --get 'http://127.0.0.1:5000/api/v1/instruments' \
+  --data-urlencode 'apikey=<your_app_apikey>' \
+  --data-urlencode 'exchange=NFO' \
+  --data-urlencode 'format=json'
 ```
-
-## Sample API Response
 
 ```json
 {
   "status": "success",
-  "message": "Found 3046 instruments",
+  "message": "Found 1 instruments",
   "data": [
     {
-      "symbol": "RELIANCE",
-      "brsymbol": "RELIANCE-EQ",
-      "name": "RELIANCE INDUSTRIES LTD",
-      "exchange": "NSE",
-      "brexchange": "NSE",
-      "token": "2885",
-      "expiry": null,
-      "strike": -1.0,
-      "lotsize": 1,
-      "instrumenttype": "EQ",
-      "tick_size": 0.05
-    },
-    {
-      "symbol": "TCS",
-      "brsymbol": "TCS-EQ",
-      "name": "TATA CONSULTANCY SERVICES",
-      "exchange": "NSE",
-      "brexchange": "NSE",
-      "token": "11536",
-      "expiry": null,
-      "strike": -1.0,
-      "lotsize": 1,
-      "instrumenttype": "EQ",
+      "symbol": "NIFTY30JUL2625000CE",
+      "brsymbol": "NIFTY26JUL25000CE",
+      "name": "NIFTY",
+      "exchange": "NFO",
+      "brexchange": "NFO",
+      "token": "12345",
+      "expiry": "30-JUL-26",
+      "strike": 25000,
+      "lotsize": 65,
+      "instrumenttype": "CE",
       "tick_size": 0.05
     }
   ]
 }
 ```
 
-## Sample API Request (All Exchanges)
+The exact symbols, broker symbols, token types, and row count depend on the active broker's downloaded master contract.
 
-```json
-{
-  "apikey": "<your_app_apikey>"
-}
+## CSV Example
+
+```bash
+curl --get 'http://127.0.0.1:5000/api/v1/instruments' \
+  --data-urlencode 'apikey=<your_app_apikey>' \
+  --data-urlencode 'exchange=NSE' \
+  --data-urlencode 'format=csv' \
+  --output instruments_NSE.csv
 ```
 
-## Request Body
+CSV responses use `Content-Type: text/csv` and a download filename of `instruments_<exchange>.csv` (or `instruments_all.csv`).
 
-| Parameter | Description | Mandatory/Optional | Default Value |
-|-----------|-------------|-------------------|---------------|
-| apikey | Your OpenAlgo API key | Mandatory | - |
-| exchange | Exchange filter: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Optional | All exchanges |
-| format | Output format: "json" or "csv" | Optional | json |
+## Errors
 
-## Response Fields
+| Status | Condition |
+|---:|---|
+| 400 | Invalid query parameter |
+| 401 | API key is missing |
+| 403 | API key is invalid |
+| 500 | Instrument database query failed |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| status | string | "success" or "error" |
-| message | string | Number of instruments found |
-| data | array | Array of instrument objects |
-
-### Data Array Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| symbol | string | OpenAlgo standard symbol |
-| brsymbol | string | Broker-specific symbol |
-| name | string | Full company/instrument name |
-| exchange | string | OpenAlgo exchange code |
-| brexchange | string | Broker-specific exchange code |
-| token | string | Broker-specific instrument token |
-| expiry | string | Expiry date (null for equity) |
-| strike | number | Strike price (-1 for non-options) |
-| lotsize | number | Lot size (1 for equity) |
-| instrumenttype | string | EQ, FUT, CE, PE |
-| tick_size | number | Minimum price movement |
-
-## CSV Export
-
-Request with `format: "csv"` to get data as downloadable CSV:
-
-```json
-{
-  "apikey": "<your_app_apikey>",
-  "exchange": "NSE",
-  "format": "csv"
-}
-```
-
-The response will include `Content-Disposition` header for file download.
-
-## Notes
-
-- Without exchange filter, returns instruments from **all exchanges** (can be large)
-- For NFO/BFO, includes all futures and options contracts
-- Data is refreshed daily with master contract updates
-- Use CSV format for importing into spreadsheets or databases
-- Response can be large for F&O exchanges (50,000+ instruments)
-
-## Exchange Instrument Counts (Approximate)
-
-| Exchange | Instruments |
-|----------|-------------|
-| NSE | ~3,000 |
-| BSE | ~5,000 |
-| NFO | ~50,000+ |
-| BFO | ~30,000+ |
-| CDS | ~500 |
-| MCX | ~200 |
-
----
-
-**Back to**: [API Documentation](../README.md)
+**Back to**: [API documentation](../README.md)

@@ -234,7 +234,7 @@ def protected_route():
 // API keys only for external integrations
 
 // Secure API call
-const response = await fetch('/api/v1/positions', {
+const response = await fetch('/api/v1/positionbook', {
     method: 'POST',
     credentials: 'include',  // Send session cookie
     headers: {

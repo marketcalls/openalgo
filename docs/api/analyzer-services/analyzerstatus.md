@@ -5,9 +5,9 @@ Get the current status of the analyzer (sandbox) mode.
 ## Endpoint URL
 
 ```http
-Local Host   :  POST http://127.0.0.1:5000/api/v1/analyzerstatus
-Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/analyzerstatus
-Custom Domain:  POST https://<your-custom-domain>/api/v1/analyzerstatus
+Local Host   :  POST http://127.0.0.1:5000/api/v1/analyzer
+Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/analyzer
+Custom Domain:  POST https://<your-custom-domain>/api/v1/analyzer
 ```
 
 ## Sample API Request
@@ -21,7 +21,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/analyzerstatus
 ## Sample cURL Request
 
 ```bash
-curl -X POST http://127.0.0.1:5000/api/v1/analyzerstatus \
+curl -X POST http://127.0.0.1:5000/api/v1/analyzer \
   -H 'Content-Type: application/json' \
   -d '{
   "apikey": "<your_app_apikey>"

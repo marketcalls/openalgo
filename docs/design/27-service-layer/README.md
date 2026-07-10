@@ -1,277 +1,67 @@
 # 27 - Service Layer
 
-## Overview
+## Boundary
 
-The services layer contains the core business logic of OpenAlgo, acting as an intermediary between API endpoints and broker/database operations.
+Services sit between Flask resources/blueprints and broker, database, sandbox, messaging, or calculation modules. A service should accept plain validated values, return plain result data plus status, and remain reusable outside a specific HTTP route where practical.
 
-## Architecture Diagram
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Service Layer Architecture                            │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  REST API Layer (restx_api/)                                                 │
-│  - Request validation                                                        │
-│  - Rate limiting                                                             │
-│  - Response formatting                                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          Service Layer (services/)                           │
-│                                                                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │ Order Services  │  │ Data Services   │  │ Account Services│             │
-│  │                 │  │                 │  │                 │             │
-│  │ - place_order   │  │ - quotes        │  │ - funds         │             │
-│  │ - cancel_order  │  │ - depth         │  │ - holdings      │             │
-│  │ - modify_order  │  │ - history       │  │ - positions     │             │
-│  │ - smart_order   │  │ - instruments   │  │ - margin        │             │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
-│                                                                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │ Flow Services   │  │ WebSocket       │  │ Alert Services  │             │
-│  │                 │  │ Services        │  │                 │             │
-│  │ - executor      │  │                 │  │ - telegram      │             │
-│  │ - scheduler     │  │ - market_data   │  │ - email         │             │
-│  │ - price_monitor │  │ - websocket     │  │                 │             │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Broker Layer (broker/) & Database Layer (database/)                         │
-└─────────────────────────────────────────────────────────────────────────────┘
+```text
+RESTX or blueprint
+  -> input/session validation
+  -> services/<domain>_service.py
+     -> auth/mode policy
+     -> broker module, sandbox manager, database, or pure calculation
+  -> HTTP response
 ```
 
-## Service Categories
+## Service Families
 
-### 1. Order Management Services
+| Family | Representative modules |
+|---|---|
+| Order execution | `place_order_service.py`, `place_smart_order_service.py`, `basket_order_service.py`, `split_order_service.py`, `place_options_order_service.py`, `options_multiorder_service.py` |
+| Order lifecycle | `modify_order_service.py`, `cancel_order_service.py`, `cancel_all_order_service.py`, `close_position_service.py`, `orderstatus_service.py` |
+| Routing/approval | `order_router_service.py`, `action_center_service.py`, `pending_order_execution_service.py` |
+| GTT | `place_gtt_order_service.py`, `modify_gtt_order_service.py`, `cancel_gtt_order_service.py`, `gtt_orderbook_service.py` |
+| Account | `funds_service.py`, `margin_service.py`, `orderbook_service.py`, `tradebook_service.py`, `positionbook_service.py`, `holdings_service.py`, `openposition_service.py` |
+| Market data | `quotes_service.py`, `depth_service.py`, `history_service.py`, `instruments_service.py`, `intervals_service.py`, `search_service.py`, `symbol_service.py`, `expiry_service.py` |
+| Options analytics | `option_chain_service.py`, `option_greeks_service.py`, `option_symbol_service.py`, `synthetic_future_service.py` |
+| Tools | `gex_service.py`, `gamma_density_service.py`, `iv_chart_service.py`, `iv_smile_service.py`, `oi_tracker_service.py`, `oi_profile_service.py`, `vol_surface_service.py`, `straddle_chart_service.py`, `custom_straddle_service.py`, `arbitrage_service.py` |
+| Automation | `flow_executor_service.py`, `flow_scheduler_service.py`, `flow_price_monitor_service.py`, `flow_openalgo_client.py`, `historify_service.py`, `historify_scheduler_service.py` |
+| Messaging | `telegram_alert_service.py`, `telegram_bot_service.py`, `whatsapp_alert_service.py`, `whatsapp_bot_service.py` |
+| Runtime | `broker_keepalive_service.py`, `websocket_service.py`, `websocket_client.py`, `scalping_risk_monitor_service.py` |
 
-| Service | File | Purpose |
-|---------|------|---------|
-| Place Order | `place_order_service.py` | Execute orders |
-| Cancel Order | `cancel_order_service.py` | Cancel pending orders |
-| Modify Order | `modify_order_service.py` | Modify order params |
-| Smart Order | `place_smart_order_service.py` | Position-aware orders |
-| Options Order | `place_options_order_service.py` | Options trading |
-| Split Order | `split_order_service.py` | Large order splitting |
-| Basket Order | `basket_order_service.py` | Multiple orders |
+Use `rg --files services` for the exact inventory; this table describes ownership rather than freezing a file count.
 
-### 2. Data Retrieval Services
+## Order Policy
 
-| Service | File | Purpose |
-|---------|------|---------|
-| Order Book | `orderbook_service.py` | Get orders |
-| Trade Book | `tradebook_service.py` | Get trades |
-| Position Book | `positionbook_service.py` | Get positions |
-| Holdings | `holdings_service.py` | Get holdings |
-| Funds | `funds_service.py` | Get account balance |
-| Margin | `margin_service.py` | Calculate margin |
+Order services are responsible for:
 
-### 3. Market Data Services
+1. Verifying the API key and resolving the active broker/user context.
+2. Respecting analyzer mode and routing supported requests to sandbox managers.
+3. Respecting auto/semi-auto policy and Action Center eligibility.
+4. Lazy-importing the correct broker module in live mode.
+5. Returning normalized status and publishing one appropriate typed event.
 
-| Service | File | Purpose |
-|---------|------|---------|
-| Quotes | `quotes_service.py` | Real-time quotes |
-| Depth | `depth_service.py` | Market depth |
-| History | `history_service.py` | Historical OHLC |
-| Option Chain | `option_chain_service.py` | Option strikes |
-| Option Greeks | `option_greeks_service.py` | Greeks calculation |
+Batch services suppress per-child EventBus publication and emit one summary event. Basket execution sorts BUY before SELL and uses live concurrent batches of 10; split execution caps at 100 children and paces live calls from `ORDER_RATE_LIMIT`.
 
-### 4. WebSocket Services
+## Market And Options Policy
 
-| Service | File | Purpose |
-|---------|------|---------|
-| Market Data | `market_data_service.py` | Singleton data cache |
-| WebSocket | `websocket_service.py` | WS management |
-| WebSocket Client | `websocket_client.py` | WS client |
+Market-data services normalize broker access without claiming every broker payload is identical. `history_service.py` owns `source=api` versus `source=db`. Option Greeks use Black-76 with automatic per-expiry synthetic forward resolution and spot fallback. Multi-Greeks batches option quotes and caps input at 50 symbols.
 
-### 5. Flow Automation Services
+## Long-Lived Services
 
-| Service | File | Purpose |
-|---------|------|---------|
-| Flow Executor | `flow_executor_service.py` | Execute workflows |
-| Flow Scheduler | `flow_scheduler_service.py` | Schedule flows |
-| Price Monitor | `flow_price_monitor_service.py` | Price triggers |
+Long-lived services need explicit start/stop ownership and cannot retain request-scoped sessions. The scalping risk monitor is a singleton that owns an internal market-data client; the WebSocket proxy has separate lifecycle integration; schedulers restore persisted jobs at startup.
 
-## Common Patterns
+## Errors And Logging
 
-### Pattern 1: Dual Authentication Support
+- Validation errors belong at the resource/schema boundary when possible.
+- Services translate expected unsupported/missing-module states to stable status codes.
+- Do not include decrypted secrets or raw API keys in logs or returned error strings.
+- Subscriber failures must not change the order HTTP result; EventBus dispatch is asynchronous and isolated.
 
-```python
-def place_order(data, api_key=None, auth_token=None, broker=None):
-    """
-    Supports both API key and direct auth token calls
-    """
-    if api_key:
-        auth_token, broker = get_auth_token_broker(api_key)
+## Adding A Service
 
-    if not auth_token:
-        return False, {"status": "error"}, 403
-
-    return execute_order(data, auth_token, broker)
-```
-
-### Pattern 2: Analyzer Mode Routing
-
-```python
-def service_function(data, api_key):
-    if get_analyze_mode():
-        # Route to sandbox
-        return sandbox_service(api_key, data)
-    else:
-        # Route to live broker
-        return live_service(api_key, data)
-```
-
-### Pattern 3: Dynamic Broker Import
-
-```python
-def import_broker_module(broker_name):
-    module_path = f'broker.{broker_name}.api.order_api'
-    return importlib.import_module(module_path)
-```
-
-### Pattern 4: Event Bus for Side-Effects
-
-All order side-effects (logging, SocketIO, Telegram) are dispatched through the Event Bus. Services publish typed events; subscribers handle them asynchronously in a shared thread pool.
-
-```python
-from events import OrderPlacedEvent
-from utils.event_bus import bus
-
-# One publish replaces 3 separate async calls
-bus.publish(OrderPlacedEvent(
-    mode="live",           # or "analyze" — subscribers branch on this
-    api_type="placeorder",
-    symbol=order_data["symbol"],
-    orderid=order_id,
-    request_data=cleaned_request,
-    response_data=response,
-    api_key=api_key,
-))
-```
-
-See [53-event-bus](../53-event-bus/README.md) for full architecture details.
-
-## Market Data Service (Singleton)
-
-### Key Features
-
-```python
-class MarketDataService:
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self):
-        self.market_data_cache = {}
-        self.subscribers = {}
-        self.health_status = {}
-        self.metrics = {
-            'cache_hits': 0,
-            'cache_misses': 0,
-            'validation_errors': 0
-        }
-```
-
-### Data Validation
-
-- Circuit breaker checks (large price changes)
-- LTP validation
-- Stale data detection
-- Health monitoring
-
-### Priority Subscribers
-
-| Priority | Use Case |
-|----------|----------|
-| CRITICAL | Stop-loss/target triggers |
-| HIGH | Order execution |
-| NORMAL | UI display |
-| LOW | Analytics |
-
-## Response Format
-
-### Standard Tuple Return
-
-```python
-Tuple[bool, Dict[str, Any], int]
-# (success, response_data, http_status_code)
-```
-
-### Response Structure
-
-```python
-# Success
-{
-    "status": "success",
-    "message": "Order placed",
-    "orderid": "123456",
-    "data": {...}
-}
-
-# Error
-{
-    "status": "error",
-    "message": "Insufficient margin"
-}
-```
-
-## Error Handling
-
-### Consistent Error Responses
-
-```python
-try:
-    result = broker_api.execute(data)
-    return True, result, 200
-except BrokerError as e:
-    logger.error(f"Broker error: {e}")
-    return False, {"status": "error", "message": str(e)}, 500
-except ValidationError as e:
-    return False, {"status": "error", "message": str(e)}, 400
-except Exception as e:
-    logger.exception("Unexpected error")
-    return False, {"status": "error", "message": "Internal error"}, 500
-```
-
-## Service Layer Benefits
-
-### Separation of Concerns
-
-- API layer handles HTTP
-- Service layer handles business logic
-- Broker layer handles integration
-
-### Testability
-
-- Services can be unit tested
-- Mock broker modules for testing
-- Isolated from HTTP layer
-
-### Reusability
-
-- Same service for multiple endpoints
-- Shared validation logic
-- Common error handling
-
-## Key Files Reference
-
-| Category | Files |
-|----------|-------|
-| Order Services | `place_order_service.py`, `cancel_order_service.py`, `modify_order_service.py` |
-| Data Services | `orderbook_service.py`, `tradebook_service.py`, `positionbook_service.py` |
-| Market Data | `market_data_service.py`, `websocket_service.py`, `quotes_service.py` |
-| Flow | `flow_executor_service.py`, `flow_scheduler_service.py` |
-| Alerts | `telegram_alert_service.py`, `telegram_bot_service.py` |
-| Sandbox | `sandbox_service.py`, `analyzer_service.py` |
+1. Confirm behavior is shared or complex enough to live outside the route.
+2. Use the existing auth, result tuple, logging, and broker import patterns for the domain.
+3. Keep Flask globals out of reusable logic unless the surrounding services already define that boundary.
+4. Add mode and failure-path tests proportional to risk.
+5. Update this family map only if ownership changes meaningfully.
