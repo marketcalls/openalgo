@@ -27,10 +27,10 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 Current totals:
 
 - Feature files: 17
-- Scenario definitions: 84
-- Scenario outlines: 4
-- Example rows across outlines: 100
-- Expanded scenario cases: 180 (`84 - 4 + 100`)
+- Scenario definitions: 86
+- Scenario outlines: 6
+- Example rows across outlines: 104
+- Expanded scenario cases: 184 (`86 - 6 + 104`)
 
 The REST inventory outline is contract coverage, not proof that every endpoint succeeds against every broker. The broker outline proves configuration inventory only; broker-specific behavioral verification remains in broker tests and adapter integration checks.
 

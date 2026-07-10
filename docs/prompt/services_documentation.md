@@ -115,10 +115,15 @@ contract.
   instead of a live broker.
 
 Action Center's approved-order executor currently dispatches `placeorder`,
-`smartorder`, `basketorder`, `splitorder`, and `optionsorder`. Do not assume
-that every service which can call `queue_order(...)` has an execution branch.
-In particular, verify `optionsmultiorder` and `placegttorder` before extending
-or depending on semi-automatic execution.
+`smartorder`, `basketorder`, `splitorder`, `optionsorder`,
+`optionsmultiorder`, and `placegttorder`. Multi-order results are tracked from
+their child order IDs. GTT results are tracked by `trigger_id`; the existing
+broker capability gate returns `501` when the active broker has no GTT module.
+Only Dhan and Zerodha currently provide `broker/<broker>/api/gtt_api.py`.
+
+The pending database row is authoritative. `queue_order(...)` returns success
+after the row commits even if the best-effort Socket.IO notification fails; the
+notification error is logged without creating a false 500 response.
 
 Order services publish typed EventBus events for asynchronous logging,
 Socket.IO updates, and configured alert delivery. A successful return does not

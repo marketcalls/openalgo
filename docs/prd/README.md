@@ -17,8 +17,8 @@ Use `PRD.md` as the source for current behavior. It is grounded in `DISCOVERY_MA
 - Broker plugins: 34
 - RESTX Swagger UI: deliberately disabled (`doc=False`)
 - BDD feature files: 17
-- BDD scenario definitions: 84
-- BDD expanded cases: 180
+- BDD scenario definitions: 86
+- BDD expanded cases: 184
 - Application / SDK: `2.0.1.4` / `2.0.2`
 
 ## Existing Module PRDs

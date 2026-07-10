@@ -49,9 +49,9 @@ interface PendingOrder {
   api_type: string
   symbol: string
   exchange: string
-  action: 'BUY' | 'SELL'
-  quantity: number
-  price: number
+  action: 'BUY' | 'SELL' | 'MULTI'
+  quantity: number | string
+  price: number | string
   price_type: string
   product_type: string
   status: 'pending' | 'approved' | 'rejected'
@@ -532,14 +532,16 @@ export default function ActionCenterPage() {
                             className={`gap-1 ${
                               order.action === 'BUY'
                                 ? 'bg-green-500 hover:bg-green-600'
-                                : 'bg-red-500 hover:bg-red-600'
+                                : order.action === 'SELL'
+                                  ? 'bg-red-500 hover:bg-red-600'
+                                  : 'bg-muted text-muted-foreground hover:bg-muted'
                             }`}
                           >
                             {order.action === 'BUY' ? (
                               <ArrowUp className="h-3 w-3" />
-                            ) : (
+                            ) : order.action === 'SELL' ? (
                               <ArrowDown className="h-3 w-3" />
-                            )}
+                            ) : null}
                             {order.action}
                           </Badge>
                         </TableCell>

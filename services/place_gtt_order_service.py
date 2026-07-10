@@ -1,6 +1,6 @@
 import copy
 import importlib
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
@@ -88,7 +88,7 @@ def place_gtt_order_with_auth(
         ))
         return False, error_response, 500
 
-    if res.status == 200 and trigger_id:
+    if res.status in (200, 201) and trigger_id:
         success_response = {"status": "success", "trigger_id": trigger_id}
         # Derive trigger_prices for the event from the flat fields.
         if (order_data.get("trigger_type") or "").upper() == "OCO":

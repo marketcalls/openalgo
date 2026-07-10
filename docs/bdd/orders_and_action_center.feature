@@ -36,6 +36,18 @@ Feature: Orders and Action Center
     Then the pending row is marked approved
     And execution is attempted immediately through the pending order execution service
 
+  # Source: services/pending_order_execution_service.py:145
+  Scenario Outline: Action Center dispatches every queueable extended order type
+    Given an approved "<api_type>" row exists in Action Center
+    When the pending order execution service dispatches the row
+    Then "<service>" is called with resolved API-key and broker authentication
+    And the "<identifier>" execution reference is persisted
+
+    Examples:
+      | api_type | service | identifier |
+      | optionsmultiorder | place_options_multiorder | child order IDs |
+      | placegttorder | place_gtt_order | trigger ID |
+
   # Source: blueprints/orders.py:1102, database/action_center_db.py:169
   Scenario: Action Center approve-all processes pending orders
     Given multiple pending orders are available

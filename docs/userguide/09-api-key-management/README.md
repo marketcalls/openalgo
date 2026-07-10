@@ -61,7 +61,7 @@ The API Key page also stores the user's order mode:
 | `auto` | Supported requests execute immediately in the active live or analyzer path |
 | `semi_auto` | Eligible live order types are queued in Action Center for approval |
 
-The current approval executor dispatches regular, smart, basket, split, and options orders. `optionsmultiorder` and `placegttorder` can currently be queued by their services but cannot be dispatched by the approval executor; approval rejects them as an unknown order type. Destructive close, cancel, cancel-all, modify, modify-GTT, and cancel-GTT operations are blocked by their services in semi-auto live mode.
+The approval executor dispatches regular, smart, basket, split, options, options-multi, and place-GTT orders. Multi-order executions retain their child order IDs, while GTT execution retains its trigger ID. GTT placement is currently available only for Dhan and Zerodha; unsupported brokers return HTTP 501 through the service capability gate. Destructive close, cancel, cancel-all, modify, modify-GTT, and cancel-GTT operations are blocked by their services in semi-auto live mode.
 
 Read-only account and market-data calls are not approval jobs.
 

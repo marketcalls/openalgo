@@ -176,10 +176,12 @@ CREATE INDEX idx_created_at ON pending_orders(created_at);
 | basketorder | Multiple orders |
 | splitorder | Split large orders |
 | optionsorder | Options contracts |
+| optionsmultiorder | Multi-leg options orders |
+| placegttorder | GTT placement for brokers with a GTT module |
 
-Approval dispatch in `services/pending_order_execution_service.py` currently handles only these five API types.
+Approval dispatch in `services/pending_order_execution_service.py` handles all seven queued API types. Single orders retain their broker order ID, batch and multi-leg orders retain child order IDs with `open` or `partial` execution state, and GTT placement retains the broker trigger ID. The GTT service capability gate returns HTTP 501 for unsupported brokers; only Dhan and Zerodha currently provide GTT modules.
 
-`optionsmultiorder` and `placegttorder` services can currently call `queue_order()` in semi-auto mode, but the approval executor has no matching dispatch branch. Such rows are stored, then approval reports `Unknown order type` and marks broker execution rejected. This is a known implementation conflict, not supported Action Center behavior.
+The committed `pending_orders` row is the authoritative queue result. Socket.IO notification is best-effort: if background notification startup fails, the error is logged and the already-created order still returns a successful queue response.
 
 ## Restricted Operations
 
