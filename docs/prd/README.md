@@ -10,11 +10,11 @@ Use `PRD.md` as the source for current behavior. It is grounded in `DISCOVERY_MA
 
 ## Current Snapshot
 
-- Documented HTTP endpoints: 510
+- Documented HTTP endpoints: 517
 - RESTX `/api/v1` endpoints: 57
-- Flask blueprint routes: 452
+- Flask blueprint routes: 459
 - App-level routes: 1
-- Broker plugins: 33
+- Broker plugins: 34
 - BDD feature files: 12
 - BDD scenarios: 56
 

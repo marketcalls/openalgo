@@ -26,4 +26,4 @@ Total scenarios: 56.
 ## Notes
 
 - These scenarios document behavior for review and test planning. They are not wired to step definitions in this repository.
-- Ambiguities and mismatches found during discovery are tracked in `REVIEW_QUEUE.md`.
+- Ambiguities and mismatches found during discovery are tracked in `docs/prd/CONFLICTS.md`.

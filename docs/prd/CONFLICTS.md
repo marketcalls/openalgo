@@ -5,13 +5,13 @@ This file lists places where the PRD had to avoid silently choosing between Disc
 ## Open Items
 
 1. REST and blueprint endpoint inventory is broader than BDD coverage.
-   - Evidence: `DISCOVERY_MAP.md` lists 57 RESTX endpoints, 452 Flask blueprint routes, and 1 app-level route in `Discovery Summary`, `RESTX Endpoint Inventory`, and `Flask Blueprint Route Inventory`; `docs/bdd` contains 56 scenarios across 12 feature files.
+   - Evidence: `DISCOVERY_MAP.md` lists 57 RESTX endpoints, 459 Flask blueprint routes, and 1 app-level route in `Discovery Summary`, `RESTX Endpoint Inventory`, and `Flask Blueprint Route Inventory`; `docs/bdd` contains 56 scenarios across 12 feature files.
    - Impact: PRD FR-022 covers endpoint groups that are not individually scenario-covered.
    - Question: Should BDD stay representative, or should endpoint-level scenarios be added for every public endpoint?
 
 2. Broker matrix is not individually covered by BDD scenarios.
-   - Evidence: `DISCOVERY_MAP.md` `Broker Matrix` lists 33 brokers; `docs/bdd/broker_sessions.feature` covers generic broker session and capability behavior, not one scenario per broker.
-   - Impact: The PRD can document the 33-broker matrix from discovery, but BDD does not prove every broker row behavior.
+   - Evidence: `DISCOVERY_MAP.md` `Broker Matrix` lists 34 brokers; `docs/bdd/broker_sessions.feature` covers generic broker session and capability behavior, not one scenario per broker.
+   - Impact: The PRD can document the 34-broker matrix from discovery, but BDD does not prove every broker row behavior.
    - Question: Should broker support be treated as inventory documentation, or should broker-specific BDD scenarios be added?
 
 3. Positions, holdings, funds, margin, and depth have REST endpoints in discovery but partial BDD coverage.

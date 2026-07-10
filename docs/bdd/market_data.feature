@@ -22,7 +22,7 @@ Feature: Market data and history
     Then candles are returned from DuckDB
     And missing local data returns a not found response
 
-  # Source: restx_api/option_chain.py:86, services/option_chain_service.py:219
+  # Source: restx_api/option_chain.py:86, services/option_chain_service.py:220
   Scenario: Option chain builds rows around ATM
     Given an underlying symbol and expiry are provided
     When the option chain service runs
