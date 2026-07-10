@@ -435,7 +435,7 @@ services:
 
 ### Install Script Dynamic Calculation
 
-The `install-docker.sh` script automatically calculates optimal values:
+The `install/install-docker.sh` script automatically calculates optimal values:
 
 ```bash
 # Thread limits based on RAM
@@ -475,6 +475,6 @@ fi
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Multi-stage build configuration |
-| `docker-compose.yml` | Service orchestration |
+| `docker-compose.yaml` | Service orchestration |
 | `start.sh` | Container entrypoint |
 | `.dockerignore` | Build exclusions |

@@ -288,7 +288,7 @@ def validate_margin_for_order(order):
 ### Get Funds
 
 ```
-GET /api/v1/funds
+POST /api/v1/funds
 
 Response:
 {
@@ -303,15 +303,15 @@ Response:
 }
 ```
 
-### Reset Funds (Sandbox Only)
+### Reset Sandbox State And Funds
 
 ```
-POST /analyzer/reset-funds
+POST /sandbox/reset
 
 Response:
 {
     "status": "success",
-    "message": "Funds reset to ₹1,00,00,000"
+    "message": "Sandbox reset to defaults and all data cleared"
 }
 ```
 
@@ -319,10 +319,12 @@ Response:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `SANDBOX_INITIAL_CAPITAL` | `10000000` | Starting capital (₹1 Cr) |
-| `SANDBOX_MIS_LEVERAGE` | `5` | MIS leverage multiplier |
-| `SANDBOX_CNC_LEVERAGE` | `1` | CNC leverage (no leverage) |
-| `SANDBOX_NRML_LEVERAGE` | `1` | NRML leverage (no leverage) |
+| `starting_capital` | `10000000.00` | Persisted sandbox starting capital |
+| `equity_mis_leverage` | `5` | Equity MIS leverage multiplier |
+| `equity_cnc_leverage` | `1` | Equity CNC leverage multiplier |
+| `futures_leverage` | `10` | Futures leverage multiplier |
+| `option_buy_leverage` | `1` | Long-option leverage multiplier |
+| `option_sell_leverage` | `1` | Short-option leverage multiplier |
 
 ## Error Codes
 

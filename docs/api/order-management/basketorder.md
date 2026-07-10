@@ -114,7 +114,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/basketorder \
 | Parameter | Description | Mandatory/Optional | Default Value |
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
-| strategy | Strategy identifier | Optional | - |
+| strategy | Strategy identifier | Mandatory | - |
 | orders | Array of order objects | Mandatory | - |
 
 ### Order Object Fields
@@ -122,11 +122,11 @@ curl -X POST http://127.0.0.1:5000/api/v1/basketorder \
 | Parameter | Description | Mandatory/Optional | Default Value |
 |-----------|-------------|-------------------|---------------|
 | symbol | Trading symbol | Mandatory | - |
-| exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Mandatory | - |
+| exchange | Exchange code accepted by the shared validation constants | Mandatory | - |
 | action | Order action: BUY or SELL | Mandatory | - |
-| quantity | Order quantity | Mandatory | - |
-| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Mandatory | - |
-| product | Product type: MIS, CNC, NRML | Mandatory | - |
+| quantity | Positive numeric order quantity | Mandatory | - |
+| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Optional | MARKET |
+| product | Product type: MIS, CNC, NRML | Optional | MIS |
 | price | Order price (for LIMIT orders) | Optional | 0 |
 | trigger_price | Trigger price (for SL orders) | Optional | 0 |
 
@@ -148,10 +148,11 @@ curl -X POST http://127.0.0.1:5000/api/v1/basketorder \
 
 ## Notes
 
-- Orders are executed **concurrently** using a thread pool for faster execution
+- BUY orders are processed before SELL orders. Live execution uses concurrent batches of 10 with a one-second delay between batches.
+- Analyzer execution prefetches quotes and sends the ordered basket through the sandbox path.
 - If some orders fail, others still execute (partial success possible)
 - Each order in the basket is independent
-- Maximum orders per basket depends on broker limits
+- Fractional quantities are accepted only for `CRYPTO`; non-crypto quantities must be whole numbers.
 - Use for:
   - **Portfolio rebalancing**: Buy/sell multiple stocks together
   - **Pair trading**: Simultaneous long/short positions

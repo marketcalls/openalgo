@@ -1,62 +1,61 @@
 # 08 - Historify
 
-## Overview
-
-Historify is OpenAlgo's historical market data manager built on DuckDB. It downloads OHLCV data from brokers and stores it locally for backtesting and analysis.
-
 ## Architecture
 
-```
-┌──────────────┐     ┌───────────────────┐     ┌─────────────────┐
-│  React UI    │────▶│ Historify Service │────▶│ Broker History  │
-│  /historify  │     │                   │     │     APIs        │
-└──────────────┘     └─────────┬─────────┘     └─────────────────┘
-                               │
-                               ▼
-                     ┌─────────────────────┐
-                     │  DuckDB             │
-                     │  historify.duckdb   │
-                     └─────────────────────┘
+Historify is the local historical-data subsystem. The React `/historify` page calls a session-authenticated Flask blueprint under `/historify/api`; download services use the logged-in user's OpenAlgo API key to fetch normalized broker history and persist it in DuckDB.
+
+```text
+React /historify
+  -> /historify/api routes
+  -> historify service / scheduler service
+  -> normalized history service
+  -> broker API
+  -> DuckDB + catalog/job state
 ```
 
-## Database (DuckDB)
+Historify is not part of the Flask-RESTX `/api/v1` namespace. `/api/v1/history` can read its DuckDB data with `source=db`, but Historify administration remains session-authenticated.
 
-**Location:** `db/historify.duckdb`
+## DuckDB Ownership
 
 | Table | Purpose |
-|-------|---------|
-| `market_data` | OHLCV candles (symbol, exchange, interval, timestamp, OHLCV, oi) |
-| `watchlist` | Symbols to track |
-| `download_jobs` | Bulk download job tracking |
-| `job_items` | Individual symbol status within jobs |
-| `symbol_metadata` | Enriched symbol info (expiry, strike, lotsize) |
+|---|---|
+| `market_data` | OHLCV/OI candles keyed by symbol, exchange, interval, timestamp |
+| `watchlist` | Unique tracked symbol/exchange entries |
+| `data_catalog` | Stored range and record-count metadata |
+| `download_jobs` | Asynchronous job status/configuration |
+| `job_items` | Per-symbol job status and errors |
+| `symbol_metadata` | Expiry, strike, lot, type, and tick metadata |
+| `historify_schedules` | Recurring watchlist download definitions |
+| `historify_schedule_executions` | Per-run schedule history |
+
+Connections are context-managed and retry transient file-lock conflicts. The default path is `db/historify.duckdb`.
+
+There is an unresolved configuration-name mismatch: `.sample.env` and system-permissions code use `HISTORIFY_DATABASE_URL`, while `database/historify_db.py` reads `HISTORIFY_DATABASE_PATH`.
+
+## Runtime Features
+
+- Watchlist CRUD and bulk changes.
+- Single/watchlist downloads.
+- Multi-symbol jobs with pause, resume, cancel, retry, incremental ranges, and Socket.IO progress.
+- Chart queries, catalog/statistics, dataset deletion, and metadata enrichment.
+- CSV/Parquet upload plus CSV, TXT, ZIP, and Parquet export.
+- F&O underlying, expiry, futures, options, and chain discovery.
+- Interval/daily schedules backed by APScheduler and persisted execution history.
+
+Jobs use a bounded thread pool. Active persisted jobs without matching process-local state after restart are marked failed so they can be retried.
 
 ## Intervals
 
-| Storage (Downloaded) | Computed (Aggregated from 1m) |
-|---------------------|-------------------------------|
-| `1m`, `D` | `5m`, `15m`, `30m`, `1h` |
-
-Only 1-minute and Daily data are stored. Other timeframes are computed on-the-fly from 1-minute data.
-
-## Key Features
-
-- **Watchlist**: Track symbols for batch downloads
-- **Bulk Download Jobs**: Download entire option chains with progress tracking
-- **Pause/Resume/Cancel**: Job control with Socket.IO progress updates
-- **Incremental Download**: Only fetch data after last available timestamp
-- **CSV/Parquet Import/Export**: Data portability
-- **FNO Discovery**: Find underlyings, expiries, and option chains
+`1m` and `D` are the primary downloaded/storage intervals. Historify can aggregate supported higher and calendar intervals from stored candles for query/export workflows. The exact supported list is exposed by `/historify/api/historify-intervals` rather than maintained as a hard-coded documentation list.
 
 ## Key Files
 
 | File | Purpose |
-|------|---------|
-| `database/historify_db.py` | DuckDB schema and queries |
-| `services/historify_service.py` | Business logic and job processing |
-| `blueprints/historify.py` | Web UI routes |
-| `frontend/src/pages/Historify.tsx` | React UI |
+|---|---|
+| `blueprints/historify.py` | Session routes and complete `/historify/api` surface |
+| `services/historify_service.py` | Download, query, export, import, and job logic |
+| `services/historify_scheduler_service.py` | Recurring schedules |
+| `database/historify_db.py` | DuckDB schema and operations |
+| `frontend/src/pages/Historify.tsx` | React manager |
 
-## Supported Exchanges
-
-`NSE`, `BSE`, `NFO`, `BFO`, `CDS`, `MCX`
+See `docs/prd/historify-api-reference.md` and `docs/bdd/historify_and_tools.feature`.

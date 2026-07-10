@@ -15,8 +15,11 @@ Use `PRD.md` as the source for current behavior. It is grounded in `DISCOVERY_MA
 - Flask blueprint routes: 459
 - App-level routes: 1
 - Broker plugins: 34
-- BDD feature files: 12
-- BDD scenarios: 56
+- RESTX Swagger UI: deliberately disabled (`doc=False`)
+- BDD feature files: 17
+- BDD scenario definitions: 84
+- BDD expanded cases: 180
+- Application / SDK: `2.0.1.4` / `2.0.2`
 
 ## Existing Module PRDs
 
@@ -42,6 +45,9 @@ The files below are module-level historical PRDs. Treat them as secondary refere
 - [WebSocket Proxy](./websocket-proxy.md)
 - [Event Bus](./event-bus.md)
 - [Remote MCP](./remote-mcp.md)
+- [Session Lifecycle](./session-lifecycle.md)
+- [Scalping Terminal](./scalping.md)
+- [Analytics Tools](./analytics-tools.md)
 - [CI/CD](./ci-cd.md)
 - [CI/CD Workflows](./ci-cd-workflows.md)
 - [CI/CD Security](./ci-cd-security.md)

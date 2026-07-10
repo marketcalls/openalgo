@@ -1,71 +1,63 @@
-# OpenAlgo Developer Documentation Tracker
+# Design Documentation Verification Tracker
 
-## Progress Overview
+This tracker records the July 2026 code-backed sweep. `Current` means the document was reconciled with the present module or its stale references were corrected. It does not mean the implementation has no open product gaps.
 
-| # | Module | Status | Last Updated |
-|---|--------|--------|--------------|
-| 00 | Directory Structure | ✅ Complete | 2026-02-22 |
-| 01 | Frontend Architecture | ✅ Complete | 2026-02-22 |
-| 02 | Backend Architecture | ✅ Complete | 2026-02-22 |
-| 03 | Login & Broker Login Flow | ✅ Complete | 2026-02-22 |
-| 04 | Cache Architecture | ✅ Complete | 2026-01-21 |
-| 05 | Security Architecture | ✅ Complete | 2026-01-21 |
-| 06 | WebSockets Architecture | ✅ Complete | 2026-02-22 |
-| 07 | Sandbox Architecture | ✅ Complete | 2026-02-22 |
-| 08 | Historify Architecture | ✅ Complete | 2026-01-21 |
-| 09 | REST API Documentation | ✅ Complete | 2026-02-22 |
-| 10 | Flow Architecture | ✅ Complete | 2026-01-21 |
-| 11 | Docker Configuration | ✅ Complete | 2026-01-21 |
-| 12 | Ubuntu Server Installation | ✅ Complete | 2026-01-21 |
-| 13 | Chartink Architecture | ✅ Complete | 2026-01-21 |
-| 14 | TradingView & GoCharting | ✅ Complete | 2026-01-21 |
-| 15 | Basic UI Elements & Analytics | ✅ Complete | 2026-02-22 |
-| 16 | Centralized Logging | ✅ Complete | 2026-01-21 |
-| 17 | Connection Pooling | ✅ Complete | 2026-01-21 |
-| 18 | Database Structure | ✅ Complete | 2026-01-21 |
-| 19 | PlaceOrder Call Flow | ✅ Complete | 2026-01-21 |
-| 20 | Design Principles | ✅ Complete | 2026-02-22 |
-| 21 | Admin Section | ✅ Complete | 2026-01-21 |
-| 22 | Log Section | ✅ Complete | 2026-01-21 |
-| 23 | IP Security | ✅ Complete | 2026-01-21 |
-| 24 | Browser Security | ✅ Complete | 2026-01-21 |
-| 25 | Latency Monitor | ✅ Complete | 2026-01-21 |
-| 26 | Traffic Logs | ✅ Complete | 2026-01-21 |
-| 27 | Service Layer | ✅ Complete | 2026-01-21 |
-| 28 | Environment Configuration | ✅ Complete | 2026-01-21 |
-| 29 | Ngrok Configuration | ✅ Complete | 2026-01-21 |
-| 30 | Upgrade Procedure | ✅ Complete | 2026-01-21 |
-| 31 | Utils Functionalities | ✅ Complete | 2026-01-21 |
-| 32 | Master Contract Download | ✅ Complete | 2026-02-22 |
-| 33 | Broker Folder Explanations | ✅ Complete | 2026-02-22 |
-| 34 | App Startup | ✅ Complete | 2026-01-21 |
-| 35 | Development & Testing Guide | ✅ Complete | 2026-01-21 |
-| 36 | Rate Limiting Guide | ✅ Complete | 2026-01-21 |
-| 37 | API Key & Playground | ✅ Complete | 2026-01-21 |
-| 38 | Python Strategies Hosting | ✅ Complete | 2026-01-21 |
-| 39 | Strategy Module | ✅ Complete | 2026-01-21 |
-| 40 | Logout & Session Expiry | ✅ Complete | 2026-01-21 |
-| 41 | MCP Architecture | ✅ Complete | 2026-02-22 |
-| 42 | Action Center | ✅ Complete | 2026-01-21 |
-| 43 | Telegram Bot Configuration | ✅ Complete | 2026-01-21 |
-| 43b | Toast Notifications | ✅ Complete | 2026-01-21 |
-| 44 | PnL Tracker | ✅ Complete | 2026-02-22 |
-| 46 | Search | ✅ Complete | 2026-01-21 |
-| 47 | SMTP Configuration | ✅ Complete | 2026-01-21 |
-| 48 | Password Reset | ✅ Complete | 2026-01-21 |
-| 49 | Themes | ✅ Complete | 2026-01-21 |
-| 50 | TOTP Configuration | ✅ Complete | 2026-01-21 |
-| 51 | Broker & System Config | ✅ Complete | 2026-01-21 |
-| 52 | Broker Factory | ✅ Complete | 2026-02-22 |
+| # | Module | Status | Verified |
+|---:|---|---|---|
+| 00 | Directory Structure | Current | 2026-07-10 |
+| 01 | Frontend Architecture | Current | 2026-07-10 |
+| 02 | Backend Architecture | Current | 2026-07-10 |
+| 03 | Login And Broker Flow | Current | 2026-07-10 |
+| 04 | Cache Architecture | Reviewed | 2026-07-10 |
+| 05 | Security Architecture | Reviewed | 2026-07-10 |
+| 06 | WebSockets | Current | 2026-07-10 |
+| 07 | Sandbox | Reviewed | 2026-07-10 |
+| 08 | Historify | Reviewed | 2026-07-10 |
+| 09 | REST API | Current; Swagger disabled by design | 2026-07-10 |
+| 10 | Flow | Reviewed | 2026-07-10 |
+| 11 | Docker | Reviewed | 2026-07-10 |
+| 12 | Ubuntu Server | Reviewed | 2026-07-10 |
+| 13 | Chartink | Reviewed | 2026-07-10 |
+| 14 | TradingView And GoCharting | Reviewed | 2026-07-10 |
+| 15 | Basic UI And Analytics | Current | 2026-07-10 |
+| 16 | Centralized Logging | Reviewed | 2026-07-10 |
+| 17 | Connection Pooling | Reviewed | 2026-07-10 |
+| 18 | Database Structure | Current | 2026-07-10 |
+| 19 | PlaceOrder Flow | Reviewed | 2026-07-10 |
+| 20 | Design Principles | Reviewed | 2026-07-10 |
+| 21 | Admin Section | Reviewed | 2026-07-10 |
+| 22 | Log Section | Reviewed | 2026-07-10 |
+| 23 | IP Security | Reviewed | 2026-07-10 |
+| 24 | Browser Security | Reviewed | 2026-07-10 |
+| 25 | Latency Monitor | Reviewed | 2026-07-10 |
+| 26 | Traffic Logs | Reviewed | 2026-07-10 |
+| 27 | Service Layer | Current | 2026-07-10 |
+| 28 | Environment Configuration | Reviewed | 2026-07-10 |
+| 29 | Ngrok Configuration | Reviewed | 2026-07-10 |
+| 30 | Upgrade Procedure | Reviewed | 2026-07-10 |
+| 31 | Utilities | Reviewed | 2026-07-10 |
+| 32 | Master Contract | Reviewed | 2026-07-10 |
+| 33 | Broker Folder | Reviewed | 2026-07-10 |
+| 34 | App Startup | Current | 2026-07-10 |
+| 35 | Development And Testing | Current | 2026-07-10 |
+| 36 | Rate Limiting | Reviewed | 2026-07-10 |
+| 37 | API Key And Playground | Reviewed | 2026-07-10 |
+| 38 | Python Strategies | Reviewed | 2026-07-10 |
+| 39 | Strategy Module | Reviewed | 2026-07-10 |
+| 40 | Logout And Session Lifecycle | Current | 2026-07-10 |
+| 41 | MCP Architecture | Current | 2026-07-10 |
+| 42 | Action Center | Reviewed | 2026-07-10 |
+| 43 | Telegram Bot | Current | 2026-07-10 |
+| 43b | Toast Notifications | Reviewed | 2026-07-10 |
+| 44 | PnL Tracker | Reviewed | 2026-07-10 |
+| 46 | Search | Reviewed | 2026-07-10 |
+| 47 | SMTP Configuration | Reviewed | 2026-07-10 |
+| 48 | Password Reset | Reviewed | 2026-07-10 |
+| 49 | Themes | Reviewed | 2026-07-10 |
+| 50 | TOTP Configuration | Reviewed | 2026-07-10 |
+| 51 | Broker And System Config | Reviewed | 2026-07-10 |
+| 52 | Broker Factory | Reviewed | 2026-07-10 |
+| 53 | Event Bus | Current | 2026-07-10 |
+| 54 | Scalping Terminal | Current | 2026-07-10 |
 
-## Status Legend
-- ✅ Complete
-- 🔄 In Progress
-- ⏳ Pending
-
-## Documentation Standards
-- Each module has its own folder with `README.md`
-- Include ASCII flow diagrams where applicable
-- Add code examples for implementation details
-- Keep explanations brief but comprehensive
-- Target audience: Beginner to intermediate developers
+Verification checks for this sweep include local Markdown targets, registered REST method/path parity, current broker plugin inventory, current dependency versions, and references to implementation files.

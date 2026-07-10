@@ -18,7 +18,7 @@ OpenAlgo follows specific design patterns and architectural principles to mainta
 │  │  Agnostic       │  │  of Concerns    │  │  Operations     │             │
 │  │                 │  │                 │  │                 │             │
 │  │  Single API for │  │  API → Service  │  │  Non-blocking   │             │
-│  │  29 brokers    │  │  → Broker       │  │  logging/alerts │             │
+│  │  34 plugins    │  │  → Broker       │  │  logging/alerts │             │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
 │                                                                              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
@@ -35,7 +35,7 @@ OpenAlgo follows specific design patterns and architectural principles to mainta
 ## 1. Broker-Agnostic API
 
 ### Principle
-One unified API that works with all 29 supported brokers.
+One unified API backed by the current 34 broker plugins.
 
 ### Implementation
 
@@ -65,7 +65,7 @@ def import_broker_module(broker_name):
 │  Layer 1: REST API (restx_api/)                                  │
 │  - Request validation                                            │
 │  - Rate limiting                                                 │
-│  - Swagger documentation                                         │
+│  - Maintained docs/api contract (Swagger UI disabled)            │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 2: Service Layer (services/)                              │
 │  - Business logic                                                │

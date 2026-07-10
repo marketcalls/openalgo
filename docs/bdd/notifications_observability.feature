@@ -28,3 +28,31 @@ Feature: Notifications and observability
     When the detailed health endpoint is requested
     Then database, WebSocket, file descriptor, memory, and thread metrics can be evaluated
     And metrics are stored with pass, warn, or fail status
+
+  # Source: services/telegram_alert_service.py:285, services/flow_openalgo_client.py:528
+  Scenario: Stopping Telegram suppresses automatic event and Flow alerts
+    Given Telegram configuration is persisted with is_active false
+    When an order event or Flow Telegram node attempts an automatic alert
+    Then the alert service skips delivery
+    And explicit admin sends and the notify API remain available
+
+  # Source: restx_api/telegram_bot.py:298
+  Scenario: Telegram webhook validates its secret but does not dispatch updates yet
+    Given Telegram webhook mode has a configured secret
+    When an update is received with the correct secret header and an update_id
+    Then the endpoint returns an empty success acknowledgement
+    And no command dispatcher is invoked by the current RESTX handler
+
+  # Source: restx_api/telegram_bot.py:385
+  Scenario: Telegram REST broadcast reports its current no-op delivery counts
+    Given REST broadcast is enabled and the request is authorized
+    When a valid broadcast message is submitted
+    Then the response reports zero successful and zero failed deliveries
+    And clients do not treat the endpoint as implemented fan-out
+
+  # Source: utils/traffic_logger.py:14, database/traffic_db.py:61
+  Scenario: Traffic telemetry is written asynchronously to its own database
+    Given traffic logging middleware is enabled
+    When a non-exempt HTTP request completes
+    Then client IP, method, path, status, duration, host, error, and user ID are submitted to a single-worker executor
+    And the traffic record is stored in logs.db rather than the primary application database

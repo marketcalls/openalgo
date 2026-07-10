@@ -5,9 +5,9 @@ Get market trading timings for a specific date across all exchanges.
 ## Endpoint URL
 
 ```http
-Local Host   :  POST http://127.0.0.1:5000/api/v1/timings
-Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/timings
-Custom Domain:  POST https://<your-custom-domain>/api/v1/timings
+Local Host   :  POST http://127.0.0.1:5000/api/v1/market/timings
+Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/market/timings
+Custom Domain:  POST https://<your-custom-domain>/api/v1/market/timings
 ```
 
 ## Sample API Request
@@ -22,7 +22,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/timings
 ## Sample cURL Request
 
 ```bash
-curl -X POST http://127.0.0.1:5000/api/v1/timings \
+curl -X POST http://127.0.0.1:5000/api/v1/market/timings \
   -H 'Content-Type: application/json' \
   -d '{
   "apikey": "<your_app_apikey>",
