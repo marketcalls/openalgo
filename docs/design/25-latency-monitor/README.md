@@ -275,6 +275,6 @@ LIMIT 10
 |------|---------|
 | `utils/latency_monitor.py` | Tracking utilities |
 | `database/latency_db.py` | Latency model |
-| `blueprints/logs.py` | Dashboard routes |
+| `blueprints/latency.py` | Dashboard and export routes |
 | `utils/httpx_client.py` | HTTP timing hooks |
-| `frontend/src/pages/Latency.tsx` | React dashboard |
+| `frontend/src/pages/monitoring/LatencyDashboard.tsx` | React dashboard |

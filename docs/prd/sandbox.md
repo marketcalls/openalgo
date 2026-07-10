@@ -1,6 +1,6 @@
 # PRD: Sandbox - Sandbox Trading Environment
 
-> **Status:** ✅ Stable - Fully implemented, production-ready
+> **Status:** Implemented for supported analyzer trading/account operations. Analyzer GTT operations remain unsupported and return 501.
 
 ## Overview
 
@@ -78,7 +78,7 @@ A complete sandbox trading environment that:
 ### FR6: Execution Engine
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR6.1 | Poll pending orders every 2 seconds | P0 |
+| FR6.1 | Poll pending orders at `order_check_interval`, default 5 seconds | P0 |
 | FR6.2 | Match limit orders against LTP | P0 |
 | FR6.3 | Trigger SL orders when price breached | P1 |
 | FR6.4 | WebSocket price updates (optional) | P2 |

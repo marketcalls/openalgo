@@ -326,5 +326,5 @@ response = requests.post(
 | `blueprints/playground.py` | API testing playground |
 | `database/auth_db.py` | API key storage/verification |
 | `collections/**/*.bru` | Bruno endpoint definitions |
-| `templates/playground.html` | Playground UI template |
 | `frontend/src/pages/ApiKey.tsx` | React API key page |
+| `frontend/src/pages/Playground.tsx` | React WebSocket/API playground |

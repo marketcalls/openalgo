@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo implements centralized logging with configurable levels, file rotation, and structured output. All application logs are routed through a unified logging system stored in `logs.db` and optional file logs.
+OpenAlgo implements centralized Python logging with configurable levels, colored console output, and optional retained files. General application logs are not stored in `logs.db`: `logs.db` is the traffic/security store, while order and analyzer audit rows live in the main database.
 
 ## Architecture Diagram
 
@@ -229,5 +229,6 @@ Access log viewer at `/logs`:
 |------|---------|
 | `utils/logging.py` | Logger configuration |
 | `blueprints/logging.py` | Log viewer UI routes |
-| `database/logs_db.py` | Log database models |
+| `database/apilog_db.py` | Order API audit rows in the main database |
+| `database/analyzer_db.py` | Analyzer audit rows in the main database |
 | `log/` | Log file directory |

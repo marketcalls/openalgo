@@ -124,7 +124,7 @@ Qty     Price                        Price     Qty
 - **Bid-Ask spread** indicates liquidity (tighter = more liquid)
 - **totalbuyqty vs totalsellqty** shows demand-supply balance
 - For F&O, **oi** (open interest) is available
-- Depth data updates in real-time with each order book change
+- The REST call returns one broker snapshot. Use WebSocket Depth for continuous updates.
 
 ## Use Cases
 

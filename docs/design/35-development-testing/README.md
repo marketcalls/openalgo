@@ -1,467 +1,84 @@
-# 35 - Development & Testing Guide
+# 35 - Development And Testing
 
-## Overview
+## Toolchain
 
-This guide covers running OpenAlgo in development and production modes using the uv package manager, along with comprehensive testing strategies including unit tests, E2E tests, accessibility tests, and linting.
+| Area | Current tool |
+|---|---|
+| Python environment | uv, Python >=3.12 |
+| Python lint/format | Ruff |
+| Python tests | pytest 9.1 with 60-second default timeout |
+| Frontend install | npm with `frontend/package-lock.json` |
+| Frontend lint/format | Biome |
+| Frontend unit/a11y | Vitest 4, Testing Library, axe |
+| Browser tests | Playwright |
+| Security | Bandit, pip-audit, Trivy, detect-secrets tooling |
 
-## Running the Application
-
-### Development Mode
-
-```bash
-# Navigate to project directory
-cd /path/to/openalgo
-
-# Copy environment file (first time only)
-cp .sample.env .env
-
-# Generate secure keys
-uv run python -c "import secrets; print(secrets.token_hex(32))"
-# Copy output to APP_KEY and API_KEY_PEPPER in .env
-
-# Run in development mode
-uv run app.py
-```
-
-**Development Features:**
-- Auto-reload on code changes
-- Debug mode enabled (if `FLASK_DEBUG=True`)
-- Detailed error messages
-- SocketIO development server
-
-### Production Mode (Linux with Gunicorn)
+## Backend Commands
 
 ```bash
-# Install production dependencies
-uv sync
-
-# Run with Gunicorn + Eventlet
-uv run gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 app:app
-
-# IMPORTANT: Use -w 1 (single worker) for WebSocket compatibility
+uv sync --dev
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
 ```
 
-**Production Configuration:**
-```bash
-# .env settings for production
-FLASK_DEBUG=False
-FLASK_ENV=production
-HOST_SERVER=https://yourdomain.com
-```
+The default pytest configuration discovers `test/test_*.py` and applies verbose output plus `--timeout=60`. Some tests require a configured/running application or broker-like state; CI therefore runs an explicit credential-free subset rather than the entire tree.
 
-### Docker Mode
+Focused example:
 
 ```bash
-# Build and run
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
+uv run pytest test/test_scalping_risk_monitor.py -v
 ```
 
-## Frontend Development (React)
+## Frontend Commands
 
-### Setup
+Run from `frontend/`:
 
 ```bash
-cd frontend
-
-# Install dependencies
-npm install
-```
-
-### Development Server
-
-```bash
-# Start Vite dev server with hot reload
-npm run dev
-
-# Access at http://localhost:5173
-# Proxies API requests to Flask backend
-```
-
-### Build for Production
-
-```bash
-# TypeScript compile + Vite build
-npm run build
-
-# Preview production build locally
-npm run preview
-```
-
-## Testing Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Testing Architecture                                   │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────┐
-│   Unit Tests    │  │  E2E Tests      │  │ Accessibility   │  │   Linting    │
-│   (Vitest)      │  │  (Playwright)   │  │ (axe-core)      │  │   (Biome)    │
-└────────┬────────┘  └────────┬────────┘  └────────┬────────┘  └──────┬───────┘
-         │                    │                    │                   │
-         ▼                    ▼                    ▼                   ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           React Frontend                                     │
-│                         (frontend/src/)                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-         │                    │                    │                   │
-         ▼                    ▼                    ▼                   ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────┐
-│  Components     │  │  Full Pages     │  │   WCAG 2.1      │  │  Code Style  │
-│  Functions      │  │  User Flows     │  │   Compliance    │  │  Formatting  │
-│  Hooks          │  │  API Mocks      │  │                 │  │              │
-└─────────────────┘  └─────────────────┘  └─────────────────┘  └──────────────┘
-```
-
-## Unit Testing (Vitest)
-
-### Running Tests
-
-```bash
-cd frontend
-
-# Run all tests
-npm test
-
-# Run tests once (CI mode)
-npm run test:run
-
-# Run with coverage report
-npm run test:coverage
-
-# Run with UI
-npm run test:ui
-```
-
-### Test File Structure
-
-```
-frontend/
-├── src/
-│   ├── components/
-│   │   ├── Button.tsx
-│   │   └── Button.test.tsx      # Component tests
-│   ├── hooks/
-│   │   ├── useAuth.ts
-│   │   └── useAuth.test.ts      # Hook tests
-│   └── utils/
-│       ├── format.ts
-│       └── format.test.ts       # Utility tests
-└── vitest.config.ts
-```
-
-### Example Test
-
-```typescript
-// src/components/Button.test.tsx
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
-import { Button } from './Button';
-
-describe('Button', () => {
-  it('renders with text', () => {
-    render(<Button>Click me</Button>);
-    expect(screen.getByText('Click me')).toBeInTheDocument();
-  });
-
-  it('calls onClick when clicked', () => {
-    const handleClick = vi.fn();
-    render(<Button onClick={handleClick}>Click</Button>);
-    fireEvent.click(screen.getByText('Click'));
-    expect(handleClick).toHaveBeenCalledTimes(1);
-  });
-});
-```
-
-## E2E Testing (Playwright)
-
-### Running E2E Tests
-
-```bash
-cd frontend
-
-# Run all E2E tests
-npm run e2e
-
-# Run with UI mode (visual debugging)
-npm run e2e:ui
-
-# Run in debug mode
-npm run e2e:debug
-
-# Generate test code interactively
-npm run e2e:codegen
-```
-
-### E2E Test Structure
-
-```
-frontend/
-├── e2e/
-│   ├── login.spec.ts        # Login flow tests
-│   ├── dashboard.spec.ts    # Dashboard tests
-│   └── orders.spec.ts       # Order placement tests
-└── playwright.config.ts
-```
-
-### Example E2E Test
-
-```typescript
-// e2e/login.spec.ts
-import { test, expect } from '@playwright/test';
-
-test.describe('Login Flow', () => {
-  test('successful login redirects to dashboard', async ({ page }) => {
-    await page.goto('/auth/login');
-
-    await page.fill('[name="username"]', 'admin');
-    await page.fill('[name="password"]', 'password123');
-    await page.click('button[type="submit"]');
-
-    await expect(page).toHaveURL('/dashboard');
-    await expect(page.locator('h1')).toContainText('Dashboard');
-  });
-
-  test('invalid credentials shows error', async ({ page }) => {
-    await page.goto('/auth/login');
-
-    await page.fill('[name="username"]', 'wrong');
-    await page.fill('[name="password"]', 'wrong');
-    await page.click('button[type="submit"]');
-
-    await expect(page.locator('.error-message')).toBeVisible();
-  });
-});
-```
-
-## Accessibility Testing (axe-core)
-
-### Running A11y Tests
-
-```bash
-cd frontend
-
-# Run accessibility-specific tests
-npm run test:a11y
-```
-
-### A11y Test Libraries
-
-| Library | Purpose |
-|---------|---------|
-| `@axe-core/react` | Runtime a11y checking in dev |
-| `@axe-core/playwright` | E2E a11y testing |
-| `jest-axe` | Unit test a11y assertions |
-| `vitest-axe` | Vitest a11y matchers |
-
-### Example A11y Test
-
-```typescript
-// src/components/Dialog.test.tsx
-import { render } from '@testing-library/react';
-import { axe, toHaveNoViolations } from 'jest-axe';
-import { Dialog } from './Dialog';
-
-expect.extend(toHaveNoViolations);
-
-describe('Dialog accessibility', () => {
-  it('should have no accessibility violations', async () => {
-    const { container } = render(
-      <Dialog open={true} title="Test Dialog">
-        <p>Dialog content</p>
-      </Dialog>
-    );
-
-    const results = await axe(container);
-    expect(results).toHaveNoViolations();
-  });
-});
-```
-
-### Playwright A11y Test
-
-```typescript
-// e2e/accessibility.spec.ts
-import { test, expect } from '@playwright/test';
-import AxeBuilder from '@axe-core/playwright';
-
-test.describe('Page accessibility', () => {
-  test('dashboard has no a11y violations', async ({ page }) => {
-    await page.goto('/dashboard');
-
-    const results = await new AxeBuilder({ page }).analyze();
-
-    expect(results.violations).toEqual([]);
-  });
-});
-```
-
-## Linting & Formatting (Biome)
-
-### Running Biome
-
-```bash
-cd frontend
-
-# Lint code
+npm ci
 npm run lint
-
-# Format code
-npm run format
-
-# Lint + format in one command
-npm run check
+npm run test:run
+npm run test:coverage
+npm run build
+npm run e2e -- --project=chromium
 ```
 
-### Biome Configuration
+Playwright starts Vite on port 5173. Its local configuration defines Chromium, Firefox, WebKit, Mobile Chrome, and Mobile Safari; CI currently invokes Chromium only.
 
-**Location:** `frontend/biome.json`
+## Main CI Workflow
 
-```json
-{
-  "formatter": {
-    "enabled": true,
-    "indentStyle": "tab",
-    "lineWidth": 100
-  },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "recommended": true,
-      "complexity": {
-        "noForEach": "warn"
-      },
-      "style": {
-        "noNonNullAssertion": "warn"
-      }
-    }
-  }
-}
-```
+`.github/workflows/ci.yml` currently runs:
 
-### Biome vs ESLint/Prettier
+- Backend Ruff checks (marked continue-on-error for existing broker warnings).
+- A small CI-safe backend pytest subset.
+- Frontend Biome lint, TypeScript/Vite build, Vitest, coverage, and Chromium E2E.
+- Bandit and pip-audit (also continue-on-error in main CI).
+- Production frontend bundle upload and main-branch auto-commit.
+- Native amd64 and arm64 Docker builds, Kaleido/Chromium smoke test on PRs, manifest assembly and Trivy scan on main.
 
-| Feature | Biome | ESLint + Prettier |
-|---------|-------|-------------------|
-| Speed | 10-100x faster | Slower |
-| Config | Single file | Multiple configs |
-| Memory | Low | Higher |
-| Setup | Zero config | Complex setup |
+A green workflow does not prove the full backend suite, all broker adapters, or all security findings are clean because several checks are intentionally non-blocking.
 
-## Backend Testing (Python)
+## Scheduled Security Workflow
 
-### Running Backend Tests
+`.github/workflows/security.yml` runs weekly and on demand. It uploads Bandit SARIF/JSON and pip-audit JSON. A fallback creates valid empty SARIF when Bandit's formatter fails, while the JSON artifact retains actual findings.
 
-```bash
-# Run all tests
-uv run pytest test/ -v
+## Test Selection By Change
 
-# Run specific test file
-uv run pytest test/test_broker.py -v
+| Change | Minimum evidence |
+|---|---|
+| REST schema/resource | Validation, invalid key, success/service mock, mode behavior |
+| Broker adapter | Common broker integration runner plus adapter-specific mapping/stream tests |
+| Order service | Live/analyzer/semi-auto paths and event publication |
+| Database schema | Fresh initialization and upgrade from a partial/existing file |
+| WebSocket | Protocol/unit tests plus connection cleanup and subscription behavior |
+| React page | Unit interaction test, build, and relevant Playwright flow |
+| Long-lived worker | Start/stop/restart, failure isolation, resource cleanup |
+| Documentation route change | REST inventory parity and local-link check |
 
-# Run single test function
-uv run pytest test/test_broker.py::test_function_name -v
+## Broker Integration Testing
 
-# Run with coverage
-uv run pytest test/ --cov
-```
+Broker behavior cannot be proven by generic service tests alone. Use `test/test_broker_integration.py`, `test/test_broker_protocol.py`, and the common runner/documentation introduced for adapters, then exercise authenticated broker paths in an appropriate environment without committing credentials.
 
-### Test Structure
+## Generated Output
 
-```
-openalgo/
-└── test/
-    ├── test_broker.py            # Broker integration tests
-    ├── test_rate_limits_simple.py # Rate limit tests
-    ├── test_api.py               # API endpoint tests
-    └── conftest.py               # Shared fixtures
-```
-
-## CI/CD Pipeline Example
-
-```yaml
-# .github/workflows/test.yml
-name: Test
-
-on: [push, pull_request]
-
-jobs:
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: cd frontend && npm ci
-
-      - name: Lint
-        run: cd frontend && npm run lint
-
-      - name: Unit tests
-        run: cd frontend && npm run test:run
-
-      - name: Build
-        run: cd frontend && npm run build
-
-      - name: E2E tests
-        run: cd frontend && npm run e2e
-
-  backend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        run: pip install uv
-
-      - name: Run tests
-        run: uv run pytest test/ -v
-```
-
-## Command Reference
-
-### Backend Commands
-
-| Command | Description |
-|---------|-------------|
-| `uv run app.py` | Start development server |
-| `uv run pytest test/ -v` | Run all tests |
-| `uv add package_name` | Add new dependency |
-| `uv sync` | Sync dependencies |
-
-### Frontend Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start dev server |
-| `npm run build` | Production build |
-| `npm test` | Run unit tests |
-| `npm run e2e` | Run E2E tests |
-| `npm run test:a11y` | Run accessibility tests |
-| `npm run lint` | Lint code |
-| `npm run format` | Format code |
-| `npm run check` | Lint + format |
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `frontend/package.json` | Frontend scripts and dependencies |
-| `frontend/vitest.config.ts` | Unit test configuration |
-| `frontend/playwright.config.ts` | E2E test configuration |
-| `frontend/biome.json` | Linting/formatting rules |
-| `pyproject.toml` | Python dependencies |
-| `test/` | Backend test files |
+Do not hand-edit `frontend/dist`. Build source changes with `npm run build`; main CI owns the committed production bundle update.

@@ -371,7 +371,7 @@ Polling-based monitor for price alert triggers.
 | `services/flow_scheduler_service.py` | APScheduler integration |
 | `services/flow_price_monitor_service.py` | Price alert monitoring |
 | `services/flow_openalgo_client.py` | OpenAlgo API client wrapper |
-| `frontend/src/pages/FlowIndex.tsx` | Workflow list UI |
-| `frontend/src/pages/FlowEditor.tsx` | Visual editor (XYFlow) |
+| `frontend/src/pages/flow/FlowIndex.tsx` | Workflow list UI |
+| `frontend/src/pages/flow/FlowEditor.tsx` | Visual editor (XYFlow) |
 | `frontend/src/components/flow/nodes/` | Custom node components |
 | `frontend/src/components/flow/panels/` | ConfigPanel, ExecutionLogPanel |

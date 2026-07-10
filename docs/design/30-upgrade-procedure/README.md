@@ -183,7 +183,7 @@ docker-compose up -d
 ### Volume Preservation
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yaml
 volumes:
   - ./db:/app/db          # Database persisted
   - ./.env:/app/.env      # Config persisted

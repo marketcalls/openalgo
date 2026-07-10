@@ -5,9 +5,9 @@ Toggle the analyzer (sandbox) mode on or off.
 ## Endpoint URL
 
 ```http
-Local Host   :  POST http://127.0.0.1:5000/api/v1/analyzertoggle
-Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/analyzertoggle
-Custom Domain:  POST https://<your-custom-domain>/api/v1/analyzertoggle
+Local Host   :  POST http://127.0.0.1:5000/api/v1/analyzer/toggle
+Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/analyzer/toggle
+Custom Domain:  POST https://<your-custom-domain>/api/v1/analyzer/toggle
 ```
 
 ## Sample API Request (Enable Analyzer Mode)
@@ -22,7 +22,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/analyzertoggle
 ## Sample cURL Request
 
 ```bash
-curl -X POST http://127.0.0.1:5000/api/v1/analyzertoggle \
+curl -X POST http://127.0.0.1:5000/api/v1/analyzer/toggle \
   -H 'Content-Type: application/json' \
   -d '{
   "apikey": "<your_app_apikey>",
@@ -105,7 +105,7 @@ When analyzer mode is **enabled**:
 
 - **WARNING**: Disabling analyzer mode means orders will be placed with real money
 - Always verify the mode before running automated strategies
-- Analyzer mode is **user-specific** (based on API key)
+- Analyzer mode is an application-wide setting for this single-user deployment. The API key authenticates the request; it does not create a separate per-key mode.
 - Use [AnalyzerStatus](./analyzerstatus.md) to check current mode
 
 ## Use Cases

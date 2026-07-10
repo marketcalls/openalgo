@@ -155,9 +155,11 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionchain \
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
 | underlying | Underlying symbol (NIFTY, BANKNIFTY, SENSEX) | Mandatory | - |
-| exchange | Exchange: NSE_INDEX, BSE_INDEX | Mandatory | - |
+| exchange | Underlying exchange accepted by the shared validation constants | Mandatory | - |
 | expiry_date | Expiry date in DDMMMYY format | Mandatory | - |
 | strike_count | Number of strikes above and below ATM | Optional | All strikes |
+
+`strike_count` must be between 1 and 100 when supplied. Broker adapters may use an optimized option-chain call; otherwise the service resolves contracts locally and retrieves quotes through the normalized market-data layer.
 
 ## Response Fields
 

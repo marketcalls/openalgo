@@ -31,8 +31,8 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 
 ## Setup And Versions
 
-- Python requires `>=3.12`; the project version is `2.0.1.3`. Source: `pyproject.toml:1` through `pyproject.toml:5`.
-- Key backend packages include Flask `3.1.3`, Flask-RESTX `1.3.2`, Flask-SocketIO `5.6.1`, httpx `0.28.1`, websockets `15.0.1`, openalgo SDK `2.0.1`, and pytest `9.0.3`. Source: `pyproject.toml:37` through `pyproject.toml:144`.
+- Python requires `>=3.12`; the project version is `2.0.1.4`. Source: `pyproject.toml:1` through `pyproject.toml:5`.
+- Key backend packages include Flask `3.1.3`, Flask-RESTX `1.3.2`, Flask-SocketIO `5.6.1`, httpx `0.28.1`, websockets `15.0.1`, openalgo SDK `2.0.2`, and pytest `9.1.1`. Source: `pyproject.toml:37` through `pyproject.toml:144`.
 - Frontend requires Node `>=20.20.0 || >=22.22.0 || >=24.13.0`. Source: `frontend/package.json:6`.
 - Frontend scripts include Vite dev/build, Vitest, and Playwright e2e. Source: `frontend/package.json:9` through `frontend/package.json:24`.
 - Frontend dependencies include React `^19.2.3`, React Router `^7.15.0`, TanStack Query, XYFlow, Plotly, lightweight-charts, Socket.IO client, Tailwind CSS 4, and Zustand. Source: `frontend/package.json:26` through `frontend/package.json:71`.
@@ -67,7 +67,7 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 
 ## RESTX API V1
 
-The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` through `restx_api/__init__.py:11`. Namespaces are registered at `restx_api/__init__.py:60` through `restx_api/__init__.py:105`.
+The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` through `restx_api/__init__.py:11`. Namespaces are registered at `restx_api/__init__.py:60` through `restx_api/__init__.py:105`. Swagger UI is deliberately disabled with `doc=False`; `/api/docs` is not a supported route.
 
 ### RESTX Endpoint Inventory
 
@@ -746,4 +746,3 @@ blueprints/whatsapp.py:388 GET /whatsapp/stats stats
 - The static route inventory lists all blueprint decorators in source. Runtime registration may omit Remote MCP unless enabled and may omit React routes when `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in `database/historify_db.py` need review before documenting a single env var as authoritative.
 - Sandbox GTT tables exist, but all GTT services return 501 in analyzer mode. The current behavior is "not implemented" for analyzer GTT, not the sandbox table state machine.
-- The old broker integration guide still says 29 supported brokers. The code and sample env show 33.
