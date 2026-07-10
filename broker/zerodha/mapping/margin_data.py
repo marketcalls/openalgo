@@ -163,6 +163,8 @@ def parse_margin_response(response_data):
         span_margin = 0
         exposure_margin = 0
         margin_benefit = 0
+        initial_total_margin = 0
+        option_premium_credit = 0
 
         if isinstance(data, dict) and "final" in data:
             # Basket response - use final values which include spread benefit
@@ -193,6 +195,14 @@ def parse_margin_response(response_data):
             initial_option_premium = initial.get("option_premium", 0)
 
             final_total = final.get("total", 0)
+
+            # initial.total is the margin required BEFORE the premium credit from
+            # selling the short legs is netted in — that credit only lands once the
+            # sell orders actually fill, so it's the safer figure for callers sizing
+            # a position ahead of placing orders (see total_margin_required's docstring
+            # note above: initial.total - final.total = option_premium).
+            initial_total_margin = initial_total
+            option_premium_credit = option_premium
 
             # Calculate margin benefit (savings from spread/hedge recognition)
             # Formula: Margin Benefit = Sum of Individual Margins - Optimized Combined Margin
@@ -274,6 +284,12 @@ def parse_margin_response(response_data):
                 f"Orders margin: total={total_margin_required}, span={span_margin}, exposure={exposure_margin}"
             )
 
+        # Non-basket (single/aggregated orders) responses have no separate
+        # pre-optimization figure — total_margin_required is already the
+        # standalone total, so it doubles as initial_total_margin here.
+        if not (isinstance(data, dict) and "final" in data):
+            initial_total_margin = total_margin_required
+
         # Return standardized format matching OpenAlgo API specification
         response_data = {
             "status": "success",
@@ -281,6 +297,8 @@ def parse_margin_response(response_data):
                 "total_margin_required": total_margin_required,
                 "span_margin": span_margin,
                 "exposure_margin": exposure_margin,
+                "initial_total_margin": initial_total_margin,
+                "option_premium_credit": option_premium_credit,
             },
         }
 
