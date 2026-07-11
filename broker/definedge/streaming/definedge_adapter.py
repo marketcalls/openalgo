@@ -1,10 +1,9 @@
-import json
 import logging
 import os
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from broker.definedge.streaming.definedge_websocket import DefinedGeWebSocket
 from database.auth_db import (
@@ -13,7 +12,6 @@ from database.auth_db import (
     get_feed_token,
     get_feed_token_dbquery,
 )
-from database.token_db import get_token
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -952,7 +950,9 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             f"Depth feed has OHLC for {exchange}|{token}: {ohlc_check}"
                         )
                     else:
-                        self.logger.warning(f"Depth feed has NO OHLC for {exchange}|{token}")
+                        # Normal for Noren depth feeds - only changed fields are sent;
+                        # cached OHLC from the ack/touchline fills the gap
+                        self.logger.debug(f"Depth feed has NO OHLC for {exchange}|{token}")
 
             # Find the subscription
             subscription = None

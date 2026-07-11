@@ -382,19 +382,9 @@ class DefinedGeWebSocket:
         if has_ohlc_in_ack:
             logger.debug(f"OHLC provided in ACK for {exchange}|{token}")
         else:
-            # Check current time to see if market is open
-            import datetime
-
-            now = datetime.datetime.now()
-            market_open = now.replace(hour=9, minute=15, second=0)
-            market_close = now.replace(hour=15, minute=30, second=0)
-
-            if now < market_open or now > market_close:
-                logger.warning(
-                    f"Market closed - No OHLC expected (Current: {now.strftime('%H:%M')})"
-                )
-            else:
-                logger.warning(f"Market open but NO OHLC in ACK for {exchange}|{token}")
+            # Expected outside market hours and for illiquid scrips; the
+            # touchline feed backfills OHLC once trades occur
+            logger.debug(f"No OHLC in ACK for {exchange}|{token}")
 
         logger.debug(f"Full ACK message: {data}")
 

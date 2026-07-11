@@ -301,9 +301,9 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # Definedge rate limit: 20 concurrent requests per batch
+            # Bound concurrency per batch; request pacing itself is handled by
+            # the shared per-host rate limiter, so no extra inter-batch sleep
             BATCH_SIZE = 20  # Process 20 symbols per batch
-            RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
 
             if len(symbols) > BATCH_SIZE:
                 logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
@@ -317,10 +317,6 @@ class BrokerData:
 
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.debug(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
