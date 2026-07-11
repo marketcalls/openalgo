@@ -143,6 +143,14 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.market_cache = MarketDataCache()  # Initialize market data cache
         self.token_to_symbol = {}  # Map tokens to symbols for cache management
         self.ws_subscription_refs = {}  # Reference counting for WebSocket subscriptions
+        self._reconnecting = False  # Single-flight guard for _connect_with_retry
+
+        # Batch subscription management - coalesce rapid subscribe calls into a
+        # single touchline/depth message instead of one send per symbol
+        # (flattrade/zerodha pattern, issue #1359)
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # seconds to collect subscriptions before flushing
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -260,45 +268,61 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         threading.Thread(target=self._connect_with_retry, daemon=True).start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to DefinEdge WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                # Check if we should still be running
-                if not self.running:
-                    self.logger.info("Adapter stopped - aborting connection attempt")
-                    return
+        """Connect to DefinEdge WebSocket with retry logic.
 
-                self.logger.info(
-                    f"Connecting to DefinEdge WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                # On retry attempts, re-read a fresh token from the DB before
-                # connecting so a daily token rollover does not leave us dead.
-                if self.reconnect_attempts > 0 and self.ws_client:
-                    self.ws_client._refresh_tokens()
-                if self.ws_client and self.ws_client.connect():
-                    self.reconnect_attempts = 0  # Reset attempts on successful connection
-                    self.connected = True
-                    break
-                else:
-                    raise Exception("Connection failed")
+        Single-flight: the adapter is the sole owner of reconnection (the WS
+        layer never reconnects itself), and only one retry loop may run at a
+        time even if multiple close events fire.
+        """
+        with self.lock:
+            if self._reconnecting:
+                self.logger.debug("Reconnect already in progress - skipping duplicate")
+                return
+            self._reconnecting = True
 
-            except Exception as e:
-                self.reconnect_attempts += 1
+        try:
+            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                try:
+                    # Check if we should still be running
+                    if not self.running:
+                        self.logger.info("Adapter stopped - aborting connection attempt")
+                        return
 
-                # Check again if we should still be running before sleeping
-                if not self.running:
-                    self.logger.info("Adapter stopped during retry - aborting")
-                    return
+                    self.logger.info(
+                        f"Connecting to DefinEdge WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    # Re-read a fresh token from the DB before connecting so a
+                    # daily ~3 AM IST token rollover does not leave us dead.
+                    if self.ws_client:
+                        self.ws_client._refresh_tokens()
+                    if self.ws_client and self.ws_client.connect():
+                        self.reconnect_attempts = 0  # Reset attempts on successful connection
+                        self.connected = True
+                        break
+                    else:
+                        raise Exception("Connection failed")
 
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-                )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                except Exception as e:
+                    self.reconnect_attempts += 1
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
-            self.running = False  # Stop the adapter
+                    # Check again if we should still be running before sleeping
+                    if not self.running:
+                        self.logger.info("Adapter stopped during retry - aborting")
+                        return
+
+                    delay = min(
+                        self.reconnect_delay * (2**self.reconnect_attempts),
+                        self.max_reconnect_delay,
+                    )
+                    self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Max reconnection attempts reached. Giving up.")
+                self.running = False  # Stop the adapter
+        finally:
+            with self.lock:
+                self._reconnecting = False
 
     def disconnect(self) -> None:
         """Disconnect from DefinEdge WebSocket with proper cleanup"""
@@ -312,6 +336,12 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             subscription_count = len(self.subscriptions)
             self.subscriptions.clear()
             self.logger.info(f"Cleared {subscription_count} active subscriptions")
+
+            # Cancel any pending batch subscription timer and drop queued items
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
 
         # Disconnect WebSocket client
         if hasattr(self, "ws_client") and self.ws_client:
@@ -460,26 +490,25 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 else:  # mode == 3, Depth
                     subscription_type = "depth"
 
-                # Use reference counting to avoid duplicate WebSocket subscriptions
+                # First reference queues the scrip for a batched subscribe;
+                # later references only bump the counter, so bursts of
+                # subscriptions go out as one message instead of one per symbol
                 scrip = f"{definedge_exchange}|{token}"
-                if self._should_ws_subscribe(scrip, subscription_type):
-                    success = self.ws_client.subscribe(subscription_type, tokens)
-                    if not success:
-                        return self._create_error_response(
-                            "SUBSCRIPTION_ERROR", "Failed to subscribe"
+                with self.lock:
+                    if self._should_ws_subscribe(scrip, subscription_type):
+                        self._queue_ws_subscription(definedge_exchange, token, subscription_type)
+                        self.logger.info(f"[SUBSCRIBE] Queued WebSocket subscription for {scrip}")
+                    else:
+                        self.logger.info(
+                            f"[SUBSCRIBE] WebSocket already has active subscription for {scrip}"
                         )
-                    self.logger.info(f"[SUBSCRIBE] WebSocket subscription sent for {scrip}")
-                else:
-                    self.logger.info(
-                        f"[SUBSCRIBE] WebSocket already has active subscription for {scrip}"
-                    )
 
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
         else:
             self.logger.warning(
-                f"[SUBSCRIBE] Not connected, cannot subscribe to {symbol}.{exchange}"
+                f"[SUBSCRIBE] Not connected - {symbol}.{exchange} will be picked up by resubscribe on connect"
             )
 
         # Log current subscription state
@@ -586,6 +615,75 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
         )
 
+    def _queue_ws_subscription(self, definedge_exchange: str, token: str, sub_type: str) -> None:
+        """Queue a scrip for batched subscription. Caller must hold self.lock."""
+        self.subscription_queue.append(
+            {"exchange": definedge_exchange, "token": token, "type": sub_type}
+        )
+        if len(self.subscription_queue) == 1:
+            self._start_batch_timer()
+
+    def _start_batch_timer(self) -> None:
+        """(Re)start the timer that flushes queued subscriptions. Caller must hold self.lock."""
+        if self.batch_timer:
+            self.batch_timer.cancel()
+
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Flush the queue: one tick and one depth subscribe with all scrips batched."""
+        with self.lock:
+            self.batch_timer = None
+
+            if not self.subscription_queue:
+                return
+
+            # De-duplicate while preserving order
+            tick_tokens = []
+            depth_tokens = []
+            seen_tick = set()
+            seen_depth = set()
+
+            for sub in self.subscription_queue:
+                pair = (sub["exchange"], sub["token"])
+                if sub["type"] == "tick":
+                    if pair not in seen_tick:
+                        seen_tick.add(pair)
+                        tick_tokens.append(pair)
+                else:
+                    if pair not in seen_depth:
+                        seen_depth.add(pair)
+                        depth_tokens.append(pair)
+
+            self.subscription_queue.clear()
+
+            # Snapshot client; release the lock before network I/O
+            ws_client = self.ws_client
+            connected = self.connected
+
+        if not ws_client or not connected:
+            self.logger.warning(
+                "Skipping batch flush - WebSocket not connected; "
+                "_resubscribe_all() will handle these on reconnect"
+            )
+            return
+
+        if tick_tokens:
+            try:
+                self.logger.info(f"Batch subscribing {len(tick_tokens)} tick scrips")
+                ws_client.subscribe("tick", tick_tokens)
+            except Exception as e:
+                self.logger.error(f"Batch tick subscription failed: {e}")
+
+        if depth_tokens:
+            try:
+                self.logger.info(f"Batch subscribing {len(depth_tokens)} depth scrips")
+                ws_client.subscribe("depth", depth_tokens)
+            except Exception as e:
+                self.logger.error(f"Batch depth subscription failed: {e}")
+
     def _on_open(self, wsapp) -> None:
         """Callback when connection is established"""
         self.logger.info("Connected to DefinEdge WebSocket")
@@ -654,7 +752,17 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info(f"DefinEdge WebSocket connection closed: {code} - {reason}")
         self.connected = False
 
-        # Only attempt to reconnect if adapter is still running (not manually disconnected)
+        # Drop pending batch items - _resubscribe_all() rebuilds subscriptions
+        # from self.subscriptions on reconnect, so anything still queued is stale
+        with self.lock:
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+
+        # Only attempt to reconnect if adapter is still running (not manually
+        # disconnected). _connect_with_retry is single-flight, so overlapping
+        # close events cannot spawn competing retry loops.
         if self.running:
             self.logger.info("Connection lost - will attempt to reconnect")
             threading.Thread(target=self._connect_with_retry, daemon=True).start()
@@ -785,6 +893,7 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 "low": market_data.get("low", 0),
                                 "close": market_data.get("close", 0),
                                 "volume": market_data.get("volume", 0),
+                                "oi": market_data.get("oi", 0),
                                 "timestamp": int(time.time() * 1000),
                             }
 

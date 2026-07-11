@@ -2,6 +2,8 @@
 
 import json
 
+from broker.definedge.api.baseurl import get_url
+from broker.definedge.api.rate_limiter import rate_limited_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -28,10 +30,10 @@ def get_margin_data(auth_token):
 
         headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
 
-        url = "https://integrate.definedgesecurities.com/dart/v1/limits"
+        url = get_url("/limits")
 
         logger.info("=== FETCHING FUNDS/LIMITS FROM DEFINEDGE ===")
-        response = client.get(url, headers=headers)
+        response = rate_limited_request(client, "GET", url, headers=headers)
 
         # Log raw response for debugging
         logger.info(f"Definedge Limits API Response Status: {response.status_code}")

@@ -86,13 +86,14 @@ def calculate_order_statistics(order_data):
             elif order_type == "SELL":
                 total_sell_orders += 1
 
-            # Count orders based on their status (DefinedGe status mapping)
+            # Count orders based on their status
+            # API order_status values: CANCELED / COMPLETE / NEW / OPEN / REJECTED / REPLACED
             status = order.get("order_status", "").upper()
             if status in ["COMPLETE", "EXECUTED"]:
                 total_completed_orders += 1
-            elif status in ["OPEN", "PENDING"]:
+            elif status in ["OPEN", "NEW", "REPLACED", "PENDING"]:
                 total_open_orders += 1
-            elif status in ["REJECTED", "CANCELLED"]:
+            elif status in ["REJECTED", "CANCELED", "CANCELLED"]:
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -127,19 +128,24 @@ def transform_order_data(orders):
             continue
 
         # Map DefinedGe order status to OpenAlgo format
+        # API order_status values: CANCELED / COMPLETE / NEW / OPEN / REJECTED / REPLACED
         status = order.get("order_status", "").upper()
         if status in ["COMPLETE", "EXECUTED"]:
             order_status = "complete"
         elif status in ["REJECTED"]:
             order_status = "rejected"
-        elif status in ["TRIGGER PENDING"]:
+        elif status in ["TRIGGER PENDING", "TRIGGER_PENDING"]:
             order_status = "trigger pending"
-        elif status in ["OPEN", "PENDING"]:
+        elif status in ["OPEN", "NEW", "REPLACED", "PENDING"]:
             order_status = "open"
-        elif status in ["CANCELLED"]:
+        elif status in ["CANCELED", "CANCELLED"]:
             order_status = "cancelled"
         else:
             order_status = status.lower()
+
+        # Map API price types (LIMIT/MARKET/SL-LIMIT/SL-MARKET) to OpenAlgo constants
+        price_type_map = {"SL-LIMIT": "SL", "SL-MARKET": "SL-M"}
+        price_type = order.get("price_type", "")
 
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
@@ -148,11 +154,11 @@ def transform_order_data(orders):
             "quantity": order.get("quantity", 0),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("trigger_price", 0.0),
-            "pricetype": order.get("price_type", ""),  # DefinedGe uses 'price_type'
+            "pricetype": price_type_map.get(price_type, price_type),
             "product": order.get("product_type", ""),  # DefinedGe uses 'product_type'
             "orderid": order.get("order_id", ""),
             "order_status": order_status,
-            "timestamp": order.get("order_timestamp", order.get("timestamp", "")),
+            "timestamp": order.get("exchange_time", order.get("order_entry_time", "")),
         }
 
         transformed_orders.append(transformed_order)
