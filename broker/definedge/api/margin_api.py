@@ -1,5 +1,7 @@
 import json
 
+from broker.definedge.api.baseurl import get_url
+from broker.definedge.api.rate_limiter import rate_limited_request
 from broker.definedge.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -7,7 +9,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Definedge API constants
-DEFINEDGE_MARGIN_URL = "https://integrate.definedgesecurities.com/dart/v1/spancalculator"
+DEFINEDGE_MARGIN_URL = get_url("/spancalculator")
 
 
 def calculate_margin_api(positions, auth):
@@ -50,7 +52,7 @@ def calculate_margin_api(positions, auth):
             status = 400
 
         return MockResponse(), error_response
-    logger.info(f"API session key: {api_session_key}")
+
     # Prepare headers
     headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
 
@@ -64,7 +66,7 @@ def calculate_margin_api(positions, auth):
 
     try:
         # Make the request to Definedge Span Calculator API
-        response = client.post(DEFINEDGE_MARGIN_URL, headers=headers, json=payload)
+        response = rate_limited_request(client, "POST", DEFINEDGE_MARGIN_URL, headers=headers, json=payload)
 
         # Add status attribute for compatibility
         response.status = response.status_code

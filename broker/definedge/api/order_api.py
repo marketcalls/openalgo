@@ -1,17 +1,17 @@
 import json
-import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.definedge.api.baseurl import get_url
+from broker.definedge.api.rate_limiter import rate_limited_request
 from broker.definedge.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
     transform_data,
     transform_modify_order_data,
 )
-from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -28,22 +28,21 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         # Get the shared httpx client with connection pooling
         client = get_httpx_client()
 
-        url = f"https://integrate.definedgesecurities.com/dart/v1{endpoint}"
+        url = get_url(endpoint)
 
         headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
 
         logger.debug(f"Making {method} request to DefinedGe API: {url}")
 
-        if method.upper() == "GET":
-            response = client.get(url, headers=headers)
-        elif method.upper() == "POST":
-            response = client.post(url, json=payload if payload else {}, headers=headers)
-        elif method.upper() == "PUT":
-            response = client.put(url, json=payload if payload else {}, headers=headers)
-        elif method.upper() == "DELETE":
-            response = client.delete(url, headers=headers)
-        else:
+        method = method.upper()
+        if method not in ("GET", "POST", "PUT", "DELETE"):
             raise ValueError(f"Unsupported HTTP method: {method}")
+
+        kwargs = {"headers": headers}
+        if method in ("POST", "PUT"):
+            kwargs["json"] = payload if payload else {}
+
+        response = rate_limited_request(client, method, url, **kwargs)
 
         response.raise_for_status()
         response_data = response.json()
@@ -227,8 +226,8 @@ def place_order_api(data, auth):
         logger.debug(f"Place order payload being sent to Definedge: {json.dumps(newdata, indent=2)}")
 
         # Make the API request
-        url = "https://integrate.definedgesecurities.com/dart/v1/placeorder"
-        response = client.post(url, json=newdata, headers=headers)
+        url = get_url("/placeorder")
+        response = rate_limited_request(client, "POST", url, json=newdata, headers=headers)
 
         # Log the raw response
         logger.debug(f"Definedge API Response Status: {response.status_code}")
@@ -261,8 +260,13 @@ def place_order_api(data, auth):
             logger.error(f"Full error response: {response_data}")
             orderid = None
 
-        # Add status attribute to response object to match what PlaceOrder endpoint expects
+        # Add status attribute to response object to match what PlaceOrder endpoint expects.
+        # Definedge returns HTTP 200 even for rejected orders - surface a non-200
+        # status when no order id came back so the service layer reports the
+        # failure instead of a false success (see issues #1618/#1623).
         response.status = response.status_code
+        if orderid is None and response.status == 200:
+            response.status = 400
 
         return response, response_data, orderid
 
@@ -565,12 +569,12 @@ def cancel_order(orderid, auth):
         headers = {"Authorization": api_session_key}
 
         # According to API docs, cancel is a GET request with orderid in URL
-        url = f"https://integrate.definedgesecurities.com/dart/v1/cancel/{orderid}"
+        url = get_url(f"/cancel/{orderid}")
 
         logger.debug(f"Making GET request to: {url}")
 
         # Make the GET request
-        response = client.get(url, headers=headers)
+        response = rate_limited_request(client, "GET", url, headers=headers)
 
         # Log the raw response
         logger.debug(f"Definedge Cancel API Response Status: {response.status_code}")
@@ -648,8 +652,8 @@ def modify_order(data, auth):
     logger.debug(f"Final JSON payload being sent: {payload}")
 
     # Make the request using the shared client
-    response = client.post(
-        "https://integrate.definedgesecurities.com/dart/v1/modify", headers=headers, content=payload
+    response = rate_limited_request(
+        client, "POST", get_url("/modify"), headers=headers, content=payload
     )
 
     # Add status attribute for compatibility with the existing codebase
@@ -667,7 +671,7 @@ def modify_order(data, auth):
         return {
             "status": "error",
             "message": data.get("emsg", data.get("message", "Failed to modify order")),
-        }, response.status
+        }, response.status if response.status != 200 else 400
 
 
 def cancel_all_orders_api(data, auth):
@@ -718,14 +722,14 @@ def cancel_all_orders_api(data, auth):
 
     logger.debug(f"Total orders in order book: {len(orders_data)}")
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    # Definedge may use different status values, so check multiple variations
+    # Filter orders that are still cancellable
+    # API order_status values: CANCELED / COMPLETE / NEW / OPEN / REJECTED / REPLACED
+    cancellable = ["open", "new", "replaced", "trigger pending", "pending", "open pending", "trigger_pending"]
     orders_to_cancel = [
         order
         for order in orders_data
-        if order.get("status", "").lower()
-        in ["open", "trigger pending", "pending", "open pending", "trigger_pending"]
-        or order.get("order_status", "").upper() in ["OPEN", "PENDING", "TRIGGER_PENDING"]
+        if order.get("status", "").lower() in cancellable
+        or order.get("order_status", "").lower() in cancellable
     ]
 
     logger.debug(f"Found {len(orders_to_cancel)} open orders to cancel")
