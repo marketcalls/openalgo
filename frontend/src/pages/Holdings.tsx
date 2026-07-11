@@ -165,6 +165,8 @@ export default function Holdings() {
         'Symbol',
         'Exchange',
         'Quantity',
+        'T1 Qty',
+        'Pledged Qty',
         'Avg Price',
         'LTP',
         'Product',
@@ -175,6 +177,8 @@ export default function Holdings() {
         sanitizeCSV(h.symbol),
         sanitizeCSV(h.exchange),
         sanitizeCSV(h.quantity),
+        sanitizeCSV(h.t1_quantity ?? 0),
+        sanitizeCSV(h.pledged_quantity ?? 0),
         sanitizeCSV(h.average_price),
         sanitizeCSV(h.ltp),
         sanitizeCSV(h.product),
@@ -400,7 +404,7 @@ export default function Holdings() {
                 </TableBody>
                 <TableFooter>
                   <TableRow className="bg-muted/50">
-                    <TableCell colSpan={6} className="text-right text-muted-foreground">
+                    <TableCell colSpan={8} className="text-right text-muted-foreground">
                       Total P&L:
                     </TableCell>
                     <TableCell

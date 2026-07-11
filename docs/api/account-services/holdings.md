@@ -119,7 +119,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/holdings \
 - **pnl** is calculated as: (Current Price - Average Buy Price) × Quantity
 - **totalholdingvalue** is the current market value of entire portfolio, including free, T1, and pledged quantities
 - Holdings persist across trading days (unlike MIS positions)
-- **t1_quantity** and **pledged_quantity** are only populated for brokers whose API exposes these separately; other brokers report `0` for both. See `SKYSHIELD_PATCHES.md` for the current per-broker support matrix.
+- **t1_quantity** and **pledged_quantity** are only populated for brokers whose API exposes these separately; other brokers report `0` for both.
 
 ## Use Cases
 

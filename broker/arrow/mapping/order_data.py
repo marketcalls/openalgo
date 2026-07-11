@@ -217,8 +217,8 @@ def transform_holdings_data(holdings_data):
                 "exchange": holding.get("_exchange", ""),
                 "quantity": holding.get("qty", 0),
                 "t1_quantity": holding.get("t1Qty", 0),
-                "pledged_quantity": holding.get("collateralQty", 0)
-                + holding.get("brokerCollateralQty", 0),
+                "pledged_quantity": float(holding.get("collateralQty") or 0.0)
+                + float(holding.get("brokerCollateralQty") or 0.0),
                 "product": holding.get("_product", "CNC"),
                 "average_price": average_price,
                 # TODO(arrow): confirm holdings PnL field name (`pnl`).

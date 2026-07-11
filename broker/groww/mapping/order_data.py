@@ -995,6 +995,7 @@ def calculate_portfolio_statistics(holdings_data):
     for holding in holdings_data:
         # Handle different possible key variations
         quantity = float(holding.get("quantity", holding.get("qty", 0)))
+        quantity += float(holding.get("t1_quantity", 0)) + float(holding.get("pledge_quantity", 0))
         avg_price = float(holding.get("average_price", holding.get("avgPrice", 0)))
 
         # Calculate holding value

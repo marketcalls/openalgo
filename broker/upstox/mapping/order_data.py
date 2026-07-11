@@ -259,18 +259,15 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    def total_quantity(item):
-        return (
-            item.get("quantity", 0)
-            + item.get("t1_quantity", 0)
-            + item.get("collateral_quantity", 0)
-        )
-
+    # Unlike Zerodha (where `quantity` is confirmed live to be the free/
+    # unpledged portion only), Upstox's own OpenAPI schema documents
+    # `quantity` as "The total holding qty" — already inclusive of
+    # t1_quantity/collateral_quantity. Summing them here would double-count.
     totalholdingvalue = sum(
-        item["last_price"] * total_quantity(item) for item in holdings_data
+        item["last_price"] * item.get("quantity", 0) for item in holdings_data
     )
     totalinvvalue = sum(
-        item["average_price"] * total_quantity(item) for item in holdings_data
+        item["average_price"] * item.get("quantity", 0) for item in holdings_data
     )
     totalprofitandloss = sum(item["pnl"] for item in holdings_data)
 

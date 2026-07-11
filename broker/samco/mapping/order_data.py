@@ -393,6 +393,7 @@ def transform_holdings_data(holdings_data):
             "symbol": holding.get("tradingSymbol", ""),
             "exchange": holding.get("exchange", "NSE"),
             "quantity": quantity,
+            "t1_quantity": 0,
             "pledged_quantity": pledged_quantity,
             "product": holding.get("product", "CNC"),
             "ltp": ltp,

@@ -385,8 +385,15 @@ def transform_holdings_data(holdings_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item["ltp"] * item["quantity"] for item in holdings_data)
-    totalinvvalue = sum(item["costPrice"] * item["quantity"] for item in holdings_data)
+    def total_quantity(item):
+        return (
+            item.get("quantity", 0)
+            + item.get("qty_t1", 0)
+            + item.get("collateralQuantity", 0)
+        )
+
+    totalholdingvalue = sum(item["ltp"] * total_quantity(item) for item in holdings_data)
+    totalinvvalue = sum(item["costPrice"] * total_quantity(item) for item in holdings_data)
     totalprofitandloss = sum(item["pl"] for item in holdings_data)
 
     # To avoid division by zero in the case when total_investment_value is 0
