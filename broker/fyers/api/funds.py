@@ -41,14 +41,14 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
             - m2mrealized: Realized M2M
             - utiliseddebits: Utilized amount
     """
-    # Initialize default response
-    default_response = {
-        "availablecash": "0.00",
-        "collateral": "0.00",
-        "m2munrealized": "0.00",
-        "m2mrealized": "0.00",
-        "utiliseddebits": "0.00",
-    }
+    # IMPORTANT: never fabricate a zero-balance funds dict on an error. Fyers returns
+    # real zeros for a genuinely empty account via the normal success path; a
+    # FABRICATED zeros dict here would make an expired/invalid session (e.g. daily
+    # token expiry → HTTP 401) look like a live, zero-balance account. The
+    # funds_service layer treats an empty {} as "session invalid/expired", which
+    # relies on every broker returning {} — not populated zeros — when it has no real
+    # data. So on any error we return {} (empty). The ONE exception is a transient 429
+    # rate-limit, where serving genuinely-cached REAL data (with backoff) is correct.
 
     now = time.time()
 
@@ -60,16 +60,17 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
     if user_cache["data"] and (now - user_cache["timestamp"]) < CACHE_TTL:
         return user_cache["data"]
 
-    # If rate-limited and in backoff period, return cached or default data
+    # If rate-limited and in backoff period, serve cached REAL data (transient 429);
+    # with no cache we can't fabricate — return {} so the session is reported honestly.
     if now < user_rate_limit["backoff_until"]:
         remaining = int(user_rate_limit["backoff_until"] - now)
         logger.debug(f"Rate limit backoff active, {remaining}s remaining. Serving cached data.")
-        return user_cache["data"] if user_cache["data"] else default_response
+        return user_cache["data"] if user_cache["data"] else {}
 
     api_key = os.getenv("BROKER_API_KEY")
     if not api_key:
         logger.error("BROKER_API_KEY environment variable not set")
-        return default_response
+        return {}
 
     # Get shared HTTP client with connection pooling
     client = get_httpx_client()
@@ -87,7 +88,9 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
         if funds_data.get("code") != 200:
             error_msg = funds_data.get("message", "Unknown error")
             logger.error(f"Error in Fyers funds API: {error_msg}")
-            return user_cache["data"] if user_cache["data"] else default_response
+            # API-level error (e.g. expired token) — return {} (no real data), never
+            # fabricate zeros. Serve cache only for transient 429 (handled below).
+            return {}
 
         # Process the funds data
         processed_funds = {}
@@ -165,7 +168,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
 
         except (ValueError, TypeError):
             logger.exception("Error calculating fund totals")
-            return user_cache["data"] if user_cache["data"] else default_response
+            return {}
 
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
@@ -181,8 +184,13 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
                 f"Fyers API rate limited (429). Backing off for {backoff}s. "
                 f"Serving cached data."
             )
-            return user_cache["data"] if user_cache["data"] else default_response
+            # Transient — serve genuinely-cached REAL data if we have it, else {}.
+            return user_cache["data"] if user_cache["data"] else {}
+        # Any other HTTP error (notably 401 = expired/invalid token) means we have no
+        # valid funds data — return {} so the session is reported as invalid/expired,
+        # never masked as a live zero-balance account.
         logger.error(f"HTTP error {e.response.status_code} fetching Fyers funds: {e.response.text}")
+        return {}
     except httpx.RequestError as e:
         logger.error(f"Request failed: {str(e)}")
     except json.JSONDecodeError as e:
@@ -190,4 +198,5 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
     except Exception:
         logger.exception("Unexpected error in get_margin_data")
 
-    return user_cache["data"] if user_cache["data"] else default_response
+    # No real funds data obtained — return {} (never fabricate zeros).
+    return {}
