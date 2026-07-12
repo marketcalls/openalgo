@@ -35,7 +35,7 @@ from database.sandbox_db import (
 )
 from database.token_db import get_symbol_info
 from utils.logging import get_logger
-from utils.symbol_utils import is_future, is_option
+from utils.symbol_utils import is_future, is_option, normalize_contract_value
 
 logger = get_logger(__name__)
 
@@ -396,16 +396,11 @@ class FundManager:
             # contract_value scales notional for instruments where one contract is not one
             # unit of the underlying (e.g. crypto derivatives: 0.001 BTC or 0.01 ETH per
             # contract). It is 1.0 for equities and standard F&O, so this is a no-op there.
-            # This mirrors the contract_value scaling already applied to realized and
-            # unrealized P&L in position_manager, keeping the margin/funds ledger consistent
-            # with the P&L ledger. Without it, margin is over-blocked by 1/contract_value
-            # (e.g. ~1000x for BTC), inflating used_margin and understating available cash.
-            contract_value = Decimal("1.0")
-            try:
-                if symbol_obj.contract_value and float(symbol_obj.contract_value) != 1.0:
-                    contract_value = Decimal(str(symbol_obj.contract_value))
-            except (TypeError, ValueError):
-                pass
+            # The same normalizer scales realized/unrealized P&L in position_manager, so the
+            # margin/funds ledger stays consistent with the P&L ledger. Without it, margin is
+            # over-blocked by 1/contract_value (e.g. ~1000x for BTC), inflating used_margin
+            # and understating available cash.
+            contract_value = normalize_contract_value(symbol_obj.contract_value)
 
             # Calculate trade value (quantity × price × contract_value)
             trade_value = quantity * price * contract_value

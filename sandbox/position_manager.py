@@ -23,6 +23,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import SandboxPositions, SandboxTrades, db_session, get_config
 from database.token_db import get_symbol_info
+from utils.symbol_utils import normalize_contract_value
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
 from services.market_data_service import get_market_data_service
@@ -175,15 +176,14 @@ class PositionManager:
         self.fund_manager = FundManager(user_id)
 
     def _get_contract_value(self, symbol: str, exchange: str) -> Decimal:
-        """Look up contract_value multiplier for a symbol (e.g. 0.01 for ETHUSD.P).
-        Returns 1.0 for normal equity instruments."""
+        """Look up the contract_value multiplier for a symbol (e.g. 0.01 for ETHUSD.P).
+        Returns 1.0 for normal equity instruments. Shares normalize_contract_value with the
+        sandbox margin path (fund_manager) so the P&L and margin ledgers cannot diverge."""
         try:
             sym_info = get_symbol_info(symbol, exchange)
-            if sym_info and sym_info.contract_value and float(sym_info.contract_value) != 1.0:
-                return Decimal(str(sym_info.contract_value))
+            return normalize_contract_value(sym_info.contract_value if sym_info else None)
         except Exception:
-            pass
-        return Decimal("1.0")
+            return Decimal("1.0")
 
     def _check_and_close_expired_positions(self, positions):
         """
