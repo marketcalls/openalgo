@@ -393,8 +393,22 @@ class FundManager:
                 logger.error(f"Symbol {symbol} not found on {exchange}")
                 return None, "Symbol not found"
 
-            # Calculate trade value (quantity × price)
-            trade_value = quantity * price
+            # contract_value scales notional for instruments where one contract is not one
+            # unit of the underlying (e.g. crypto derivatives: 0.001 BTC or 0.01 ETH per
+            # contract). It is 1.0 for equities and standard F&O, so this is a no-op there.
+            # This mirrors the contract_value scaling already applied to realized and
+            # unrealized P&L in position_manager, keeping the margin/funds ledger consistent
+            # with the P&L ledger. Without it, margin is over-blocked by 1/contract_value
+            # (e.g. ~1000x for BTC), inflating used_margin and understating available cash.
+            contract_value = Decimal("1.0")
+            try:
+                if symbol_obj.contract_value and float(symbol_obj.contract_value) != 1.0:
+                    contract_value = Decimal(str(symbol_obj.contract_value))
+            except (TypeError, ValueError):
+                pass
+
+            # Calculate trade value (quantity × price × contract_value)
+            trade_value = quantity * price * contract_value
 
             # Determine leverage based on action, product and symbol type
             leverage = self._get_leverage(exchange, product, symbol, action)
