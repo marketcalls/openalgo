@@ -22,8 +22,9 @@ special case.
 
 **Success criteria**
 
-- A third party can ship a broker for any market as an out-of-tree package
-  against a documented, versioned contract, and self-certify it.
+- A new broker for any market is added by dropping in `broker/{name}/` against a
+  documented in-repo contract + registry, validated by the conformance suite — a
+  PR into the repo, no out-of-tree distribution ([ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)).
 - Adding a market is *data + strategies*, not edits scattered across dozens of files.
 - Existing Indian users observe **no change** — proven in CI, not asserted.
 
@@ -31,9 +32,10 @@ special case.
 
 1. **Additive, zero breaks** — the global model is a *superset*; today's Indian
    format/constants/`/api/v1` are byte-identical special cases.
-2. **Out-of-tree plugins** — a versioned public `BrokerAdapter` contract;
-   discovery via entry-points; a shipped conformance suite; plugins are *trusted
-   code* (no sandboxing in v1).
+2. **In-tree brokers, formal contract** ([ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)) —
+   brokers live in `broker/{name}/`, contributed via PR, implementing an in-repo
+   `BrokerAdapter` contract + a unified registry + a conformance suite. No
+   out-of-tree/installable plugins, no published contract package.
 3. **Model four, build two** — model & paper-validate Indian F&O, crypto
    derivatives, crypto spot, US equity/options; build live only **IN + crypto
    derivatives**.
@@ -49,7 +51,7 @@ Internal API   services/         same orchestration; calls BrokerAdapter; cross-
 Domain Core    (new)             Venue → Market/Region → Segment → (UnderlyingAssetClass × InstrumentKind) → Instrument
 Capability Manifest  plugin.json v2 (EXTENDS existing get_broker_capabilities / /capabilities)
 Resolvers      (new)             Currency · Calendar/TZ · Tick/Lot · Rate-limit · Margin (each with its OWN key)
-Broker Adapters                  formal versioned Protocol; 33 existing wrapped via shim; out-of-tree loader
+Broker Adapters                  formal in-repo Protocol; 34 existing wrapped via shim; unified registry
 Symbol DB      SymToken          shared-schema decision required (34 defs today); additive columns
 Feed           websocket_proxy/  ZMQ fan-in unchanged; streaming part of adapter contract
 ```
@@ -114,8 +116,8 @@ changes — it resolves internally to `(Venue, Market, Segment)`.
 
 ### 5.1 The `BrokerAdapter` Protocol — full surface (corrected)
 
-The contract is **not just the data/order methods**. An out-of-tree broker must
-also declare its integration surface:
+The contract is **not just the data/order methods**. A broker must also declare
+its full integration surface:
 
 | Group | Surface |
 |-------|---------|
@@ -176,20 +178,20 @@ OPTION". Validation runs against the active broker's manifest.
 
 ### 5.3 Loading & conformance
 
-In-tree (`broker/{name}/`) **or** out-of-tree; version-gated by
-`contract_version`; a shipped `broker_conformance` suite; and the **conformance
-shim** wrapping the **34** existing adapters (33 Indian + Delta; auto-generating an
-Indian manifest so their accepted set is exactly today's). No broker rewrites to
-ship.
+Brokers are **in-tree** (`broker/{name}/`), contributed via PR
+([ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)); the contract is an
+**in-repo module** (e.g. `broker/contract/`); a shipped `broker_conformance` suite
+runs over every adapter in CI; and the **conformance shim** wraps the **34**
+existing adapters (33 Indian + Delta; auto-generating an Indian manifest so their
+accepted set is exactly today's). No broker rewrites to ship, no published package.
 
-> **Feasibility (corrected).** Out-of-tree is **not** just an entry-point loader.
-> Today `pyproject.toml` ships `packages = []` (non-distributable) and broker
-> dispatch is hard-coded in `brlogin.py:73`, `auth_utils.py:283` (`f"broker.{broker}…"`),
-> `websocket_proxy/__init__.py:30` (eager in-tree imports), and
-> `broker_factory.py:53` (fixed `{name}_adapter` naming — the reason Delta needs an
-> alias). P1 must publish a **distributable contract package** (e.g.
-> `openalgo-broker-api`) and a **unified broker registry** (auth · credentials ·
-> master-contract · data · streaming · migrations · config) to remove that coupling.
+> **A registry, not a loader.** P1's value is a **unified broker registry** (auth ·
+> credentials · master-contract · data · streaming · migrations · config) that
+> replaces the hard-coded dispatch in `brlogin.py:73`, `auth_utils.py:283`
+> (`f"broker.{broker}…"`), `websocket_proxy/__init__.py:30` (eager imports), and
+> `broker_factory.py:53` (fixed naming — the reason Delta needs an alias). This is
+> internal decoupling + one place to register a broker; it does **not** require
+> making OpenAlgo distributable (`pyproject.toml` stays `packages = []`).
 
 ## 6. Resolvers (cross-cutting) — each keyed on its OWN dimension (corrected)
 
@@ -273,6 +275,9 @@ does not yet exist):
 ## 10. Non-goals (YAGNI)
 
 - No US or crypto-spot **reference broker** in this effort (interfaces only).
+- **No out-of-tree / installable broker plugins** — brokers are in-tree,
+  PR-contributed ([ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)); no
+  published contract package, no entry-point discovery.
 - No plugin **sandboxing/signing** in v1 (plugins are trusted code).
 - **No vendor SDKs / aggregation libraries** ([ADR-0002](../decisions/2026-07-13-direct-api-integration-no-vendor-sdks.md), [ADR-0001](../decisions/2026-07-13-crypto-native-integration-not-ccxt.md)).
 - No new canonical symbol *table* — reuse `SymToken` (but resolve its **34-way
