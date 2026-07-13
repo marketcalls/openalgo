@@ -4,7 +4,12 @@
 Pins the methodology so the audit's file counts are reproducible (addresses the
 review finding that ad-hoc greps drifted). Run from the repo root:
 
-    python docs/superpowers/audit/coupling_inventory.py
+    uv run python docs/superpowers/audit/coupling_inventory.py
+
+FIRST-PASS SUBSET: scans 9 code dirs for *token* coupling only. P0A expands this
+into an AST/schema inventory suite over all top-level folders + semantic coupling
+(broker-name switches, int coercions, tz arithmetic, symbol parsing, migration
+and WebSocket-registration assumptions).
 
 Methodology (fixed):
   * SIGNAL = hard Indian-coupling tokens with word boundaries where the token is

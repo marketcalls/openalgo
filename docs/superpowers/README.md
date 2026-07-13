@@ -16,9 +16,9 @@ Every part of this design follows from four decisions made during brainstorming:
 | # | Decision | Meaning |
 |---|----------|---------|
 | 1 | **Additive, zero breaks** | Existing symbol format, order constants (`CNC/NRML/MIS`, `SL/SL-M`), and `/api/v1` request+response shapes stay **byte-identical**. All global capability is additive. |
-| 2 | **Out-of-tree plugins** | Brokers become installable packages discovered via entry-points, against a **versioned public `BrokerAdapter` contract**. Anyone can ship a broker without touching core. |
+| 2 | **Out-of-tree plugins** | Brokers become installable packages against a **versioned public `BrokerAdapter` contract**. *Requires a distributable contract package + a unified broker registry — the current core hard-codes broker dispatch in several spots, so this is real decoupling work, not just an entry-point loader (roadmap P1).* |
 | 3 | **Model four, build two** | The domain model + contract are designed & paper-validated against **four** shapes (Indian F&O, crypto derivatives, crypto spot, US equity/options). Only **Indian + crypto-derivatives (Delta)** are wired up & tested **live** now. |
-| 4 | **Normalized domain core** | A structured `Market → Segment → AssetClass → Instrument` model sits *underneath* the flat symbol; the string becomes a byte-identical *rendering*. Cross-cutting concerns resolve from metadata, not hardcoding. |
+| 4 | **Normalized domain core** | A structured **five-axis** model (Venue · Market/Region · Segment · UnderlyingAssetClass · InstrumentKind → Instrument) sits *underneath* the flat symbol; the string becomes a *rendering* that is byte-identical for existing symbols. Cross-cutting concerns resolve from metadata, not hardcoding. |
 
 ## Documents
 

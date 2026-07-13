@@ -54,9 +54,11 @@ third-party aggregation library — for crypto connectivity.
 
 ## Roadmap implications
 
-- **P7** — clean up Delta to the native contract (remove the duplicate
-  `delta_adapter.py` / `deltaexchange_adapter.py`). **Delta becomes the reference
-  native crypto adapter** that Binance / CoinDCX / Hyperliquid follow.
+- **P1.5** — Delta becomes the **reference native crypto adapter** (moved up to
+  prove the contract early). Make the adapter entry points explicit and drop the
+  `deltaexchange_adapter.py` **alias** (a 15-line re-export forced by
+  `broker_factory.py`'s rigid naming) once the registry no longer needs it.
+  Binance / CoinDCX / Hyperliquid follow.
 - **P4** — rate-limit and margin (leverage / isolated-cross) resolvers are
   implemented natively per exchange.
 - Contributor docs ship a **native crypto adapter guide** + scaffolding, so the
