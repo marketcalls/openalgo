@@ -27,7 +27,8 @@ Every part of this design follows from four decisions made during brainstorming:
 | [`problem/2026-07-13-challenges-and-solutions.md`](problem/2026-07-13-challenges-and-solutions.md) | **The why — read first.** Each current challenge paired with how the design overcomes it and where in the roadmap. |
 | [`specs/2026-07-13-global-market-architecture-design.md`](specs/2026-07-13-global-market-architecture-design.md) | The full target architecture — the six design sections, principles, and best practices. **The how.** |
 | [`audit/2026-07-13-sitewide-coupling-audit.md`](audit/2026-07-13-sitewide-coupling-audit.md) | The complete folder-by-folder audit of Indian-market coupling across the whole repo. |
-| [`roadmap/2026-07-13-phased-roadmap.md`](roadmap/2026-07-13-phased-roadmap.md) | The P0–P7 phase plan; each phase becomes its own spec → plan → implementation cycle. |
+| [`roadmap/2026-07-13-phased-roadmap.md`](roadmap/2026-07-13-phased-roadmap.md) | The P0A–P7 phase plan; each phase becomes its own spec → plan → implementation cycle. |
+| [`blockers/blocker-register.md`](blockers/blocker-register.md) | **Living blocker register** — current blockers (B1–B5), the owner decision (D1: precision sequencing), resolved items, and the critical path. |
 | [`decisions/`](decisions/) | Architecture Decision Records (ADRs). **ADR-0003:** in-tree broker model (no out-of-tree plugins). **ADR-0002:** direct API/WebSocket integration, no vendor SDKs or aggregation libraries. **ADR-0001:** the crypto/CCXT instance of that rule. |
 | [`reviews/`](reviews/) | External review responses — **three Codex rounds** (all findings verified & applied): #1 architecture corrections, #2 implementation-readiness, #3 post-ADR-0003 reconciliation + design gates. |
 | [`audit/coupling_inventory.py`](audit/coupling_inventory.py) | Reproducible, commit-pinned coupling-count script (replaces ad-hoc greps). |
