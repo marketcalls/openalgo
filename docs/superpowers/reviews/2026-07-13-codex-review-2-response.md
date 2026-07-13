@@ -26,7 +26,7 @@ strings**; WebSocket topics/payload schemas preserved; new normalized DTOs stay
 
 | # | Finding | Evidence | Resolution → phase |
 |---|---------|----------|--------------------|
-| 5 | Contract needs required + capability-conditional protocols | Only `dhan`/`zerodha` have `gtt_api.py`; `quotes_service.py:125` inspects `__init__` **arity** for feed-token | P1: minimal required protocol + optional `HistoricalData/Depth/GTT/OptionsChain/Holdings` + `UnsupportedCapability` + DTO schemas; kill arity-sniffing |
+| 5 | Contract needs required + capability-conditional protocols | Only `dhan`/`zerodha` have `gtt_api.py`; `quotes_service.py:125` inspects `__init__` **arity** for feed-token | P1: minimal required protocol + optional `HistoricalData/Depth/GTT(experimental)/OptionsChain/Holdings` + `UnsupportedCapability` + DTO schemas; kill arity-sniffing |
 | 6 | No error/retry/idempotency contract | (design gap) | P1: typed errors (auth-expired, permission, unsupported, rate-limited+retry-after, transient, permanent-reject) + **client-order-id idempotency** (retry must not double-place); rate-limit = weights+concurrency+headers+backoff+safe/unsafe |
 | 7 | Auth lifetime ≠ market calendar | `session.py:13` global 03:00 IST rollover; `auth_db.py:102` TTL vs IST; `:179` 4 generic aux fields | P4: explicit per-broker **auth/session policy** (lifetime/tz, refresh window, feed-token, revocation, callback state, flow type, master-contract schedule); richer credential schema |
 | 8 | No canonical time-series contract | `zerodha/api/data.py:518` adds 5:30; `download/sqlite_downloader.py:78` labels −5:30 "UTC→IST" | P4: canonical UTC epoch, exchange-local tz, session date, candle open/close convention, inclusive/exclusive ranges, DST, 24/7 daily boundaries |
@@ -50,7 +50,7 @@ P0A (consistency + full inventory) → P0B (compat + migration foundation) → P
 errors/idempotency) → **P1.5 (Delta reference adapter — moved up to prove
 auth/data/streaming/precision early)** → P2 (instrument identity + storage +
 backfill) → P3 (order semantics across **every** entry surface: REST, smart/
-basket/split/options/GTT, UI, Flow, strategies, webhooks, MCP, scalping, action
+basket/split/options/GTT (experimental), UI, Flow, strategies, webhooks, MCP, scalping, action
 center, sandbox) → P4 (runtime policies: calendar/time-series, currency, auth/
 session, rate limits, margin) → P5 (sandbox replatform) → P6 (frontend, versioned
 schema, fail-closed) → P7 (second out-of-tree proof in a clean environment).

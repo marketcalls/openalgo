@@ -130,9 +130,11 @@ also declare its integration surface:
 | manifest | `capabilities()` → Capability Manifest |
 
 **Required vs optional (corrected).** A single interface requiring every method
-forces fake implementations (only `dhan`/`zerodha` have GTT). The contract is a
+forces fake implementations (only `dhan`/`zerodha` have GTT, and **GTT is
+experimental** — so it must never be a required capability). The contract is a
 **minimal required protocol** + **optional protocols** (`HistoricalData`,
-`Depth`, `GTT`, `OptionsChain`, `Holdings`) with a standard `UnsupportedCapability`
+`Depth`, `GTT` *(experimental)*, `OptionsChain`, `Holdings`) with a standard
+`UnsupportedCapability`
 response; conformance tests are generated from declared capabilities. This also
 eliminates the current **arity-sniffing** (`quotes_service.py:125` inspects
 `__init__` argument count to decide feed-token handling).
