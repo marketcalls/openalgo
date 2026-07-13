@@ -13,6 +13,7 @@ instance/
 .DS_Store
 Thumbs.db
 .vscode/
+.superpowers/
 .idea/
 .claude/settings.json
 .claude/settings.local.json
