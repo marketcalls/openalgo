@@ -26,7 +26,7 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
   **semantic** coupling (broker-name switches, int coercions, Float/Decimal, fixed
   column lengths, tz arithmetic, symbol parsing, plugin-lifecycle, migration
   coverage, WS static registration); enumerate all **34 adapters** and **every
-  order-entry surface** (REST, smart/basket/split/options/GTT, UI, Flow,
+  order-entry surface** (REST, smart/basket/split/options/GTT (experimental), UI, Flow,
   strategies, webhooks, MCP, scalping, action center, sandbox).
 - **Depends:** —
 - **Done when:** no doc contradicts the spec; inventory JSON reproducible via
@@ -55,8 +55,9 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
   REST/data, streaming, migrations, config — replacing the hard-coded dispatch in
   `brlogin.py`, `auth_utils.py`, `websocket_proxy/__init__.py`, `broker_factory.py`
   (and removing the arity-sniffing in `quotes_service.py:125`). **Required minimal
-  protocol + optional protocols** (`HistoricalData`, `Depth`, `GTT`,
-  `OptionsChain`, `Holdings`) with a standard `UnsupportedCapability`; **typed
+  protocol + optional protocols** (`HistoricalData`, `Depth`,
+  `GTT` *(experimental — 2 brokers, never required)*, `OptionsChain`, `Holdings`)
+  with a standard `UnsupportedCapability`; **typed
   errors** (auth-expired / permission / unsupported / rate-limited+retry-after /
   transient / permanent-reject) and **client-order-id idempotency**; structured
   order model (type × TIF × exec-flags × conditional); manifest as **versioned
@@ -98,7 +99,7 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 ## P3 · Order semantics — every entry surface
 - **Deliverables:** manifest-driven validation (collapse `schemas.py` +
   `constants.py`); append-only order-type/TIF/exec-flag extension; apply across
-  **all** surfaces enumerated in P0A (REST, smart/basket/split/options/GTT, UI,
+  **all** surfaces enumerated in P0A (REST, smart/basket/split/options/GTT (experimental), UI,
   Flow, strategies, webhooks, MCP, scalping, action center, sandbox).
 - **Depends:** P2
 - **Done when:** Indian brokers accept exactly today's set; crypto accepts
