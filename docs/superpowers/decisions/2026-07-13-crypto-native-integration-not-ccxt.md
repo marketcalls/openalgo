@@ -1,6 +1,7 @@
 # ADR-0001 — Crypto exchanges: direct native integration, not CCXT
 
 **Status:** Accepted · 2026-07-13
+**Generalized by:** [ADR-0002](2026-07-13-direct-api-integration-no-vendor-sdks.md) (direct integration for *all* brokers, not just crypto)
 **Companion:** [design](../specs/2026-07-13-global-market-architecture-design.md) ·
 [roadmap](../roadmap/2026-07-13-phased-roadmap.md)
 
