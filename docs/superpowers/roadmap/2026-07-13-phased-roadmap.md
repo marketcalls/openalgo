@@ -97,7 +97,9 @@ P0 ─┬─► P1 ──► P3 ──┐
 - **Goal:** validate the whole contract against a real non-Indian broker.
 - **Deliverables:** refactor `broker/deltaexchange/` to a native `BrokerAdapter`
   (remove the duplicate `delta_adapter.py`/`deltaexchange_adapter.py`); author a
-  full crypto manifest; validate a second crypto venue on paper.
+  full crypto manifest; validate a second crypto venue on paper. Delta is the
+  **reference native crypto adapter** ([ADR-0001](../decisions/2026-07-13-crypto-native-integration-not-ccxt.md))
+  that Binance/CoinDCX/Hyperliquid follow — no CCXT.
 - **Depends:** P1–P4
 - **Sequencing note:** placed last as the culminating proof. **Alternative:** pull
   forward to run right after P1 to de-risk the contract against a live

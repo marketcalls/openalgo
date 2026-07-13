@@ -224,6 +224,8 @@ connecting a crypto broker auto-morphs the UI with no forked "crypto screens."
 
 - No US or crypto-spot **reference broker** in this effort (interfaces only).
 - No plugin **sandboxing/signing** in v1 (plugins are trusted code).
+- **No CCXT or third-party crypto aggregation** — each crypto exchange is a
+  direct native adapter (see [ADR-0001](../decisions/2026-07-13-crypto-native-integration-not-ccxt.md)).
 - No new canonical symbol *table* — reuse `SymToken` + additive columns.
 - No rewrite of the 33 brokers — shim first, migrate opportunistically.
 - No change to the ZMQ bus invariant, FD-hygiene, or single-worker eventlet model.

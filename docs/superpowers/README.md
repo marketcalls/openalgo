@@ -28,6 +28,7 @@ Every part of this design follows from four decisions made during brainstorming:
 | [`specs/2026-07-13-global-market-architecture-design.md`](specs/2026-07-13-global-market-architecture-design.md) | The full target architecture — the six design sections, principles, and best practices. **The how.** |
 | [`audit/2026-07-13-sitewide-coupling-audit.md`](audit/2026-07-13-sitewide-coupling-audit.md) | The complete folder-by-folder audit of Indian-market coupling across the whole repo. |
 | [`roadmap/2026-07-13-phased-roadmap.md`](roadmap/2026-07-13-phased-roadmap.md) | The P0–P7 phase plan; each phase becomes its own spec → plan → implementation cycle. |
+| [`decisions/`](decisions/) | Architecture Decision Records (ADRs). **ADR-0001:** crypto via direct native adapters, not CCXT. |
 
 ## How this was produced
 
