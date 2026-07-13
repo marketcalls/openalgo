@@ -219,13 +219,19 @@ connecting a crypto broker auto-morphs the UI with no forked "crypto screens."
 - **Small, single-purpose units** with explicit interfaces (Protocol, resolver
   strategy) so each can be understood and tested in isolation.
 - **Additive by construction, proven by golden tests.**
+- **Direct integration only.** Adapters talk to raw venue REST/WebSocket via the
+  shared `httpx` client + sync-websocket pattern — no vendor SDKs, no aggregation
+  libraries ([ADR-0002](../decisions/2026-07-13-direct-api-integration-no-vendor-sdks.md)).
 
 ## 10. Non-goals (YAGNI)
 
 - No US or crypto-spot **reference broker** in this effort (interfaces only).
 - No plugin **sandboxing/signing** in v1 (plugins are trusted code).
-- **No CCXT or third-party crypto aggregation** — each crypto exchange is a
-  direct native adapter (see [ADR-0001](../decisions/2026-07-13-crypto-native-integration-not-ccxt.md)).
+- **No vendor broker SDKs and no aggregation libraries (CCXT, etc.)** — every
+  broker integrates directly against its raw REST/WebSocket endpoints via the
+  shared `httpx` client + sync-websocket pattern
+  ([ADR-0002](../decisions/2026-07-13-direct-api-integration-no-vendor-sdks.md),
+  [ADR-0001](../decisions/2026-07-13-crypto-native-integration-not-ccxt.md)).
 - No new canonical symbol *table* — reuse `SymToken` + additive columns.
 - No rewrite of the 33 brokers — shim first, migrate opportunistically.
 - No change to the ZMQ bus invariant, FD-hygiene, or single-worker eventlet model.
