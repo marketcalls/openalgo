@@ -18,6 +18,7 @@ def authenticate_broker(code):
         full_api_key = os.getenv("BROKER_API_KEY")
         if not full_api_key or ":::" not in full_api_key:
             return None, "BROKER_API_KEY must be in format userid:::client_id"
+        userid = full_api_key.split(":::")[0]  # Noren user id
         client_id = full_api_key.split(":::")[1]  # appKey / client_id
         secret_key = os.getenv("BROKER_API_SECRET")
         if not secret_key:
@@ -33,10 +34,13 @@ def authenticate_broker(code):
         checksum_input = f"{client_id}{secret_key}{code}"
         checksum = hashlib.sha256(checksum_input.encode()).hexdigest()
 
-        # Prepare token exchange payload
+        # Prepare token exchange payload. Shoonya's GenAcsTok requires the
+        # uid field; without it the server returns INVALID_VERIFIER even with
+        # a correct checksum (matches Finvasia's NorenRestApiOAuth.getAccessToken).
         payload = {
             "code": code,
             "checksum": checksum,
+            "uid": userid,
         }
 
         # Convert payload to jData format
@@ -53,7 +57,10 @@ def authenticate_broker(code):
         # Handle the response
         if response.status_code == 200:
             data = response.json()
-            if data.get("stat") == "Ok" and "access_token" in data:
+            # GenAcsTok success returns the access_token; it is not guaranteed
+            # to carry stat == "Ok", so key the success on access_token presence
+            # (matches Finvasia's NorenRestApiOAuth.getAccessToken).
+            if "access_token" in data:
                 logger.info("Shoonya authentication successful")
                 return data["access_token"], None
             else:
