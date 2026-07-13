@@ -29,6 +29,13 @@ Every part of this design follows from four decisions made during brainstorming:
 | [`audit/2026-07-13-sitewide-coupling-audit.md`](audit/2026-07-13-sitewide-coupling-audit.md) | The complete folder-by-folder audit of Indian-market coupling across the whole repo. |
 | [`roadmap/2026-07-13-phased-roadmap.md`](roadmap/2026-07-13-phased-roadmap.md) | The P0–P7 phase plan; each phase becomes its own spec → plan → implementation cycle. |
 | [`decisions/`](decisions/) | Architecture Decision Records (ADRs). **ADR-0002:** direct API/WebSocket integration, no vendor SDKs or aggregation libraries. **ADR-0001:** the crypto/CCXT instance of that rule. |
+| [`reviews/`](reviews/) | External review responses. **2026-07-13 Codex review** — 10 findings verified, all confirmed; corrections applied across the design. |
+| [`audit/coupling_inventory.py`](audit/coupling_inventory.py) | Reproducible, commit-pinned coupling-count script (replaces ad-hoc greps). |
+
+**Related reference (outside this folder):**
+[`docs/prompt/crypto-symbol-format.md`](../prompt/crypto-symbol-format.md) — the
+code-accurate crypto (Delta) symbol format, sibling to the Indian
+`docs/prompt/symbol-format.md`.
 
 ## How this was produced
 

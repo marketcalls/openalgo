@@ -19,34 +19,52 @@ P0 ─┬─► P1 ──► P3 ──┐
 
 ## P0 · Foundations & guardrails
 - **Goal:** make "additive" enforceable before touching anything.
-- **Deliverables:** this design set; golden-master fixtures (current `/api/v1`
-  responses + rendered symbols for equity/future/option across
-  NSE·NFO·MCX·CDS·BSE); domain-type skeleton (`Market/Segment/AssetClass/
-  Instrument` dataclasses/Protocols, no behavior yet).
+- **Deliverables:** this design set; **audit-correction step** — pin
+  `python docs/superpowers/audit/coupling_inventory.py` output at a known commit
+  so counts are reproducible; golden-master fixtures for **both** the Indian set
+  (equity/future/option across NSE·NFO·MCX·CDS·BSE) **and the live Delta/crypto
+  set** (perpetual `BTCUSDFUT`, dated `…FUT`, option `…CE/PE`, spot `BTCINR`) —
+  REST responses, mapping output, and WebSocket payloads; domain-type skeleton
+  (Venue/Market/Segment/UnderlyingAssetClass/InstrumentKind/Instrument
+  dataclasses/Protocols, no behavior yet).
 - **Depends:** —
-- **Done when:** golden tests run in CI and pass against current `main`
-  unchanged.
+- **Done when:** golden tests (Indian **and** crypto) run in CI and pass against
+  current `main` unchanged.
 
 ## P1 · Broker Adapter Contract
 - **Goal:** the versioned public plugin API + back-compat shim.
-- **Deliverables:** `BrokerAdapter` Protocol; `plugin.json` v2 Capability
-  Manifest schema; conformance shim wrapping all 33 brokers (+ auto-generated
-  Indian manifests); `broker_conformance` test suite; out-of-tree entry-point
-  loader with semver version-gating.
+- **Deliverables:** `BrokerAdapter` Protocol covering the **full surface** — not
+  just data/order methods but the **auth model (API-key/OAuth AND
+  wallet-signature for Hyperliquid), declared credential schema,
+  login/OAuth-callback flow, master-contract scheduling, owned migrations, and
+  broker config**; the structured order model (type × time-in-force × exec-flags ×
+  conditional); `plugin.json` v2 manifest schema (extending the existing
+  `get_broker_capabilities`); conformance shim wrapping all 33 brokers (+
+  auto-generated Indian manifests); `broker_conformance` suite; out-of-tree
+  entry-point loader with semver version-gating.
 - **Depends:** P0
-- **Done when:** all 33 brokers load through the shim with identical behavior; a
-  trivial out-of-tree sample broker loads via entry-point; conformance suite
-  green.
+- **Done when:** all 33 brokers load through the shim with identical behavior;
+  **Delta is validated through the contract too** (even if its cleanup stays P7); a
+  trivial out-of-tree sample broker loads via entry-point; conformance suite green.
 
 ## P2 · Domain model & symbol renderer
 - **Goal:** structure underneath the string, byte-identical on top.
-- **Deliverables:** `Market/Segment/AssetClass/Instrument` model; per-asset-class
-  renderers (Indian equity/future/option byte-identical; crypto base+quote; US
-  reuses Indian option/equity); `SymToken` additive columns (`asset_class`,
-  `market`, `quote_ccy`, …) with additive migration; round-trip tests.
+- **PREREQUISITE — `SymToken` schema ownership.** There are **34** `class
+  SymToken` definitions in `broker/`, **1** shared in `database/symbol.py`, plus
+  the `token_db_enhanced` cache representation. Decide the ownership model (shared
+  base/mixin vs per-broker), the centralized migration path, compatibility with
+  all 34 master-contract downloaders, and cache serialization — **before** adding
+  columns.
+- **Deliverables:** the five-axis model
+  (Venue/Market/Segment/UnderlyingAssetClass/InstrumentKind/Instrument);
+  per-InstrumentKind renderers (Indian equity/future/option byte-identical; crypto
+  dated-future/option **reuse** the Indian renderers; perpetual `[sym]FUT`, spot
+  `[base][quote]`; US reuses option/equity); `SymToken` additive columns with
+  **Decimal/step/min-notional** precision (not `Float`) and additive migration;
+  round-trip tests (Indian **and** crypto).
 - **Depends:** P0
 - **Done when:** `render(structure(symbol)) == symbol` for 100% of existing
-  `SymToken` rows; new migration is additive & reversible.
+  `SymToken` rows (Indian + Delta); migration additive & reversible.
 
 ## P3 · Order semantics
 - **Goal:** one manifest-driven order vocabulary.
@@ -63,9 +81,12 @@ P0 ─┬─► P1 ──► P3 ──┐
 ## P4 · Resolvers
 - **Goal:** market-aware cross-cutting concerns, no hardcoding.
 - **Deliverables:** `Currency`, `Calendar/TZ`, `Tick/Lot`, `Rate-limit`, `Margin`
-  resolvers as Market-selected strategies; migrate the ~55 hardcoded `₹/IST/tick`
-  sites to resolve from metadata. Build IN + crypto strategies; US strategies are
-  interface stubs. Margin: IN (SPAN/exposure) + crypto (leverage/isolated-cross).
+  resolvers — **each keyed on its own dimension**, not a uniform "Market":
+  calendar = venue+segment (Indian sessions already differ per exchange),
+  tick/lot = instrument, currency = value/account/instrument, rate-limit =
+  broker+endpoint+weight, margin = account+instrument+margin-mode. Migrate the
+  hardcoded `₹/IST/tick` sites to resolve from metadata. Build IN + crypto; US
+  stubs. Margin: IN (SPAN/exposure) + crypto (leverage/isolated-cross).
 - **Depends:** P1, P2
 - **Done when:** live dashboards/alerts render correct currency & sessions for IN
   and Delta; no `₹`/`Asia/Kolkata` literal remains in `services/`/`utils` core
@@ -84,10 +105,17 @@ P0 ─┬─► P1 ──► P3 ──┐
 
 ## P6 · Frontend decoupling  *(added from audit)*
 - **Goal:** UI renders capability; kill the partial fork.
-- **Deliverables:** `GET /api/v1/config` (additive); migrate the 85 coupled React
-  files to read markets/exchanges/products/currency/calendar from it;
-  capability-gate the `/tools` options suite (visible only when the active market
-  has OPTION + data).
+- **Deliverables:** **extend the existing capability substrate** — the
+  authenticated `GET /capabilities` (`blueprints/broker_credentials.py:356`),
+  `brokerStore.ts`, and `useSupportedExchanges.ts` — rather than adding a parallel
+  source. Only add an external `/api/v1/config` if a real external-API consumer
+  needs one (decide in this spec). Migrate the coupled React files (58 signal + 69
+  exchange-code, per `coupling_inventory.py`) to read from the extended
+  capabilities response; **capability-gate `/tools` on the manifest's `data_caps`**
+  (quote/history/option-chain/oi/greeks/depth) **plus per-tool plumbing** — the
+  current hook already excludes MCX/CDS for missing plumbing
+  (`useSupportedExchanges.ts:67`), which the model must express (not just "has
+  OPTION").
 - **Depends:** P1, P3, P4
 - **Done when:** connecting a crypto broker auto-morphs the UI (crypto markets,
   USDT, perp/spot, post-only/reduce-only, 24/7) with no forked screens; Indian UI
@@ -95,9 +123,12 @@ P0 ─┬─► P1 ──► P3 ──┐
 
 ## P7 · Delta Exchange cleanup (proof exemplar)
 - **Goal:** validate the whole contract against a real non-Indian broker.
-- **Deliverables:** refactor `broker/deltaexchange/` to a native `BrokerAdapter`
-  (remove the duplicate `delta_adapter.py`/`deltaexchange_adapter.py`); author a
-  full crypto manifest; validate a second crypto venue on paper. Delta is the
+- **Deliverables:** refactor `broker/deltaexchange/` to a native `BrokerAdapter`;
+  **make the adapter module/class entry points explicit, then remove the
+  compatibility alias** (`delta_adapter.py` vs `deltaexchange_adapter.py`) **only
+  if no longer referenced** — don't blind-delete; fix the perpetual
+  **comment/code/alias inconsistency** (`BTCUSDFUT` vs stale `.P`); author a full
+  crypto manifest; validate a second crypto venue on paper. Delta is the
   **reference native crypto adapter** ([ADR-0001](../decisions/2026-07-13-crypto-native-integration-not-ccxt.md))
   that Binance/CoinDCX/Hyperliquid follow — no CCXT.
 - **Depends:** P1–P4
