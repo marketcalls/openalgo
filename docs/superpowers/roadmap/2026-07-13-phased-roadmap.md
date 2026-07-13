@@ -47,27 +47,28 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 - **Done when:** CI runs the golden + old-DB tests and fails on any regression;
   a failed migration **halts** startup.
 
-## P1 · Public plugin boundary
-- **Goal:** a stable, importable contract + a unified registry.
-- **Deliverables:** publish/import a **distributable contract package**
-  (e.g. `openalgo-broker-api`) — today `pyproject.toml` ships `packages = []`;
-  a **unified broker registry** covering auth, credentials, master-contract,
-  REST/data, streaming, migrations, config — replacing the hard-coded dispatch in
-  `brlogin.py`, `auth_utils.py`, `websocket_proxy/__init__.py`, `broker_factory.py`
-  (and removing the arity-sniffing in `quotes_service.py:125`). **Required minimal
-  protocol + optional protocols** (`HistoricalData`, `Depth`,
+## P1 · Broker contract & unified registry
+- **Goal:** a formal in-repo contract + a registry that removes hard-coded dispatch.
+- **Deliverables:** the `BrokerAdapter` contract as an **in-repo module** (e.g.
+  `broker/contract/`); a **unified broker registry** covering auth, credentials,
+  master-contract, REST/data, streaming, migrations, config — replacing the
+  hard-coded dispatch in `brlogin.py`, `auth_utils.py`, `websocket_proxy/__init__.py`,
+  `broker_factory.py` (and removing the arity-sniffing in `quotes_service.py:125`
+  and the `deltaexchange_adapter.py` naming alias). **Required minimal protocol +
+  optional protocols** (`HistoricalData`, `Depth`,
   `GTT` *(experimental — 2 brokers, never required)*, `OptionsChain`, `Holdings`)
   with a standard `UnsupportedCapability`; **typed
   errors** (auth-expired / permission / unsupported / rate-limited+retry-after /
   transient / permanent-reject) and **client-order-id idempotency**; structured
   order model (type × TIF × exec-flags × conditional); manifest as **versioned
   JSON Schema** constrained by venue/segment/kind; conformance shim for the 34
-  adapters; entry-point loader with semver gating. WS lifecycle contract preserves
+  adapters. WS lifecycle contract preserves
   cleanup/reconnect/idempotent-sub/batching/backpressure/health/snapshot-vs-delta
-  + shared-feed & FD-hygiene (fix the depth-mode doc discrepancy).
+  + shared-feed & FD-hygiene (fix the depth-mode doc discrepancy). **No published
+  package, no out-of-tree loader** ([ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)).
 - **Depends:** P0B
-- **Done when:** the 34 adapters conform (via shim); a clean-env sample plugin
-  imports the contract package and loads.
+- **Done when:** the 34 adapters conform (via shim/registry); no core
+  `if broker == …` dispatch remains.
 
 ## P1.5 · Delta reference adapter  *(moved up)*
 - **Goal:** prove the contract against a real non-Indian broker **before**
@@ -139,10 +140,10 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 - **Done when:** crypto broker auto-morphs the UI; capability-load failure shows a
   health error, not all-exchanges; Indian UI unchanged.
 
-## P7 · Second out-of-tree proof
-- **Deliverables:** clean-environment **package installation** of an out-of-tree
-  broker; paper adapters for a second crypto venue + US edge cases (DST, OCC,
-  Reg-T).
+## P7 · Second-venue proof
+- **Deliverables:** add a **second crypto venue in-tree** against the contract +
+  paper adapters for US edge cases (DST, OCC, Reg-T) — proving the contract
+  generalizes beyond Delta.
 - **Depends:** P1–P6
 
 ## Cross-phase invariants

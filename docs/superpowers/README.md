@@ -16,7 +16,7 @@ Every part of this design follows from four decisions made during brainstorming:
 | # | Decision | Meaning |
 |---|----------|---------|
 | 1 | **Additive, zero breaks** | Existing symbol format, order constants (`CNC/NRML/MIS`, `SL/SL-M`), and `/api/v1` request+response shapes stay **byte-identical**. All global capability is additive. |
-| 2 | **Out-of-tree plugins** | Brokers become installable packages against a **versioned public `BrokerAdapter` contract**. *Requires a distributable contract package + a unified broker registry — the current core hard-codes broker dispatch in several spots, so this is real decoupling work, not just an entry-point loader (roadmap P1).* |
+| 2 | **In-tree brokers, formal contract** | Brokers live in `broker/{name}/`, contributed via PR, against an **in-repo `BrokerAdapter` contract** + a **unified registry** + a conformance suite. No out-of-tree/installable plugins ([ADR-0003](decisions/2026-07-13-in-tree-broker-model.md)). |
 | 3 | **Model four, build two** | The domain model + contract are designed & paper-validated against **four** shapes (Indian F&O, crypto derivatives, crypto spot, US equity/options). Only **Indian + crypto-derivatives (Delta)** are wired up & tested **live** now. |
 | 4 | **Normalized domain core** | A structured **five-axis** model (Venue · Market/Region · Segment · UnderlyingAssetClass · InstrumentKind → Instrument) sits *underneath* the flat symbol; the string becomes a *rendering* that is byte-identical for existing symbols. Cross-cutting concerns resolve from metadata, not hardcoding. |
 
@@ -28,7 +28,7 @@ Every part of this design follows from four decisions made during brainstorming:
 | [`specs/2026-07-13-global-market-architecture-design.md`](specs/2026-07-13-global-market-architecture-design.md) | The full target architecture — the six design sections, principles, and best practices. **The how.** |
 | [`audit/2026-07-13-sitewide-coupling-audit.md`](audit/2026-07-13-sitewide-coupling-audit.md) | The complete folder-by-folder audit of Indian-market coupling across the whole repo. |
 | [`roadmap/2026-07-13-phased-roadmap.md`](roadmap/2026-07-13-phased-roadmap.md) | The P0–P7 phase plan; each phase becomes its own spec → plan → implementation cycle. |
-| [`decisions/`](decisions/) | Architecture Decision Records (ADRs). **ADR-0002:** direct API/WebSocket integration, no vendor SDKs or aggregation libraries. **ADR-0001:** the crypto/CCXT instance of that rule. |
+| [`decisions/`](decisions/) | Architecture Decision Records (ADRs). **ADR-0003:** in-tree broker model (no out-of-tree plugins). **ADR-0002:** direct API/WebSocket integration, no vendor SDKs or aggregation libraries. **ADR-0001:** the crypto/CCXT instance of that rule. |
 | [`reviews/`](reviews/) | External review responses. **2026-07-13 Codex review** — 10 findings verified, all confirmed; corrections applied across the design. |
 | [`audit/coupling_inventory.py`](audit/coupling_inventory.py) | Reproducible, commit-pinned coupling-count script (replaces ad-hoc greps). |
 

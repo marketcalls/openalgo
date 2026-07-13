@@ -6,6 +6,13 @@ architecture direction holds, but the design was **not implementation-ready**;
 this round hardens it. Convention adopted throughout: **34 broker adapters =
 33 legacy Indian integrations + Delta.**
 
+> **Update — superseded by [ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md):**
+> the project subsequently chose **in-tree brokers only**. Blocker 2's resolution
+> below (distributable package + entry-point loader) no longer applies — the
+> `packages = []` state is a non-issue; P1 now delivers the **contract module +
+> unified registry** (still needed to remove the hard-coded dispatch), and P7
+> becomes a second-venue **in-tree** proof. The decoupling findings still stand.
+
 ## Critical blockers
 
 | # | Finding | Verdict | Evidence | Resolution → phase |
