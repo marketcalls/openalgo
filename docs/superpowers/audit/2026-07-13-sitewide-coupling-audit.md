@@ -15,24 +15,29 @@ raw hits.
 
 ## The seven coupling patterns
 
-1. **No formal broker contract.** Services call
-   `importlib.import_module(f"broker.{broker}.api.{module}")` and trust
-   convention (`services/place_order_service.py:38`). No interface to implement
-   → "plug in your exchange" means reverse-engineering Zerodha.
+1. **No *unified full-lifecycle* broker contract.** REST/auth/data are duck-typed:
+   services call `importlib.import_module(f"broker.{broker}.api.{module}")` and
+   trust convention (`services/place_order_service.py:38`); `quotes_service.py:125`
+   even sniffs `__init__` arity. A streaming base class *does* exist
+   (`websocket_proxy/base_adapter.py` `BaseBrokerWebSocketAdapter`), but there is
+   no single contract spanning auth→orders→data→streaming→lifecycle — so "plug in
+   your exchange" means reverse-engineering Zerodha.
 2. **Symbol format is Indian-derivative-shaped** — expiry-in-symbol + `CE/PE` +
    strike (`docs/prompt/symbol-format.md`). Crypto perps, US OCC options, forex
    don't fit.
 3. **Order constants are Indian broker vocabulary** — `CNC/NRML/MIS`, `SL/SL-M`
    (`utils/constants.py:69-82`).
 4. **Exchange codes are a hardcoded Indian enum** (`VALID_EXCHANGES`,
-   `utils/constants.py:52-67`) with no `Market → Segment → AssetClass`
-   abstraction above them.
+   `utils/constants.py:52-67`) with no Venue/Market/Segment/UnderlyingAssetClass/
+   InstrumentKind abstraction above them.
 5. **Cross-cutting Indian defaults scattered** across ~55 files (`₹/IST/tick`).
 6. **`plugin.json` too coarse** — `broker_type` is only `IN_stock` (33×) vs
    `crypto` (1×); cannot express capabilities.
 7. **Local inconsistency where crypto was bolted on** —
-   `broker/deltaexchange/streaming/` has **duplicate** adapters
-   (`delta_adapter.py` *and* `deltaexchange_adapter.py`); `services/` has
+   `broker/deltaexchange/streaming/` needs an **alias** module
+   (`deltaexchange_adapter.py`, 15 lines re-exporting `delta_adapter.py`) because
+   `broker_factory.py:53` hard-codes a `{name}_adapter` / `{Name}WebSocketAdapter`
+   naming convention; `services/` has
    `telegram_bot_service.py`, `telegram_bot_service_fixed.py`,
    `telegram_bot_service_v2.py`.
 
@@ -156,6 +161,12 @@ appear pervasively.
 
 > Earlier drafts cited `frontend/src = 85` from an ad-hoc grep that mixed signal
 > and exchange-code tokens. The script pins the methodology so counts are
-> reproducible over time. Re-run: `python docs/superpowers/audit/coupling_inventory.py`.
+> reproducible over time. Re-run: `uv run python docs/superpowers/audit/coupling_inventory.py`.
+>
+> **Scope caveat:** this first pass scans **9 code directories** for *token*
+> coupling only. P0A expands it into an **AST/schema inventory suite** over all
+> top-level folders plus **semantic** coupling (broker-name switches, int
+> coercions, Float/Decimal, fixed column lengths, tz arithmetic, symbol parsing,
+> plugin-lifecycle, migration coverage, WS static registration).
 
 These counts scope each phase in the [roadmap](../roadmap/2026-07-13-phased-roadmap.md).

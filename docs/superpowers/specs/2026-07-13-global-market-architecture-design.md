@@ -129,6 +129,21 @@ also declare its integration surface:
 | **lifecycle** | **migrations** it owns + **broker-specific config** it declares |
 | manifest | `capabilities()` → Capability Manifest |
 
+**Required vs optional (corrected).** A single interface requiring every method
+forces fake implementations (only `dhan`/`zerodha` have GTT). The contract is a
+**minimal required protocol** + **optional protocols** (`HistoricalData`,
+`Depth`, `GTT`, `OptionsChain`, `Holdings`) with a standard `UnsupportedCapability`
+response; conformance tests are generated from declared capabilities. This also
+eliminates the current **arity-sniffing** (`quotes_service.py:125` inspects
+`__init__` argument count to decide feed-token handling).
+
+**Errors & idempotency (new).** Typed errors — auth-expired · permission-denied ·
+unsupported-capability · rate-limited+retry-after · transient-transport ·
+permanent-reject — and **client-order-id idempotency** so a transport retry never
+double-places a live order. Rate limiting is *behavior* (weights · concurrency
+budgets · response-header handling · backoff · safe-vs-unsafe retry), not just
+manifest data.
+
 ### 5.2 Capability Manifest — structured order model (corrected)
 
 Extends the **existing** `plugin.json` + `get_broker_capabilities()` (do not
@@ -159,11 +174,20 @@ OPTION". Validation runs against the active broker's manifest.
 
 ### 5.3 Loading & conformance
 
-In-tree (`broker/{name}/`) **or** out-of-tree via the `openalgo.brokers`
-entry-point group; version-gated by `contract_version`; a shipped
-`broker_conformance` suite; and the **conformance shim** wrapping the 33 existing
-brokers (auto-generating an Indian manifest so their accepted set is exactly
-today's). No broker rewrites to ship.
+In-tree (`broker/{name}/`) **or** out-of-tree; version-gated by
+`contract_version`; a shipped `broker_conformance` suite; and the **conformance
+shim** wrapping the **34** existing adapters (33 Indian + Delta; auto-generating an
+Indian manifest so their accepted set is exactly today's). No broker rewrites to
+ship.
+
+> **Feasibility (corrected).** Out-of-tree is **not** just an entry-point loader.
+> Today `pyproject.toml` ships `packages = []` (non-distributable) and broker
+> dispatch is hard-coded in `brlogin.py:73`, `auth_utils.py:283` (`f"broker.{broker}…"`),
+> `websocket_proxy/__init__.py:30` (eager in-tree imports), and
+> `broker_factory.py:53` (fixed `{name}_adapter` naming — the reason Delta needs an
+> alias). P1 must publish a **distributable contract package** (e.g.
+> `openalgo-broker-api`) and a **unified broker registry** (auth · credentials ·
+> master-contract · data · streaming · migrations · config) to remove that coupling.
 
 ## 6. Resolvers (cross-cutting) — each keyed on its OWN dimension (corrected)
 
@@ -180,8 +204,12 @@ today's). No broker rewrites to ship.
 | Rate limit | **broker + endpoint + weight** | orders/sec per broker | weight-based | broker-specific |
 | Margin | **account + instrument + margin-mode** | SPAN+exposure | leverage · isolated/cross | Reg-T / PDT |
 
-Live trading and the sandbox consume the **same** resolvers, so globalizing
-`sandbox/` is mostly wiring it to these. Margin builds for IN + crypto.
+Live trading and the sandbox consume the **same** resolvers. **But sandbox
+globalization is a replatform, not just wiring** — its schema is integer quantity
+/ `DECIMAL(10,2)` / no-partial-fills / single-INR-account (`sandbox_db.py`), so P5
+needs schema + execution changes (fractional qty, precision, multipliers,
+quote/settlement currency, partial fills, fees, funding, liquidation, 24/7
+accounting) and depends on **P2+P3+P4**. Margin builds for IN + crypto.
 
 ## 7. Frontend decoupling — extend the existing substrate (corrected)
 
@@ -199,15 +227,36 @@ current hook already excludes MCX/CDS from `/tools` for missing plumbing
 (`useSupportedExchanges.ts:67`), which the capability model must express, not just
 "market has OPTION".
 
-## 8. Backward-compatibility — guaranteed in CI
+**Fail closed (corrected).** Today the store **silently falls back to showing all
+exchanges** when capability loading fails (`brokerStore.ts`,
+`useSupportedExchanges.ts`). For a trading UI this must **fail closed** — surface a
+capability-health error, never an unrestricted exchange list.
 
-- **Golden-master snapshots** of current `/api/v1` responses + rendered symbols
-  for a representative Indian set **and the live Delta/crypto set** (perp/dated/
-  option/spot); CI fails on any byte change.
-- **Renderer round-trip:** `render(structure(symbol)) == symbol` for every
-  existing `SymToken` symbol (Indian **and** crypto).
-- **Append-only enums**; **additive migrations**; **optional new fields**;
-  **conformance shim** keeps brokers on their same code paths.
+## 8. Backward-compatibility — defined per surface, enforced in CI (P0B)
+
+**Compatibility is defined per surface** — the earlier flat "byte-identical"
+became self-contradictory once optional fields + Decimal were added:
+
+- **`/api/v1` requests & responses** — *semantic JSON compatibility*: existing
+  keys, value semantics, and types unchanged; responses may **gain** keys. Not
+  literal byte identity.
+- **Rendered symbol strings** — *literal byte identity* (where "byte-identical"
+  actually applies).
+- **WebSocket** — existing topics and payload schemas preserved.
+- **New normalized DTOs / Decimal values** — stay **internal** (behind adapters);
+  never exposed on `/api/v1`.
+- Dynamic values (timestamps, order IDs, broker messages) are normalized by the
+  fixtures.
+
+Enforced (built in **P0B** — CI runs only a small subset today, so this guardrail
+does not yet exist):
+
+- **Golden semantic fixtures** for the Indian set **and** the live Delta/crypto
+  set (perp `BTCUSDFUT`/dated/option/spot) — REST + mapping + WS payloads.
+- **Renderer round-trip** `render(structure(symbol)) == symbol` for reconstructable
+  rows; ambiguous rows quarantined (P2), not force-asserted.
+- **Append-only enums**; **fail-stop additive migrations** with old-DB tests;
+  **optional new fields**; **conformance shim** keeps brokers on their code paths.
 
 ## 9. Principles & best practices
 
