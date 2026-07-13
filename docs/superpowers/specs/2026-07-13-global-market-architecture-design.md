@@ -65,8 +65,9 @@ Feed           websocket_proxy/  ZMQ fan-in unchanged; streaming part of adapter
 A structured identity underneath the flat symbol, with **five orthogonal axes**:
 
 - **Venue** (`NSE`, `MCX`, `DELTA`, `BINANCE`, `NASDAQ`) — the actual exchange/DEX.
-- **Market / Region** (`IN`, `CRYPTO`, `US`) — currency, timezone, calendar,
-  rate-limit profile, margin regime hang here.
+- **Market / Region** (`IN`, `CRYPTO`, `US`) — a *default* anchor for currency,
+  timezone, calendar, rate-limit and margin; but each resolves on its **own key**
+  (see §6), not uniformly on Market.
 - **Segment** (`NSE-EQ`, `NSE-FO`, `MCX`, `perp`, `spot`, `US-OPT`) — session
   hours, settlement, lot/tick conventions (these already differ *within* a market
   — see resolvers §6).
@@ -139,42 +140,53 @@ experimental** — so it must never be a required capability). The contract is a
 `UnsupportedCapability`
 response; conformance tests are generated from declared capabilities. This also
 eliminates the current **arity-sniffing** (`quotes_service.py:125` inspects
-`__init__` argument count to decide feed-token handling).
+`__init__` argument count to decide feed-token handling). The precise split —
+required-always / required-when-declared / optional-experimental / expected
+`UnsupportedCapability` / shim-emulatable / conformance-fixture — is the
+**operation matrix** delivered in P1.
 
 **Errors & idempotency (new).** Typed errors — auth-expired · permission-denied ·
 unsupported-capability · rate-limited+retry-after · transient-transport ·
-permanent-reject — and **client-order-id idempotency** so a transport retry never
-double-places a live order. Rate limiting is *behavior* (weights · concurrency
-budgets · response-header handling · backoff · safe-vs-unsafe retry), not just
-manifest data.
+permanent-reject. Idempotency is **adapter-side**, not a promise that retries
+"never" duplicate: many brokers lack native client-order IDs, so the adapter keeps
+an **idempotency ledger** (request fingerprint → outcome), reconciles on retry,
+and returns **`unknown_execution_state`** on ambiguous timeouts rather than
+blindly re-placing. Rate limiting is *behavior* (weights · concurrency budgets ·
+response-header handling · backoff · safe-vs-unsafe retry), not just manifest data.
 
-### 5.2 Capability Manifest — structured order model (corrected)
+### 5.2 Capability Manifest — SCOPED per venue/segment (corrected)
 
 Extends the **existing** `plugin.json` + `get_broker_capabilities()` (do not
-invent a parallel system). Order semantics are **three orthogonal axes**, not a
-flat `order_flags` list (`IOC`/`FOK` are time-in-force, not flags):
+invent a parallel system). **A single flat block cannot describe a real Indian
+broker** — Zerodha spans NSE/BSE/NFO/BFO/CDS/MCX/NCO + index feeds, and
+capabilities differ per segment. So the manifest is a list of **`capability_scopes`**,
+each gated by selectors. Order semantics are three orthogonal axes (`IOC`/`FOK`
+are time-in-force, not flags):
 
 ```yaml
+broker: zerodha
 contract_version: "1.0"
-venue: NSE            # market/region below
-market: IN
-asset_classes:   [EQUITY, INDEX]         # underlying kinds
-instrument_kinds: [CASH, FUTURE, OPTION]
-product_types:   [CNC, NRML, MIS]
-order_types:     [MARKET, LIMIT, SL, SL-M]
-time_in_force:   [DAY]                    # crypto: [GTC, IOC, FOK]
-exec_flags:      []                       # crypto: [post_only, reduce_only]
-conditional:     []                       # bracket/OCO schemas where supported
-leverage: false
-base_currency: INR
-sessions: { calendar: IN, tz: Asia/Kolkata }   # per venue+segment, see §6
-rate_limits: { orders_per_sec: 10 }
-data_caps: { quote: true, history: true, depth: true, option_chain: true, oi: true, greeks: true }
-streaming: { modes: [ltp, quote, depth], max_symbols: 3000 }
+capability_scopes:
+  - selectors: { venue: NSE, segment: NSE-EQ, instrument_kinds: [CASH] }
+    product_types: [CNC, MIS]
+    order_types:   [MARKET, LIMIT, SL, SL-M]
+    time_in_force: [DAY]
+    currency: INR
+    data:      { quote: true, history: { intervals: [1m, 1d], max_range: 60d }, depth: { levels: 5 } }
+    streaming: { modes: [ltp, quote, depth], max_symbols: 3000 }
+  - selectors: { venue: NSE, segment: NSE-FO, instrument_kinds: [FUTURE, OPTION] }
+    product_types: [NRML, MIS]
+    order_types:   [MARKET, LIMIT, SL, SL-M]
+    data:      { option_chain: true, oi: true, greeks: true }
+# a crypto scope adds: time_in_force:[GTC,IOC,FOK], exec_flags:[post_only,reduce_only],
+#                      leverage:true, currency:USDT
 ```
 
-`data_caps` is what drives **capability-gated tools** (§7), not a blanket "has
-OPTION". Validation runs against the active broker's manifest.
+The scope's `data` block drives **capability-gated tools** (§7). Currency, rate
+limits, history intervals, depth levels, and streaming limits are **scoped
+overrides** — a top-level `base_currency` is insufficient for multi-currency
+accounts. Validation resolves the request's `(venue, segment, kind)` to the
+matching scope. The whole manifest is a **versioned JSON Schema**.
 
 ### 5.3 Loading & conformance
 
@@ -182,8 +194,9 @@ Brokers are **in-tree** (`broker/{name}/`), contributed via PR
 ([ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)); the contract is an
 **in-repo module** (e.g. `broker/contract/`); a shipped `broker_conformance` suite
 runs over every adapter in CI; and the **conformance shim** wraps the **34**
-existing adapters (33 Indian + Delta; auto-generating an Indian manifest so their
-accepted set is exactly today's). No broker rewrites to ship, no published package.
+existing adapters — auto-generating an **Indian** manifest for the **33 Indian**
+brokers (accepted set exactly today's), while **Delta gets its own crypto
+manifest**, not an auto-Indian one. No broker rewrites to ship, no published package.
 
 > **A registry, not a loader.** P1's value is a **unified broker registry** (auth ·
 > credentials · master-contract · data · streaming · migrations · config) that
@@ -261,6 +274,9 @@ does not yet exist):
   rows; ambiguous rows quarantined (P2), not force-asserted.
 - **Append-only enums**; **fail-stop additive migrations** with old-DB tests;
   **optional new fields**; **conformance shim** keeps brokers on their code paths.
+- **Client-level fixtures** — the official Python/Node SDKs, webhook integrations,
+  and error `status`/`message` behavior under **strict decoders** — not only REST
+  payload fixtures.
 
 ## 9. Principles & best practices
 
@@ -282,7 +298,8 @@ does not yet exist):
 - **No vendor SDKs / aggregation libraries** ([ADR-0002](../decisions/2026-07-13-direct-api-integration-no-vendor-sdks.md), [ADR-0001](../decisions/2026-07-13-crypto-native-integration-not-ccxt.md)).
 - No new canonical symbol *table* — reuse `SymToken` (but resolve its **34-way
   schema ownership** first, §11).
-- No rewrite of the 33 brokers — shim first, migrate opportunistically.
+- No rewrite of the 33 Indian brokers — shim first, migrate opportunistically
+  (Delta, the 34th, is deliberately refactored to a native adapter in P1.5).
 - No change to the ZMQ bus invariant, FD-hygiene, or single-worker eventlet model.
 
 ## 11. Risks & open questions (updated)
@@ -293,11 +310,12 @@ does not yet exist):
   a **P2 prerequisite**.
 - **Delta baseline** — existing crypto users must be golden-tested too (P0), or
   "zero breaks" doesn't cover them. Includes the `BTCUSDFUT` vs stale-`.P`
-  comment/alias inconsistency (fix in P7).
+  comment/alias inconsistency (fix in P1.5).
 - **Margin correctness** across SPAN / leverage / Reg-T — IN+crypto now, US deferred.
 - **Frontend blast radius** — 58 signal + 69 exchange-code files (`frontend/src`,
   reproducible via `audit/coupling_inventory.py`); migrate behind the extended
   capabilities endpoint.
 - **External `/api/v1/config`?** — decide in P6 whether an external endpoint is
   needed at all vs extending the authenticated `/capabilities`.
-- **Delta cleanup timing** — P7 vs pulled-forward to de-risk the contract.
+- **Delta cleanup timing** — resolved: pulled forward to **P1.5** to de-risk the
+  contract against a real non-Indian broker early.

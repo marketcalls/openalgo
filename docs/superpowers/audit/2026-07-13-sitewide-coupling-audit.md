@@ -1,7 +1,9 @@
 # Sitewide Indian-Market Coupling Audit
 
 **Date:** 2026-07-13
-**Scope:** every top-level folder in the OpenAlgo repository.
+**Scope:** every top-level folder in the OpenAlgo repository (manual sweep). The
+reproducible `coupling_inventory.py` currently scans **9 code directories**; P0A
+expands it to an AST/schema suite over all folders + semantic coupling.
 **Goal:** locate every place Indian-market assumptions are baked in, so the
 global-architecture design can be verified as *complete* (nothing surprises us
 mid-implementation).
@@ -48,7 +50,7 @@ raw hits.
 | Folder | Size | Coupled | What changes |
 |--------|------|---------|--------------|
 | `utils/` | 28 py | 5 | `constants.py` → market/asset/order registry; `number_formatter.py` → locale-aware; NEW resolvers |
-| `broker/` | 549 py | 163 | formal `BrokerAdapter` Protocol + conformance shim (33 brokers) + `plugin.json` v2 |
+| `broker/` | 549 py | 163 | formal `BrokerAdapter` Protocol + conformance shim (34 adapters = 33 Indian + Delta) + `plugin.json` v2 |
 | `services/` | 71 py | 22 | call adapter contract; resolve `₹/IST/tick` from metadata |
 | `restx_api/` | 49 py | 4 | extend `OneOf` enums additively; new optional fields; new endpoints |
 | `database/` | 35 py | 13 | `SymToken` additive columns; market-calendar → multi-market |
@@ -59,7 +61,7 @@ raw hits.
 | Folder | Size | Coupled | What changes |
 |--------|------|---------|--------------|
 | `sandbox/` | 11 py | 9 | **BIG.** ₹1 Cr capital, IST square-off, Indian margin → market-aware capital currency, session/24-7 square-off, per-market margin |
-| `frontend/` | 836 files | 85 | **BIG.** exchange dropdowns, ₹ display, `CNC/NRML/MIS` selectors, market-hours → market-driven config |
+| `frontend/` | 836 files | 58 | **BIG.** exchange dropdowns, ₹ display, `CNC/NRML/MIS` selectors, market-hours → market-driven config |
 | `blueprints/` | 52 py | 14 | server pages + webhooks: currency/exchange display, sandbox controls |
 | `events/` + `subscribers/` | 12 py | — | event payloads + Telegram/WhatsApp alert currency formatting |
 | `download/` | 3 py | — | historical downloaders: IST cutoffs, symbol-master assumptions |
@@ -110,8 +112,9 @@ hardcoded. Becomes the `IN` strategy of a market-aware `CurrencyResolver`.
 ### `sandbox/` — deepest single coupling
 
 9 of 11 files carry Indian assumptions: ₹1 Crore capital, IST auto-square-off,
-Indian SPAN/exposure margin. Globalizing it (in scope) is mostly **wiring
-sandbox to the shared resolvers** rather than new logic.
+Indian SPAN/exposure margin. Globalizing it is a **replatform** — the schema is
+integer-quantity / `DECIMAL(10,2)` / no-partial-fills / single-INR-account — not
+just resolver wiring (P5, depends on P2+P3+P4).
 
 ### `SymToken` is defined 34+1 times (schema-ownership blocker)
 

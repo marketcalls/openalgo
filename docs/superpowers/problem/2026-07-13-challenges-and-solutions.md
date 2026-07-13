@@ -32,7 +32,7 @@ the roadmap it happens.
 | 7 | **Crypto was bolted on inconsistently** — Delta needs an **alias module** forced by the factory's rigid naming; UI is partially forked; `telegram_bot_service` has `_fixed`/`_v2` variants | Tech debt, no reusable pattern, divergence risk | One contract + conformance; a **single config-driven UI path** (kills the fork); **Delta as the reference adapter** (P1.5) | P1.5, P6 |
 | 8 | **Sandbox is deeply Indian** — ₹1 Cr capital, IST auto-square-off, SPAN/exposure margin | Can't paper-trade crypto (24/7, leverage) or US (ET sessions, Reg-T) | Wire `sandbox/` to the **same resolvers** as live: multi-currency capital, session-vs-24/7 square-off, leverage margin | P5 |
 | 9 | **Frontend holds market knowledge** — 58 signal (+69 exchange-code) files hardcode exchanges/₹/CNC-NRML-MIS/hours | Every market needs forked screens; brittle and duplicative | **Extend** the existing `/capabilities` + `brokerStore` + `useSupportedExchanges`; **fail-closed** on load failure; **capability-gated** `/tools` | P6 |
-| 10 | **Backward-compat risk for 200k users** — any refactor could break SDKs | Python/Node SDKs and TradingView/Amibroker/Excel integrations must not break | **Additive-only by construction**, proven by **golden-master CI snapshots** + **renderer round-trip** + **append-only enums** + **conformance shim** (33 brokers unchanged) | P0 (guardrail first) |
+| 10 | **Backward-compat risk for 200k users** — any refactor could break SDKs | Python/Node SDKs and TradingView/Amibroker/Excel integrations must not break | **Additive-only by construction**, proven by **golden-master CI snapshots** + **renderer round-trip** + **append-only enums** + **conformance shim** (existing brokers unchanged) | P0 (guardrail first) |
 
 ## The through-line
 
@@ -48,5 +48,6 @@ resolver strategy**, and let today's Indian behavior fall out as the default cas
 - **Additive, proven in CI** (10) → the 200k users are protected the whole way.
 
 The result: adding a market becomes *registering data and strategies*, not
-editing 55 files — and a third party can ship a broker for any venue in any
-country against a documented, versioned contract.
+editing 55 files — and a new broker for any venue in any country is added
+**in-tree via a PR** against a documented contract + registry (no out-of-tree
+shipping — [ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)).

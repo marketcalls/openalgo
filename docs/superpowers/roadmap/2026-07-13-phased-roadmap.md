@@ -40,9 +40,12 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
   DTOs stay internal. Add **golden semantic fixtures** (Indian **and** Delta:
   perp `BTCUSDFUT`, dated, option, spot — REST + mapping + WS payloads);
   **old-DB migration tests**; a **versioned migration ledger** with dependency
-  ordering, **atomic/fail-stop** behavior (fix `start.sh:291` swallowing failures
-  and `migrate_all.py` central list), backup/recovery policy, and **plugin
-  migration discovery**.
+  ordering, **per-file (SQLite/DuckDB) transaction boundaries** (global atomicity
+  across files is unrealistic), **checkpoint/resume**, checksum/version ownership,
+  backup/restore, and **dual-read/dual-write** for Float→Decimal; **broker-owned
+  migration registration** (file/convention-based — P0B precedes the P1 registry,
+  so it cannot depend on it). Fix `start.sh:291` swallowing failures + the
+  `migrate_all.py` central list.
 - **Depends:** P0A
 - **Done when:** CI runs the golden + old-DB tests and fails on any regression;
   a failed migration **halts** startup.
@@ -66,19 +69,32 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
   cleanup/reconnect/idempotent-sub/batching/backpressure/health/snapshot-vs-delta
   + shared-feed & FD-hygiene (fix the depth-mode doc discrepancy). **No published
   package, no out-of-tree loader** ([ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md)).
+- **Registry bootstrap decisions (this spec):** Python registration vs
+  `plugin.json` authoritative; static import vs filesystem discovery; **lazy-load
+  only the configured broker** (never import all 34 at startup; preserve
+  single-broker-per-instance); import/config failures surfaced in **health
+  checks**; a safe **pre-auth `BrokerDescriptor`** exposing public credential-form
+  + login-flow metadata (secrets/runtime config stay private) — `/capabilities` is
+  session-authed, but login needs descriptors *before* auth.
+- **Operation matrix:** per method — required-always / required-when-declared /
+  optional-experimental / expected-unsupported response / shim-emulatable /
+  conformance-fixture — resolving the required-vs-optional ambiguity.
 - **Depends:** P0B
 - **Done when:** the 34 adapters conform (via shim/registry); no core
-  `if broker == …` dispatch remains.
+  `if broker == …` dispatch remains; only the configured broker is imported.
 
 ## P1.5 · Delta reference adapter  *(moved up)*
 - **Goal:** prove the contract against a real non-Indian broker **before**
   building more layers on it.
 - **Deliverables:** implement Delta as a native adapter to the full contract —
-  auth, data, streaming, **Decimal precision** — end to end; make the adapter
-  entry points explicit and drop the `deltaexchange_adapter.py` **alias** once the
-  registry no longer needs the naming convention; fix the `BTCUSDFUT` vs stale
-  `.P` comment/alias inconsistency.
-- **Depends:** P1
+  auth, data, streaming — with **Decimal at the DTO/runtime layer**. NOTE:
+  **persisted** `SymToken` Decimal precision + schema ownership are **P2**, so P1.5
+  proves the contract/DTOs and **explicitly excludes persisted-precision
+  migration** (alternative: pull a **P2A** schema-ownership + precision-migration
+  slice ahead of P1.5). Make the adapter entry points explicit and drop the
+  `deltaexchange_adapter.py` **alias** once the registry no longer needs the naming
+  convention; fix the `BTCUSDFUT` vs stale `.P` inconsistency.
+- **Depends:** P1 (persisted precision deferred to P2)
 - **Done when:** Delta trades/streams through the contract with no core `if broker
   == …`.
 
@@ -99,9 +115,11 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 
 ## P3 · Order semantics — every entry surface
 - **Deliverables:** manifest-driven validation (collapse `schemas.py` +
-  `constants.py`); append-only order-type/TIF/exec-flag extension; apply across
-  **all** surfaces enumerated in P0A (REST, smart/basket/split/options/GTT (experimental), UI,
-  Flow, strategies, webhooks, MCP, scalping, action center, sandbox).
+  `constants.py`); append-only order-type/TIF/exec-flag extension; **fractional
+  quantity in live order-entry persistence** — `strategy_db` + `chartink_db`
+  Integer→Decimal (live models, **moved here from P5**); apply across **all**
+  surfaces enumerated in P0A (REST, smart/basket/split/options/GTT (experimental),
+  UI, Flow, strategies, webhooks, MCP, scalping, action center, sandbox).
 - **Depends:** P2
 - **Done when:** Indian brokers accept exactly today's set; crypto accepts
   `reduce_only`; a US manifest rejects `NRML` with a typed error; golden green.
@@ -122,11 +140,11 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 ## P5 · Sandbox replatform
 - **Goal:** the sandbox works for any market — **schema + execution changes, not
   just wiring.**
-- **Deliverables:** fractional quantities (Integer→Decimal in `sandbox_db`,
-  `strategy_db`, `chartink_db`), high-precision prices, contract multipliers,
-  quote/settlement currency, **partial fills**, fees, funding, liquidation,
-  isolated-vs-cross margin, explicit 24/7 daily accounting boundaries; wire to the
-  resolvers.
+- **Deliverables:** **sandbox-specific** schema + execution — fractional
+  quantities (Integer→Decimal in `sandbox_db`; `strategy_db`/`chartink_db` are done
+  in P3), high-precision prices, contract multipliers, quote/settlement currency,
+  **partial fills**, fees, funding, liquidation, isolated-vs-cross margin, explicit
+  24/7 daily accounting boundaries; wire to the resolvers.
 - **Depends:** **P2, P3, P4**
 - **Done when:** a crypto sandbox account holds USDT capital, fills fractionally,
   never IST-squares-off; Indian sandbox unchanged.
@@ -149,4 +167,5 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 ## Cross-phase invariants
 - Golden semantic fixtures stay green (Indian + crypto).
 - ZMQ bus invariant, single-worker eventlet, FD-hygiene untouched.
-- No broker rewrites to ship a phase (shim covers back-compat).
+- No broker rewrites to ship a phase (shim covers back-compat) — **except the
+  deliberate Delta native-adapter refactor in P1.5**.

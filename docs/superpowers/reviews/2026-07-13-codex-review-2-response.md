@@ -60,6 +60,7 @@ backfill) → P3 (order semantics across **every** entry surface: REST, smart/
 basket/split/options/GTT (experimental), UI, Flow, strategies, webhooks, MCP, scalping, action
 center, sandbox) → P4 (runtime policies: calendar/time-series, currency, auth/
 session, rate limits, margin) → P5 (sandbox replatform) → P6 (frontend, versioned
-schema, fail-closed) → P7 (second out-of-tree proof in a clean environment).
+schema, fail-closed) → P7 (second-venue **in-tree** proof — updated per ADR-0003;
+the original "out-of-tree proof" no longer applies).
 
 See the [roadmap](../roadmap/2026-07-13-phased-roadmap.md) for the detailed phases.
