@@ -58,7 +58,14 @@ def on_order_update(event):
 
         publisher = SharedZmqPublisher()
         if not publisher._connected:
-            publisher.connect()  # idempotent — connects to the proxy SUB once
+            # Cold path — should be rare (services/order_update_service warms
+            # the publisher at boot). A fresh ZMQ PUB drops messages sent
+            # before the PUB<->SUB handshake completes (slow-joiner), so give
+            # the link a moment before the first publish.
+            publisher.connect()
+            import time
+
+            time.sleep(0.25)
 
         publisher.publish(topic, payload)
 
