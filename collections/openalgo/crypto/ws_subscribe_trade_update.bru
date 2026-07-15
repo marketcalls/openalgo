@@ -1,0 +1,56 @@
+meta {
+  name: Subscribe Trade Update
+  type: websocket
+  seq: 15
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Subscribe to real-time fill/trade events
+}
+
+message:json {
+  {
+    "action": "subscribe",
+    "channel": "trade_update"
+  }
+}
+
+docs {
+  No symbol/exchange/mode needed — same single-account-stream model as
+  order_update.
+
+  Server responds with an ack:
+  {"type": "subscribe", "channel": "trade_update", "status": "success"}
+
+  Within one poll/fill cycle, trade_update always arrives after the
+  order_update for the same execution, and before any position_update
+  it produced — canonical ordering, never observed out of order.
+
+  Event shape:
+  {
+    "type": "trade_update",
+    "data": {
+      "event_type": "trade_update",
+      "generation": 43,
+      "sequence": 1,
+      "orderid": "250714000012345",
+      "tradeid": "250714000012345:10:2500.5:2026-07-15 09:16:23",
+      "symbol": "BTCUSDFUT",
+      "exchange": "CRYPTO",
+      "product": "MIS",
+      "action": "BUY",
+      "fill_quantity": 10,
+      "fill_price": 2500.5,
+      "trade_value": 25005.0,
+      "timestamp": "2026-07-15 09:16:23"
+    }
+  }
+
+  tradeid is synthesized (orderid:quantity:price:timestamp) since most
+  brokers' normalized tradebook format has no native per-fill id — it's
+  stable across repeated polls of the same fill and distinct across
+  partial fills on the same order.
+
+  See docs/prompt/websockets-format.md for the full protocol reference.
+}

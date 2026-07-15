@@ -1,0 +1,22 @@
+meta {
+  name: Unsubscribe Position Update
+  type: websocket
+  seq: 19
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Unsubscribe from position_update events
+}
+
+message:json {
+  {
+    "action": "unsubscribe",
+    "channel": "position_update"
+  }
+}
+
+docs {
+  Server responds with:
+  {"type": "unsubscribe", "channel": "position_update", "status": "success"}
+}

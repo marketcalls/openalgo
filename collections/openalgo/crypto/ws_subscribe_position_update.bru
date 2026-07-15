@@ -1,0 +1,51 @@
+meta {
+  name: Subscribe Position Update
+  type: websocket
+  seq: 16
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Subscribe to real-time position/P&L updates
+}
+
+message:json {
+  {
+    "action": "subscribe",
+    "channel": "position_update"
+  }
+}
+
+docs {
+  No symbol/exchange/mode needed — same single-account-stream model as
+  order_update.
+
+  Server responds with an ack:
+  {"type": "subscribe", "channel": "position_update", "status": "success"}
+
+  Event shape:
+  {
+    "type": "position_update",
+    "data": {
+      "event_type": "position_update",
+      "generation": 43,
+      "sequence": 2,
+      "symbol": "BTCUSDFUT",
+      "exchange": "CRYPTO",
+      "product": "MIS",
+      "net_quantity": 10,
+      "average_price": 2500.5,
+      "ltp": 2504.0,
+      "pnl": 35.0,
+      "timestamp": ""
+    }
+  }
+
+  Freshness for live broker sessions is bounded by POSITION_POLL_MS
+  (default 1000ms) AND by how often the broker's own positions REST
+  endpoint recomputes ltp/pnl server-side — a slow-refreshing broker API
+  caps how live this can get regardless of poll interval. Analyze/sandbox
+  mode instead pushes on every fill in real time, no polling involved.
+
+  See docs/prompt/websockets-format.md for the full protocol reference.
+}

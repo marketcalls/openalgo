@@ -1,0 +1,22 @@
+meta {
+  name: Unsubscribe Trade Update
+  type: websocket
+  seq: 18
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Unsubscribe from trade_update events
+}
+
+message:json {
+  {
+    "action": "unsubscribe",
+    "channel": "trade_update"
+  }
+}
+
+docs {
+  Server responds with:
+  {"type": "unsubscribe", "channel": "trade_update", "status": "success"}
+}

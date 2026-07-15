@@ -1,0 +1,63 @@
+meta {
+  name: Subscribe Order Update
+  type: websocket
+  seq: 14
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Subscribe to real-time order lifecycle events (placed/modified/cancelled/rejected/filled)
+}
+
+message:json {
+  {
+    "action": "subscribe",
+    "channel": "order_update"
+  }
+}
+
+docs {
+  Unlike symbol-based market data subscriptions, this channel takes no
+  symbol/exchange/mode — OpenAlgo is single-user/single-broker per
+  deployment, so there is exactly one account's order stream.
+
+  Server responds with an ack:
+  {"type": "subscribe", "channel": "order_update", "status": "success"}
+
+  If a snapshot is available (live poller has completed at least one
+  cycle, or analyze/sandbox mode has already produced state), it's sent
+  immediately after:
+  {
+    "type": "order_update",
+    "snapshot": true,
+    "generation": 42,
+    "data": {"generation": 42, "orders": [...], "trades": [...], "positions": [...]}
+  }
+
+  Subsequent order_update events look like:
+  {
+    "type": "order_update",
+    "data": {
+      "event_type": "order_update",
+      "generation": 43,
+      "sequence": 0,
+      "orderid": "250714000012345",
+      "symbol": "BTCUSDFUT",
+      "exchange": "CRYPTO",
+      "action": "BUY",
+      "product": "MIS",
+      "pricetype": "LIMIT",
+      "quantity": 10,
+      "price": 2500.5,
+      "trigger_price": 0.0,
+      "status": "complete",
+      "rejection_reason": "",
+      "timestamp": "2026-07-15 09:16:23"
+    }
+  }
+
+  status follows OpenAlgo's standard order-status values: open,
+  trigger pending, complete, rejected, cancelled.
+
+  See docs/prompt/websockets-format.md for the full protocol reference.
+}
