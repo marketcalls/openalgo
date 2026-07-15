@@ -159,6 +159,22 @@ def start_order_update_adapters_on_boot() -> None:
         return
 
     def _boot():
+        # Warm up the shared ZMQ publisher NOW, long before the first order
+        # event. Under gunicorn+eventlet the market-data adapters live in the
+        # websocket_proxy subprocess, so nothing else connects this process'
+        # publisher until the first publish — and a ZMQ PUB drops messages
+        # sent before the PUB<->SUB handshake settles (slow-joiner), which
+        # silently ate the first order update. Connecting at boot gives the
+        # link seconds of margin. (The dev server never hit this because the
+        # in-process market-data adapters connect the same singleton early.)
+        try:
+            from websocket_proxy.connection_manager import SharedZmqPublisher
+
+            SharedZmqPublisher().connect()
+            logger.info("Shared ZMQ publisher warmed up for order-update relay")
+        except Exception:
+            logger.exception("Failed to warm up shared ZMQ publisher")
+
         try:
             from database.auth_db import Auth
 
