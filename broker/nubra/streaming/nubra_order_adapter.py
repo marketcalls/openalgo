@@ -25,7 +25,7 @@ from google.protobuf.any_pb2 import Any as ProtoAny
 
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -175,6 +175,11 @@ class NubraOrderUpdateAdapter(BaseOrderUpdateAdapter):
                 refdata = _decode_fields(refdata_bytes)
                 symbol = _first_str(refdata, 5)  # stock_name
                 exchange = _first_str(refdata, 10)
+                # Map to OpenAlgo format via the instrument token (field 4) —
+                # the same get_symbol lookup the REST orderbook mapping uses.
+                symbol = to_openalgo_symbol(
+                    symbol, exchange, token=_first(refdata, 4, None) or None
+                )
             except ValueError:
                 pass
 
