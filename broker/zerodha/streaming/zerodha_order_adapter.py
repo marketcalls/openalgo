@@ -34,7 +34,7 @@ _STATUS_MAP = {
     "CANCELLED": "cancelled",
     "OPEN": "open",
     "UPDATE": "open",
-    "TRIGGER PENDING": "open",
+    "TRIGGER PENDING": "trigger pending",
     "VALIDATION PENDING": "open",
     "PUT ORDER REQ RECEIVED": "open",
     "OPEN PENDING": "open",

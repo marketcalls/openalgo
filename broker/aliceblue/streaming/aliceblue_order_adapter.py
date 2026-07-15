@@ -36,8 +36,8 @@ ALICEBLUE_HEARTBEAT_INTERVAL_SECONDS = 55  # under the 60s server timeout
 _STATUS_MAP = {
     "open": "open",
     "new": "open",
-    "trigger_pending": "open",
-    "trigger pending": "open",
+    "trigger_pending": "trigger pending",
+    "trigger pending": "trigger pending",
     "replaced": "open",
     "complete": "complete",
     "rejected": "rejected",

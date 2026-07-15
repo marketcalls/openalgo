@@ -44,7 +44,7 @@ Every field uses OpenAlgo's common order constants: `symbol` in OpenAlgo
 format (e.g. `NIFTY28JUL26FUT`, mapped from the broker's own symbology),
 `action` `BUY`/`SELL`, `pricetype` `MARKET`/`LIMIT`/`SL`/`SL-M`, `product`
 `CNC`/`NRML`/`MIS`, and lowercase `order_status`
-(`open`/`complete`/`rejected`/`cancelled`, plus broker extras such as
+(`open`/`trigger pending`/`complete`/`rejected`/`cancelled`, plus broker extras such as
 `expired`). `mode` is `live` for broker-pushed events and `analyze` for
 sandbox events.
 
