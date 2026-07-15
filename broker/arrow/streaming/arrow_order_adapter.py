@@ -20,7 +20,7 @@ import os
 
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -97,10 +97,17 @@ class ArrowOrderUpdateAdapter(BaseOrderUpdateAdapter):
         filled = _num(data.get("cumulativeFillQty"), int)
         leaves = _num(data.get("leavesQuantity"), int, default=max(quantity - filled, 0))
 
+        # Symbol -> OpenAlgo format (get_oa_symbol on Arrow's brsymbol, with
+        # the instrument token as an extra key), same as the REST mapping.
+        exchange = data.get("exchange", "")
+        symbol = to_openalgo_symbol(
+            data.get("symbol", ""), exchange, token=data.get("token")
+        )
+
         return {
             "orderid": str(data.get("id", "")),
-            "symbol": data.get("symbol", ""),
-            "exchange": data.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": _ACTION_MAP.get(data.get("transactionType", ""), data.get("transactionType", "")),
             "quantity": quantity,
             "price": _num(data.get("price")),

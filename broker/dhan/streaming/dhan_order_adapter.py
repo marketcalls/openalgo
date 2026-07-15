@@ -11,7 +11,7 @@ import json
 
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -49,6 +49,18 @@ _PRICETYPE_MAP = {
 
 # Live Order Update "TxnType" codes -> OpenAlgo action constants
 _ACTION_MAP = {"B": "BUY", "S": "SELL"}
+
+# (Exchange, Segment) from the order-update payload -> OpenAlgo exchange code.
+# Segment codes: E = equity, D = derivatives, C = currency, M = commodity.
+_EXCHANGE_SEGMENT_MAP = {
+    ("NSE", "E"): "NSE",
+    ("NSE", "D"): "NFO",
+    ("NSE", "C"): "CDS",
+    ("BSE", "E"): "BSE",
+    ("BSE", "D"): "BFO",
+    ("BSE", "C"): "BCD",
+    ("MCX", "M"): "MCX",
+}
 
 
 class DhanOrderUpdateAdapter(BaseOrderUpdateAdapter):
@@ -93,10 +105,20 @@ class DhanOrderUpdateAdapter(BaseOrderUpdateAdapter):
         quantity = int(data.get("Quantity") or 0)
         traded_qty = int(data.get("TradedQty") or 0)
 
+        # OpenAlgo exchange from (Exchange, Segment); symbol via SecurityId —
+        # the same get_symbol(token, exchange) lookup the REST orderbook
+        # mapping uses — falling back to Dhan's Symbol field.
+        exchange = _EXCHANGE_SEGMENT_MAP.get(
+            (data.get("Exchange", ""), data.get("Segment", "")), data.get("Exchange", "")
+        )
+        symbol = to_openalgo_symbol(
+            data.get("Symbol", ""), exchange, token=data.get("SecurityId")
+        )
+
         return {
             "orderid": data.get("OrderNo", ""),
-            "symbol": data.get("Symbol", ""),
-            "exchange": data.get("Exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": _ACTION_MAP.get(data.get("TxnType", ""), data.get("TxnType", "")),
             "quantity": quantity,
             "price": float(data.get("Price") or 0),

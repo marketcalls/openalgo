@@ -22,7 +22,7 @@ import json
 from database.auth_db import get_auth_token, get_user_id
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -107,10 +107,15 @@ class AliceBlueOrderUpdateAdapter(BaseOrderUpdateAdapter):
         qty = int(data.get("qty") or 0)
         fillshares = int(data.get("fillshares") or 0)
 
+        # Symbol -> OpenAlgo format (get_oa_symbol on Noren tsym, same as the
+        # REST orderbook mapping), falling back to the broker symbol.
+        exchange = data.get("exch", "")
+        symbol = to_openalgo_symbol(data.get("tsym", ""), exchange)
+
         return {
             "orderid": data.get("norenordno", ""),
-            "symbol": data.get("tsym", ""),
-            "exchange": data.get("exch", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": _ACTION_MAP.get(data.get("trantype", ""), data.get("trantype", "")),
             "quantity": qty,
             "price": float(data.get("prc") or 0),

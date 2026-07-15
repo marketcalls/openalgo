@@ -31,6 +31,7 @@ from flask import Blueprint, jsonify, request
 from database.auth_db import Auth
 from utils.event_bus import bus
 from utils.logging import get_logger
+from websocket_proxy.order_adapter import to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -47,6 +48,15 @@ _DHAN_POSTBACK_PRICETYPE_MAP = {
     "LIMIT": "LIMIT",
     "STOP_LOSS": "SL",
     "STOP_LOSS_MARKET": "SL-M",
+}
+_DHAN_POSTBACK_EXCHANGE_MAP = {
+    "NSE_EQ": "NSE",
+    "NSE_FNO": "NFO",
+    "NSE_CURRENCY": "CDS",
+    "BSE_EQ": "BSE",
+    "BSE_FNO": "BFO",
+    "BSE_CURRENCY": "BCD",
+    "MCX_COMM": "MCX",
 }
 
 
@@ -80,10 +90,11 @@ def _normalize_zerodha(data: dict) -> dict | None:
 
     raw_status = str(data.get("status", "")).upper()
     order_status = _STATUS_MAP.get(raw_status, raw_status.lower() or "open")
+    exchange = data.get("exchange", "")
     return {
         "orderid": str(data.get("order_id", "")),
-        "symbol": data.get("tradingsymbol", ""),
-        "exchange": data.get("exchange", ""),
+        "symbol": to_openalgo_symbol(data.get("tradingsymbol", ""), exchange),
+        "exchange": exchange,
         "action": str(data.get("transaction_type", "")).upper(),
         "quantity": int(data.get("quantity") or 0),
         "price": float(data.get("price") or 0),
@@ -109,10 +120,15 @@ def _normalize_dhan(data: dict) -> dict | None:
     order_status = _STATUS_MAP.get(raw_status, raw_status.lower() or "open")
     quantity = int(data.get("quantity") or 0)
     filled = int(data.get("filled_qty") or 0)
+    exchange = _DHAN_POSTBACK_EXCHANGE_MAP.get(
+        data.get("exchangeSegment", ""), data.get("exchangeSegment", "")
+    )
     return {
         "orderid": str(data.get("orderId", "")),
-        "symbol": data.get("tradingSymbol", ""),
-        "exchange": data.get("exchangeSegment", ""),
+        "symbol": to_openalgo_symbol(
+            data.get("tradingSymbol", ""), exchange, token=data.get("securityId")
+        ),
+        "exchange": exchange,
         "action": str(data.get("transactionType", "")).upper(),
         "quantity": quantity,
         "price": float(data.get("price") or 0),
@@ -137,6 +153,7 @@ def _normalize_fyers(data: dict) -> dict | None:
         _ACTION_MAP,
         _PRICETYPE_MAP,
         _STATUS_MAP,
+        _oa_exchange,
     )
 
     if "id" not in data or "status" not in data:
@@ -145,9 +162,11 @@ def _normalize_fyers(data: dict) -> dict | None:
     order_status = _STATUS_MAP.get(raw_status, str(raw_status))
     qty = int(data.get("qty") or 0)
     filled = int(data.get("filledQty") or 0)
+    exchange = _oa_exchange(data)
     return {
         "orderid": str(data.get("id", "")),
-        "symbol": data.get("symbol", ""),
+        "symbol": to_openalgo_symbol(data.get("symbol", ""), exchange),
+        "exchange": exchange,
         "action": _ACTION_MAP.get(data.get("side"), str(data.get("side", ""))),
         "quantity": qty,
         "price": float(data.get("limitPrice") or 0),
@@ -171,10 +190,15 @@ def _normalize_upstox(data: dict) -> dict | None:
     order_status = _STATUS_MAP.get(raw_status, raw_status or "open")
     quantity = int(data.get("quantity") or 0)
     filled = int(data.get("filled_quantity") or 0)
+    exchange = data.get("exchange", "")
     return {
         "orderid": data.get("order_id", ""),
-        "symbol": data.get("trading_symbol", "") or data.get("tradingsymbol", ""),
-        "exchange": data.get("exchange", ""),
+        "symbol": to_openalgo_symbol(
+            data.get("trading_symbol", "") or data.get("tradingsymbol", ""),
+            exchange,
+            token=data.get("instrument_token") or data.get("instrument_key"),
+        ),
+        "exchange": exchange,
         "action": data.get("transaction_type", ""),
         "quantity": quantity,
         "price": float(data.get("price") or 0),
@@ -202,10 +226,13 @@ def _normalize_angel(data: dict) -> dict | None:
     order_status = _STATUS_TEXT_MAP.get(raw_text, raw_text or "open")
     filled = int(float(data.get("filledshares") or 0))
     unfilled = int(float(data.get("unfilledshares") or 0))
+    exchange = data.get("exchange", "")
     return {
         "orderid": str(data.get("orderid", "")),
-        "symbol": data.get("tradingsymbol", ""),
-        "exchange": data.get("exchange", ""),
+        "symbol": to_openalgo_symbol(
+            data.get("tradingsymbol", ""), exchange, token=data.get("symboltoken")
+        ),
+        "exchange": exchange,
         "action": str(data.get("transactiontype", "")).upper(),
         "quantity": int(float(data.get("quantity") or 0)) or (filled + unfilled),
         "price": float(data.get("price") or 0),
@@ -233,10 +260,11 @@ def _normalize_aliceblue(data: dict) -> dict | None:
     order_status = _STATUS_MAP.get(raw_status, raw_status or "open")
     qty = int(data.get("qty") or 0)
     fillshares = int(data.get("fillshares") or 0)
+    exchange = data.get("exch", "")
     return {
         "orderid": data.get("norenordno", ""),
-        "symbol": data.get("tsym", ""),
-        "exchange": data.get("exch", ""),
+        "symbol": to_openalgo_symbol(data.get("tsym", ""), exchange),
+        "exchange": exchange,
         "action": _ACTION_MAP.get(data.get("trantype", ""), data.get("trantype", "")),
         "quantity": qty,
         "price": float(data.get("prc") or 0),

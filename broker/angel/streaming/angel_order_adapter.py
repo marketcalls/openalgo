@@ -18,7 +18,7 @@ import json
 
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -103,10 +103,17 @@ class AngelOrderUpdateAdapter(BaseOrderUpdateAdapter):
         unfilled = int(float(data.get("unfilledshares") or 0))
         quantity = int(float(data.get("quantity") or 0)) or (filled + unfilled)
 
+        # Symbol -> OpenAlgo format via the instrument token (same lookup the
+        # REST orderbook mapping uses), falling back to the trading symbol.
+        exchange = data.get("exchange", "")
+        symbol = to_openalgo_symbol(
+            data.get("tradingsymbol", ""), exchange, token=data.get("symboltoken")
+        )
+
         return {
             "orderid": str(data.get("orderid", "")),
-            "symbol": data.get("tradingsymbol", ""),
-            "exchange": data.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": str(data.get("transactiontype", "")).upper(),
             "quantity": quantity,
             "price": float(data.get("price") or 0),

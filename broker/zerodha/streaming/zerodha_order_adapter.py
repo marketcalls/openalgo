@@ -21,7 +21,7 @@ import json
 
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -80,10 +80,15 @@ class ZerodhaOrderUpdateAdapter(BaseOrderUpdateAdapter):
 
         # Kite's order_type (MARKET/LIMIT/SL/SL-M) and product (CNC/NRML/MIS)
         # already match OpenAlgo's constants — no mapping tables needed.
+        # Symbol is mapped to OpenAlgo format the same way the REST orderbook
+        # mapping does (get_oa_symbol on Kite's tradingsymbol).
+        exchange = data.get("exchange", "")
+        symbol = to_openalgo_symbol(data.get("tradingsymbol", ""), exchange)
+
         return {
             "orderid": str(data.get("order_id", "")),
-            "symbol": data.get("tradingsymbol", ""),
-            "exchange": data.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": str(data.get("transaction_type", "")).upper(),
             "quantity": int(data.get("quantity") or 0),
             "price": float(data.get("price") or 0),

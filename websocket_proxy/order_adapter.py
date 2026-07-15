@@ -31,6 +31,32 @@ from utils.logging import get_logger
 _RECONNECT_BACKOFFS = [1, 2, 5, 10, 30, 60]
 
 
+def to_openalgo_symbol(broker_symbol: str, exchange: str, token=None) -> str:
+    """Best-effort mapping of a broker symbol to OpenAlgo symbol format.
+
+    Tries the broker instrument token first (get_symbol — the lookup used by
+    token-keyed brokers like Upstox/Dhan/Angel/Nubra), then the broker symbol
+    (get_oa_symbol — used by brsymbol-keyed brokers like Zerodha/Fyers/Noren/
+    Arrow), mirroring each broker's own mapping/order_data.py. Falls back to
+    the raw broker symbol when the active master contract has no match (e.g.
+    that broker's contract isn't loaded).
+    """
+    try:
+        from database.token_db import get_oa_symbol, get_symbol
+
+        if token and exchange:
+            mapped = get_symbol(token, exchange)
+            if mapped:
+                return mapped
+        if broker_symbol and exchange:
+            mapped = get_oa_symbol(broker_symbol, exchange)
+            if mapped:
+                return mapped
+    except Exception:
+        pass
+    return broker_symbol
+
+
 class BaseOrderUpdateAdapter(ABC):
     """
     Base class for a broker's dedicated order-update WebSocket connection.

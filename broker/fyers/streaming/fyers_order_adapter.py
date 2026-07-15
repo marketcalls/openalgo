@@ -18,7 +18,7 @@ import json
 
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
 
 logger = get_logger(__name__)
 
@@ -41,9 +41,29 @@ _PRICETYPE_MAP = {1: "LIMIT", 2: "MARKET", 3: "SL-M", 4: "SL"}
 # "side" numeric codes -> OpenAlgo action constants
 _ACTION_MAP = {1: "BUY", -1: "SELL"}
 
-# "exchange" numeric codes (Fyers convention) -> OpenAlgo exchange constants.
-# Only the commonly-seen codes are mapped; unknowns pass through as-is.
-_EXCHANGE_MAP = {10: "NSE", 11: "NSE", 12: "BSE"}
+# (exchange, segment) numeric codes -> OpenAlgo exchange constants.
+# Fyers exchange codes: 10 = NSE, 11 = MCX, 12 = BSE.
+# Fyers segment codes: 10 = capital/equity, 11 = F&O, 12 = currency,
+# 20 = commodity. Unknown combinations fall back to the exchange prefix of
+# the Fyers symbol string ("NSE:SBIN-EQ" -> "NSE").
+_EXCHANGE_SEGMENT_MAP = {
+    (10, 10): "NSE",
+    (10, 11): "NFO",
+    (10, 12): "CDS",
+    (12, 10): "BSE",
+    (12, 11): "BFO",
+    (12, 12): "BCD",
+    (11, 20): "MCX",
+    (11, 11): "MCX",
+}
+
+
+def _oa_exchange(data: dict) -> str:
+    mapped = _EXCHANGE_SEGMENT_MAP.get((data.get("exchange"), data.get("segment")))
+    if mapped:
+        return mapped
+    symbol = str(data.get("symbol", ""))
+    return symbol.split(":", 1)[0] if ":" in symbol else str(data.get("exchange", ""))
 
 
 class FyersOrderUpdateAdapter(BaseOrderUpdateAdapter):
@@ -84,12 +104,17 @@ class FyersOrderUpdateAdapter(BaseOrderUpdateAdapter):
 
         qty = int(data.get("qty") or 0)
         filled_qty = int(data.get("filledQty") or 0)
-        exchange_code = data.get("exchange")
+
+        # OpenAlgo exchange from (exchange, segment) codes; symbol via
+        # get_oa_symbol on Fyers' "NSE:SBIN-EQ"-style brsymbol — the same
+        # lookup the REST orderbook mapping uses.
+        exchange = _oa_exchange(data)
+        symbol = to_openalgo_symbol(data.get("symbol", ""), exchange)
 
         return {
             "orderid": str(data.get("id", "")),
-            "symbol": data.get("symbol", ""),
-            "exchange": _EXCHANGE_MAP.get(exchange_code, str(exchange_code)),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": _ACTION_MAP.get(data.get("side"), str(data.get("side", ""))),
             "quantity": qty,
             "price": float(data.get("limitPrice") or 0),
