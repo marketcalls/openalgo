@@ -251,7 +251,20 @@ class BrokerSymbolCache:
                 self.symbols[sym.token] = symbol_data
 
                 # Build indexes
-                self.by_symbol_exchange[(sym.symbol, sym.exchange)] = symbol_data
+                # A master contract can contain more than one row for the same
+                # (symbol, exchange) — e.g. an equity's rights-entitlement or
+                # NCD/debt tranche sharing the underlying's display symbol
+                # (confirmed for MOTHERSON, CHOLAFIN, AARTISURF, ELECTCAST on
+                # NSE: an EQ row plus a D1/P1/W1 row). SymToken.query.all() has
+                # no ORDER BY, so plain last-write-wins here is undefined —
+                # whichever row the DB happens to return last for a given key
+                # silently decides which real-world instrument every quote /
+                # order / WS subscription for that symbol resolves to. Prefer
+                # the EQ row deterministically: never let a non-EQ row
+                # overwrite an EQ one already stored for the same key.
+                existing = self.by_symbol_exchange.get((sym.symbol, sym.exchange))
+                if existing is None or existing.instrumenttype != "EQ" or sym.instrumenttype == "EQ":
+                    self.by_symbol_exchange[(sym.symbol, sym.exchange)] = symbol_data
                 self.by_token_exchange[(sym.token, sym.exchange)] = symbol_data
                 self.by_brsymbol_exchange[(sym.brsymbol, sym.exchange)] = symbol_data
                 self.by_token[sym.token] = symbol_data
@@ -799,12 +812,26 @@ def get_symbol_info(symbol: str, exchange: str) -> SymbolData | None:
 
 
 # Database fallback functions (imported from original token_db)
+def _query_symtoken_preferring_eq(symbol: str, exchange: str):
+    """Look up a SymToken row for (symbol, exchange), preferring instrumenttype='EQ'
+    when more than one row shares the same (symbol, exchange) — a master contract
+    can legitimately contain an equity's rights-entitlement or NCD/debt tranche
+    under the same display symbol (confirmed for MOTHERSON, CHOLAFIN, AARTISURF,
+    ELECTCAST on NSE). Without this, plain .filter_by(...).first() picks whichever
+    row the DB happens to return first — undefined, and can silently resolve a
+    cash-equity symbol to a dead debt/rights instrument (zero quotes/ticks)."""
+    from database.symbol import SymToken
+
+    sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange, instrumenttype="EQ").first()
+    if sym_token is None:
+        sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+    return sym_token
+
+
 def get_token_dbquery(symbol: str, exchange: str) -> str | None:
     """Query database for token by symbol and exchange"""
     try:
-        from database.symbol import SymToken
-
-        sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+        sym_token = _query_symtoken_preferring_eq(symbol, exchange)
         if sym_token:
             return sym_token.token
         else:
@@ -832,9 +859,7 @@ def get_symbol_dbquery(token: str, exchange: str) -> str | None:
 def get_br_symbol_dbquery(symbol: str, exchange: str) -> str | None:
     """Query database for broker symbol"""
     try:
-        from database.symbol import SymToken
-
-        sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+        sym_token = _query_symtoken_preferring_eq(symbol, exchange)
         if sym_token:
             return sym_token.brsymbol
         else:
@@ -862,9 +887,7 @@ def get_oa_symbol_dbquery(brsymbol: str, exchange: str) -> str | None:
 def get_brexchange_dbquery(symbol: str, exchange: str) -> str | None:
     """Query database for broker exchange"""
     try:
-        from database.symbol import SymToken
-
-        sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+        sym_token = _query_symtoken_preferring_eq(symbol, exchange)
         if sym_token:
             return sym_token.brexchange
         else:
@@ -877,9 +900,7 @@ def get_brexchange_dbquery(symbol: str, exchange: str) -> str | None:
 def get_symbol_info_dbquery(symbol: str, exchange: str) -> SymbolData | None:
     """Query database for full symbol information, returns SymbolData object"""
     try:
-        from database.symbol import SymToken
-
-        sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+        sym_token = _query_symtoken_preferring_eq(symbol, exchange)
         if sym_token:
             # Convert SymToken database object to SymbolData
             return SymbolData(
