@@ -78,6 +78,37 @@ class OrderCancelFailedEvent(OrderEvent):
     error_message: str = ""
 
 
+@dataclass
+class OrderUpdateEvent(OrderEvent):
+    """Fired for asynchronous order status changes that happen after the
+    original placing HTTP call returns — broker-side fills/rejections/status
+    changes (live, via postback or a dedicated order-update WebSocket) or
+    sandbox engine-internal transitions (analyze).
+
+    Unlike OrderPlacedEvent/OrderModifiedEvent/OrderCancelledEvent, this event
+    is not tied to a user-driven API call — it is a push notification about
+    order state observed after the fact. mode="live" or "analyze" (inherited
+    from OrderEvent) distinguishes broker-sourced from sandbox-sourced updates.
+    """
+
+    topic: str = "order.update"
+    orderid: str = ""
+    symbol: str = ""
+    exchange: str = ""
+    action: str = ""
+    quantity: int = 0
+    price: float = 0.0
+    trigger_price: float = 0.0
+    pricetype: str = ""
+    product: str = ""
+    order_status: str = ""
+    filled_quantity: int = 0
+    pending_quantity: int = 0
+    average_price: float = 0.0
+    rejection_reason: str = ""
+    broker: str = ""
+
+
 # -----------------------------------------------------------------------------
 # GTT (Good Till Triggered) events
 # -----------------------------------------------------------------------------

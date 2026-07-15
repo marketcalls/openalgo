@@ -75,6 +75,11 @@ class WebSocketProxy:
         # This eliminates the need for nested loops in zmq_listener
         self.subscription_index: dict[tuple[str, str, int], set[int]] = defaultdict(set)
 
+        # Order-update subscribers: user_id -> set of client_ids that sent
+        # {"action": "subscribe_orders"}. Account-scoped (no symbol/mode),
+        # unlike market-data subscriptions above.
+        self.order_subscribers: dict[str, set[int]] = defaultdict(set)
+
         # PERFORMANCE OPTIMIZATION 2: Message throttling to avoid excessive updates
         # Maps (symbol, exchange, mode) -> last message timestamp
         # Prevents sending duplicate LTP updates faster than 50ms
@@ -668,6 +673,12 @@ class WebSocketProxy:
         if client_id in self.user_mapping:
             user_id = self.user_mapping[client_id]
 
+            # Clean up order-update subscription
+            if user_id in self.order_subscribers:
+                self.order_subscribers[user_id].discard(client_id)
+                if not self.order_subscribers[user_id]:
+                    del self.order_subscribers[user_id]
+
             # Check if this was the last client for this user
             is_last_client = True
             for other_client_id, other_user_id in self.user_mapping.items():
@@ -723,6 +734,10 @@ class WebSocketProxy:
                 await self.subscribe_client(client_id, data)
             elif action in ["unsubscribe", "unsubscribe_all"]:
                 await self.unsubscribe_client(client_id, data)
+            elif action == "subscribe_orders":
+                await self.subscribe_orders_client(client_id, data)
+            elif action == "unsubscribe_orders":
+                await self.unsubscribe_orders_client(client_id, data)
             elif action == "get_broker_info":
                 await self.get_broker_info(client_id)
             elif action == "get_supported_brokers":
@@ -1484,6 +1499,66 @@ class WebSocketProxy:
             unsub_response["request_id"] = request_id
         await self.send_message(client_id, unsub_response)
 
+    async def subscribe_orders_client(self, client_id, data):
+        """
+        Subscribe a client to real-time order updates for their account.
+
+        Account-scoped (no symbol/exchange/mode) — every order-status change
+        for the authenticated user's broker session is delivered, sourced
+        from the order.update event bus topic (broker postback/order-WS
+        adapters or the sandbox engine) via subscribers/wsproxy_subscriber.py.
+
+        Args:
+            client_id: ID of the client
+            data: Subscription data (optional request_id)
+        """
+        if client_id not in self.user_mapping:
+            await self.send_error(client_id, "NOT_AUTHENTICATED", "You must authenticate first")
+            return
+
+        user_id = self.user_mapping[client_id]
+        request_id = data.get("request_id")
+
+        self.order_subscribers[user_id].add(client_id)
+
+        response = {
+            "type": "subscribe_orders",
+            "status": "success",
+            "message": "Subscribed to order updates",
+        }
+        if request_id is not None:
+            response["request_id"] = request_id
+        await self.send_message(client_id, response)
+
+    async def unsubscribe_orders_client(self, client_id, data):
+        """
+        Unsubscribe a client from real-time order updates.
+
+        Args:
+            client_id: ID of the client
+            data: Unsubscription data (optional request_id)
+        """
+        if client_id not in self.user_mapping:
+            await self.send_error(client_id, "NOT_AUTHENTICATED", "You must authenticate first")
+            return
+
+        user_id = self.user_mapping[client_id]
+        request_id = data.get("request_id")
+
+        if user_id in self.order_subscribers:
+            self.order_subscribers[user_id].discard(client_id)
+            if not self.order_subscribers[user_id]:
+                del self.order_subscribers[user_id]
+
+        response = {
+            "type": "unsubscribe_orders",
+            "status": "success",
+            "message": "Unsubscribed from order updates",
+        }
+        if request_id is not None:
+            response["request_id"] = request_id
+        await self.send_message(client_id, response)
+
     async def send_message(self, client_id, message):
         """
         Send a message to a client
@@ -1608,6 +1683,36 @@ class WebSocketProxy:
         except Exception as e:
             logger.exception(f"Error processing cache invalidation: {e}")
 
+    async def _handle_order_update(self, data_str: str):
+        """
+        Relay an order-update message (published by
+        subscribers/wsproxy_subscriber.py onto the "{BROKER}_{USER_ID}_orders"
+        / "ANALYZE_{USER_ID}_orders" ZMQ topics) to every WS client that sent
+        {"action": "subscribe_orders"} for that user.
+
+        Args:
+            data_str: JSON string — the payload built in
+                subscribers/wsproxy_subscriber.py::on_order_update, already
+                shaped as the client-facing {"type": "order_update", ...} message.
+        """
+        message = json.loads(data_str)
+        user_id = message.get("user_id")
+        if not user_id:
+            logger.warning("Order update message missing user_id")
+            return
+
+        client_ids = self.order_subscribers.get(user_id)
+        if not client_ids:
+            return  # no WS clients currently subscribed for this user
+
+        send_tasks = [
+            self.send_message(client_id, message)
+            for client_id in list(client_ids)
+            if client_id in self.clients
+        ]
+        if send_tasks:
+            await aio.gather(*send_tasks, return_exceptions=True)
+
     def _is_auth_error_exception(self, error_message: str) -> bool:
         """
         Check if an error message indicates an authentication failure.
@@ -1728,10 +1833,22 @@ class WebSocketProxy:
                         logger.exception(f"Error handling cache invalidation: {e}")
                     continue  # Skip market data processing for cache messages
 
-                # Skip private account-level event topics (orders, positions, margins).
+                # Order-update relay: published by subscribers/wsproxy_subscriber.py
+                # (topic "{BROKER}_{USER_ID}_orders" or "ANALYZE_{USER_ID}_orders").
+                # user_id comes from the JSON payload, not topic-string parsing —
+                # usernames may contain underscores, same reasoning as the
+                # CACHE_INVALIDATE_* handling below.
+                if topic_str.endswith("_orders"):
+                    try:
+                        await self._handle_order_update(data_str)
+                    except Exception as e:
+                        logger.exception(f"Error handling order update: {e}")
+                    continue
+
+                # Skip other private account-level event topics (positions, margins).
                 # These are published by broker adapters on the shared ZMQ socket but
                 # do not follow the BROKER_EXCHANGE_SYMBOL_MODE market-data format.
-                if topic_str.endswith(("_orders", "_positions", "_margins")):
+                if topic_str.endswith(("_positions", "_margins")):
                     logger.debug(f"Skipping private event topic: {topic_str}")
                     continue
 

@@ -592,6 +592,10 @@ class OrderManager:
                     f"Order rejected: {orderid} - {symbol} {action} {quantity} - Reason: {cnc_sell_rejection_reason}"
                 )
 
+                self._publish_order_update_event(
+                    order, order_status="rejected", rejection_reason=cnc_sell_rejection_reason
+                )
+
                 return (
                     False,
                     {
@@ -943,6 +947,8 @@ class OrderManager:
 
             logger.info(f"Order cancelled: {orderid}")
 
+            self._publish_order_update_event(order, order_status="cancelled")
+
             return (
                 True,
                 {
@@ -966,6 +972,39 @@ class OrderManager:
                 },
                 500,
             )
+
+    def _publish_order_update_event(self, order, order_status, rejection_reason=""):
+        """Publish OrderUpdateEvent for a sandbox order transition (rejection
+        at placement, cancellation) so the real-time order-update channel
+        (socketio + websocket_proxy relay, see subscribers/wsproxy_subscriber.py)
+        picks it up. Error-isolated — never let event-bus failures break order
+        placement/cancellation.
+        """
+        try:
+            from events import OrderUpdateEvent
+            from utils.event_bus import bus
+
+            bus.publish(
+                OrderUpdateEvent(
+                    mode="analyze",
+                    api_type="sandbox.order_update",
+                    request_data={"user_id": self.user_id} if self.user_id else {},
+                    broker="sandbox",
+                    orderid=order.orderid,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    action=order.action,
+                    quantity=int(order.quantity),
+                    price=float(order.price or 0),
+                    pricetype=order.price_type or "",
+                    trigger_price=float(order.trigger_price or 0),
+                    product=order.product,
+                    order_status=order_status,
+                    rejection_reason=rejection_reason,
+                )
+            )
+        except Exception as pub_err:
+            logger.debug(f"Failed to publish OrderUpdateEvent for {order.orderid}: {pub_err}")
 
     def get_orderbook(self):
         """Get all orders for the user for current session only"""

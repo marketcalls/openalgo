@@ -9,6 +9,7 @@ from subscribers import (
     socketio_subscriber,
     telegram_subscriber,
     whatsapp_subscriber,
+    wsproxy_subscriber,
 )
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -66,6 +67,14 @@ def register_all():
     bus.subscribe("orders.all_cancelled", socketio_subscriber.on_all_orders_cancelled, "socketio:all_cancelled")
     bus.subscribe("orders.all_cancelled", telegram_subscriber.on_all_orders_cancelled, "telegram:all_cancelled")
     bus.subscribe("orders.all_cancelled", whatsapp_subscriber.on_all_orders_cancelled, "whatsapp:all_cancelled")
+
+    # --- order.update (async broker postback/order-WS fills+rejections, and
+    # sandbox engine-internal transitions). Engine/broker-driven, not a user
+    # API call — like sandbox.order_filled below, only socketio + the new
+    # ZMQ relay are wired; there's no request/response pair for order_logs
+    # or analyzer_logs to record, and it would be noise on Telegram.
+    bus.subscribe("order.update", socketio_subscriber.on_order_update, "socketio:order_update")
+    bus.subscribe("order.update", wsproxy_subscriber.on_order_update, "wsproxy:order_update")
 
     # --- position.closed ---
     bus.subscribe("position.closed", log_subscriber.on_position_closed, "log:position_closed")

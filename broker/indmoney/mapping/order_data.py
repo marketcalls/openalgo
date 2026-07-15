@@ -19,6 +19,9 @@ OPEN_STATUSES = {
     "INITIATED",
     "MODIFIED",
     "PARTIALLY FILLED",
+    # Order-update WebSocket stream variant (08-websockets.md) of the REST
+    # "PARTIALLY FILLED" status — a partial execution is still a working order.
+    "PARTIALLY EXECUTED",
 }
 TRIGGER_PENDING_STATUSES = {"SL-PENDING"}
 REJECTED_STATUSES = {"REJECTED", "FAILED", "ABORTED"}
