@@ -218,6 +218,7 @@ Unsubscribe with `{"action": "unsubscribe_orders"}`. Each event arrives as:
 ```json
 {
   "type": "order_update",
+  "user_id": "openalgo-user",
   "mode": "live",
   "broker": "upstox",
   "orderid": "240221025997024",
@@ -237,10 +238,19 @@ Unsubscribe with `{"action": "unsubscribe_orders"}`. Each event arrives as:
 }
 ```
 
-Fields use OpenAlgo's common order constants (`action` BUY/SELL, `pricetype`
-MARKET/LIMIT/SL/SL-M, `product` CNC/NRML/MIS); `order_status` is lowercase
+Fields use OpenAlgo's common order constants: `symbol` is in OpenAlgo symbol
+format (mapped from the broker's own symbology, e.g. `NHPC-EQ` → `NHPC`,
+`NIFTY28JUL26FUT` for NFO futures), `action` BUY/SELL, `pricetype`
+MARKET/LIMIT/SL/SL-M, `product` CNC/NRML/MIS; `order_status` is lowercase
 `open` / `complete` / `rejected` / `cancelled` (plus broker extras such as
-`expired`); `mode` is `live` (broker) or `analyze` (sandbox).
+`expired`); `rejection_reason` carries the broker's full RMS/OMS text when
+rejected; `mode` is `live` (broker) or `analyze` (sandbox).
+
+Sources: dedicated broker order feeds (Zerodha, Dhan, Fyers, Upstox,
+AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow), REST-orderbook
+polling for brokers without push (Groww), and `/postback/<broker>` HTTPS
+webhooks on production deployments. If both a broker feed and a postback are
+configured, deduplicate on `orderid` + `order_status` + `filled_quantity`.
 
 ### Heartbeat and Reconnection
 

@@ -153,6 +153,7 @@ MY CALLBACK: NIFTY LTP: 26008.5
 | **\[LTP]**   | LTP updates *(verbose=2)*           |
 | **\[QUOTE]** | Quote updates *(verbose=2)*         |
 | **\[DEPTH]** | Market depth updates *(verbose=2)*  |
+| **\[ORDER]** | Order status updates via `subscribe_orders()` *(verbose=2)* |
 | **\[ERROR]** | Error messages *(always shown)*     |
 
 
