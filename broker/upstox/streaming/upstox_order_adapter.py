@@ -111,10 +111,25 @@ class UpstoxOrderUpdateAdapter(BaseOrderUpdateAdapter):
         quantity = int(data.get("quantity") or 0)
         filled_quantity = int(data.get("filled_quantity") or 0)
 
+        exchange = data.get("exchange", "")
+        symbol = data.get("trading_symbol", "") or data.get("tradingsymbol", "")
+        # Map to OpenAlgo symbol format (NHPC-EQ -> NHPC) via the instrument
+        # token, exactly like broker/upstox/mapping/order_data.py does for the
+        # orderbook (Upstox's SymToken.token is the instrument key, e.g.
+        # "NSE_EQ|INE848E01016"). Falls back to the broker trading symbol.
+        instrument_token = data.get("instrument_token") or data.get("instrument_key")
+        if instrument_token and exchange:
+            try:
+                from database.token_db import get_symbol
+
+                symbol = get_symbol(instrument_token, exchange) or symbol
+            except Exception:
+                pass
+
         return {
             "orderid": data.get("order_id", ""),
-            "symbol": data.get("trading_symbol", ""),
-            "exchange": data.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": data.get("transaction_type", ""),
             "quantity": quantity,
             "price": float(data.get("price") or 0),
@@ -125,7 +140,11 @@ class UpstoxOrderUpdateAdapter(BaseOrderUpdateAdapter):
             "filled_quantity": filled_quantity,
             "pending_quantity": int(data.get("pending_quantity") or max(quantity - filled_quantity, 0)),
             "average_price": float(data.get("average_price") or 0),
-            "rejection_reason": data.get("status", "") if raw_status == "rejected" else "",
+            "rejection_reason": (
+                data.get("status_message") or data.get("status", "")
+            )
+            if order_status == "rejected"
+            else "",
         }
 
 
