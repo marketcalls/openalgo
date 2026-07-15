@@ -14,6 +14,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from services.order_position_poller_lifecycle import (
+    _fetch_orders,
+    _fetch_positions,
+    _fetch_trades,
+    _resolve_auth_token,
     start_poller_for_session,
     stop_poller_for_session,
 )
@@ -56,6 +60,103 @@ class TestStartPollerForSession:
 
         old_poller.stop.assert_called_once()
         assert get_poller("zerodha", "user1") is new_poller
+
+
+class TestResolveAuthToken:
+    @patch("database.auth_db.get_auth_token")
+    def test_uses_freshly_resolved_token_when_available(self, mock_get_auth_token):
+        mock_get_auth_token.return_value = "fresh-token"
+
+        token = _resolve_auth_token("user1", "zerodha", "stale-token")
+
+        assert token == "fresh-token"
+
+    @patch("database.auth_db.get_auth_token")
+    def test_falls_back_to_cached_token_when_db_returns_none(self, mock_get_auth_token):
+        # e.g. a revoked/missing Auth row - resolving fails but must not
+        # crash polling, since the cached token might still work for a
+        # broker whose REST calls don't hard-require the DB row.
+        mock_get_auth_token.return_value = None
+
+        token = _resolve_auth_token("user1", "zerodha", "stale-token")
+
+        assert token == "stale-token"
+
+    @patch("database.auth_db.get_auth_token")
+    def test_falls_back_to_cached_token_when_lookup_raises(self, mock_get_auth_token):
+        mock_get_auth_token.side_effect = RuntimeError("db unavailable")
+
+        token = _resolve_auth_token("user1", "zerodha", "stale-token")
+
+        assert token == "stale-token"
+
+
+class TestFetchFunctionsLogFailuresInsteadOfSwallowing:
+    @patch("services.order_position_poller_lifecycle._resolve_auth_token")
+    @patch("services.orderbook_service.get_orderbook_with_auth")
+    def test_fetch_orders_logs_and_returns_empty_on_failure(
+        self, mock_get_orderbook, mock_resolve, caplog
+    ):
+        mock_resolve.return_value = "token"
+        mock_get_orderbook.return_value = (
+            False,
+            {"status": "error", "message": "auth expired"},
+            401,
+        )
+
+        with caplog.at_level("WARNING"):
+            result = _fetch_orders("user1", "zerodha", "token")
+
+        assert result == []
+        assert "auth expired" in caplog.text
+
+    @patch("services.order_position_poller_lifecycle._resolve_auth_token")
+    @patch("services.tradebook_service.get_tradebook_with_auth")
+    def test_fetch_trades_logs_and_returns_empty_on_failure(
+        self, mock_get_tradebook, mock_resolve, caplog
+    ):
+        mock_resolve.return_value = "token"
+        mock_get_tradebook.return_value = (
+            False,
+            {"status": "error", "message": "auth expired"},
+            401,
+        )
+
+        with caplog.at_level("WARNING"):
+            result = _fetch_trades("user1", "zerodha", "token")
+
+        assert result == []
+        assert "auth expired" in caplog.text
+
+    @patch("services.order_position_poller_lifecycle._resolve_auth_token")
+    @patch("services.positionbook_service.get_positionbook_with_auth")
+    def test_fetch_positions_logs_and_returns_empty_on_failure(
+        self, mock_get_positionbook, mock_resolve, caplog
+    ):
+        mock_resolve.return_value = "token"
+        mock_get_positionbook.return_value = (
+            False,
+            {"status": "error", "message": "auth expired"},
+            401,
+        )
+
+        with caplog.at_level("WARNING"):
+            result = _fetch_positions("user1", "zerodha", "token")
+
+        assert result == []
+        assert "auth expired" in caplog.text
+
+    @patch("services.order_position_poller_lifecycle._resolve_auth_token")
+    @patch("services.positionbook_service.get_positionbook_with_auth")
+    def test_fetch_positions_uses_the_resolved_token_not_the_stale_one(
+        self, mock_get_positionbook, mock_resolve
+    ):
+        mock_resolve.return_value = "fresh-token"
+        mock_get_positionbook.return_value = (True, {"status": "success", "data": []}, 200)
+
+        _fetch_positions("user1", "zerodha", "stale-token")
+
+        mock_get_positionbook.assert_called_once_with("fresh-token", "zerodha")
 
 
 class TestConfigurableIntervals:

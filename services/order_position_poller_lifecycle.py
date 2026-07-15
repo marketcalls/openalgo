@@ -33,11 +33,32 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _fetch_orders(auth_token: str, broker: str) -> list[dict[str, Any]]:
+def _resolve_auth_token(user_id: str, broker: str, fallback_token: str) -> str:
+    """Re-resolve the auth token from the DB on every poll cycle instead of
+    trusting the value captured at poller-start time. A broker session can
+    rotate/refresh its token without going through upsert_auth (a silent
+    internal reconnect), in which case the closed-over token from
+    start_poller_for_session goes stale and every fetch below starts
+    failing invisibly - see the "position/LTP stopped updating" report this
+    was added for. Falls back to the original token if the DB lookup
+    itself fails, so a transient DB hiccup doesn't kill polling outright."""
+    try:
+        from database.auth_db import get_auth_token
+
+        token = get_auth_token(user_id)
+        return token or fallback_token
+    except Exception:
+        logger.debug(f"Could not re-resolve auth token for {broker}_{user_id}; using cached one")
+        return fallback_token
+
+
+def _fetch_orders(user_id: str, broker: str, auth_token: str) -> list[dict[str, Any]]:
     from services.orderbook_service import get_orderbook_with_auth
 
-    success, response, _ = get_orderbook_with_auth(auth_token, broker)
+    token = _resolve_auth_token(user_id, broker, auth_token)
+    success, response, _ = get_orderbook_with_auth(token, broker)
     if not success:
+        logger.warning(f"Order poll failed for {broker}_{user_id}: {response.get('message')}")
         return []
     data = response.get("data", {})
     if isinstance(data, dict):
@@ -45,20 +66,24 @@ def _fetch_orders(auth_token: str, broker: str) -> list[dict[str, Any]]:
     return data or []
 
 
-def _fetch_trades(auth_token: str, broker: str) -> list[dict[str, Any]]:
+def _fetch_trades(user_id: str, broker: str, auth_token: str) -> list[dict[str, Any]]:
     from services.tradebook_service import get_tradebook_with_auth
 
-    success, response, _ = get_tradebook_with_auth(auth_token, broker)
+    token = _resolve_auth_token(user_id, broker, auth_token)
+    success, response, _ = get_tradebook_with_auth(token, broker)
     if not success:
+        logger.warning(f"Trade poll failed for {broker}_{user_id}: {response.get('message')}")
         return []
     return response.get("data", []) or []
 
 
-def _fetch_positions(auth_token: str, broker: str) -> list[dict[str, Any]]:
+def _fetch_positions(user_id: str, broker: str, auth_token: str) -> list[dict[str, Any]]:
     from services.positionbook_service import get_positionbook_with_auth
 
-    success, response, _ = get_positionbook_with_auth(auth_token, broker)
+    token = _resolve_auth_token(user_id, broker, auth_token)
+    success, response, _ = get_positionbook_with_auth(token, broker)
     if not success:
+        logger.warning(f"Position poll failed for {broker}_{user_id}: {response.get('message')}")
         return []
     return response.get("data", []) or []
 
@@ -102,9 +127,9 @@ def start_poller_for_session(broker: str, user_id: str, auth_token: str) -> None
     poller = OrderPositionPoller(
         broker=broker,
         user_id=user_id,
-        fetch_orders=lambda: _fetch_orders(auth_token, broker),
-        fetch_trades=lambda: _fetch_trades(auth_token, broker),
-        fetch_positions=lambda: _fetch_positions(auth_token, broker),
+        fetch_orders=lambda: _fetch_orders(user_id, broker, auth_token),
+        fetch_trades=lambda: _fetch_trades(user_id, broker, auth_token),
+        fetch_positions=lambda: _fetch_positions(user_id, broker, auth_token),
         order_poll_normal_ms=int(
             os.getenv("ORDER_POLL_NORMAL_MS", str(DEFAULT_ORDER_POLL_NORMAL_MS))
         ),
