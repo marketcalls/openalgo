@@ -22,7 +22,13 @@ from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
 
 logger = get_logger(__name__)
 
-UPSTOX_PORTFOLIO_AUTH_URL = "https://api.upstox.com/v2/feed/portfolio-stream-feed/auth"
+UPSTOX_PORTFOLIO_AUTH_URL = "https://api.upstox.com/v2/feed/portfolio-stream-feed/authorize"
+# Direct endpoint fallback: 21c-websocket-portfolio-stream.md documents wss
+# connection with the Bearer header (HTTP 302 -> authorized endpoint, which
+# websocket-client follows during the handshake).
+UPSTOX_PORTFOLIO_DIRECT_WS_URL = (
+    "wss://api.upstox.com/v2/feed/portfolio-stream-feed?update_types=order"
+)
 
 # Upstox order "status" free-text values -> OpenAlgo's lowercase order_status
 # vocabulary. Upstox statuses are already close to lowercase; unrecognized
@@ -55,26 +61,40 @@ class UpstoxOrderUpdateAdapter(BaseOrderUpdateAdapter):
         Fetch a fresh authorized redirect URI. Called on every (re)connect
         attempt by BaseOrderUpdateAdapter._connect_once — the "code" query
         param in the returned URL is single-use per Upstox's docs, so this
-        must not be cached across reconnects.
+        must not be cached across reconnects. Falls back to the direct wss
+        endpoint (Bearer-header auth, 302-redirect handshake) if the
+        authorize endpoint is unavailable.
         """
-        client = get_httpx_client()
-        response = client.get(
-            UPSTOX_PORTFOLIO_AUTH_URL,
-            params={"update_types": "order"},
-            headers={
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json",
-            },
-        )
-        response.raise_for_status()
-        payload = response.json()
-        url = payload.get("data", {}).get("authorized_redirect_uri")
-        if not url:
-            raise RuntimeError("Upstox portfolio-stream auth did not return a redirect URI")
-        return url
+        try:
+            client = get_httpx_client()
+            response = client.get(
+                UPSTOX_PORTFOLIO_AUTH_URL,
+                params={"update_types": "order"},
+                headers={
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Accept": "application/json",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            url = payload.get("data", {}).get("authorized_redirect_uri")
+            if url:
+                return url
+            self.logger.warning(
+                "Upstox portfolio-stream authorize returned no redirect URI; "
+                "falling back to direct endpoint"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Upstox portfolio-stream authorize failed ({e}); "
+                "falling back to direct endpoint"
+            )
+        return UPSTOX_PORTFOLIO_DIRECT_WS_URL
 
     def get_headers(self):
-        return None  # auth is baked into the redirect URL's query params
+        # Required for the direct-endpoint fallback; harmless on the
+        # pre-authorized redirect URI (auth is in its query params).
+        return {"Authorization": f"Bearer {self.access_token}"}
 
     def normalize(self, raw_message):
         try:
