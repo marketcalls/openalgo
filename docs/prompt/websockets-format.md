@@ -199,6 +199,137 @@ If a client requests a depth level not supported by their broker:
 }
 ```
 
+### Order, Trade, and Position Channels
+
+In addition to market data, the same WebSocket connection can stream **order lifecycle** updates so strategies don't have to poll `/api/v1/orderbook`, `/api/v1/tradebook`, or `/api/v1/positionbook`. Three channels are available: `order_update`, `trade_update`, and `position_update`.
+
+Unlike market-data subscriptions, these channels take no `symbol`/`exchange`/`mode` — OpenAlgo is single-user/single-broker per deployment, so there is exactly one account's stream to subscribe to.
+
+#### Subscribing
+
+```json
+{
+  "action": "subscribe",
+  "channel": "order_update"
+}
+```
+
+Send one `subscribe` request per channel (`order_update`, `trade_update`, `position_update`) for the events you want. The server acknowledges:
+
+```json
+{
+  "type": "subscribe",
+  "channel": "order_update",
+  "status": "success"
+}
+```
+
+Immediately after a successful subscribe, if a snapshot is available, the server sends the current state of all open orders/trades/positions so the client isn't left waiting for the next change:
+
+```json
+{
+  "type": "order_update",
+  "snapshot": true,
+  "generation": 42,
+  "data": {
+    "generation": 42,
+    "orders": [ /* ... */ ],
+    "trades": [ /* ... */ ],
+    "positions": [ /* ... */ ]
+  }
+}
+```
+
+No snapshot is sent if analyzer/sandbox mode is active (fills are pushed in real time as they happen, so there's nothing to snapshot yet) or if the poller hasn't completed its first cycle — this is expected, not an error.
+
+#### Unsubscribing
+
+```json
+{
+  "action": "unsubscribe",
+  "channel": "order_update"
+}
+```
+
+#### Event Payloads
+
+Every event carries `event_type`, `generation`, and `sequence`. Within one poll cycle, events are always delivered in canonical order — `order_update` before `trade_update` before `position_update` for the same execution — so a client never observes a fill before the order status change that produced it.
+
+**`order_update`**
+
+```json
+{
+  "type": "order_update",
+  "data": {
+    "event_type": "order_update",
+    "generation": 43,
+    "sequence": 0,
+    "orderid": "250714000012345",
+    "symbol": "SBIN",
+    "exchange": "NSE",
+    "action": "BUY",
+    "product": "MIS",
+    "pricetype": "LIMIT",
+    "quantity": 10,
+    "price": 825.5,
+    "trigger_price": 0.0,
+    "status": "complete",
+    "rejection_reason": "",
+    "timestamp": "2026-07-15 09:16:23"
+  }
+}
+```
+
+`status` follows the standard OpenAlgo order-status values: `open`, `trigger pending`, `complete`, `rejected`, `cancelled`.
+
+**`trade_update`**
+
+```json
+{
+  "type": "trade_update",
+  "data": {
+    "event_type": "trade_update",
+    "generation": 43,
+    "sequence": 1,
+    "orderid": "250714000012345",
+    "tradeid": "250714000012345:10:825.5:2026-07-15 09:16:23",
+    "symbol": "SBIN",
+    "exchange": "NSE",
+    "product": "MIS",
+    "action": "BUY",
+    "fill_quantity": 10,
+    "fill_price": 825.5,
+    "trade_value": 8255.0,
+    "timestamp": "2026-07-15 09:16:23"
+  }
+}
+```
+
+**`position_update`**
+
+```json
+{
+  "type": "position_update",
+  "data": {
+    "event_type": "position_update",
+    "generation": 43,
+    "sequence": 2,
+    "symbol": "SBIN",
+    "exchange": "NSE",
+    "product": "MIS",
+    "net_quantity": 10,
+    "average_price": 825.5,
+    "ltp": 826.0,
+    "pnl": 5.0,
+    "timestamp": ""
+  }
+}
+```
+
+#### How This Works
+
+A background poller (one per broker session, shared across every browser tab/device the user has open) polls the broker's orderbook/tradebook/positions and diffs against the last snapshot — most brokers don't offer a push feed for order status, so this keeps behavior broker-agnostic across all 30+ integrations without any broker-specific code. Polling is adaptive: it runs at a conservative baseline and briefly speeds up right after OpenAlgo places, modifies, or cancels an order (or while an order remains non-terminal), then settles back down — never a standing aggressive interval, since the poll budget is shared with real trading calls on the same broker session. Analyzer/sandbox mode bypasses polling entirely and pushes fills the instant they happen. Poll intervals are configurable via `.env` (`ORDER_POLL_NORMAL_MS`, `ORDER_POLL_FAST_MS`, `TRADE_POLL_NORMAL_MS`, `TRADE_POLL_FAST_MS`, `POSITION_POLL_MS`, `FAST_MODE_TIMEOUT_SEC`).
+
 ### Heartbeat and Reconnection
 
 * Server sends `ping` messages every 30 seconds.

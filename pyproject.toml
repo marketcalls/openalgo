@@ -201,7 +201,7 @@ packages = []
 testpaths = ["test"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --timeout=60"
+addopts = "-v --timeout=60 --import-mode=importlib"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",

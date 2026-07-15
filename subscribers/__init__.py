@@ -6,6 +6,7 @@ Call register_all() once during app initialization.
 
 from subscribers import (
     log_subscriber,
+    order_poller_subscriber,
     socketio_subscriber,
     telegram_subscriber,
     whatsapp_subscriber,
@@ -24,6 +25,9 @@ def register_all():
     bus.subscribe("order.placed", socketio_subscriber.on_order_placed, "socketio:order_placed")
     bus.subscribe("order.placed", telegram_subscriber.on_order_placed, "telegram:order_placed")
     bus.subscribe("order.placed", whatsapp_subscriber.on_order_placed, "whatsapp:order_placed")
+    bus.subscribe(
+        "order.placed", order_poller_subscriber.on_order_placed, "order_poller:order_placed"
+    )
 
     # --- order.failed ---
     bus.subscribe("order.failed", log_subscriber.on_order_failed, "log:order_failed")
@@ -33,75 +37,171 @@ def register_all():
 
     # --- order.no_action (smart order) ---
     bus.subscribe("order.no_action", log_subscriber.on_smart_order_no_action, "log:no_action")
-    bus.subscribe("order.no_action", socketio_subscriber.on_smart_order_no_action, "socketio:no_action")
-    bus.subscribe("order.no_action", telegram_subscriber.on_smart_order_no_action, "telegram:no_action")
-    bus.subscribe("order.no_action", whatsapp_subscriber.on_smart_order_no_action, "whatsapp:no_action")
+    bus.subscribe(
+        "order.no_action", socketio_subscriber.on_smart_order_no_action, "socketio:no_action"
+    )
+    bus.subscribe(
+        "order.no_action", telegram_subscriber.on_smart_order_no_action, "telegram:no_action"
+    )
+    bus.subscribe(
+        "order.no_action", whatsapp_subscriber.on_smart_order_no_action, "whatsapp:no_action"
+    )
 
     # --- order.modified ---
     bus.subscribe("order.modified", log_subscriber.on_order_modified, "log:order_modified")
-    bus.subscribe("order.modified", socketio_subscriber.on_order_modified, "socketio:order_modified")
-    bus.subscribe("order.modified", telegram_subscriber.on_order_modified, "telegram:order_modified")
-    bus.subscribe("order.modified", whatsapp_subscriber.on_order_modified, "whatsapp:order_modified")
+    bus.subscribe(
+        "order.modified", socketio_subscriber.on_order_modified, "socketio:order_modified"
+    )
+    bus.subscribe(
+        "order.modified", telegram_subscriber.on_order_modified, "telegram:order_modified"
+    )
+    bus.subscribe(
+        "order.modified", whatsapp_subscriber.on_order_modified, "whatsapp:order_modified"
+    )
+    bus.subscribe(
+        "order.modified", order_poller_subscriber.on_order_modified, "order_poller:order_modified"
+    )
 
     # --- order.modify_failed ---
     bus.subscribe("order.modify_failed", log_subscriber.on_order_modify_failed, "log:modify_failed")
-    bus.subscribe("order.modify_failed", socketio_subscriber.on_order_modify_failed, "socketio:modify_failed")
-    bus.subscribe("order.modify_failed", telegram_subscriber.on_order_modify_failed, "telegram:modify_failed")
-    bus.subscribe("order.modify_failed", whatsapp_subscriber.on_order_modify_failed, "whatsapp:modify_failed")
+    bus.subscribe(
+        "order.modify_failed", socketio_subscriber.on_order_modify_failed, "socketio:modify_failed"
+    )
+    bus.subscribe(
+        "order.modify_failed", telegram_subscriber.on_order_modify_failed, "telegram:modify_failed"
+    )
+    bus.subscribe(
+        "order.modify_failed", whatsapp_subscriber.on_order_modify_failed, "whatsapp:modify_failed"
+    )
 
     # --- order.cancelled ---
     bus.subscribe("order.cancelled", log_subscriber.on_order_cancelled, "log:order_cancelled")
-    bus.subscribe("order.cancelled", socketio_subscriber.on_order_cancelled, "socketio:order_cancelled")
-    bus.subscribe("order.cancelled", telegram_subscriber.on_order_cancelled, "telegram:order_cancelled")
-    bus.subscribe("order.cancelled", whatsapp_subscriber.on_order_cancelled, "whatsapp:order_cancelled")
+    bus.subscribe(
+        "order.cancelled", socketio_subscriber.on_order_cancelled, "socketio:order_cancelled"
+    )
+    bus.subscribe(
+        "order.cancelled", telegram_subscriber.on_order_cancelled, "telegram:order_cancelled"
+    )
+    bus.subscribe(
+        "order.cancelled", whatsapp_subscriber.on_order_cancelled, "whatsapp:order_cancelled"
+    )
+    bus.subscribe(
+        "order.cancelled",
+        order_poller_subscriber.on_order_cancelled,
+        "order_poller:order_cancelled",
+    )
 
     # --- order.cancel_failed ---
     bus.subscribe("order.cancel_failed", log_subscriber.on_order_cancel_failed, "log:cancel_failed")
-    bus.subscribe("order.cancel_failed", socketio_subscriber.on_order_cancel_failed, "socketio:cancel_failed")
-    bus.subscribe("order.cancel_failed", telegram_subscriber.on_order_cancel_failed, "telegram:cancel_failed")
-    bus.subscribe("order.cancel_failed", whatsapp_subscriber.on_order_cancel_failed, "whatsapp:cancel_failed")
+    bus.subscribe(
+        "order.cancel_failed", socketio_subscriber.on_order_cancel_failed, "socketio:cancel_failed"
+    )
+    bus.subscribe(
+        "order.cancel_failed", telegram_subscriber.on_order_cancel_failed, "telegram:cancel_failed"
+    )
+    bus.subscribe(
+        "order.cancel_failed", whatsapp_subscriber.on_order_cancel_failed, "whatsapp:cancel_failed"
+    )
 
     # --- orders.all_cancelled ---
-    bus.subscribe("orders.all_cancelled", log_subscriber.on_all_orders_cancelled, "log:all_cancelled")
-    bus.subscribe("orders.all_cancelled", socketio_subscriber.on_all_orders_cancelled, "socketio:all_cancelled")
-    bus.subscribe("orders.all_cancelled", telegram_subscriber.on_all_orders_cancelled, "telegram:all_cancelled")
-    bus.subscribe("orders.all_cancelled", whatsapp_subscriber.on_all_orders_cancelled, "whatsapp:all_cancelled")
+    bus.subscribe(
+        "orders.all_cancelled", log_subscriber.on_all_orders_cancelled, "log:all_cancelled"
+    )
+    bus.subscribe(
+        "orders.all_cancelled",
+        socketio_subscriber.on_all_orders_cancelled,
+        "socketio:all_cancelled",
+    )
+    bus.subscribe(
+        "orders.all_cancelled",
+        telegram_subscriber.on_all_orders_cancelled,
+        "telegram:all_cancelled",
+    )
+    bus.subscribe(
+        "orders.all_cancelled",
+        whatsapp_subscriber.on_all_orders_cancelled,
+        "whatsapp:all_cancelled",
+    )
 
     # --- position.closed ---
     bus.subscribe("position.closed", log_subscriber.on_position_closed, "log:position_closed")
-    bus.subscribe("position.closed", socketio_subscriber.on_position_closed, "socketio:position_closed")
-    bus.subscribe("position.closed", telegram_subscriber.on_position_closed, "telegram:position_closed")
-    bus.subscribe("position.closed", whatsapp_subscriber.on_position_closed, "whatsapp:position_closed")
+    bus.subscribe(
+        "position.closed", socketio_subscriber.on_position_closed, "socketio:position_closed"
+    )
+    bus.subscribe(
+        "position.closed", telegram_subscriber.on_position_closed, "telegram:position_closed"
+    )
+    bus.subscribe(
+        "position.closed", whatsapp_subscriber.on_position_closed, "whatsapp:position_closed"
+    )
 
     # --- basket.completed ---
     bus.subscribe("basket.completed", log_subscriber.on_basket_completed, "log:basket_completed")
-    bus.subscribe("basket.completed", socketio_subscriber.on_basket_completed, "socketio:basket_completed")
-    bus.subscribe("basket.completed", telegram_subscriber.on_basket_completed, "telegram:basket_completed")
-    bus.subscribe("basket.completed", whatsapp_subscriber.on_basket_completed, "whatsapp:basket_completed")
+    bus.subscribe(
+        "basket.completed", socketio_subscriber.on_basket_completed, "socketio:basket_completed"
+    )
+    bus.subscribe(
+        "basket.completed", telegram_subscriber.on_basket_completed, "telegram:basket_completed"
+    )
+    bus.subscribe(
+        "basket.completed", whatsapp_subscriber.on_basket_completed, "whatsapp:basket_completed"
+    )
 
     # --- split.completed ---
     bus.subscribe("split.completed", log_subscriber.on_split_completed, "log:split_completed")
-    bus.subscribe("split.completed", socketio_subscriber.on_split_completed, "socketio:split_completed")
-    bus.subscribe("split.completed", telegram_subscriber.on_split_completed, "telegram:split_completed")
-    bus.subscribe("split.completed", whatsapp_subscriber.on_split_completed, "whatsapp:split_completed")
+    bus.subscribe(
+        "split.completed", socketio_subscriber.on_split_completed, "socketio:split_completed"
+    )
+    bus.subscribe(
+        "split.completed", telegram_subscriber.on_split_completed, "telegram:split_completed"
+    )
+    bus.subscribe(
+        "split.completed", whatsapp_subscriber.on_split_completed, "whatsapp:split_completed"
+    )
 
     # --- options.completed ---
     bus.subscribe("options.completed", log_subscriber.on_options_completed, "log:options_completed")
-    bus.subscribe("options.completed", socketio_subscriber.on_options_completed, "socketio:options_completed")
-    bus.subscribe("options.completed", telegram_subscriber.on_options_completed, "telegram:options_completed")
-    bus.subscribe("options.completed", whatsapp_subscriber.on_options_completed, "whatsapp:options_completed")
+    bus.subscribe(
+        "options.completed", socketio_subscriber.on_options_completed, "socketio:options_completed"
+    )
+    bus.subscribe(
+        "options.completed", telegram_subscriber.on_options_completed, "telegram:options_completed"
+    )
+    bus.subscribe(
+        "options.completed", whatsapp_subscriber.on_options_completed, "whatsapp:options_completed"
+    )
 
     # --- multiorder.completed ---
-    bus.subscribe("multiorder.completed", log_subscriber.on_multiorder_completed, "log:multiorder_completed")
-    bus.subscribe("multiorder.completed", socketio_subscriber.on_multiorder_completed, "socketio:multiorder_completed")
-    bus.subscribe("multiorder.completed", telegram_subscriber.on_multiorder_completed, "telegram:multiorder_completed")
-    bus.subscribe("multiorder.completed", whatsapp_subscriber.on_multiorder_completed, "whatsapp:multiorder_completed")
+    bus.subscribe(
+        "multiorder.completed", log_subscriber.on_multiorder_completed, "log:multiorder_completed"
+    )
+    bus.subscribe(
+        "multiorder.completed",
+        socketio_subscriber.on_multiorder_completed,
+        "socketio:multiorder_completed",
+    )
+    bus.subscribe(
+        "multiorder.completed",
+        telegram_subscriber.on_multiorder_completed,
+        "telegram:multiorder_completed",
+    )
+    bus.subscribe(
+        "multiorder.completed",
+        whatsapp_subscriber.on_multiorder_completed,
+        "whatsapp:multiorder_completed",
+    )
 
     # --- analyzer.error ---
     bus.subscribe("analyzer.error", log_subscriber.on_analyzer_error, "log:analyzer_error")
-    bus.subscribe("analyzer.error", socketio_subscriber.on_analyzer_error, "socketio:analyzer_error")
-    bus.subscribe("analyzer.error", telegram_subscriber.on_analyzer_error, "telegram:analyzer_error")
-    bus.subscribe("analyzer.error", whatsapp_subscriber.on_analyzer_error, "whatsapp:analyzer_error")
+    bus.subscribe(
+        "analyzer.error", socketio_subscriber.on_analyzer_error, "socketio:analyzer_error"
+    )
+    bus.subscribe(
+        "analyzer.error", telegram_subscriber.on_analyzer_error, "telegram:analyzer_error"
+    )
+    bus.subscribe(
+        "analyzer.error", whatsapp_subscriber.on_analyzer_error, "whatsapp:analyzer_error"
+    )
 
     # --- sandbox engine-internal events (analyze mode only, UI auto-refresh) ---
     # Only the socketio subscriber is wired — these are engine-driven state
