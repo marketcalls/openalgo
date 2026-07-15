@@ -871,8 +871,8 @@ class FyersHSMWebSocket:
 
         # Wait for initial connection
         timeout = 15
-        start_time = time.time()
-        while not self.connected and time.time() - start_time < timeout:
+        start_time = time.perf_counter()
+        while not self.connected and time.perf_counter() - start_time < timeout:
             if not self.running:
                 break
             time.sleep(0.1)
@@ -1070,8 +1070,8 @@ class FyersHSMWebSocket:
 
             # Wait for authentication
             timeout = 10
-            start_time = time.time()
-            while not self.authenticated and time.time() - start_time < timeout:
+            start_time = time.perf_counter()
+            while not self.authenticated and time.perf_counter() - start_time < timeout:
                 time.sleep(0.1)
 
             if not self.authenticated:

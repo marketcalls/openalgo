@@ -139,8 +139,8 @@ class DhanWebSocket:
 
     def wait_for_connection(self, timeout: float = 5.0) -> bool:
         """Wait for WebSocket connection to be established"""
-        start_time = time.time()
-        while not self.connected and time.time() - start_time < timeout:
+        start_time = time.perf_counter()
+        while not self.connected and time.perf_counter() - start_time < timeout:
             time.sleep(0.1)
         return self.connected
 
@@ -478,8 +478,8 @@ class DhanWebSocket:
                 logger.info(f"Waiting {sleep_time:.1f} seconds before next reconnection attempt...")
 
                 # Sleep with periodic checks for shutdown
-                start_time = time.time()
-                while time.time() - start_time < sleep_time:
+                start_time = time.perf_counter()
+                while time.perf_counter() - start_time < sleep_time:
                     if not self.running:
                         logger.info("Stopping reconnection attempts - client is shutting down")
                         return

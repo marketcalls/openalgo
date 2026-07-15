@@ -176,9 +176,9 @@ class ShoonyaWebSocket:
             bool: True if connected within timeout, False otherwise
         """
         # Phase 8: interruptible poll. Bail immediately if shutdown is signaled.
-        start_time = time.time()
+        start_time = time.perf_counter()
 
-        while self.running and time.time() - start_time < self.CONNECTION_TIMEOUT:
+        while self.running and time.perf_counter() - start_time < self.CONNECTION_TIMEOUT:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True

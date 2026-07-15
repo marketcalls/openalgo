@@ -128,9 +128,9 @@ class FlattradeWebSocket:
         Returns:
             bool: True if connected within timeout, False otherwise
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
 
-        while time.time() - start_time < self.CONNECTION_TIMEOUT:
+        while time.perf_counter() - start_time < self.CONNECTION_TIMEOUT:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True

@@ -57,9 +57,9 @@ def request(method: str, url: str, **kwargs) -> httpx.Response:
     client = get_httpx_client()
 
     # Track actual broker API call time for latency monitoring
-    broker_api_start = time.time()
+    broker_api_start = time.perf_counter()
     response = client.request(method, url, **kwargs)
-    broker_api_end = time.time()
+    broker_api_end = time.perf_counter()
 
     # Store broker API time in Flask's g object for latency tracking
     if hasattr(g, "latency_tracker"):
@@ -147,7 +147,7 @@ def _create_http_client() -> httpx.Client:
     # Event hooks for tracking broker API timing
     def log_request(request):
         """Hook called before request is sent"""
-        request.extensions["start_time"] = time.time()
+        request.extensions["start_time"] = time.perf_counter()
         logger.debug(f"Starting request to {request.url}")
 
     def log_response(response):
@@ -155,7 +155,7 @@ def _create_http_client() -> httpx.Client:
         try:
             start_time = response.request.extensions.get("start_time")
             if start_time:
-                duration_ms = (time.time() - start_time) * 1000
+                duration_ms = (time.perf_counter() - start_time) * 1000
 
                 # Store broker API time in Flask's g object for latency tracking
                 try:

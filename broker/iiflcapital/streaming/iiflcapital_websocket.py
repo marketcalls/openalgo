@@ -372,8 +372,8 @@ class IiflcapitalWebSocket:
         self.connected = False
 
     def wait_for_connection(self, timeout: float = 15.0) -> bool:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
             if self.connected:
                 return True
             if self._fatal_error:

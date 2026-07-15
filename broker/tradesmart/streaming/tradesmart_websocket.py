@@ -99,8 +99,8 @@ class TradeSmartWebSocket:
         self.ws_thread.start()
 
     def _wait_for_connection(self) -> bool:
-        start_time = time.time()
-        while time.time() - start_time < self.CONNECTION_TIMEOUT:
+        start_time = time.perf_counter()
+        while time.perf_counter() - start_time < self.CONNECTION_TIMEOUT:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True

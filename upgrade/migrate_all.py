@@ -117,7 +117,7 @@ def main():
     print("Already applied migrations will be automatically skipped.")
     print()
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     success_count = 0
     fail_count = 0
 
@@ -127,7 +127,7 @@ def main():
         else:
             fail_count += 1
 
-    elapsed = time.time() - start_time
+    elapsed = time.perf_counter() - start_time
 
     # Summary
     print()

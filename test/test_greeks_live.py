@@ -36,9 +36,9 @@ STRIKE_INTERVAL = 50  # NIFTY=50, BANKNIFTY=100
 
 
 def api_call(endpoint, payload):
-    start = time.time()
+    start = time.perf_counter()
     resp = requests.post(f"{BASE_URL}{endpoint}", json=payload)
-    elapsed = time.time() - start
+    elapsed = time.perf_counter() - start
     return resp.status_code, resp.json(), elapsed
 
 

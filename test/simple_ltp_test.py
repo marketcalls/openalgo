@@ -86,8 +86,8 @@ class SimpleFeed:
 
             # Wait for connection to establish
             timeout = 5
-            start_time = time.time()
-            while not self.connected and time.time() - start_time < timeout:
+            start_time = time.perf_counter()
+            while not self.connected and time.perf_counter() - start_time < timeout:
                 time.sleep(0.1)
 
             if not self.connected:
@@ -106,8 +106,8 @@ class SimpleFeed:
             self.ws.close()
             # Wait for websocket to close
             timeout = 2
-            start_time = time.time()
-            while self.connected and time.time() - start_time < timeout:
+            start_time = time.perf_counter()
+            while self.connected and time.perf_counter() - start_time < timeout:
                 time.sleep(0.1)
             self.ws = None
 
@@ -125,8 +125,8 @@ class SimpleFeed:
 
         # Wait for authentication response synchronously
         timeout = 5
-        start_time = time.time()
-        while not self.authenticated and time.time() - start_time < timeout:
+        start_time = time.perf_counter()
+        while not self.authenticated and time.perf_counter() - start_time < timeout:
             # Process any messages in the queue
             try:
                 if not self.message_queue.empty():

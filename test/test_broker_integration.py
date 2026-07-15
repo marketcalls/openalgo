@@ -615,8 +615,8 @@ class _WSClient:
         t = threading.Thread(target=self.ws.run_forever, daemon=True)
         t.start()
 
-        deadline = time.time() + 8
-        while time.time() < deadline and not self.authenticated:
+        deadline = time.perf_counter() + 8
+        while time.perf_counter() < deadline and not self.authenticated:
             time.sleep(0.1)
         return self.authenticated
 
@@ -628,8 +628,8 @@ class _WSClient:
                                      "exchange": exchange, "mode": mode, "depth": 5}))
         except Exception:
             return False
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
             with self.lock:
                 if any(t[2] == mode and t[1] == symbol for t in self.ticks):
                     break

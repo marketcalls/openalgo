@@ -24,7 +24,7 @@ def load_symbols_to_cache(broker: str) -> bool:
     """
     try:
         logger.info(f"Starting cache load for broker: {broker}")
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         # Import the enhanced token_db module
         from database.token_db_enhanced import get_cache_stats, load_cache_for_broker
@@ -33,7 +33,7 @@ def load_symbols_to_cache(broker: str) -> bool:
         success = load_cache_for_broker(broker)
 
         if success:
-            load_time = time.time() - start_time
+            load_time = time.perf_counter() - start_time
             stats = get_cache_stats()
 
             logger.info(

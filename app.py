@@ -689,7 +689,7 @@ def setup_environment(app):
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
             ]
 
-            db_init_start = time.time()
+            db_init_start = time.perf_counter()
             with ThreadPoolExecutor(max_workers=15) as executor:
                 futures = {executor.submit(func): name for name, func in db_init_functions}
                 for future in as_completed(futures):
@@ -699,7 +699,7 @@ def setup_environment(app):
                     except Exception as e:
                         logger.error(f"Failed to initialize {db_name}: {e}")
 
-            db_init_time = (time.time() - db_init_start) * 1000
+            db_init_time = (time.perf_counter() - db_init_start) * 1000
             logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
 
             # Signal that DB tables are ready (unblocks cache restoration)

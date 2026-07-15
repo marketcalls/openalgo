@@ -1155,8 +1155,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             self.subscribe(symbol, mode=mode)
 
                         # Wait for some ticks
-                        start_time = time.time()
-                        while time.time() - start_time < timeout / 4:  # Divide timeout by modes
+                        start_time = time.perf_counter()
+                        while time.perf_counter() - start_time < timeout / 4:  # Divide timeout by modes
                             if results["ticks_received"] > 0:
                                 self.logger.info(
                                     f"Received {results['ticks_received']} ticks for mode {mode}"

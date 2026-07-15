@@ -275,7 +275,7 @@ def async_master_contract_download(broker):
 
     Tracks download duration and exchange-wise statistics for smart download feature.
     """
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     # Update status to downloading
     update_status(broker, "downloading", "Master contract download in progress")
@@ -313,7 +313,7 @@ def async_master_contract_download(broker):
         logger.info(f"Master contract download completed for {broker}")
 
         # Calculate download duration and get exchange stats
-        duration_seconds = int(time.time() - start_time)
+        duration_seconds = int(time.perf_counter() - start_time)
         exchange_stats = get_exchange_stats_from_db()
 
         # Update download statistics for smart download tracking

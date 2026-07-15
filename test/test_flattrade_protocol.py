@@ -72,9 +72,9 @@ def test_broker_protocols():
     try:
         times = []
         for i in range(3):
-            start = time.time()
+            start = time.perf_counter()
             response = client_auto.head(flattrade_url, follow_redirects=True)
-            elapsed = (time.time() - start) * 1000
+            elapsed = (time.perf_counter() - start) * 1000
             times.append(elapsed)
             print(f"   Request {i + 1}: {response.http_version} - {elapsed:.0f}ms")
         print(f"   Average: {sum(times) / len(times):.0f}ms")
@@ -88,9 +88,9 @@ def test_broker_protocols():
     try:
         times = []
         for i in range(3):
-            start = time.time()
+            start = time.perf_counter()
             response = client_http1.head(flattrade_url, follow_redirects=True)
-            elapsed = (time.time() - start) * 1000
+            elapsed = (time.perf_counter() - start) * 1000
             times.append(elapsed)
             print(f"   Request {i + 1}: {response.http_version} - {elapsed:.0f}ms")
         print(f"   Average: {sum(times) / len(times):.0f}ms")

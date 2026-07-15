@@ -99,9 +99,9 @@ def main():
 
     # Monitor for 30 seconds
     print("\nMonitoring for 30 seconds...")
-    monitor_start = time.time()
+    monitor_start = time.perf_counter()
 
-    while time.time() - monitor_start < 30:
+    while time.perf_counter() - monitor_start < 30:
         time.sleep(5)
         with stats["lock"]:
             print(

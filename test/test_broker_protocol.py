@@ -42,18 +42,18 @@ def test_broker_apis():
             print(f"\n{name:25} ({url})")
 
             # First request (includes connection setup)
-            start = time.time()
+            start = time.perf_counter()
             response = client.head(url, follow_redirects=True)
-            first_time = (time.time() - start) * 1000
+            first_time = (time.perf_counter() - start) * 1000
 
             print(
                 f"  Protocol: {response.http_version:10} Status: {response.status_code:3}  First request: {first_time:.0f}ms"
             )
 
             # Second request (reuses connection)
-            start = time.time()
+            start = time.perf_counter()
             response = client.head(url, follow_redirects=True)
-            second_time = (time.time() - start) * 1000
+            second_time = (time.perf_counter() - start) * 1000
 
             print(
                 f"  Connection reused:                        Second request: {second_time:.0f}ms"
@@ -86,9 +86,9 @@ def test_broker_apis():
         try:
             print(f"\n{name:25} ({url})")
 
-            start = time.time()
+            start = time.perf_counter()
             response = client_http1.head(url, follow_redirects=True)
-            response_time = (time.time() - start) * 1000
+            response_time = (time.perf_counter() - start) * 1000
 
             print(
                 f"  Protocol: {response.http_version:10} Status: {response.status_code:3}  Time: {response_time:.0f}ms"
