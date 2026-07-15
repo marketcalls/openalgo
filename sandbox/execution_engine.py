@@ -206,16 +206,19 @@ class ExecutionEngine:
         return quote_cache
 
     def _publish_fill_event(
-        self, orderid, tradeid, symbol, exchange, action, quantity, price, product, strategy
+        self, orderid, tradeid, symbol, exchange, action, quantity, price, product, strategy,
+        user_id=None, pricetype="", trigger_price=0.0,
     ):
-        """Emit SandboxOrderFilledEvent so the analyzer-mode UI auto-refreshes.
+        """Emit SandboxOrderFilledEvent so the analyzer-mode UI auto-refreshes,
+        and OrderUpdateEvent so the real-time order-update channel (socketio +
+        websocket_proxy relay) picks it up too.
 
         Logged at INFO so it's visible in server logs and confirms the
         event-bus path was reached (any breakage in registration or imports
         would suppress the log too).
         """
         try:
-            from events import SandboxOrderFilledEvent
+            from events import OrderUpdateEvent, SandboxOrderFilledEvent
             from utils.event_bus import bus
 
             bus.publish(
@@ -231,6 +234,27 @@ class ExecutionEngine:
                     price=price,
                     product=product,
                     strategy=strategy,
+                )
+            )
+            bus.publish(
+                OrderUpdateEvent(
+                    mode="analyze",
+                    api_type="sandbox.fill",
+                    request_data={"user_id": user_id} if user_id else {},
+                    broker="sandbox",
+                    orderid=orderid,
+                    symbol=symbol,
+                    exchange=exchange,
+                    action=action,
+                    quantity=quantity,
+                    price=price,
+                    pricetype=pricetype,
+                    trigger_price=trigger_price,
+                    product=product,
+                    order_status="complete",
+                    filled_quantity=quantity,
+                    pending_quantity=0,
+                    average_price=price,
                 )
             )
             logger.info(
@@ -278,6 +302,9 @@ class ExecutionEngine:
                         price=float(existing_trade.price),
                         product=order.product,
                         strategy=order.strategy or "",
+                        user_id=order.user_id,
+                        pricetype=order.price_type or "",
+                        trigger_price=float(order.trigger_price or 0),
                     )
                 return
 
@@ -404,6 +431,9 @@ class ExecutionEngine:
                 price=float(execution_price),
                 product=order.product,
                 strategy=order.strategy or "",
+                user_id=order.user_id,
+                pricetype=order.price_type or "",
+                trigger_price=float(order.trigger_price or 0),
             )
 
         except Exception as e:
@@ -411,13 +441,49 @@ class ExecutionEngine:
             logger.exception(f"Error executing order {order.orderid}: {e}")
 
             # Mark order as rejected
+            rejection_reason = f"Execution error: {str(e)}"
             try:
                 order.order_status = "rejected"
-                order.rejection_reason = f"Execution error: {str(e)}"
+                order.rejection_reason = rejection_reason
                 order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
                 db_session.commit()
             except Exception:
                 db_session.rollback()
+
+            self._publish_order_update_event(
+                order, order_status="rejected", rejection_reason=rejection_reason
+            )
+
+    def _publish_order_update_event(self, order, order_status, rejection_reason=""):
+        """Publish OrderUpdateEvent for a sandbox order transition that isn't
+        a fill (rejection, cancellation) — mirrors _publish_fill_event's
+        never-break-the-caller error isolation.
+        """
+        try:
+            from events import OrderUpdateEvent
+            from utils.event_bus import bus
+
+            bus.publish(
+                OrderUpdateEvent(
+                    mode="analyze",
+                    api_type="sandbox.order_update",
+                    request_data={"user_id": order.user_id} if order.user_id else {},
+                    broker="sandbox",
+                    orderid=order.orderid,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    action=order.action,
+                    quantity=int(order.quantity),
+                    price=float(order.price or 0),
+                    pricetype=order.price_type or "",
+                    trigger_price=float(order.trigger_price or 0),
+                    product=order.product,
+                    order_status=order_status,
+                    rejection_reason=rejection_reason,
+                )
+            )
+        except Exception as pub_err:
+            logger.debug(f"Failed to publish OrderUpdateEvent for {order.orderid}: {pub_err}")
 
     def _update_position(self, order, execution_price):
         """

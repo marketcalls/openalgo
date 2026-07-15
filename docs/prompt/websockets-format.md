@@ -199,6 +199,49 @@ If a client requests a depth level not supported by their broker:
 }
 ```
 
+### Order Updates (Account-Level Stream)
+
+Real-time order status changes (fills, partial fills, rejections,
+cancellations) pushed by the broker — or by the sandbox engine in analyze
+mode. No symbols or modes; one subscription covers the whole account.
+
+Subscribe (after authentication):
+
+```json
+{
+  "action": "subscribe_orders"
+}
+```
+
+Unsubscribe with `{"action": "unsubscribe_orders"}`. Each event arrives as:
+
+```json
+{
+  "type": "order_update",
+  "mode": "live",
+  "broker": "upstox",
+  "orderid": "240221025997024",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "action": "BUY",
+  "quantity": 10,
+  "price": 1424.0,
+  "trigger_price": 0,
+  "pricetype": "LIMIT",
+  "product": "MIS",
+  "order_status": "complete",
+  "filled_quantity": 10,
+  "pending_quantity": 0,
+  "average_price": 1423.85,
+  "rejection_reason": ""
+}
+```
+
+Fields use OpenAlgo's common order constants (`action` BUY/SELL, `pricetype`
+MARKET/LIMIT/SL/SL-M, `product` CNC/NRML/MIS); `order_status` is lowercase
+`open` / `complete` / `rejected` / `cancelled` (plus broker extras such as
+`expired`); `mode` is `live` (broker) or `analyze` (sandbox).
+
 ### Heartbeat and Reconnection
 
 * Server sends `ping` messages every 30 seconds.

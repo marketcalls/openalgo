@@ -23,6 +23,7 @@ from events.order_events import (
     OrderModifiedEvent,
     OrderModifyFailedEvent,
     OrderPlacedEvent,
+    OrderUpdateEvent,
     SmartOrderNoActionEvent,
 )
 from events.position_events import AllOrdersCancelledEvent, PositionClosedEvent
@@ -41,6 +42,7 @@ __all__ = [
     "OrderModifyFailedEvent",
     "OrderCancelledEvent",
     "OrderCancelFailedEvent",
+    "OrderUpdateEvent",
     "BasketCompletedEvent",
     "SplitCompletedEvent",
     "OptionsOrderCompletedEvent",
