@@ -117,6 +117,12 @@ A live rejection example (pushed by the broker's own order feed):
   covered by server-side orderbook polling (`ORDER_POLL_INTERVAL`, default 5s).
 - **HTTPS postbacks**: `/postback/<broker>` webhook receivers feed the same
   stream on production deployments (public HTTPS URL required by brokers).
+  Postback coverage is broker-defined and can be narrower than the WebSocket
+  source — e.g. Zerodha postbacks fire only for orders placed through your
+  API key and omit intermediate states such as `open`, while the ticker
+  WebSocket covers all order origins with the full lifecycle. The WS adapter
+  is therefore the more complete source; postbacks are a parallel inlet, not
+  a fallback.
 - Sandbox (analyze mode) emits the same messages for order placements
   (open), engine fills, rejections, and cancellations — test end-to-end without a live broker.
 
