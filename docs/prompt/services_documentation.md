@@ -370,6 +370,7 @@ or risk monitor when an accessor already owns the process-wide instance.
 | `pending_order_execution_service.py` | Dispatches approved pending orders. |
 | `sandbox_service.py` | Simulated orders, books, funds, P&L symbols, and square-off controls. |
 | `broker_keepalive_service.py` | Starts broker-session keepalive behavior where configured. |
+| `order_update_service.py` | Lifecycle of the always-on per-broker-session order-update adapter (broker order-WS / polling ingestion → `OrderUpdateEvent` → socketio + websocket_proxy relay). |
 
 Primary internal entry points:
 
@@ -400,7 +401,20 @@ sandbox_get_squareoff_status()
 sandbox_get_pnl_symbols(api_key, original_data)
 
 start_broker_keepalive()
+
+start_order_update_adapter(user_id, broker)
+stop_order_update_adapter(user_id)
+start_order_update_adapters_on_boot()
+stop_all_order_update_adapters()
+get_order_update_status()
 ```
+
+`order_update_service` owns one always-on adapter per broker session
+(never per WebSocket client). It is started at app startup for an existing
+session and restarted/stopped by `database.auth_db.upsert_auth` on a real
+token change or revoke — do not start adapters from feature code. Brokers
+without a push feed use `websocket_proxy.order_adapter.PollingOrderUpdateAdapter`
+automatically. Disable globally with `ORDER_UPDATES_ENABLED=FALSE`.
 
 Feature code normally calls the public order facade and lets it select the
 sandbox or Action Center path. Direct sandbox calls are appropriate for sandbox
