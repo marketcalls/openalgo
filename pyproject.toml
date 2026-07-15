@@ -80,7 +80,7 @@ dependencies = [
   "nbformat==5.10.4",
   "nest-asyncio==1.6.0",
   "numpy==2.4.4",
-  "openalgo==2.0.2",
+  "openalgo==2.0.3",
   "ordered-set==4.1.0",
   "orjson==3.11.9",
   "packaging==24.1",
