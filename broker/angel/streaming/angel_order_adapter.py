@@ -37,7 +37,7 @@ _STATUS_CODE_MAP = {
     "AB07": "cancelled",  # cancelled after market order
     "AB08": "open",  # modify AMO req received
     "AB09": "open",  # open pending
-    "AB10": "open",  # trigger pending
+    "AB10": "trigger pending",
     "AB11": "open",  # modify pending
 }
 
@@ -46,7 +46,7 @@ _STATUS_TEXT_MAP = {
     "open": "open",
     "pending": "open",
     "open pending": "open",
-    "trigger pending": "open",
+    "trigger pending": "trigger pending",
     "modified": "open",
     "modify pending": "open",
     "executed": "complete",

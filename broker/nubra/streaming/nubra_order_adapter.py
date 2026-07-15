@@ -33,7 +33,7 @@ NUBRA_ORDER_WS_URL_DEFAULT = "wss://uatapi.nubra.io/ws"
 
 # NubraIntentOrderStatus enum -> OpenAlgo's lowercase order_status vocabulary.
 # GTE (good-till-triggered) is a still-armed working order -> "open".
-_STATUS_MAP = {1: "open", 2: "complete", 3: "rejected", 4: "open", 5: "cancelled", 6: "expired"}
+_STATUS_MAP = {1: "open", 2: "complete", 3: "rejected", 4: "trigger pending", 5: "cancelled", 6: "expired"}
 
 # OrderSide enum -> OpenAlgo action constants
 _ACTION_MAP = {1: "BUY", 2: "SELL"}

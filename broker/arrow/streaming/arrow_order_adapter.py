@@ -34,7 +34,7 @@ _STATUS_MAP = {
     "COMPLETE": "complete",
     "CANCELLED": "cancelled",
     "REJECTED": "rejected",
-    "TRIGGER_PENDING": "open",
+    "TRIGGER_PENDING": "trigger pending",
     "AFTER_MARKET_ORDER_REQ_RECEIVED": "open",
 }
 

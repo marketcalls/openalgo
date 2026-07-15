@@ -104,6 +104,28 @@ def test_zerodha_rejected_carries_status_message():
     assert fields["rejection_reason"] == "RMS: margin shortfall"
 
 
+def test_trigger_pending_is_a_first_class_status():
+    """SL orders waiting on their trigger report the canonical OpenAlgo
+    'trigger pending' status (matching the REST orderbook vocabulary),
+    not a collapsed 'open'."""
+    fields = _zerodha_adapter().normalize(json.dumps({
+        "type": "order",
+        "data": {"order_id": "1", "status": "TRIGGER PENDING", "tradingsymbol": "SBIN",
+                 "exchange": "NSE", "order_type": "SL", "trigger_price": 800},
+    }))
+    assert fields["order_status"] == "trigger pending"
+
+    from broker.arrow.streaming.arrow_order_adapter import ArrowOrderUpdateAdapter
+
+    arrow = ArrowOrderUpdateAdapter(user_id="u", app_id="a", access_token="t")
+    fields = arrow.normalize(json.dumps({
+        "updateType": "ORDER_UPDATE", "id": "2", "symbol": "X", "exchange": "NSE",
+        "orderStatus": "TRIGGER_PENDING", "order": "SL", "quantity": "1",
+        "cumulativeFillQty": "0", "leavesQuantity": "1",
+    }))
+    assert fields["order_status"] == "trigger pending"
+
+
 # ---------------------------------------------------------------------------
 # Dhan — Live Order Update WS (13-live-order-update.md sample)
 # ---------------------------------------------------------------------------
