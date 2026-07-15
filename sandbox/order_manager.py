@@ -637,6 +637,13 @@ class OrderManager:
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
+            # Announce the accepted order on the real-time order-update stream
+            # (order_status="open"), matching live-broker behaviour — brokers
+            # push an "open" event when an order enters their OMS. MARKET /
+            # marketable orders will follow up with "complete" moments later,
+            # exactly like a live feed does.
+            self._publish_order_update_event(order, order_status="open")
+
             # Execute orders immediately when conditions are already met
             # MARKET: always immediate, LIMIT: if marketable, SL/SL-M: if trigger already met
             # This must happen BEFORE notifying the WebSocket engine to prevent

@@ -117,8 +117,8 @@ A live rejection example (pushed by the broker's own order feed):
   covered by server-side orderbook polling (`ORDER_POLL_INTERVAL`, default 5s).
 - **HTTPS postbacks**: `/postback/<broker>` webhook receivers feed the same
   stream on production deployments (public HTTPS URL required by brokers).
-- Sandbox (analyze mode) emits the same messages for engine fills,
-  rejections, and cancellations — test end-to-end without a live broker.
+- Sandbox (analyze mode) emits the same messages for order placements
+  (open), engine fills, rejections, and cancellations — test end-to-end without a live broker.
 
 If both a broker WebSocket and a postback are configured, the same transition
 may be delivered twice — deduplicate on `orderid` + `order_status` +
