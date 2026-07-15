@@ -87,10 +87,24 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
         if response.status_code == 429 and _attempt < _MAX_RETRIES:
             retry_after = response.headers.get("Retry-After")
-            wait = (
-                float(retry_after) if retry_after
-                else (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
-            )
+            wait = None
+            if retry_after:
+                # RFC 7231 permits Retry-After as either delay-seconds (numeric)
+                # or an HTTP-date string — float() only handles the former.
+                try:
+                    wait = float(retry_after)
+                except ValueError:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        from datetime import datetime, timezone
+                        retry_dt = parsedate_to_datetime(retry_after)
+                        if retry_dt.tzinfo is None:
+                            retry_dt = retry_dt.replace(tzinfo=timezone.utc)
+                        wait = max(0.0, (retry_dt - datetime.now(timezone.utc)).total_seconds())
+                    except Exception:
+                        wait = None  # unparseable — fall through to exponential backoff
+            if wait is None:
+                wait = (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
             logger.warning(
                 f"[DeltaExchange] HTTP 429 rate-limit on {endpoint} "
                 f"(attempt {_attempt + 1}/{_MAX_RETRIES}). Retrying in {wait:.1f}s ..."
@@ -135,14 +149,52 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 # Order book / trade book
 # ---------------------------------------------------------------------------
 
+def _get_all_pages(endpoint, auth, params=None, max_pages=50):
+    """
+    Fetch every page of a cursor-paginated Delta Exchange GET endpoint,
+    following meta.after until it is null/absent or a page comes back empty.
+
+    Delta's endpoints (e.g. /v2/orders, /v2/orders/history, /v2/fills) return
+    at most one page of results per call — relying on a single call silently
+    truncates the result set once an account has more open orders / history /
+    fills than fit in one page. A safety cap (max_pages) prevents an infinite
+    loop if the API ever misbehaves.
+    """
+    all_results = []
+    cursor = None
+    base_params = dict(params or {})
+    base_params.setdefault("page_size", 500)
+
+    for page_num in range(max_pages):
+        page_params = dict(base_params)
+        if cursor:
+            page_params["after"] = cursor
+
+        result = get_api_response(endpoint, auth, method="GET", params=page_params)
+        if not result.get("success"):
+            logger.warning(
+                f"[DeltaExchange] {endpoint} pagination stopped at page {page_num + 1} "
+                f"(unexpected response): {result}"
+            )
+            break
+
+        page = result.get("result", [])
+        all_results.extend(page)
+
+        meta = result.get("meta") or {}
+        cursor = meta.get("after")
+        if not cursor or not page:
+            break
+    else:
+        logger.warning(f"[DeltaExchange] {endpoint} hit max_pages={max_pages} — results may be truncated")
+
+    return all_results
+
+
 def _get_all_open_orders(auth):
     """Internal: Fetch all open orders regardless of creation date (for cancel all operations)."""
     try:
-        result = get_api_response("/v2/orders", auth, method="GET", params={"state": "open"})
-        if result.get("success"):
-            return result.get("result", [])
-        logger.warning(f"[DeltaExchange] _get_all_open_orders unexpected response: {result}")
-        return []
+        return _get_all_pages("/v2/orders", auth, params={"state": "open"})
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception in _get_all_open_orders: {e}")
         return []
@@ -153,25 +205,23 @@ def get_order_book(auth):
     try:
         from datetime import datetime
         import pytz
-        
+
         # Get today's date in IST
         ist = pytz.timezone("Asia/Kolkata")
         today_date = datetime.now(ist).date()
-        
-        all_orders = []
-        
-        # 1. Fetch open orders
-        open_result = get_api_response("/v2/orders", auth, method="GET", params={"state": "open"})
-        logger.debug(f"[DeltaExchange] /v2/orders (open) count={len(open_result.get('result', []))}")
-        if open_result.get("success"):
-            all_orders.extend(open_result.get("result", []))
 
-        # 2. Fetch historical orders
-        hist_result = get_api_response("/v2/orders/history", auth, method="GET")
-        logger.debug(f"[DeltaExchange] /v2/orders/history count={len(hist_result.get('result', []))}")
-        if hist_result.get("success"):
-            all_orders.extend(hist_result.get("result", []))
-            
+        all_orders = []
+
+        # 1. Fetch open orders (paginated)
+        open_orders = _get_all_pages("/v2/orders", auth, params={"state": "open"})
+        logger.debug(f"[DeltaExchange] /v2/orders (open) count={len(open_orders)}")
+        all_orders.extend(open_orders)
+
+        # 2. Fetch historical orders (paginated)
+        hist_orders = _get_all_pages("/v2/orders/history", auth)
+        logger.debug(f"[DeltaExchange] /v2/orders/history count={len(hist_orders)}")
+        all_orders.extend(hist_orders)
+
         # Filter for today's orders only
         today_orders = []
         for order in all_orders:
@@ -185,7 +235,7 @@ def get_order_book(auth):
                         today_orders.append(order)
                 except Exception as e:
                     logger.warning(f"Error parsing date {created_at}: {e}")
-                    
+
         return today_orders
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception in get_order_book: {e}")
@@ -197,31 +247,27 @@ def get_trade_book(auth):
     try:
         from datetime import datetime
         import pytz
-        
+
         # Get today's date in IST
         ist = pytz.timezone("Asia/Kolkata")
         today_date = datetime.now(ist).date()
-        
-        result = get_api_response("/v2/fills", auth, method="GET")
-        logger.debug(f"[DeltaExchange] /v2/fills count={len(result.get('result', []))}")
-        if result.get("success"):
-            all_trades = result.get("result", [])
-            today_trades = []
-            for trade in all_trades:
-                created_at = trade.get("created_at")
-                if created_at:
-                    try:
-                        # Parse UTC timestamp and convert to IST
-                        dt_utc = datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=pytz.UTC)
-                        dt_ist = dt_utc.astimezone(ist)
-                        if dt_ist.date() == today_date:
-                            today_trades.append(trade)
-                    except Exception as e:
-                        logger.warning(f"Error parsing date {created_at}: {e}")
-            return today_trades
-            
-        logger.warning(f"[DeltaExchange] get_trade_book unexpected response: {result}")
-        return []
+
+        all_trades = _get_all_pages("/v2/fills", auth)
+        logger.debug(f"[DeltaExchange] /v2/fills count={len(all_trades)}")
+
+        today_trades = []
+        for trade in all_trades:
+            created_at = trade.get("created_at")
+            if created_at:
+                try:
+                    # Parse UTC timestamp and convert to IST
+                    dt_utc = datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=pytz.UTC)
+                    dt_ist = dt_utc.astimezone(ist)
+                    if dt_ist.date() == today_date:
+                        today_trades.append(trade)
+                except Exception as e:
+                    logger.warning(f"Error parsing date {created_at}: {e}")
+        return today_trades
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception in get_trade_book: {e}")
         return []
@@ -449,6 +495,10 @@ def place_order_api(data, auth):
         orderid = f"{product_id}:{raw_id}"
         logger.debug(f"[DeltaExchange] Order placed. composite orderid={orderid}")
         response_dict = {"orderid": orderid, "status": "success"}
+        # Invalidate the cached position snapshot so a smart order placed
+        # right after this one calculates its adjustment from fresh data,
+        # not the pre-order position.
+        _invalidate_position_cache(auth)
     else:
         error = result.get("error", {})
         msg = error.get("message") or error.get("code") or str(error)
@@ -668,6 +718,8 @@ def close_all_positions(current_api_key, auth):
     if not positions:
         return {"message": "No Open Positions Found"}, 200
 
+    failed_symbols = []
+
     for pos in positions:
         if not isinstance(pos, dict):
             continue
@@ -707,5 +759,13 @@ def close_all_positions(current_api_key, auth):
         }
         _, api_response, _ = place_order_api(order_payload, auth)
         logger.debug(f"[DeltaExchange] Close response: {api_response}")
+
+        if not isinstance(api_response, dict) or api_response.get("status") != "success":
+            failed_symbols.append(symbol)
+
+    if failed_symbols:
+        msg = f"Squareoff failed for {len(failed_symbols)} position(s): {', '.join(failed_symbols)}"
+        logger.error(f"[DeltaExchange] {msg}")
+        return {"status": "error", "message": msg}, 502
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200

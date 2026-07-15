@@ -92,7 +92,8 @@ def get_margin_data(auth_token):
         m2munrealized  ← sum of unrealized_pnl across all open positions
 
     OpenAlgo field mapping:
-        availablecash  ← sum of balance_inr across all wallets (spot + FNO combined in INR)
+        availablecash  ← sum of available_balance_inr across all wallets (free/tradeable
+                         balance converted to INR, spot + FNO combined)
         collateral     ← sum of cross_locked_collateral across all wallets
         utiliseddebits ← blocked_margin
 
@@ -147,13 +148,13 @@ def get_margin_data(auth_token):
             )
             return DEFAULT_MARGIN_RESPONSE
 
-        total_balance_inr = 0.0
+        total_available_inr = 0.0
         total_blocked = 0.0
         total_collateral = 0.0
         for asset in balances:
             if not isinstance(asset, dict):
                 continue
-            total_balance_inr += _f(asset.get("balance_inr", 0))
+            total_available_inr += _f(asset.get("available_balance_inr", 0))
             total_blocked += _f(asset.get("blocked_margin", 0))
             total_collateral += _f(asset.get("cross_locked_collateral", 0))
 
@@ -161,7 +162,7 @@ def get_margin_data(auth_token):
         total_realized_pnl, total_unrealized_pnl = _get_positions_pnl(api_key, api_secret)
 
         result = {
-            "availablecash": f"{total_balance_inr:.2f}",
+            "availablecash": f"{total_available_inr:.2f}",
             "collateral": f"{total_collateral:.2f}",
             "m2mrealized": f"{total_realized_pnl:.2f}",
             "m2munrealized": f"{total_unrealized_pnl:.2f}",

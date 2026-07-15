@@ -110,7 +110,7 @@ generate_hex() {
 validate_broker() {
     local broker=$1
 
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,deltaexchange_demo,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 
     if [[ ",$valid_brokers," == *",$broker,"* ]]; then
         return 0
@@ -134,7 +134,7 @@ is_xts_broker() {
 # Uses space-delimited boundary matching for exact broker ID checks
 is_crypto_broker() {
     local broker=$1
-    local crypto_brokers=" deltaexchange "
+    local crypto_brokers=" deltaexchange deltaexchange_demo "
     if [[ $crypto_brokers == *" $broker "* ]]; then
         return 0
     else
@@ -367,7 +367,7 @@ done
 # Get broker name
 while true; do
 
-    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha" "$BLUE"
+    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,deltaexchange_demo,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha" "$BLUE"
 
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then

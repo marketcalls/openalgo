@@ -2,6 +2,8 @@
 # Mapping OpenAlgo margin positions to Delta Exchange margin_required API format
 # Delta Exchange endpoint: GET /v2/products/{product_id}/margin_required
 
+from decimal import Decimal, InvalidOperation
+
 from broker.deltaexchange_demo.mapping.transform_data import _order_size
 from database.token_db import get_token
 from utils.logging import get_logger
@@ -63,20 +65,26 @@ def transform_margin_positions(positions):
             price = pos.get("price", 0)
             if order_type == "limit_order":
                 try:
-                    price_f = float(price) if price is not None else 0.0
-                except (ValueError, TypeError):
-                    price_f = 0.0
+                    price_dec = Decimal(str(price)) if price is not None else Decimal(0)
+                except (InvalidOperation, ValueError, TypeError):
+                    price_dec = Decimal(0)
 
-                if price_f > 0:
-                    entry["limit_price"] = str(price_f)
+                if price_dec > 0:
+                    # Preserve the original decimal string (via Decimal, not float)
+                    # so high-precision prices aren't rounded or emitted in
+                    # scientific notation by str(float(...)).
+                    entry["limit_price"] = str(price_dec)
                 else:
-                    # limit_price is required for limit_order but none was provided —
-                    # fall back to market_order so the margin call still succeeds
+                    # limit_price is required for limit_order but none was provided.
+                    # Silently falling back to market_order would misstate the
+                    # margin requirement (limit and market margin can differ) —
+                    # skip the position instead so the caller sees it was excluded.
                     logger.warning(
                         f"limit_order for {symbol} has no valid price "
-                        f"(got {price!r}); falling back to market_order for margin calculation"
+                        f"(got {price!r}); skipping — cannot estimate limit-order margin"
                     )
-                    entry["order_type"] = "market_order"
+                    skipped.append(symbol)
+                    continue
 
             transformed.append(entry)
             logger.debug(

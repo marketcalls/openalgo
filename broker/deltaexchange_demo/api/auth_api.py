@@ -50,7 +50,6 @@ def authenticate_broker(code):
         response = client.get(url, headers=headers)
 
         logger.debug(f"Profile response status: {response.status_code}")
-        logger.debug(f"Profile response body: {response.text}")
 
         if response.status_code == 200:
             data = response.json()

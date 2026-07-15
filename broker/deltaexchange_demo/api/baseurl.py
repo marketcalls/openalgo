@@ -6,7 +6,10 @@ import time
 
 # Base URL for Delta Exchange India Testnet/Demo REST API.
 # Override via DELTA_DEMO_BASE_URL env var if needed.
-BASE_URL = os.getenv("DELTA_DEMO_BASE_URL", "https://cdn-ind.testnet.deltaex.org")
+# rstrip a trailing slash: BASE_URL + "/v2/..." must produce a single "/",
+# otherwise a "//v2/..." request path would no longer match the "/v2/..."
+# path used to build the HMAC signature, and Delta would reject it.
+BASE_URL = os.getenv("DELTA_DEMO_BASE_URL", "https://cdn-ind.testnet.deltaex.org").rstrip("/")
 
 
 def get_url(endpoint):

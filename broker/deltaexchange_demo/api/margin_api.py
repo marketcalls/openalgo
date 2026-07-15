@@ -3,6 +3,7 @@
 # Endpoint: GET /v2/products/{product_id}/margin_required  (authenticated)
 
 import os
+from urllib.parse import urlencode
 
 from broker.deltaexchange_demo.api.baseurl import BASE_URL, get_auth_headers
 from broker.deltaexchange_demo.mapping.margin_data import parse_margin_response, transform_margin_positions
@@ -44,7 +45,9 @@ def get_margin_mode(auth: str) -> str:
             api_secret=api_secret,
         )
         client = get_httpx_client()
-        resp = client.get(BASE_URL + path, headers=headers, timeout=15.0)
+        # Informational only (logging) — keep the timeout short so an outage on
+        # this endpoint can't stall every margin request by up to 15s.
+        resp = client.get(BASE_URL + path, headers=headers, timeout=3.0)
         data = resp.json()
         if data.get("success"):
             prefs = data.get("result", {})
@@ -126,7 +129,7 @@ def calculate_margin_api(positions, auth):
         if "limit_price" in pos:
             params["limit_price"] = pos["limit_price"]
 
-        query_string = "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        query_string = "?" + urlencode(sorted(params.items()))
         url = BASE_URL + path + query_string
 
         try:
@@ -171,6 +174,17 @@ def calculate_margin_api(positions, auth):
         if failed:
             msg += f" Failed product_ids: {', '.join(failed)}"
         return MockResponse(500), {"status": "error", "message": msg}
+
+    if failed:
+        # Some positions failed — returning the partial total as "success" would
+        # silently understate the real required margin. Surface it as an error
+        # with the partial data attached for diagnostics instead.
+        msg = (
+            f"Margin calculation failed for {len(failed)}/{len(transformed)} positions "
+            f"(product_ids: {', '.join(failed)}); total below is incomplete."
+        )
+        logger.warning(f"[DeltaExchange] {msg}")
+        return MockResponse(502), {"status": "error", "message": msg, "partial_data": aggregated}
 
     logger.info(
         f"[DeltaExchange] Margin aggregation done: {ok_count}/{len(transformed)} positions. "

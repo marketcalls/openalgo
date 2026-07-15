@@ -88,6 +88,15 @@ def delete_symtoken_table():
 
 
 def copy_from_dataframe(df):
+    """
+    Bulk-insert the master contract DataFrame into symtoken.
+
+    Returns:
+        dict: {"total_inserted": int, "failed_records": int, "total_expected": int}
+        Callers must check failed_records before reporting a download as fully
+        successful — a nonzero value means some rows were silently dropped
+        after chunk retries were exhausted.
+    """
     logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
@@ -117,6 +126,7 @@ def copy_from_dataframe(df):
     # Insert in smaller chunks to minimize database lock time
     chunk_size = 500  # Reduced chunk size for shorter lock duration
     total_inserted = 0
+    failed_records = 0
 
     try:
         if filtered_data_dict:  # Proceed only if there's anything to insert
@@ -157,18 +167,34 @@ def copy_from_dataframe(df):
                             f"Failed to insert chunk {i // chunk_size + 1} after retry: {retry_error}"
                         )
                         db_session.rollback()
-                        # Continue with next chunk instead of failing completely
+                        # Continue with next chunk instead of failing completely,
+                        # but track the loss so the caller can report it accurately.
+                        failed_records += len(chunk)
                         continue
 
                 # Small delay to allow other operations
                 time.sleep(0.005)  # 5ms delay between chunks (reduced from 10ms)
 
-            logger.info(f"Bulk insert completed successfully with {total_inserted} new records.")
+            if failed_records:
+                logger.error(
+                    f"Bulk insert completed with {failed_records} record(s) dropped "
+                    f"after retry; {total_inserted} inserted successfully."
+                )
+            else:
+                logger.info(f"Bulk insert completed successfully with {total_inserted} new records.")
         else:
             logger.info("No new records to insert.")
     except Exception as e:
         logger.exception(f"Error during bulk insert: {e}")
         db_session.rollback()
+        # Whatever wasn't confirmed inserted before the exception counts as failed.
+        failed_records = len(filtered_data_dict) - total_inserted
+
+    return {
+        "total_inserted": total_inserted,
+        "failed_records": failed_records,
+        "total_expected": len(filtered_data_dict),
+    }
 
 
 def _to_canonical_symbol(delta_symbol: str, instrument_type: str, expiry: str) -> str:
@@ -534,7 +560,25 @@ def master_contract_download():
             )
 
         delete_symtoken_table()
-        copy_from_dataframe(token_df)
+        insert_result = copy_from_dataframe(token_df)
+
+        if insert_result["failed_records"]:
+            # The table was already cleared — a partial insert here means users
+            # would trade from an incomplete master contract. Surface the failure
+            # explicitly rather than reporting success for every source row.
+            return socketio.emit(
+                "master_contract_download",
+                {
+                    "status": "error",
+                    "message": (
+                        f"Master contract download incomplete — "
+                        f"{insert_result['failed_records']}/{insert_result['total_expected']} "
+                        f"instruments failed to insert after retry. "
+                        f"{insert_result['total_inserted']} inserted successfully."
+                    ),
+                },
+            )
+
         return socketio.emit(
             "master_contract_download",
             {

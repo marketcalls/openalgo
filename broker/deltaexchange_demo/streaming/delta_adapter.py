@@ -146,6 +146,17 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "depth_level": depth_level,
             }
 
+        # ConnectionPool can reuse this adapter instance for a fresh symbol after
+        # a prior unsubscribe() dropped the last subscription and called
+        # disconnect() (which permanently stops DeltaWebSocket's retry loop).
+        # Without this, subscribe_ticker/subscribe_l2_orderbook below would only
+        # buffer the message in _active_sub_msgs with nothing left running to
+        # ever flush it — reporting success while never delivering data.
+        if not self.running and self.ws_client:
+            self.logger.info("Adapter was disconnected — reconnecting for new subscription")
+            self.running = True
+            self.connect()
+
         # Always forward to DeltaWebSocket — its _queue_or_send() handles
         # both the pre-connect case (buffers in _active_sub_msgs and replays
         # on connect) and the already-connected case (sends immediately).
@@ -320,6 +331,20 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 topic       = f"{oa_exchange}_{oa_symbol}_{mode_str}"
 
                 market_data = dict(base_data)  # shallow copy per subscriber
+
+                if msg_type == "l2_orderbook" and "depth" in base_data:
+                    # Slice to this subscriber's requested depth_level — base_data
+                    # always carries the full 5-level book, but a mode-3 subscriber
+                    # that asked for depth_level=1 should only see 1 level.
+                    requested = subscription.get("depth_level") or 1
+                    level = DeltaCapabilityRegistry.get_fallback_depth_level(
+                        oa_exchange, requested
+                    )
+                    market_data["depth"] = {
+                        "buy":  base_data["depth"]["buy"][:level],
+                        "sell": base_data["depth"]["sell"][:level],
+                    }
+
                 market_data.update({
                     "symbol":    oa_symbol,
                     "exchange":  oa_exchange,
@@ -442,7 +467,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Map l2_orderbook message to OpenAlgo depth format.
 
         Delta l2_orderbook levels:
-          buy/sell: [{"limit_price": str, "size": int, "depth": str}, ...]
+          buy/sell: [{"price": str, "size": int, "depth": str}, ...]
         """
         def _f(v, d=0.0):
             try: return float(v) if v is not None else d
@@ -451,7 +476,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         def _parse_levels(side_list, n=5):
             levels = []
             for lvl in (side_list or [])[:n]:
-                levels.append({"price": _f(lvl.get("limit_price")), "quantity": int(lvl.get("size", 0))})
+                levels.append({"price": _f(lvl.get("price")), "quantity": int(lvl.get("size", 0))})
             while len(levels) < n:
                 levels.append({"price": 0.0, "quantity": 0})
             return levels

@@ -2,9 +2,9 @@
 delta_websocket.py
 Low-level WebSocket client for Delta Exchange Demo (Testnet) real-time feed.
 
-Endpoint : wss://socket.testnet.delta.exchange
+Endpoint : wss://socket-ind.testnet.deltaex.org
 Protocol : JSON over secure WebSocket
-Auth msg : { "type": "auth", "payload": { "api-key": "...", "signature": "...", "timestamp": "..." } }
+Auth msg : { "type": "key-auth", "payload": { "api-key": "...", "signature": "...", "timestamp": "..." } }
 Signature: HMAC-SHA256(api_secret, "GET" + timestamp + "/live")
 
 Public channels  (no auth needed):
@@ -59,7 +59,7 @@ class DeltaWebSocket:
     """
 
     # ── constants ─────────────────────────────────────────────────────────────
-    WS_URL            = os.getenv("DELTA_DEMO_WS_URL", "wss://socket.testnet.delta.exchange")
+    WS_URL            = os.getenv("DELTA_DEMO_WS_URL", "wss://socket-ind.testnet.deltaex.org")
     HEARTBEAT_INTERVAL = 30      # seconds between pings
     MSG_TYPE_AUTH      = "key-auth"
     MSG_TYPE_SUB       = "subscribe"

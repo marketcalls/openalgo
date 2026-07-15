@@ -364,27 +364,33 @@ class BrokerData:
     # get_history
     # ──────────────────────────────────────────────────────────────────────────
 
-    # Delta Exchange caps candles returned per request to 2,000 (most recent).
-    # Chunk sizes are derived as: floor(2000 / candles_per_day) with a safety margin.
-    #   1m:  1440/day → cap=1.39d → 1 day
-    #   3m:   480/day → cap=4.2d  → 3 days
-    #   5m:   288/day → cap=6.9d  → 6 days
-    #   15m:   96/day → cap=20.8d → 20 days
-    #   30m:   48/day → cap=41.7d → 40 days
-    #   1h+:   24/day → cap=83d+  → 60 days
-    #   1d/1w: unlimited          → 0 (no chunking)
+    # Delta Exchange caps candles returned per request to 2,000 (most recent),
+    # for EVERY resolution including 1d/1w — a long-enough date range silently
+    # loses older candles if not chunked. Chunk sizes are derived as
+    # floor(2000 * 0.9 / candles_per_day) — a 10% safety margin below the cap.
+    #   1m:  1440/day → 1.25d  → 1 day
+    #   3m:   480/day → 3.75d  → 3 days
+    #   5m:   288/day → 6.25d  → 6 days
+    #   15m:   96/day → 18.75d → 18 days
+    #   30m:   48/day → 37.5d  → 37 days
+    #   1h:    24/day → 75d    → 75 days
+    #   2h:    12/day → 150d   → 150 days
+    #   4h:     6/day → 300d   → 300 days
+    #   6h:     4/day → 450d   → 450 days
+    #   1d:     1/day → 1800d  → 1800 days (~4.9 years)
+    #   1w:   1/7/day → 12600d → 12600 days (~34.5 years)
     CHUNK_DAYS = {
         "1m":  1,
-        "3m":  7,
-        "5m":  12,
-        "15m": 30,
-        "30m": 60,
-        "1h":  90,
-        "2h":  90,
-        "4h":  90,
-        "6h":  90,
-        "1d":  0,   # 0 = no chunking
-        "1w":  0,
+        "3m":  3,
+        "5m":  6,
+        "15m": 18,
+        "30m": 37,
+        "1h":  75,
+        "2h":  150,
+        "4h":  300,
+        "6h":  450,
+        "1d":  1800,
+        "1w":  12600,
     }
 
     def get_history(
