@@ -541,7 +541,29 @@ function setProductOptions() {
   p.innerHTML = '';
   const opts = sym.lots ? ['MIS', 'NRML'] : ['MIS', 'CNC'];
   for (const o of opts) p.append(new Option(o, o));
+  // restore the last-used product if it's valid for this instrument, else MIS
+  const saved = localStorage.getItem('oa-trading-product');
+  p.value = opts.includes(saved) ? saved : opts[0];
   p.disabled = !!sym.quoteOnly;
+  buildProductSeg(opts);
+}
+
+/* horizontal segmented product selector (TradingView favorites-style) */
+function buildProductSeg(opts) {
+  const seg = el('productSeg');
+  seg.innerHTML = '';
+  seg.classList.toggle('disabled', !!sym.quoteOnly);
+  for (const o of opts) {
+    const b = document.createElement('button');
+    b.className = 'seg-pill' + (o === el('product').value ? ' sel' : '');
+    b.dataset.v = o; b.textContent = o;
+    b.addEventListener('click', () => {
+      el('product').value = o;
+      localStorage.setItem('oa-trading-product', o);
+      seg.querySelectorAll('.seg-pill').forEach((x) => x.classList.toggle('sel', x.dataset.v === o));
+    });
+    seg.appendChild(b);
+  }
 }
 
 function setQtyUi() {
@@ -727,6 +749,94 @@ el('exchange').addEventListener('change', () => {
 });
 el('qty').addEventListener('input', () => { updateLotInfo(); if (tradeBtns) tradeBtns.setQty(qtyChip()); });
 
+/* ── TradingView-style dropdowns (timeframe + chart type) ────────────────── */
+/* The hidden <select>s remain the source of truth; these menus set + dispatch
+   change on them, so all existing logic keeps working unchanged. */
+const TV_ICONS = {
+  candle: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="4.5" y="9" width="4" height="7" rx="1"/><rect x="6" y="5" width="1" height="15" rx=".5"/><rect x="14.5" y="7" width="4" height="6" rx="1"/><rect x="16" y="4" width="1" height="16" rx=".5"/></svg>',
+  hollowCandle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4.5" y="9" width="4" height="7" rx="1"/><path d="M6.5 9V5M6.5 16v3"/><rect x="14.5" y="7" width="4" height="6" rx="1"/><path d="M16.5 7V4M16.5 13v3"/></svg>',
+  bars: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M7 4v16M4 8h3M7 13h3M17 5v14M14 9h3M17 15h3"/></svg>',
+  highLow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6v12M12 4v14M18 8v10"/></svg>',
+  volCandle: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="6" width="4" height="6" rx="1"/><rect x="6.5" y="3" width="1" height="13"/><rect x="4.5" y="18" width="5" height="2.5" rx=".5" opacity=".5"/><rect x="14.5" y="8" width="4" height="5" rx="1"/><rect x="16" y="5" width="1" height="13"/><rect x="14" y="16" width="5" height="4.5" rx=".5" opacity=".5"/></svg>',
+  line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16l4-5 4 3 4-6 6 4"/></svg>',
+  lineMarkers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16l4-5 4 3 4-6 6 4"/><circle cx="7" cy="11" r="1.7" fill="currentColor" stroke="none"/><circle cx="11" cy="14" r="1.7" fill="currentColor" stroke="none"/><circle cx="15" cy="8" r="1.7" fill="currentColor" stroke="none"/></svg>',
+  step: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17h4v-6h5V7h4v4h1"/></svg>',
+  area: '<svg viewBox="0 0 24 24"><path d="M3 17l4-5 4 3 4-6 6 4v6H3z" fill="currentColor" opacity=".32"/><path d="M3 17l4-5 4 3 4-6 6 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  baseline: '<svg viewBox="0 0 24 24"><path d="M3 12h18" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity=".6"/><path d="M3 13l4-5 4 2 4-5 6 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  bricks: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="13" width="5" height="5" rx=".6"/><rect x="9.5" y="8.5" width="5" height="5" rx=".6"/><rect x="16" y="10" width="5" height="5" rx=".6"/></svg>',
+};
+const CTYPE_ICON_MAP = {
+  candlestick: 'candle', 'hollow-candle': 'hollowCandle', bar: 'bars', 'high-low': 'highLow',
+  'volume-candle': 'volCandle', line: 'line', 'line-markers': 'lineMarkers', step: 'step',
+  area: 'area', 'hlc-area': 'area', baseline: 'baseline', 'heikin-ashi': 'candle',
+  renko: 'bricks', range: 'bricks', 'line-break': 'bricks',
+};
+const CTYPE_GROUPS = [
+  ['bar', 'candlestick', 'hollow-candle', 'volume-candle', 'high-low'],
+  ['line', 'line-markers', 'step', 'area', 'hlc-area', 'baseline'],
+  ['heikin-ashi', 'renko', 'range', 'line-break'],
+];
+const ctypeIcon = (v) => TV_ICONS[CTYPE_ICON_MAP[v] || 'candle'];
+const ctypeLabel = (v) => { const o = [...el('ctype').options].find((x) => x.value === v); return o ? o.textContent : v; };
+
+function buildCtypeMenu() {
+  const menu = el('ctypeMenu');
+  menu.innerHTML = '';
+  CTYPE_GROUPS.forEach((grp, gi) => {
+    if (gi) { const s = document.createElement('div'); s.className = 'tvmenu-sep'; menu.appendChild(s); }
+    for (const v of grp) {
+      if (![...el('ctype').options].some((o) => o.value === v)) continue; // skip removed types
+      const b = document.createElement('button');
+      b.className = 'tvmenu-item'; b.dataset.v = v;
+      b.innerHTML = `<span class="tv-ico">${ctypeIcon(v)}</span>${ctypeLabel(v)}`;
+      b.addEventListener('click', () => { closeTvMenus(); setSelect('ctype', v); });
+      menu.appendChild(b);
+    }
+  });
+}
+
+function buildIntervalMenu() {
+  const menu = el('intervalMenu');
+  menu.innerHTML = '';
+  for (const og of el('interval').querySelectorAll('optgroup')) {
+    const head = document.createElement('div'); head.className = 'tvmenu-head'; head.textContent = og.label;
+    menu.appendChild(head);
+    const grid = document.createElement('div'); grid.className = 'tf-grid';
+    for (const o of og.querySelectorAll('option')) {
+      const p = document.createElement('button');
+      p.className = 'tf-pill'; p.dataset.v = o.value; p.textContent = o.value;
+      p.addEventListener('click', () => { closeTvMenus(); setSelect('interval', o.value); });
+      grid.appendChild(p);
+    }
+    menu.appendChild(grid);
+  }
+}
+
+/* set a hidden select + fire its change handler + refresh the trigger UI */
+function setSelect(id, v) {
+  const sel = el(id);
+  if (sel.value === v) { syncTvButtons(); return; }
+  sel.value = v;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  syncTvButtons();
+}
+
+function syncTvButtons() {
+  el('intervalLabel').textContent = el('interval').value || '—';
+  el('ctypeIcon').innerHTML = ctypeIcon(el('ctype').value);
+  el('ctypeBtn').title = ctypeLabel(el('ctype').value);
+  el('intervalMenu').querySelectorAll('.tf-pill').forEach((p) => p.classList.toggle('sel', p.dataset.v === el('interval').value));
+  el('ctypeMenu').querySelectorAll('.tvmenu-item').forEach((b) => b.classList.toggle('sel', b.dataset.v === el('ctype').value));
+}
+
+function closeTvMenus() { el('intervalMenu').hidden = true; el('ctypeMenu').hidden = true; }
+function toggleTvMenu(menu) { const willOpen = menu.hidden; closeTvMenus(); if (willOpen) { menu.hidden = false; syncTvButtons(); } }
+el('intervalBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleTvMenu(el('intervalMenu')); });
+el('ctypeBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleTvMenu(el('ctypeMenu')); });
+document.addEventListener('click', (e) => { if (!e.target.closest('.tvwrap')) closeTvMenus(); });
+
+buildCtypeMenu();
+
 /* ── bootstrap ──────────────────────────────────────────────────────────── */
 function populateIntervals(data) {
   const sel = el('interval');
@@ -747,6 +857,8 @@ function populateIntervals(data) {
   sel.value = (saved && all.includes(saved)) ? saved
     : all.includes('5m') ? '5m'
     : (data.minutes && data.minutes[0]) || all[0] || 'D';
+  buildIntervalMenu();
+  syncTvButtons();
 }
 
 async function bootstrap() {
@@ -754,6 +866,7 @@ async function bootstrap() {
   // restore the saved chart type (defaults to candles for a fresh browser)
   const savedType = localStorage.getItem('oa-trading-ctype');
   if (savedType && [...el('ctype').options].some((o) => o.value === savedType)) el('ctype').value = savedType;
+  syncTvButtons();
   try {
     const [keyRes, cfgRes] = await Promise.all([
       fetch('/api/websocket/apikey').then((r) => r.json()),

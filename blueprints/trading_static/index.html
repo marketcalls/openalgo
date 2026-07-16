@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OpenAlgo — Chart Trading</title>
+  <title>OpenAlgo — Charting Terminal</title>
   <style>
     /* Design tokens extracted from the OpenAlgo app (shadcn theme, hue 280). */
     :root {
@@ -137,6 +137,70 @@
     .btn:active { transform: translateY(1px); }
     .btn svg { width: 16px; height: 16px; }
 
+    /* ── TradingView-style dropdowns (timeframe / chart type) ────── */
+    .tvwrap { position: relative; display: inline-flex; }
+    .tvbtn {
+      height: var(--h); display: inline-flex; align-items: center; gap: 6px; padding: 0 8px 0 10px;
+      background: color-mix(in oklab, var(--muted) 50%, transparent); color: var(--tx);
+      border: 1px solid var(--bd); border-radius: 8px; cursor: pointer;
+      font: 600 13px/1 system-ui, sans-serif; transition: border-color .12s, background .12s;
+    }
+    .tvbtn:hover { border-color: var(--primary); background: var(--muted); }
+    .tvbtn .caret { width: 13px; height: 13px; opacity: .6; }
+    .tvbtn .tv-ico { width: 17px; height: 17px; display: inline-flex; }
+    .tvbtn .tv-ico svg { width: 17px; height: 17px; }
+    .tvbtn--tf { min-width: 46px; justify-content: space-between; }
+    .tvmenu {
+      position: absolute; top: calc(var(--h) + 6px); left: 0; z-index: 60; min-width: 210px;
+      max-height: min(560px, calc(100vh - 90px)); overflow: auto; padding: 5px;
+      background: var(--card); border: 1px solid var(--bd); border-radius: 10px;
+      box-shadow: 0 16px 40px rgb(0 0 0 / .5);
+    }
+    .tvmenu[hidden] { display: none; }
+    .tvmenu-head {
+      color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: 1px;
+      text-transform: uppercase; padding: 8px 10px 4px;
+    }
+    .tvmenu-sep { height: 1px; background: var(--bd-soft); margin: 5px 6px; }
+    .tvmenu-item {
+      display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+      background: transparent; border: 0; border-radius: 7px; color: var(--tx);
+      padding: 7px 10px; cursor: pointer; font: 500 13px/1 system-ui, sans-serif; transition: background .1s;
+    }
+    .tvmenu-item:hover { background: var(--muted); }
+    .tvmenu-item.sel { background: color-mix(in oklab, var(--primary) 20%, transparent); }
+    .tvmenu-item .tv-ico { width: 18px; height: 18px; flex: none; color: var(--mut); display: inline-flex; }
+    .tvmenu-item .tv-ico svg { width: 18px; height: 18px; }
+    .tvmenu-item.sel .tv-ico { color: var(--primary); }
+    .tvmenu-item .tf-label { margin-left: auto; color: var(--faint); font-size: 11px; font-weight: 600; }
+    /* timeframe menu: compact grid of pills */
+    .tvmenu--tf { min-width: 176px; }
+    .tf-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 2px 4px 6px; }
+    .tf-pill {
+      display: inline-flex; align-items: center; justify-content: center; height: 30px;
+      background: color-mix(in oklab, var(--muted) 45%, transparent); border: 1px solid var(--bd-soft);
+      border-radius: 7px; color: var(--tx); cursor: pointer; font: 600 12px/1 system-ui, sans-serif;
+      transition: border-color .1s, background .1s;
+    }
+    .tf-pill:hover { border-color: var(--primary); }
+    .tf-pill.sel { background: var(--primary); border-color: var(--primary); color: oklch(98% 0 0); }
+
+    /* segmented control (product: MIS / CNC / NRML), TradingView favorites-style */
+    .seg {
+      display: inline-flex; height: var(--h); padding: 2px; gap: 2px;
+      background: color-mix(in oklab, var(--muted) 45%, transparent);
+      border: 1px solid var(--bd); border-radius: 8px;
+    }
+    .seg[hidden], .seg:empty { display: none; }
+    .seg-pill {
+      display: inline-flex; align-items: center; padding: 0 13px; border: 0; border-radius: 6px;
+      background: transparent; color: var(--mut); cursor: pointer;
+      font: 600 12px/1 system-ui, sans-serif; letter-spacing: .3px; transition: background .1s, color .1s;
+    }
+    .seg-pill:hover { color: var(--tx); }
+    .seg-pill.sel { background: var(--primary); color: oklch(98% 0 0); }
+    .seg.disabled { opacity: .5; pointer-events: none; }
+
     /* symbol search */
     .search { position: relative; }
     .search input { width: 240px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase; }
@@ -223,7 +287,7 @@
   <nav class="nav">
     <a class="logo" href="/dashboard" title="back to the dashboard">
       <img src="/logo.png" alt="OpenAlgo" />
-      <span><b>openalgo</b> <small>· chart trading</small></span>
+      <span><b>openalgo</b> <small>· charting terminal</small></span>
     </a>
     <div class="nav-links">
       <a href="/orderbook">Orderbook</a>
@@ -278,32 +342,49 @@
       <option>NSE_INDEX</option><option>BSE_INDEX</option>
     </select>
     <div class="divider"></div>
-    <select id="interval" class="field" title="bar interval"></select>
-    <select id="ctype" class="field" title="chart type">
-      <option value="candlestick">Candles</option>
-      <option value="hollow-candle">Hollow Candles</option>
-      <option value="bar">Bars (OHLC)</option>
-      <option value="high-low">High-Low</option>
-      <option value="volume-candle">Volume Candles</option>
-      <option value="line">Line</option>
-      <option value="line-markers">Line + Markers</option>
-      <option value="step">Step</option>
-      <option value="area">Area</option>
-      <option value="hlc-area">HLC Area</option>
-      <option value="baseline">Baseline</option>
-      <option value="heikin-ashi">Heikin Ashi</option>
-      <option value="renko">Renko</option>
-      <option value="range">Range Bars</option>
-      <option value="line-break">Line Break</option>
-    </select>
+    <!-- timeframe (TradingView-style): hidden select drives all logic; button + menu are the UI -->
+    <div class="tvwrap">
+      <select id="interval" hidden></select>
+      <button class="tvbtn tvbtn--tf" id="intervalBtn" title="timeframe" aria-haspopup="menu">
+        <span id="intervalLabel">—</span>
+        <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="tvmenu tvmenu--tf" id="intervalMenu" hidden></div>
+    </div>
+    <!-- chart type -->
+    <div class="tvwrap">
+      <select id="ctype" hidden>
+        <option value="candlestick">Candles</option>
+        <option value="hollow-candle">Hollow Candles</option>
+        <option value="bar">Bars (OHLC)</option>
+        <option value="high-low">High-Low</option>
+        <option value="volume-candle">Volume Candles</option>
+        <option value="line">Line</option>
+        <option value="line-markers">Line + Markers</option>
+        <option value="step">Step</option>
+        <option value="area">Area</option>
+        <option value="hlc-area">HLC Area</option>
+        <option value="baseline">Baseline</option>
+        <option value="heikin-ashi">Heikin Ashi</option>
+        <option value="renko">Renko</option>
+        <option value="range">Range Bars</option>
+        <option value="line-break">Line Break</option>
+      </select>
+      <button class="tvbtn" id="ctypeBtn" title="chart type" aria-haspopup="menu">
+        <span class="tv-ico" id="ctypeIcon"></span>
+        <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="tvmenu" id="ctypeMenu" hidden></div>
+    </div>
     <div class="divider"></div>
     <label class="lbl" id="qtylbl">Qty <input type="number" id="qty" class="field field--qty" value="1" min="1" /></label>
     <span id="lotinfo"></span>
-    <select id="product" class="field" title="product"></select>
+    <select id="product" hidden></select>
+    <div class="seg" id="productSeg" title="product" role="group" aria-label="product"></div>
     <div class="divider"></div>
     <div class="group">
-      <button id="fit" class="btn" title="fit content + autoscale (double-click chart does the same)" aria-label="fit content">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3"/></svg>
+      <button id="fit" class="btn" title="reset view — fit content + autoscale (double-click chart does the same)" aria-label="reset view">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8m0-4v4h-4M21 12a9 9 0 0 1-15 6.7L3 16m0 4v-4h4"/></svg>
       </button>
       <button id="snap" class="btn" title="save chart as PNG (Alt+Shift+S)" aria-label="save chart image">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7.7 6.3A2 2 0 0 1 6.1 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2.1a2 2 0 0 1-1.6-.7z"/><circle cx="12" cy="13" r="3.5"/></svg>
