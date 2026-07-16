@@ -25,6 +25,7 @@ The vendored openalgo-charts bundles in trading_static/ are the published
 npm build (see https://github.com/marketcalls/openalgo-charts).
 """
 
+import mimetypes
 from pathlib import Path
 
 from flask import Blueprint, jsonify, send_from_directory, session
@@ -32,6 +33,13 @@ from flask import Blueprint, jsonify, send_from_directory, session
 from utils.session import check_session_validity
 
 STATIC_DIR = Path(__file__).parent / "trading_static"
+
+# ES modules must be served with a JavaScript MIME type — browsers enforce
+# strict MIME checking for `<script type="module">` and reject text/plain.
+# Windows' mimetypes registry has no `.mjs` mapping (macOS/Linux usually do),
+# so register it explicitly for send_from_directory's content-type guess.
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("application/javascript", ".js")
 
 trading_bp = Blueprint("trading_bp", __name__, url_prefix="/trading")
 
@@ -53,4 +61,9 @@ def trading_me():
 @trading_bp.route("/static/<path:filename>")
 def trading_static(filename: str):
     """Serve the page's JS/assets (same-origin, so the strict CSP is satisfied)."""
-    return send_from_directory(STATIC_DIR, filename)
+    # Force the JS MIME type for modules so Windows (whose mimetypes registry
+    # lacks .mjs) doesn't fall back to text/plain and break the module import.
+    mimetype = None
+    if filename.endswith((".mjs", ".js")):
+        mimetype = "application/javascript"
+    return send_from_directory(STATIC_DIR, filename, mimetype=mimetype)
