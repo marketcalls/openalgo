@@ -65,17 +65,32 @@ function intervalSeconds(interval) {
 }
 
 /* ── tick-size helpers ──────────────────────────────────────────────────── */
+const tickSize = () => { const t = Number(sym && sym.tick); return t > 0 ? t : 0.05; };
+/* Decimals implied by the tick, computed numerically (no String()/locale
+   parsing, which can differ across environments): 0.05→2, 0.01→2, 0.1→1,
+   0.005→3, 1→0. */
 const tickDecimals = () => {
-  const t = String(sym?.tick ?? 0.05);
-  return t.includes('.') ? Math.min(6, t.split('.')[1].length) : 0;
+  const t = tickSize();
+  if (t >= 1) return 0;
+  let d = 0, v = t;
+  while (d < 8 && Math.abs(v - Math.round(v)) > 1e-9) { v *= 10; d++; }
+  return d;
 };
 /* Display decimals: tick-accurate, floored at 2 for a currency feel. Used for
    BOTH the chart axis/buttons and the toolbar chips so every price on the page
    shows the same number of decimals on every platform. */
 const priceDp = () => Math.max(2, tickDecimals());
 function snapTick(p) {
-  const tick = sym?.tick || 0.05;
+  const tick = tickSize();
   return Number((Math.round(p / tick) * tick).toFixed(tickDecimals()));
+}
+/* 2-decimal Indian-grouped rupee value (₹ P&L, charges) — platform-stable. */
+function money(n) {
+  const s = Math.abs(Number(n)).toFixed(2);
+  let [ip, fp] = s.split('.');
+  const grouped = ip.length <= 3 ? ip
+    : ip.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + ip.slice(-3);
+  return grouped + '.' + fp;
 }
 /* Format with fixed decimals + Indian digit grouping (12,34,567.89), done
    manually so it is byte-identical on every OS/browser — Intl 'en-IN' data and
@@ -256,7 +271,8 @@ function posLabel() {
   if (!position) return '';
   const mark = lastLtp != null ? lastLtp : position.avg;
   const pnl = (mark - position.avg) * position.net;
-  return `@ ${fmt(position.avg)}  ${pnl >= 0 ? '+' : '-'}₹${Math.round(Math.abs(pnl)).toLocaleString('en-IN')}`;
+  // 2 decimals — a few paise on a tick-0.01 stock must not round away to ₹0
+  return `@ ${fmt(position.avg)}  ${pnl >= 0 ? '+' : '-'}₹${money(Math.abs(pnl))}`;
 }
 
 function renderPosition(pos) {
@@ -404,13 +420,18 @@ function buildChart() {
   });
   volume = chart.addSeries('histogram', { paneIndex: 1, style: { color: isLightTheme() ? '#d4d4d8' : '#33415e' } });
   setPriceData();
-  // Comfortable default zoom: ~last 120 candles right-aligned, instead of
-  // squeezing the full history into the viewport. Short series still fit whole.
-  if (shownCount > 140) {
-    chart.timeScale.setBarSpacing(9);
-    chart.timeScale.setRightOffset(5);
+  // Default zoom: show a FIXED number of most-recent candles regardless of
+  // screen width. A fixed bar *spacing* would show far more bars on a wide
+  // monitor, widening the visible price range so the last price sits near the
+  // plot edge — which makes clicks near it read as the range extreme. Anchoring
+  // a fixed bar *count* keeps the price range (and the cursor→price mapping)
+  // consistent on every display.
+  const VISIBLE = 120;
+  if (shownCount > VISIBLE) {
+    const to = shownCount - 1 + 4;                 // a few bars of right margin
+    chart.timeScale.setVisibleLogicalRange({ from: to - VISIBLE, to });
   } else if (chart.timeScale.barSpacing > 14) {
-    chart.timeScale.setBarSpacing(14); // don't over-stretch a short series
+    chart.timeScale.setBarSpacing(14);             // don't over-stretch a short series
   }
   const lp = lastLtp != null ? lastLtp : (rawBars.length ? rawBars[rawBars.length - 1].close : null);
   ltpLine = lp != null ? chart.addPriceLine({ price: lp, color: '#e0b020', lineWidth: 1, dashed: true, id: 'ltp' }, 0) : null;
@@ -725,9 +746,14 @@ el('chart').addEventListener('contextmenu', (e) => {
   if (!chart || !sym) return;
   if (sym.quoteOnly) return; // let the native menu (and its Save image) through
   e.preventDefault();
-  const p = chart.coordinateToPrice(e.clientY - el('chart').getBoundingClientRect().top, 0);
+  const rect = el('chart').getBoundingClientRect();
+  const y = e.clientY - rect.top;
+  const p = chart.coordinateToPrice(y, 0);
   if (p == null) return;
   ctxPrice = snapTick(p);
+  // Diagnostics for the reported Windows coordinate issue — share the console
+  // line if the price looks wrong: raw price should track the cursor height.
+  console.debug('[trading] right-click', { clientY: e.clientY, rectTop: Math.round(rect.top), y: Math.round(y), rawPrice: p, snapped: ctxPrice, ltp: lastLtp });
   const m = marketPrice();
   const lotTxt = sym.lots ? `${Math.max(1, Math.floor(Number(el('qty').value) || 1))}L` : orderQty();
   ctxMenu.querySelectorAll('button[data-type]').forEach((b) => {
