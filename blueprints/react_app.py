@@ -177,6 +177,12 @@ def react_playground():
     return serve_react_app()
 
 
+# Charting terminal (line-based chart trading, powered by openalgo-charts)
+@react_bp.route("/trading", strict_slashes=False)
+def react_trading():
+    return serve_react_app()
+
+
 # ============================================================
 # Phase 4 Routes - Charts, WebSocket & Sandbox
 # ============================================================
