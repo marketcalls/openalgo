@@ -65,7 +65,18 @@ function intervalSeconds(interval) {
 }
 
 /* ── tick-size helpers ──────────────────────────────────────────────────── */
-const tickSize = () => { const t = Number(sym && sym.tick); return t > 0 ? t : 0.05; };
+/* The instrument tick, guarded against a bad feed. A tick greater than ~1% of
+   the price is implausible for any real instrument (e.g. a ₹1 tick on a ₹23
+   stock, or a paise/rupee unit mismatch) and would snap every order to a whole
+   number — fall back to a valid 0.05 in that case. Legitimate ticks (0.01,
+   0.05, and even 1 on a high-priced instrument) are always kept. */
+const tickSize = () => {
+  const t = Number(sym && sym.tick);
+  if (!(t > 0)) return 0.05;
+  const ref = lastLtp || (rawBars.length ? rawBars[rawBars.length - 1].close : 0);
+  if (ref > 0 && t > ref * 0.01) return 0.05;
+  return t;
+};
 /* Decimals implied by the tick, computed numerically (no String()/locale
    parsing, which can differ across environments): 0.05→2, 0.01→2, 0.1→1,
    0.005→3, 1→0. */
@@ -656,6 +667,10 @@ async function loadSymbol(pick, opts = {}) {
     quoteOnly: QUOTE_ONLY.has(info.exchange),
   };
   sym.lots = DERIVATIVE_EXCHANGES.has(sym.exchange) && sym.lotsize > 1;
+  // Diagnostics for the reported whole-rupee snapping: if `tick` here is >= 1 for
+  // a low-priced stock, the instrument's tick_size feed is coarse/wrong and every
+  // order price will round to a whole rupee. Share this line if snapping is off.
+  console.debug('[trading] symbol', { symbol: sym.symbol, exchange: sym.exchange, rawTickSize: info.tick_size, tick: sym.tick, decimals: tickDecimals(), lotsize: sym.lotsize });
   localStorage.setItem('oa-trading-symbol', JSON.stringify({ symbol: sym.symbol, exchange: sym.exchange }));
   el('symsearch').value = sym.symbol;
   setProductOptions();
