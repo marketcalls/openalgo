@@ -25,7 +25,8 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 let apiKey = null;
 let wsUrl = null;
 let chart = null, price = null, volume = null, ltpLine = null, posLine = null, tradeBtns = null;
-let ws = null, rest = null, trade = null, builder = null, offLtp = null;
+let ws = null, rest = null, trade = null, builder = null, offLtp = null, offDepth = null;
+let depthActive = false;   // true once live top-of-book bid/ask is streaming
 let rawBars = [];            // raw OHLC (history + live-built bars)
 let liveBucket = null;       // time of the forming live bar
 let lastLtp = null, prevClose = null, tickN = 0;
@@ -467,6 +468,11 @@ function startLtpFallback() {
       const j = await api('quotes', { symbol: sym.symbol, exchange: sym.exchange });
       const q = j.data || {};
       if (typeof q.ltp === 'number' && q.ltp > 0) onTick({ symbol: sym.symbol, ltp: q.ltp, timeSec: nowSec() });
+      // quotes carries bid/ask too — keep the Buy/Sell panel showing the spread
+      if (tradeBtns && typeof q.bid === 'number' && typeof q.ask === 'number' && q.bid > 0 && q.ask > 0) {
+        depthActive = true;
+        tradeBtns.setPrices(q.bid, q.ask);
+      }
       setWs('fallback');
     } catch (_) { /* next cycle */ }
   }, 4000);
@@ -483,7 +489,8 @@ function onTick(e) {
   lastLtp = e.ltp;
   if (ltpLine) ltpLine.setPrice(e.ltp);
   if (position && posLine) posLine.setLeftLabel(posLabel());
-  if (tradeBtns) tradeBtns.setMark(e.ltp);
+  // Only fall back to LTP on both buttons when live depth (bid/ask) isn't flowing.
+  if (tradeBtns && !depthActive) tradeBtns.setMark(e.ltp);
   if (builder) {
     const u = builder.onTick({ time: e.timeSec || nowSec(), price: e.ltp, ltq: e.ltq });
     if (u) {
@@ -501,13 +508,26 @@ function connectLive() {
   const sec = intervalSeconds(interval);
   builder = sec ? new CandleBuilder({ intervalSec: sec, volumeMode: 'ltq-sum' }) : null;
   tickN = 0;
+  depthActive = false;
   if (offLtp) { offLtp(); offLtp = null; }
+  if (offDepth) { offDepth(); offDepth = null; }
   offLtp = ws.onLtp((e) => {
     setWs('live');
     stopLtpFallback(); // push stream is alive — REST polling not needed
     onTick(e);
   });
+  // Depth (mode 3) → live top-of-book bid × ask for the Buy/Sell panel.
+  offDepth = ws.onDepth((symbol, exchange, depth) => {
+    if (!sym || symbol !== sym.symbol) return;
+    const bid = depth.bids && depth.bids[0] && depth.bids[0].price;
+    const ask = depth.asks && depth.asks[0] && depth.asks[0].price;
+    if (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0) {
+      depthActive = true;
+      if (tradeBtns) tradeBtns.setPrices(bid, ask);
+    }
+  });
   ws.subscribe('LTP', sym.symbol, sym.exchange);
+  if (!sym.quoteOnly) ws.subscribe('Depth', sym.symbol, sym.exchange, 5);
 }
 
 /* periodic history reconcile: snap completed bars to broker OHLC/volume */
@@ -586,6 +606,7 @@ async function loadSymbol(pick, opts = {}) {
   // swap the live stream: drop the previous symbol's subscription
   if (ws && sym && (sym.symbol !== pick.symbol || sym.exchange !== pick.exchange)) {
     try { ws.unsubscribe('LTP', sym.symbol, sym.exchange); } catch (_) { /* not subscribed */ }
+    try { ws.unsubscribe('Depth', sym.symbol, sym.exchange); } catch (_) { /* not subscribed */ }
   }
   // authoritative metadata (lotsize / tick_size / freeze_qty)
   status(`loading ${pick.symbol} …`);
