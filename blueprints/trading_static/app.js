@@ -375,10 +375,12 @@ async function exitPosition() {
   const summary = `close ${position.net > 0 ? 'LONG' : 'SHORT'} ${qty} ${sym.symbol} @ market`;
   status(summary + ' …');
   try {
-    await api('placesmartorder', {
-      strategy: STRATEGY, exchange: sym.exchange, symbol: sym.symbol,
-      action: side, product: position.product || el('product').value, pricetype: 'MARKET',
-      quantity: String(qty), position_size: '0', price: '0', trigger_price: '0', disclosed_quantity: '0',
+    // Square off with a plain market placeorder (opposite side, position qty) —
+    // never placesmartorder.
+    await trade.place({
+      symbol: sym.symbol, exchange: sym.exchange, side, type: 'MARKET', qty,
+      product: position.product || el('product').value,
+      mode: isLiveMode() ? 'live' : 'analyzer',
     });
     toast('position closed', 'ok');
     pollBook();
