@@ -10,7 +10,7 @@
  */
 import {
   createChart, OpenAlgoDataFeed, OpenAlgoWsFeed, OpenAlgoTradeFeed,
-  CandleBuilder, darkTheme, lightTheme, LogoWatermark,
+  CandleBuilder, darkTheme, lightTheme, LogoWatermark, BuySellButtons,
 } from './openalgo-charts.mjs';
 import {
   runTransform, HeikinAshiTransform, RenkoTransform, RangeBarsTransform,
@@ -24,7 +24,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 /* ── state ──────────────────────────────────────────────────────────────── */
 let apiKey = null;
 let wsUrl = null;
-let chart = null, price = null, volume = null, ltpLine = null, posLine = null;
+let chart = null, price = null, volume = null, ltpLine = null, posLine = null, tradeBtns = null;
 let ws = null, rest = null, trade = null, builder = null, offLtp = null;
 let rawBars = [];            // raw OHLC (history + live-built bars)
 let liveBucket = null;       // time of the forming live bar
@@ -286,6 +286,16 @@ function orderQty() {
   return sym.lots ? n * sym.lotsize : n;
 }
 
+/* label for the inline panel's quantity chip (lots for FnO, else qty) */
+function qtyChip() {
+  if (!sym) return '';
+  const n = Math.max(1, Math.floor(Number(el('qty').value) || 1));
+  return sym.lots ? `${n}L` : String(n);
+}
+
+/* inline Buy/Sell panel → market order */
+const placeMarket = (side) => placeFromMenu(side, 'MARKET');
+
 function marketPrice() {
   return lastLtp != null ? lastLtp : (rawBars.length ? rawBars[rawBars.length - 1].close : null);
 }
@@ -402,6 +412,14 @@ function buildChart() {
     tint: isLightTheme() ? undefined : '#e4e8f4', // black mark on light, light mark on dark
   }), 1);
 
+  // inline TradingView-style SELL · qty · BUY panel, docked top-left below the
+  // OHLC legend (which is an HTML overlay at the top-left corner)
+  if (!sym.quoteOnly) {
+    tradeBtns = new BuySellButtons({ id: 'trade', position: 'top-left', margin: { x: 14, y: 52 }, qty: qtyChip() });
+    if (lp != null) tradeBtns.setMark(lp);
+    chart.addPrimitive(tradeBtns, 0);
+  } else tradeBtns = null;
+
   chart.subscribeCrosshairMove((e) => setLegend(e.bar || (rawBars.length ? rawBars[rawBars.length - 1] : null)));
 
   // drag-to-modify with a drag ghost; commit on release (tick-snapped)
@@ -424,6 +442,9 @@ function buildChart() {
     },
   );
   chart.subscribeClick((id) => {
+    if (id === 'trade:buy') { placeMarket('BUY'); return; }
+    if (id === 'trade:sell') { placeMarket('SELL'); return; }
+    if (id === 'trade:qty') { el('qty').focus(); el('qty').select(); return; }
     if (id === 'position::close') { exitPosition(); return; }
     if (id.startsWith('order:') && id.endsWith('::close')) {
       const oid = id.slice(6, -7);
@@ -464,6 +485,7 @@ function onTick(e) {
   lastLtp = e.ltp;
   if (ltpLine) ltpLine.setPrice(e.ltp);
   if (position && posLine) posLine.setLeftLabel(posLabel());
+  if (tradeBtns) tradeBtns.setMark(e.ltp);
   if (builder) {
     const u = builder.onTick({ time: e.timeSec || nowSec(), price: e.ltp, ltq: e.ltq });
     if (u) {
@@ -696,7 +718,7 @@ el('exchange').addEventListener('change', () => {
   const q = el('symsearch').value.trim();
   if (q.length >= 2) doSearch(q);
 });
-el('qty').addEventListener('input', updateLotInfo);
+el('qty').addEventListener('input', () => { updateLotInfo(); if (tradeBtns) tradeBtns.setQty(qtyChip()); });
 
 /* ── bootstrap ──────────────────────────────────────────────────────────── */
 function populateIntervals(data) {
