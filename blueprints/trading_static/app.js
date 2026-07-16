@@ -69,13 +69,25 @@ const tickDecimals = () => {
   const t = String(sym?.tick ?? 0.05);
   return t.includes('.') ? Math.min(6, t.split('.')[1].length) : 0;
 };
+/* Display decimals: tick-accurate, floored at 2 for a currency feel. Used for
+   BOTH the chart axis/buttons and the toolbar chips so every price on the page
+   shows the same number of decimals on every platform. */
+const priceDp = () => Math.max(2, tickDecimals());
 function snapTick(p) {
   const tick = sym?.tick || 0.05;
   return Number((Math.round(p / tick) * tick).toFixed(tickDecimals()));
 }
-const fmt = (n) => Number(n).toLocaleString('en-IN', {
-  minimumFractionDigits: Math.min(2, tickDecimals() || 2), maximumFractionDigits: Math.max(2, tickDecimals()),
-});
+/* Format with fixed decimals + Indian digit grouping (12,34,567.89), done
+   manually so it is byte-identical on every OS/browser — Intl 'en-IN' data and
+   minMove-derived auto-precision both vary across platforms (Windows vs macOS). */
+function fmt(n) {
+  const s = Number(n).toFixed(priceDp());
+  let [ip, fp] = s.split('.');
+  const neg = ip.startsWith('-'); if (neg) ip = ip.slice(1);
+  const grouped = ip.length <= 3 ? ip
+    : ip.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + ip.slice(-3);
+  return (neg ? '-' : '') + grouped + (fp ? '.' + fp : '');
+}
 
 /* ── toast + status ─────────────────────────────────────────────────────── */
 let toastTimer = null;
@@ -385,9 +397,10 @@ function buildChart() {
   el('chart').innerHTML = '';
   chart = createChart(el('chart'), { priceAxisWidth: 78, theme: themeObj() });
   const cfg = chartType();
+  const dp = priceDp(); // pin the axis/label decimals to the tick (platform-stable)
   price = chart.addSeries(cfg.series, {
     style: cfg.style ? cfg.style() : {},
-    priceFormat: sym && sym.tick ? { type: 'price', minMove: sym.tick } : undefined,
+    priceFormat: { type: 'custom', formatter: (p) => p.toFixed(dp) },
   });
   volume = chart.addSeries('histogram', { paneIndex: 1, style: { color: isLightTheme() ? '#d4d4d8' : '#33415e' } });
   setPriceData();
