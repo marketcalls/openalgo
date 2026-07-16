@@ -51,6 +51,7 @@ const Analyzer = lazy(() => import('@/pages/Analyzer'))
 const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const ChartTest = lazy(() => import('@/pages/ChartTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
+const Trading = lazy(() => import('@/pages/Trading'))
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 
@@ -281,6 +282,7 @@ function App() {
               {/* Full-width protected routes */}
               <Route element={<FullWidthLayout />}>
                 <Route path="/playground" element={<Playground />} />
+                <Route path="/trading" element={<Trading />} />
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
