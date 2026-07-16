@@ -181,7 +181,7 @@
       position: absolute; top: 12px; left: 14px; z-index: 10; pointer-events: none;
       padding: 8px 12px; border-radius: 10px; font: 12px system-ui;
       background: color-mix(in oklab, var(--card) 78%, transparent); border: 1px solid var(--bd-soft);
-      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
     }
     .legend:empty { display: none; }
     .legend b { font-size: 13px; }
@@ -295,8 +295,6 @@
       <option value="renko">Renko</option>
       <option value="range">Range Bars</option>
       <option value="line-break">Line Break</option>
-      <option value="point-figure">Point &amp; Figure</option>
-      <option value="kagi">Kagi</option>
     </select>
     <div class="divider"></div>
     <label class="lbl" id="qtylbl">Qty <input type="number" id="qty" class="field field--qty" value="1" min="1" /></label>

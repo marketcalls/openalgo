@@ -14,7 +14,7 @@ import {
 } from './openalgo-charts.mjs';
 import {
   runTransform, HeikinAshiTransform, RenkoTransform, RangeBarsTransform,
-  LineBreakTransform, PointFigureTransform, KagiTransform,
+  LineBreakTransform,
 } from './openalgo-charts.transform.mjs';
 
 const el = (id) => document.getElementById(id);
@@ -185,8 +185,6 @@ const CHART_TYPES = {
   renko: { series: 'candlestick', tf: () => new RenkoTransform({ boxSize: boxOf() }) },
   range: { series: 'candlestick', tf: () => new RangeBarsTransform({ range: boxOf() }) },
   'line-break': { series: 'candlestick', tf: () => new LineBreakTransform({ lines: 3 }) },
-  'point-figure': { series: 'point-figure', style: () => ({ boxSize: boxOf() }), tf: () => new PointFigureTransform({ boxSize: boxOf(), reversal: 3 }) },
-  kagi: { series: 'kagi', tf: () => new KagiTransform({ reversal: boxOf() * 2 }) },
 };
 const chartType = () => CHART_TYPES[el('ctype').value] || CHART_TYPES.candlestick;
 
@@ -562,7 +560,7 @@ function updateLotInfo() {
   } else el('lotinfo').textContent = sym.quoteOnly ? 'quote-only (no trading)' : '';
 }
 
-async function loadSymbol(pick) {
+async function loadSymbol(pick, opts = {}) {
   // swap the live stream: drop the previous symbol's subscription
   if (ws && sym && (sym.symbol !== pick.symbol || sym.exchange !== pick.exchange)) {
     try { ws.unsubscribe('LTP', sym.symbol, sym.exchange); } catch (_) { /* not subscribed */ }
@@ -594,11 +592,13 @@ async function loadSymbol(pick) {
     rawBars = await rest.getBars({ symbol: sym.symbol, exchange: sym.exchange, interval, from: to - lookbackDays(interval) * 86400, to });
   } catch (e) {
     rawBars = [];
-    toast(`history error: ${cleanError(e)}`, 'err');
-    status('');
-    return;
+    if (!opts.silent) { toast(`history error: ${cleanError(e)}`, 'err'); status(''); }
+    return false; // caller may fall back (e.g. to the default symbol)
   }
-  if (!rawBars.length) { toast(`no history for ${sym.symbol} ${sym.exchange} ${interval}`, 'err'); return; }
+  if (!rawBars.length) {
+    if (!opts.silent) toast(`no history for ${sym.symbol} ${sym.exchange} ${interval}`, 'err');
+    return false;
+  }
   prevClose = rawBars.length > 1 ? rawBars[rawBars.length - 2].close : rawBars[rawBars.length - 1].open;
   lastLtp = rawBars[rawBars.length - 1].close;
   buildChart();
@@ -609,6 +609,7 @@ async function loadSymbol(pick) {
   connectLive();
   scheduleReconcile();
   pollBook();
+  return true;
 }
 
 /* ── symbol search dropdown ─────────────────────────────────────────────── */
@@ -712,8 +713,14 @@ el('themebtn').addEventListener('click', () => {
   localStorage.setItem('openalgo-theme', JSON.stringify(stored));
   applyTheme();
 });
-el('ctype').addEventListener('change', () => rawBars.length && buildChart());
-el('interval').addEventListener('change', () => sym && loadSymbol(sym));
+el('ctype').addEventListener('change', () => {
+  localStorage.setItem('oa-trading-ctype', el('ctype').value);
+  if (rawBars.length) buildChart();
+});
+el('interval').addEventListener('change', () => {
+  localStorage.setItem('oa-trading-interval', el('interval').value);
+  if (sym) loadSymbol(sym);
+});
 el('exchange').addEventListener('change', () => {
   const q = el('symsearch').value.trim();
   if (q.length >= 2) doSearch(q);
@@ -733,13 +740,20 @@ function populateIntervals(data) {
     for (const iv of arr) og.append(new Option(iv, iv));
     sel.append(og);
   }
-  // sensible default: 5m when available, else first minute interval, else first
+  // restore the saved interval if the broker still supports it, else default to
+  // 5m (then first minute interval, then whatever exists)
   const all = [...sel.options].map((o) => o.value);
-  sel.value = all.includes('5m') ? '5m' : (data.minutes?.[0] ?? all[0] ?? 'D');
+  const saved = localStorage.getItem('oa-trading-interval');
+  sel.value = (saved && all.includes(saved)) ? saved
+    : all.includes('5m') ? '5m'
+    : (data.minutes && data.minutes[0]) || all[0] || 'D';
 }
 
 async function bootstrap() {
   applyTheme(); // analyzer look until the API reports the actual mode
+  // restore the saved chart type (defaults to candles for a fresh browser)
+  const savedType = localStorage.getItem('oa-trading-ctype');
+  if (savedType && [...el('ctype').options].some((o) => o.value === savedType)) el('ctype').value = savedType;
   try {
     const [keyRes, cfgRes] = await Promise.all([
       fetch('/api/websocket/apikey').then((r) => r.json()),
@@ -804,22 +818,24 @@ async function bootstrap() {
   clearInterval(bookTimer);
   bookTimer = setInterval(pollBook, 8000); // slow reconciliation; order events stream via WS
 
-  // restore the last symbol, else default to BHEL (NSE)
-  let target = null;
+  // restore the last symbol; if it's gone (delisted) or has no data (expired
+  // contract), fall back to the default (BHEL / NSE).
+  let loaded = false;
   try {
     const saved = JSON.parse(localStorage.getItem('oa-trading-symbol') || 'null');
     if (saved && saved.symbol) {
       const j = await api('search', { query: saved.symbol, exchange: saved.exchange });
-      target = (j.data || []).find((r) => r.symbol === saved.symbol && r.exchange === saved.exchange) || null;
+      const row = (j.data || []).find((r) => r.symbol === saved.symbol && r.exchange === saved.exchange);
+      if (row) loaded = await loadSymbol(row, { silent: true }); // silent: we may fall back
     }
   } catch (_) { /* fall through to the default */ }
-  if (!target) {
+  if (!loaded) {
     try {
       const j = await api('search', { query: 'BHEL', exchange: 'NSE' });
-      target = (j.data || []).find((r) => r.symbol === 'BHEL' && r.exchange === 'NSE') || null;
-    } catch (_) { /* no default available */ }
+      const bhel = (j.data || []).find((r) => r.symbol === 'BHEL' && r.exchange === 'NSE');
+      if (bhel) await loadSymbol(bhel);
+    } catch (_) { status('search a symbol to begin'); }
   }
-  if (target) loadSymbol(target);
 }
 
 bootstrap();
