@@ -894,6 +894,10 @@ def get_symbol_info_dbquery(symbol: str, exchange: str) -> SymbolData | None:
                 lotsize=sym_token.lotsize,
                 instrumenttype=sym_token.instrumenttype,
                 tick_size=sym_token.tick_size,
+                # Carry contract_value so the DB-fallback path (cold/expired cache) scales
+                # margin and P&L identically to the cache path; without it crypto
+                # derivatives silently fall back to an unscaled 1.0 multiplier.
+                contract_value=getattr(sym_token, "contract_value", None),
             )
         else:
             return None
