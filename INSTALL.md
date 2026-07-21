@@ -5,7 +5,7 @@
 Before installing OpenAlgo, ensure you have the following prerequisites installed:
 
 - **Visual Studio Code (VS Code)** installed on Windows.
-- **Python** version 3.10 or 3.11 installed.
+- **Python** version 3.12 or newer installed.
 - **Git** for cloning the repository (Download from [https://git-scm.com/downloads](https://git-scm.com/downloads)).
 - **Node.js** for CSS compilation (Download from [https://nodejs.org/](https://nodejs.org/)).
 
@@ -105,7 +105,7 @@ If you encounter any issues during installation:
 
 2. **Python dependencies**:
    - Use a virtual environment
-   - Ensure you're using Python 3.10 or 3.11
+   - Ensure you're using Python 3.12 or newer
    - Try upgrading pip: `pip install --upgrade pip`
 
 3. **WebSocket issues**:
