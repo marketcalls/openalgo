@@ -63,6 +63,21 @@ _EXCHANGE_SEGMENT_MAP = {
 }
 
 
+def _field(data: dict, *keys, default=None):
+    """Return the first present key from `keys`.
+
+    Dhan's live order-update payload sends camelCase keys (orderNo, txnType,
+    tradedQty, ...) even though docs/13-live-order-update.md documents PascalCase
+    (OrderNo, TxnType, TradedQty, ...). Read camelCase first and fall back to the
+    documented PascalCase so the adapter is correct against the real feed and
+    stays correct if Dhan ever aligns the wire format with its docs.
+    """
+    for k in keys:
+        if k in data:
+            return data[k]
+    return default
+
+
 class DhanOrderUpdateAdapter(BaseOrderUpdateAdapter):
     """Dedicated order-update WebSocket adapter for Dhan (individual-user flow)."""
 
@@ -99,37 +114,50 @@ class DhanOrderUpdateAdapter(BaseOrderUpdateAdapter):
             return None  # ignore login-ack / other frame types
 
         data = message.get("Data") or {}
-        raw_status = str(data.get("Status", "")).upper()
+
+        # Dhan's live status values are Title-case ("Pending"/"Traded"); upper() to
+        # match the _STATUS_MAP keys (which mirror the REST orderbook vocabulary).
+        raw_status = str(_field(data, "status", "Status", default="")).upper()
         order_status = _STATUS_MAP.get(raw_status, raw_status.lower())
 
-        quantity = int(data.get("Quantity") or 0)
-        traded_qty = int(data.get("TradedQty") or 0)
+        quantity = int(_field(data, "quantity", "Quantity", default=0) or 0)
+        traded_qty = int(_field(data, "tradedQty", "TradedQty", default=0) or 0)
 
-        # OpenAlgo exchange from (Exchange, Segment); symbol via SecurityId —
+        # OpenAlgo exchange from (exchange, segment); symbol via securityId —
         # the same get_symbol(token, exchange) lookup the REST orderbook
-        # mapping uses — falling back to Dhan's Symbol field.
-        exchange = _EXCHANGE_SEGMENT_MAP.get(
-            (data.get("Exchange", ""), data.get("Segment", "")), data.get("Exchange", "")
-        )
+        # mapping uses — falling back to Dhan's symbol field.
+        exch = _field(data, "exchange", "Exchange", default="")
+        seg = _field(data, "segment", "Segment", default="")
+        exchange = _EXCHANGE_SEGMENT_MAP.get((exch, seg), exch)
         symbol = to_openalgo_symbol(
-            data.get("Symbol", ""), exchange, token=data.get("SecurityId")
+            _field(data, "symbol", "Symbol", default=""),
+            exchange,
+            token=_field(data, "securityId", "SecurityId"),
         )
+
+        txn_type = _field(data, "txnType", "TxnType", default="")
+        order_type = _field(data, "orderType", "OrderType", default="")
+        product_code = _field(data, "product", "Product", default="")
 
         return {
-            "orderid": data.get("OrderNo", ""),
+            "orderid": _field(data, "orderNo", "OrderNo", default=""),
             "symbol": symbol,
             "exchange": exchange,
-            "action": _ACTION_MAP.get(data.get("TxnType", ""), data.get("TxnType", "")),
+            "action": _ACTION_MAP.get(txn_type, txn_type),
             "quantity": quantity,
-            "price": float(data.get("Price") or 0),
-            "trigger_price": float(data.get("TriggerPrice") or 0),
-            "pricetype": _PRICETYPE_MAP.get(data.get("OrderType", ""), data.get("OrderType", "")),
-            "product": _PRODUCT_MAP.get(data.get("Product", ""), data.get("Product", "")),
+            "price": float(_field(data, "price", "Price", default=0) or 0),
+            "trigger_price": float(_field(data, "triggerPrice", "TriggerPrice", default=0) or 0),
+            "pricetype": _PRICETYPE_MAP.get(order_type, order_type),
+            "product": _PRODUCT_MAP.get(product_code, product_code),
             "order_status": order_status,
             "filled_quantity": traded_qty,
             "pending_quantity": max(quantity - traded_qty, 0),
-            "average_price": float(data.get("AvgTradedPrice") or 0),
-            "rejection_reason": data.get("ReasonDescription", "") if raw_status == "REJECTED" else "",
+            "average_price": float(_field(data, "avgTradedPrice", "AvgTradedPrice", default=0) or 0),
+            "rejection_reason": (
+                _field(data, "reasonDescription", "ReasonDescription", default="")
+                if raw_status == "REJECTED"
+                else ""
+            ),
         }
 
 
