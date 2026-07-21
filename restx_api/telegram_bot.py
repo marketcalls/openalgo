@@ -94,7 +94,30 @@ preferences_model = api.model(
 
 
 def run_async(coro):
-    """Helper to run async coroutine in sync context"""
+    """Run an async coroutine in a synchronous context.
+
+    Creates a new event loop, runs the given coroutine to completion,
+    and closes the loop afterward to free resources.
+
+    Args:
+        coro (Coroutine): The async coroutine to be executed in a new
+            event loop.
+
+    Returns:
+        Any: The result returned by the coroutine.
+
+    Raises:
+        RuntimeError: If the event loop encounters an error during
+            execution.
+        Exception: If the coroutine raises an exception during
+            execution.
+
+    Example:
+        >>> async def my_task():
+        ...     return 42
+        >>> run_async(my_task())
+        42
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -275,9 +298,25 @@ class StopBot(Resource):
 
 
 def get_webhook_secret():
-    """
-    Get or generate webhook secret for Telegram webhook verification.
-    Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
+    """Get or generate a webhook secret for Telegram webhook verification.
+
+    Retrieves the webhook secret by first checking for an explicitly set
+    environment variable. If not found, derives a secret from the bot token
+    using SHA-256 hashing. Returns None if neither is available.
+
+    Returns:
+        str or None: The webhook secret string if available, or None if
+            neither a webhook secret nor a bot token is configured.
+
+    Raises:
+        ValueError: If the bot token cannot be encoded for hashing.
+        Exception: If retrieving the bot configuration fails.
+
+    Example:
+        >>> import os
+        >>> os.environ["TELEGRAM_WEBHOOK_SECRET"] = "mysecret"
+        >>> get_webhook_secret()
+        'mysecret'
     """
     # First check for explicit webhook secret
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -289,11 +328,9 @@ def get_webhook_secret():
     bot_token = config.get("bot_token")
     if bot_token:
         import hashlib
-
         return hashlib.sha256(bot_token.encode()).hexdigest()[:32]
 
     return None
-
 
 @api.route("/webhook", strict_slashes=False)
 class WebhookHandler(Resource):
