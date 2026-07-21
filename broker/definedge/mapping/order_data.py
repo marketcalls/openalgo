@@ -88,10 +88,19 @@ def calculate_order_statistics(order_data):
 
             # Count orders based on their status
             # API order_status values: CANCELED / COMPLETE / NEW / OPEN / REJECTED / REPLACED
+            # SL/SL-M orders additionally rest in TRIGGER PENDING until the trigger
+            # fires - they are still live at the exchange, so count them as open.
             status = order.get("order_status", "").upper()
             if status in ["COMPLETE", "EXECUTED"]:
                 total_completed_orders += 1
-            elif status in ["OPEN", "NEW", "REPLACED", "PENDING"]:
+            elif status in [
+                "OPEN",
+                "NEW",
+                "REPLACED",
+                "PENDING",
+                "TRIGGER PENDING",
+                "TRIGGER_PENDING",
+            ]:
                 total_open_orders += 1
             elif status in ["REJECTED", "CANCELED", "CANCELLED"]:
                 total_rejected_orders += 1
@@ -134,9 +143,17 @@ def transform_order_data(orders):
             order_status = "complete"
         elif status in ["REJECTED"]:
             order_status = "rejected"
-        elif status in ["TRIGGER PENDING", "TRIGGER_PENDING"]:
-            order_status = "trigger pending"
-        elif status in ["OPEN", "NEW", "REPLACED", "PENDING"]:
+        elif status in [
+            "OPEN",
+            "NEW",
+            "REPLACED",
+            "PENDING",
+            "TRIGGER PENDING",
+            "TRIGGER_PENDING",
+        ]:
+            # TRIGGER PENDING is an SL/SL-M order resting at the exchange waiting
+            # for its trigger. It is still cancellable and modifiable, so report it
+            # as "open" - the order book only exposes Cancel/Modify for "open".
             order_status = "open"
         elif status in ["CANCELED", "CANCELLED"]:
             order_status = "cancelled"
