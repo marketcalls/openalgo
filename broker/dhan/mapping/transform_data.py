@@ -1,6 +1,46 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Upstox Broking Parameters https://dhanhq.co/docs/v2/orders/
 
+from database.token_db import get_symbol_info
+from utils.logging import get_logger
+from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+
+logger = get_logger(__name__)
+
+
+def _slm_protected_price(symbol, exchange, action, trigger_price):
+    """
+    Derive a protective stop-limit price for an SL-M order from its trigger price.
+
+    Dhan's live API does not honor a bare STOP_LOSS_MARKET as a resting market stop
+    under the SEBI MPP regime: it either drops the trigger and fills immediately as a
+    LIMIT, or rejects the order with DH-906 "Trigger Price should be greater than
+    Price" (the limit price it substitutes via MPP lands on the wrong side of the
+    trigger). See GitHub issue #1647.
+
+    To place a stop that actually rests, SL-M is mapped to Dhan's STOP_LOSS
+    (stop-limit) with a limit price offset MPP% beyond the trigger in the fill
+    direction (SELL below the trigger, BUY above it) so it stays marketable once
+    triggered. This mirrors the shared MPP handling used by the other Noren/MPP
+    brokers (e.g. samco).
+    """
+    instrument_type = get_instrument_type_from_symbol(symbol)
+    tick_size = None
+    try:
+        symbol_info = get_symbol_info(symbol, exchange)
+        if symbol_info and getattr(symbol_info, "tick_size", None):
+            tick_size = float(symbol_info.tick_size)
+    except Exception as e:
+        logger.warning(f"Dhan SL-M: tick size lookup failed for {symbol}/{exchange}: {e}")
+
+    return calculate_protected_price(
+        price=trigger_price,
+        action=action,
+        symbol=symbol,
+        instrument_type=instrument_type,
+        tick_size=tick_size,
+    )
+
 
 def transform_data(data, token):
     """
@@ -24,8 +64,10 @@ def transform_data(data, token):
     if correlation_id:
         transformed["correlationId"] = correlation_id
 
-    # Set price for non-market orders
-    if data["pricetype"] != "MARKET":
+    # Set price for limit-priced orders (LIMIT and SL). MARKET carries no price —
+    # Dhan applies its own MPP (market->limit) conversion server-side. SL-M is
+    # handled below (converted to a protective STOP_LOSS with a derived limit).
+    if data["pricetype"] in ["LIMIT", "SL"]:
         price = float(data.get("price", 0))
         transformed["price"] = float(price)
 
@@ -37,10 +79,22 @@ def transform_data(data, token):
     # Set trigger price for SL orders
     if data["pricetype"] in ["SL", "SL-M"]:
         trigger_price = float(data.get("trigger_price", 0))
-        if trigger_price > 0:
-            transformed["triggerPrice"] = float(trigger_price)
-        else:
+        if trigger_price <= 0:
             raise ValueError("Trigger price is required for Stop Loss orders")
+        transformed["triggerPrice"] = float(trigger_price)
+
+        # Map SL-M -> STOP_LOSS with an MPP-protected limit price so the stop rests
+        # instead of being mangled/rejected by Dhan's live MPP. See _slm_protected_price.
+        if data["pricetype"] == "SL-M":
+            protected_price = _slm_protected_price(
+                data["symbol"], data["exchange"], data["action"], trigger_price
+            )
+            transformed["orderType"] = "STOP_LOSS"
+            transformed["price"] = float(protected_price)
+            logger.info(
+                f"Dhan SL-M -> STOP_LOSS: Symbol={data['symbol']}, Action={data['action']}, "
+                f"Trigger={trigger_price}, ProtectedLimit={protected_price}"
+            )
 
     # Handle after market orders
     after_market = data.get("after_market_order", False)
@@ -76,8 +130,8 @@ def transform_modify_order_data(data):
         "validity": "DAY",
     }
 
-    # Set price for non-market orders
-    if data.get("pricetype") != "MARKET":
+    # Set price for limit-priced orders (LIMIT and SL). SL-M is handled below.
+    if data.get("pricetype") in ["LIMIT", "SL"]:
         modified["price"] = float(data["price"])
 
     # Set disclosed quantity if provided
@@ -90,6 +144,19 @@ def transform_modify_order_data(data):
         trigger_price = float(data.get("trigger_price", 0))
         if trigger_price > 0:
             modified["triggerPrice"] = float(trigger_price)
+
+            # Same SL-M -> protective STOP_LOSS conversion as placement (see
+            # _slm_protected_price / issue #1647), so a modified SL-M also rests.
+            if data["pricetype"] == "SL-M":
+                protected_price = _slm_protected_price(
+                    data["symbol"], data["exchange"], data["action"], trigger_price
+                )
+                modified["orderType"] = "STOP_LOSS"
+                modified["price"] = float(protected_price)
+                logger.info(
+                    f"Dhan SL-M modify -> STOP_LOSS: Symbol={data['symbol']}, "
+                    f"Action={data['action']}, Trigger={trigger_price}, ProtectedLimit={protected_price}"
+                )
 
     return modified
 
