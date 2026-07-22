@@ -616,6 +616,9 @@ All error logging uses `logger.exception()` (not `logger.error()` + manual trace
 
 ## Claude Code Instructions
 
+### No Icons or Emojis
+- Do not use icons or emojis anywhere: source code, comments, loggers, commit messages, PR descriptions, changelogs, release notes, or any generated text (including messages drafted for Discord, Telegram, or other channels). Use plain text labels instead.
+
 ### Frontend Build Process
 - The React frontend dist is force-committed to `main` by CI (`commit-dist` job in `.github/workflows/ci.yml`). Production servers and backend-only contributors do NOT need Node.js or npm — a plain `git pull` from `main` already brings the latest UI.
 - When actively editing React code, run `cd frontend && npm install && npm run build` (build only, no tests). Tests run in CI; not required for local iteration.
