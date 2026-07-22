@@ -49,6 +49,7 @@ const Sandbox = lazy(() => import('@/pages/Sandbox'))
 const SandboxPnL = lazy(() => import('@/pages/SandboxPnL'))
 const Analyzer = lazy(() => import('@/pages/Analyzer'))
 const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
+const WebSocketOrder = lazy(() => import('@/pages/WebSocketOrder'))
 const ChartTest = lazy(() => import('@/pages/ChartTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
 const Trading = lazy(() => import('@/pages/Trading'))
@@ -223,6 +224,7 @@ function App() {
                   element={<Navigate to="/strategybuilder/portfolio" replace />}
                 />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
+                <Route path="/websocket/order" element={<WebSocketOrder />} />
                 <Route path="/chart/test" element={<ChartTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
