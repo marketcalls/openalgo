@@ -123,7 +123,7 @@ dependencies = [
   "requests==2.34.2",
   "rich==13.7.1",
   "rpds-py==0.30.0",
-  "setuptools==80.10.1",
+  "setuptools==83.0.0",
   "simple-websocket==1.1.0",
   "simplejson==3.20.2",
   "six==1.17.0",
