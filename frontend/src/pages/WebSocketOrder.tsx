@@ -128,6 +128,10 @@ export default function WebSocketOrder() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [autoReconnect, setAutoReconnect] = useState(true)
+  // Mirror autoReconnect into a ref so the long-lived socket.onclose handler
+  // reads the CURRENT toggle value, not the one captured when the socket opened.
+  const autoReconnectRef = useRef(autoReconnect)
+  autoReconnectRef.current = autoReconnect
   const socketRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -223,7 +227,10 @@ export default function WebSocketOrder() {
 
   // WebSocket connection
   const connectWebSocket = useCallback(async () => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
+    // Treat an in-flight handshake (CONNECTING) as active too, so rapid retries
+    // don't spawn duplicate sockets and duplicate config/auth requests.
+    const readyState = socketRef.current?.readyState
+    if (readyState === WebSocket.OPEN || readyState === WebSocket.CONNECTING) {
       logEvent('Already connected', 'warn')
       return
     }
@@ -277,7 +284,7 @@ export default function WebSocketOrder() {
         setOrdersSubscribed(false)
         logEvent(`Disconnected (code: ${event.code})`, event.wasClean ? 'info' : 'error')
 
-        if (autoReconnect && !event.wasClean) {
+        if (autoReconnectRef.current && !event.wasClean) {
           logEvent('Auto-reconnect in 3s...', 'warn')
           reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000)
         }
@@ -304,7 +311,7 @@ export default function WebSocketOrder() {
       logEvent(`Connection failed: ${err}`, 'error')
       setIsConnecting(false)
     }
-  }, [autoReconnect, getCsrfToken, handleMessage, logEvent])
+  }, [getCsrfToken, handleMessage, logEvent])
 
   const disconnectWebSocket = () => {
     if (reconnectTimeoutRef.current) {
