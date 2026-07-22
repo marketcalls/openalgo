@@ -14,6 +14,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from datetime import time as datetime_time
 from decimal import Decimal
 
 import pytz
@@ -33,6 +34,12 @@ logger = get_logger(__name__)
 
 # Maximum age (seconds) for WebSocket data to be considered fresh
 WEBSOCKET_DATA_MAX_AGE = 5
+IST = pytz.timezone("Asia/Kolkata")
+
+# Delta Exchange settles dated crypto options at 17:30 IST (12:00 UTC).  Keep
+# this explicit and exchange-scoped: a calendar expiry date is not enough to
+# decide that a contract has reached its terminal settlement point.
+CRYPTO_EXPIRY_SETTLEMENT_TIME = datetime_time(17, 30)
 
 
 def parse_expiry_from_symbol(symbol, exchange):
@@ -167,6 +174,38 @@ def get_contract_expiry(symbol, exchange):
     return get_expiry_from_database(symbol, exchange)
 
 
+def is_contract_expired(symbol, exchange, *, now=None):
+    """Return whether a dated contract has reached its settlement boundary.
+
+    Delta crypto contracts remain tradable on their calendar expiry date until
+    the 17:30 IST settlement point.  Other exchanges retain the existing
+    date-only behavior because their expiry/settlement clocks are not uniform.
+
+    ``now`` is injectable so the boundary can be tested without sleeping or
+    changing the host clock.  Naive datetimes are interpreted as IST for
+    compatibility with the sandbox's existing naive-IST timestamps.
+    """
+
+    expiry_date = get_contract_expiry(symbol, exchange)
+    if expiry_date is None:
+        return False
+
+    if now is None:
+        current = datetime.now(IST)
+    elif now.tzinfo is None:
+        current = IST.localize(now)
+    else:
+        current = now.astimezone(IST)
+
+    if str(exchange).upper() == "CRYPTO":
+        settlement_at = IST.localize(
+            datetime.combine(expiry_date, CRYPTO_EXPIRY_SETTLEMENT_TIME)
+        )
+        return current >= settlement_at
+
+    return current.date() > expiry_date
+
+
 class PositionManager:
     """Manages positions and MTM calculations"""
 
@@ -205,9 +244,7 @@ class PositionManager:
         Returns:
             list: All positions (expired ones settled, others unchanged)
         """
-        from datetime import date
-
-        today = date.today()
+        now = datetime.now(IST)
         valid_positions = []
         expired_count = 0
 
@@ -221,7 +258,7 @@ class PositionManager:
                 continue
 
             # Check if contract has expired
-            is_expired = today > expiry_date
+            is_expired = is_contract_expired(position.symbol, position.exchange, now=now)
 
             # For already closed positions (qty=0), just keep them
             # These are today's closed trades - show them regardless of expiry
@@ -234,7 +271,7 @@ class PositionManager:
                 # Contract has expired - auto-close it
                 logger.info(
                     f"Expired contract detected: {position.symbol} "
-                    f"(expiry: {expiry_date}, today: {today}, user: {position.user_id})"
+                    f"(expiry: {expiry_date}, now: {now.isoformat()}, user: {position.user_id})"
                 )
 
                 try:
@@ -1214,13 +1251,12 @@ def cleanup_expired_contracts():
     - P&L calculated and added to realized P&L
     - Position quantity set to 0
     """
-    from datetime import date
     from decimal import Decimal
 
     from sandbox.fund_manager import FundManager
 
     try:
-        today = date.today()
+        now = datetime.now(IST)
 
         # Find all open positions in F&O exchanges
         fo_exchanges = ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "CRYPTO"]
@@ -1242,11 +1278,13 @@ def cleanup_expired_contracts():
         for position in all_fo_positions:
             expiry_date = get_contract_expiry(position.symbol, position.exchange)
 
-            if expiry_date and today > expiry_date:
+            if expiry_date and is_contract_expired(
+                position.symbol, position.exchange, now=now
+            ):
                 expired_positions.append(position)
                 logger.debug(
                     f"Found expired contract: {position.symbol} "
-                    f"(expiry: {expiry_date}, user: {position.user_id})"
+                    f"(expiry: {expiry_date}, now: {now.isoformat()}, user: {position.user_id})"
                 )
 
         if not expired_positions:
