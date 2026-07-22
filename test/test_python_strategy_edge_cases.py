@@ -13,7 +13,9 @@ Run:
 import json
 import os
 import sys
+import tempfile
 from datetime import date, datetime
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -474,6 +476,7 @@ def test_subprocess_env_includes_strategy_exchange(ps_module, monkeypatch, tmp_p
     # Build a noop strategy file
     strat = tmp_path / "noop.py"
     strat.write_text("import sys; sys.exit(0)\n")
+    monkeypatch.setattr(ps_module, "STRATEGIES_DIR", tmp_path)
 
     ps_module.STRATEGY_CONFIGS["envtest"] = {
         "name": "EnvTest",
@@ -483,10 +486,12 @@ def test_subprocess_env_includes_strategy_exchange(ps_module, monkeypatch, tmp_p
     }
 
     captured_env = {}
+    captured_cwd = {}
 
     class FakeProc:
         def __init__(self, *a, **kw):
             captured_env.update(kw.get("env") or {})
+            captured_cwd["cwd"] = kw.get("cwd")
             self.pid = 12345
             self._stdout = a
 
@@ -504,6 +509,62 @@ def test_subprocess_env_includes_strategy_exchange(ps_module, monkeypatch, tmp_p
     assert captured_env.get("OPENALGO_STRATEGY_EXCHANGE") == "MCX"
     assert captured_env.get("STRATEGY_ID") == "envtest"
     assert captured_env.get("STRATEGY_NAME") == "EnvTest"
+    assert str(ps_module.APP_ROOT) in captured_env.get("PYTHONPATH", "").split(os.pathsep)
+    assert captured_cwd["cwd"] == str(ps_module.APP_ROOT)
+
+
+def test_ensure_directories_moves_ocs_store_with_temp_fallback(ps_module, monkeypatch, tmp_path):
+    """Permission fallback relocates OCS config storage with strategy files."""
+    from openalgo_config import ConfigStore
+
+    original_mkdir = Path.mkdir
+    blocked_strategies_dir = tmp_path / "blocked" / "strategies"
+    blocked_logs_dir = tmp_path / "blocked" / "logs"
+
+    ps_module.STRATEGIES_DIR = blocked_strategies_dir
+    ps_module.LOGS_DIR = blocked_logs_dir
+    ps_module.OCS_STORE = ConfigStore(tmp_path / "blocked" / "configs")
+
+    def fake_mkdir(self, *args, **kwargs):
+        if self == blocked_strategies_dir:
+            raise PermissionError("blocked")
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+
+    ps_module.ensure_directories()
+
+    temp_base = Path(tempfile.gettempdir()) / "openalgo"
+    assert ps_module.STRATEGIES_DIR == temp_base / "strategies" / "scripts"
+    assert ps_module.LOGS_DIR == temp_base / "log" / "strategies"
+    assert ps_module.OCS_STORE.base_dir == temp_base / "strategies" / "configs"
+
+
+def test_ensure_directories_moves_ocs_store_with_temp_fallback(ps_module, monkeypatch, tmp_path):
+    """Permission fallback relocates OCS config storage with strategy files."""
+    from openalgo_config import ConfigStore
+
+    original_mkdir = Path.mkdir
+    blocked_strategies_dir = tmp_path / "blocked" / "strategies"
+    blocked_logs_dir = tmp_path / "blocked" / "logs"
+
+    ps_module.STRATEGIES_DIR = blocked_strategies_dir
+    ps_module.LOGS_DIR = blocked_logs_dir
+    ps_module.OCS_STORE = ConfigStore(tmp_path / "blocked" / "configs")
+
+    def fake_mkdir(self, *args, **kwargs):
+        if self == blocked_strategies_dir:
+            raise PermissionError("blocked")
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+
+    ps_module.ensure_directories()
+
+    temp_base = Path(tempfile.gettempdir()) / "openalgo"
+    assert ps_module.STRATEGIES_DIR == temp_base / "strategies" / "scripts"
+    assert ps_module.LOGS_DIR == temp_base / "log" / "strategies"
+    assert ps_module.OCS_STORE.base_dir == temp_base / "strategies" / "configs"
 
 
 # ---------------------------------------------------------------------------
