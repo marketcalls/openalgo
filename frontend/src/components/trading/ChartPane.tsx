@@ -1,5 +1,5 @@
 import { ChevronDown, RefreshCw, Search } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -13,7 +13,6 @@ import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/cha
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import {
   type CtxItem,
-  type SearchRow,
   type SymbolView,
   type TerminalCallbacks,
   TradingTerminal,
@@ -21,6 +20,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { SymbolSearchDialog } from './SymbolSearchDialog'
 
 /** TradingView-style camera (screenshot) glyph. */
 function CameraIcon({ className }: { className?: string }) {
@@ -86,12 +86,8 @@ export function ChartPane({ paneId, apiKey, wsUrl, style }: Props) {
   const [qty, setQty] = useState(1)
   const [wsState, setWsState] = useState('connecting')
 
-  // symbol search
-  const [query, setQuery] = useState('')
-  const [rows, setRows] = useState<SearchRow[]>([])
+  // symbol search modal (per-pane; opened from the toolbar symbol pill)
   const [searchOpen, setSearchOpen] = useState(false)
-  const [searchSel, setSearchSel] = useState(-1)
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // right-click order menu
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
@@ -119,7 +115,6 @@ export function ChartPane({ paneId, apiKey, wsUrl, style }: Props) {
         if (!aliveRef.current) return
         setSym(view)
         setQty(1)
-        setQuery(view.symbol)
       },
       onLtp: () => {}, // legend overlay + canvas render the live price
     }
@@ -153,51 +148,6 @@ export function ChartPane({ paneId, apiKey, wsUrl, style }: Props) {
   useEffect(() => {
     terminalRef.current?.applyTheme()
   }, [mode, appMode])
-
-  /* ── symbol search (debounced, all exchanges — pick inline like TradingView) */
-  const runSearch = useCallback(async (q: string) => {
-    const t = terminalRef.current
-    if (!t) return
-    const res = await t.search(q)
-    if (!aliveRef.current) return
-    setRows(res)
-    setSearchSel(-1)
-    setSearchOpen(res.length > 0)
-  }, [])
-
-  const onQueryChange = (v: string) => {
-    setQuery(v)
-    if (searchTimer.current) clearTimeout(searchTimer.current)
-    const q = v.trim()
-    if (q.length < 2) {
-      setRows([])
-      setSearchOpen(false)
-      return
-    }
-    searchTimer.current = setTimeout(() => runSearch(q), 220)
-  }
-
-  const pickSymbol = (row: SearchRow) => {
-    setSearchOpen(false)
-    setRows([])
-    terminalRef.current?.loadSymbol(row)
-  }
-
-  const onSearchKey = (e: React.KeyboardEvent) => {
-    if (!rows.length) return
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setSearchSel((s) => (s + 1) % rows.length)
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setSearchSel((s) => (s - 1 + rows.length) % rows.length)
-    } else if (e.key === 'Enter') {
-      const pick = rows[searchSel >= 0 ? searchSel : 0]
-      if (pick) pickSymbol(pick)
-    } else if (e.key === 'Escape') {
-      setSearchOpen(false)
-    }
-  }
 
   /* ── toolbar actions ──────────────────────────────────────────────────── */
   const changeInterval = (iv: string) => {
@@ -253,51 +203,22 @@ export function ChartPane({ paneId, apiKey, wsUrl, style }: Props) {
     >
       {/* Per-pane control row */}
       <div className="flex flex-wrap items-center gap-1.5 border-b bg-background/60 px-2 py-1.5">
-        {/* Symbol search */}
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onKeyDown={onSearchKey}
-            onFocus={() => rows.length && setSearchOpen(true)}
-            onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
-            placeholder="Search symbol…"
-            className="h-8 w-44 pl-8 text-sm"
-            aria-label="Search symbol"
-          />
-          {searchOpen && rows.length > 0 && (
-            <div className="absolute left-0 top-full z-40 mt-1 max-h-80 w-80 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
-              {rows.map((r, i) => (
-                <button
-                  type="button"
-                  key={`${r.symbol}:${r.exchange}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    pickSymbol(r)
-                  }}
-                  className={cn(
-                    'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm',
-                    i === searchSel ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'
-                  )}
-                >
-                  <span className="font-medium">{r.symbol}</span>
-                  <span className="flex-1 truncate text-xs text-muted-foreground">
-                    {r.name || ''}
-                  </span>
-                  {Number(r.lotsize) > 1 && (
-                    <span className="text-[10px] text-muted-foreground">
-                      lot {String(r.lotsize)}
-                    </span>
-                  )}
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                    {r.exchange}
-                  </span>
-                </button>
-              ))}
-            </div>
+        {/* Symbol pill — opens the TradingView-style search modal for this pane */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-2 font-medium"
+          onClick={() => setSearchOpen(true)}
+          title="Search symbol"
+        >
+          <Search className="h-3.5 w-3.5 opacity-60" />
+          <span className="max-w-[10rem] truncate">{sym?.symbol ?? 'Search symbol'}</span>
+          {sym && (
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {sym.exchange}
+            </span>
           )}
-        </div>
+        </Button>
 
         {/* Timeframe */}
         <DropdownMenu>
@@ -468,6 +389,16 @@ export function ChartPane({ paneId, apiKey, wsUrl, style }: Props) {
           </div>
         )}
       </div>
+
+      <SymbolSearchDialog
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        search={(q, ex, limit) =>
+          terminalRef.current ? terminalRef.current.search(q, ex, limit) : Promise.resolve([])
+        }
+        onPick={(row) => terminalRef.current?.loadSymbol(row)}
+        initialQuery={sym?.symbol}
+      />
     </section>
   )
 }
