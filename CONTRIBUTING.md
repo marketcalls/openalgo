@@ -197,7 +197,7 @@ uv run gunicorn --worker-class eventlet -w 1 app:app
 
 - **Main app**: http://127.0.0.1:5000
 - **React frontend**: http://127.0.0.1:5000/react
-- **Swagger API docs**: http://127.0.0.1:5000/api/docs
+- **REST API documentation**: [docs/api/README.md](docs/api/README.md)
 - **API Analyzer**: http://127.0.0.1:5000/analyzer
 
 ---
@@ -248,7 +248,7 @@ openalgo/
 
 - **`frontend/`**: React 19 SPA with TypeScript, built with Vite and served by Flask via `blueprints/react_app.py`
 - **`broker/`**: Each subdirectory contains a complete broker integration with `api/`, `database/`, `mapping/`, `streaming/`, and `plugin.json`
-- **`restx_api/`**: RESTful API endpoints with automatic Swagger documentation at `/api/docs`
+- **`restx_api/`**: RESTful API endpoints under `/api/v1`; request contracts are maintained in [docs/api/README.md](docs/api/README.md)
 - **`blueprints/`**: Flask route handlers for UI pages and webhooks
 - **`services/`**: Business logic separated from route handlers
 - **`websocket_proxy/`**: Real-time market data streaming via unified WebSocket proxy
@@ -389,7 +389,7 @@ npm run e2e
 # Manual testing:
 # 1. Web UI: http://127.0.0.1:5000
 # 2. React UI: http://127.0.0.1:5000/react
-# 3. API Docs: http://127.0.0.1:5000/api/docs
+# 3. REST API documentation: docs/api/README.md
 # 4. API Analyzer: http://127.0.0.1:5000/analyzer
 ```
 
@@ -743,7 +743,7 @@ def get_historical_data(symbol, interval, start_date, end_date):
 1. Add broker to `VALID_BROKERS` in `.env`
 2. Configure broker credentials in `.env`
 3. Test authentication flow
-4. Test each API endpoint via Swagger UI at `/api/docs`
+4. Test each API endpoint against the request and response contracts in `docs/api/`
 5. Test WebSocket streaming (if supported)
 6. Validate error handling
 
