@@ -228,7 +228,7 @@ openalgo/
 │   ├── auth.py               # Authentication routes
 │   ├── react_app.py          # Serves React SPA from frontend/dist/
 │   └── ...
-├── broker/                   # Broker integrations (24+ brokers)
+├── broker/                   # Broker integrations (34 brokers)
 │   ├── zerodha/              # Reference implementation
 │   ├── dhan/                 # Modern API design
 │   ├── angel/                # AngelOne integration
@@ -252,7 +252,7 @@ openalgo/
 - **`blueprints/`**: Flask route handlers for UI pages and webhooks
 - **`services/`**: Business logic separated from route handlers
 - **`websocket_proxy/`**: Real-time market data streaming via unified WebSocket proxy
-- **`database/`**: 5 separate databases for isolation (main, logs, latency, sandbox, historify)
+- **`database/`**: 6 separate databases for isolation (main, logs, latency, health, sandbox, historify)
 
 ---
 
