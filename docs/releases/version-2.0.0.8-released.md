@@ -14,7 +14,7 @@ This release covers **6 commits** since v2.0.0.7. The headline addition is end-t
 * **Telegram `/StopPython` command + `/closeall` enhancement** — Lists running Python strategies inline; new **Close all + Stop strategies** button on `/closeall` flattens positions and stops every running strategy in one flow. (#1231)
 * **Historify Parquet export now aggregates computed intervals** — Selecting `Parquet` with `5m` / `15m` / `30m` / `1h` / `W` / `M` / `Q` / `Y` no longer silently downgrades to ZIP. The exporter now uses the same DuckDB time-bucket / daily-aggregation logic the ZIP path has used. (#917)
 * **Codebase-wide bare-except sweep** — 82 `except:` clauses across 45 files replaced with `except Exception:` (#1039). Restores correct shutdown-signal handling under Gunicorn / Docker / systemd; aligns with PEP 8 / Ruff `E722`.
-* **🔴 Critical: Docker `.env` `:ro` mount removed; `APP_KEY` auto-rotation no longer crashes legacy Docker installs.** Affects every Docker user upgrading from v2.0.0.5 or earlier.
+* ** Critical: Docker `.env` `:ro` mount removed; `APP_KEY` auto-rotation no longer crashes legacy Docker installs.** Affects every Docker user upgrading from v2.0.0.5 or earlier.
 
 ***
 
@@ -33,7 +33,7 @@ Pilot APIs (currently Zerodha + Dhan; other brokers to follow):
 
 Schema highlights: flat place/modify body with `triggerprice_sl` and `triggerprice_tg`, `MIS` rejected, `last_price` fetched server-side; Dhan SINGLE/OCO mapping with per-leg modify; Zerodha `MARKET` pricetype auto-converted to MPP-protected `LIMIT` (Kite GTTs cannot carry MARKET).
 
-⚠️ **Database migration is mandatory on upgrade.** Run before starting the new build:
+**Database migration is mandatory on upgrade.** Run before starting the new build:
 
 ```bash
 uv run python upgrade/migrate_all.py
@@ -51,15 +51,15 @@ API docs: <https://docs.openalgo.in/api-documentation/v1/orders-api/placegttorde
 
 * `53334a0c` — `feat(telegram): add /stoppython and "Close all + Stop strategies" action`
 
-New `/stoppython` command snapshots `RUNNING_STRATEGIES` from `blueprints/python_strategy.py` and renders one inline button per running strategy plus a **Stop All** button and **Cancel**. Per-strategy and bulk actions both prompt for confirmation before terminating, then call `stop_strategy_process()` — the same code path the UI's Stop button uses (`SIGTERM` → `SIGKILL` on Linux/Mac, `taskkill /F /T` on Windows). The strategy-id ↔ button-index map is held in `context.user_data["stoppy_list"]` so `callback_data` stays under Telegram's 64-byte cap regardless of how long strategy IDs get. If nothing is running, the bot replies `ℹ️ No Python strategies running.` and exits cleanly.
+New `/stoppython` command snapshots `RUNNING_STRATEGIES` from `blueprints/python_strategy.py` and renders one inline button per running strategy plus a **Stop All** button and **Cancel**. Per-strategy and bulk actions both prompt for confirmation before terminating, then call `stop_strategy_process()` — the same code path the UI's Stop button uses (`SIGTERM` → `SIGKILL` on Linux/Mac, `taskkill /F /T` on Windows). The strategy-id ↔ button-index map is held in `context.user_data["stoppy_list"]` so `callback_data` stays under Telegram's 64-byte cap regardless of how long strategy IDs get. If nothing is running, the bot replies `ℹ No Python strategies running.` and exits cleanly.
 
 `/closeall` confirmation now offers a third button:
 
 | Button | Action |
 |--------|--------|
-| ✅ Yes, close all | (existing) flattens every open position via `closeposition`. |
-| ⚠️ Close all + Stop strategies | Closes all positions, then iterates `RUNNING_STRATEGIES` and terminates each via `stop_strategy_process()`. Reports a combined summary (positions closed, strategies stopped, failures). |
-| ❌ Cancel | No-op. |
+| Yes, close all | (existing) flattens every open position via `closeposition`. |
+| Close all + Stop strategies | Closes all positions, then iterates `RUNNING_STRATEGIES` and terminates each via `stop_strategy_process()`. Reports a combined summary (positions closed, strategies stopped, failures). |
+| Cancel | No-op. |
 
 Help text updated; `docs/design/43-telegram-bot/README.md` brought back in sync with the actually-registered command names (`/orderbook`, `/tradebook`, `/chart`, `/mode`, `/menu`, `/link`, `/unlink`).
 
@@ -147,7 +147,7 @@ sudo chmod 600 .env
 docker compose up -d
 ```
 
-⚠️ **Do NOT manually rotate `API_KEY_PEPPER` on a populated install.** The auto-rotation in `utils/env_check.py` deliberately declines to touch the pepper when the database has users — rotating it would invalidate every Argon2 password hash and every Fernet-encrypted broker auth/feed token / TradingView API key, none of which can be recovered. If you genuinely need to rotate the pepper (rare), use the dedicated migration which handles re-encryption and the required password reset:
+**Do NOT manually rotate `API_KEY_PEPPER` on a populated install.** The auto-rotation in `utils/env_check.py` deliberately declines to touch the pepper when the database has users — rotating it would invalidate every Argon2 password hash and every Fernet-encrypted broker auth/feed token / TradingView API key, none of which can be recovered. If you genuinely need to rotate the pepper (rare), use the dedicated migration which handles re-encryption and the required password reset:
 
 ```bash
 uv run python upgrade/rotate_pepper.py

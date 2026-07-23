@@ -17,7 +17,7 @@ Or click **Dashboard** in the navigation menu.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  OpenAlgo                              🔔  👤 Admin  [Logout]               │
+│  OpenAlgo  Admin  [Logout]               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -34,7 +34,7 @@ Or click **Dashboard** in the navigation menu.
 │  │    Broker Status             │ │    Quick Actions                  │    │
 │  │                              │ │                                   │    │
 │  │  Broker: Zerodha            │ │  [Login to Broker]               │    │
-│  │  Status: 🟢 Connected       │ │  [Place Order]                   │    │
+│  │  Status: Connected       │ │  [Place Order]                   │    │
 │  │  User: AB1234               │ │  [View Positions]                │    │
 │  │  Last Login: 9:05 AM        │ │  [API Playground]                │    │
 │  └──────────────────────────────┘ └──────────────────────────────────┘    │
@@ -62,9 +62,9 @@ Four key metrics displayed as cards:
 | **Day's P&L** | Today's profit or loss |
 
 **Color Coding**:
-- 🟢 Green = Positive/Profit
-- 🔴 Red = Negative/Loss
-- ⚪ Gray = Neutral/Zero
+- Green = Positive/Profit
+- Red = Negative/Loss
+- Gray = Neutral/Zero
 
 ### 2. Broker Status
 
@@ -78,9 +78,9 @@ Shows your broker connection:
 | Last Login | When you logged in |
 
 **Status Indicators**:
-- 🟢 **Connected**: Ready to trade
-- 🔴 **Disconnected**: Need to login
-- 🟡 **Reconnecting**: Attempting to reconnect
+- **Connected**: Ready to trade
+- **Disconnected**: Need to login
+- **Reconnecting**: Attempting to reconnect
 
 ### 3. Quick Actions
 
@@ -110,27 +110,27 @@ The sidebar provides access to all features:
 
 ```
 ┌──────────────────────┐
-│  📊 Dashboard        │  ← You are here
-│  📈 Positions        │
-│  📋 Order Book       │
-│  📜 Trade Book       │
-│  💼 Holdings         │
-│  💰 Funds            │
+│ Dashboard        │  ← You are here
+│ Positions        │
+│ Order Book       │
+│ Trade Book       │
+│ Holdings         │
+│ Funds            │
 │  ──────────────────  │
-│  🔑 API Key          │
-│  🎮 Playground       │
+│ API Key          │
+│ Playground       │
 │  ──────────────────  │
-│  📺 TradingView      │
-│  📉 ChartInk         │
-│  🔄 Flow Builder     │
-│  🐍 Python Strategy  │
+│ TradingView      │
+│ ChartInk         │
+│ Flow Builder     │
+│ Python Strategy  │
 │  ──────────────────  │
-│  📊 PnL Tracker      │
-│  ⏱️ Latency Monitor  │
-│  📝 Traffic Logs     │
+│ PnL Tracker      │
+│  Latency Monitor  │
+│ Traffic Logs     │
 │  ──────────────────  │
-│  ⚙️ Settings         │
-│  🔒 Security         │
+│ Settings         │
+│ Security         │
 └──────────────────────┘
 ```
 
@@ -172,7 +172,7 @@ The dashboard automatically updates:
 
 ### Manual Refresh
 
-Click the refresh icon (🔄) to force update all data.
+Click the refresh icon ( ) to force update all data.
 
 ## Analyzer Mode Indicator
 
@@ -180,7 +180,7 @@ When Analyzer (sandbox testing) mode is ON:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  ⚠️ ANALYZER MODE ACTIVE - Sandbox testing mode                 │
+│ ANALYZER MODE ACTIVE - Sandbox testing mode                 │
 │  Sandbox Balance: ₹1,00,00,000                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -206,7 +206,7 @@ On mobile devices, the dashboard adapts:
 │  │5L │ │+2K│       │
 │  └───┘ └───┘       │
 │                     │
-│  Broker: 🟢 Online  │
+│  Broker: Online  │
 │                     │
 │  [≡ Menu]           │
 └─────────────────────┘
@@ -267,23 +267,23 @@ On mobile devices, the dashboard adapts:
 
 ### Morning Routine
 
-1. ☐ Open OpenAlgo
-2. ☐ Login to broker
-3. ☐ Verify "Connected" status
-4. ☐ Check available margin
-5. ☐ Review any pending orders
+1. Open OpenAlgo
+2. Login to broker
+3. Verify "Connected" status
+4. Check available margin
+5. Review any pending orders
 
 ### During Trading
 
-1. ☐ Monitor P&L periodically
-2. ☐ Check for failed orders
-3. ☐ Watch position count
+1. Monitor P&L periodically
+2. Check for failed orders
+3. Watch position count
 
 ### End of Day
 
-1. ☐ Review Day's P&L
-2. ☐ Check all orders executed
-3. ☐ Verify positions closed (if intraday)
+1. Review Day's P&L
+2. Check all orders executed
+3. Verify positions closed (if intraday)
 
 ---
 

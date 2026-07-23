@@ -67,7 +67,7 @@ def test_priority_alert():
     payload = {
         "apikey": API_KEY,
         "username": USERNAME,
-        "message": "🚨 URGENT: High priority alert message!",
+        "message": "URGENT: High priority alert message!",
         "priority": 10,
     }
 
@@ -94,7 +94,7 @@ def test_formatted_alert():
     payload = {
         "apikey": API_KEY,
         "username": USERNAME,
-        "message": "📊 Daily Trading Summary\n─────────────────────\n✅ Winning Trades: 5\n❌ Losing Trades: 1\n💰 Net P&L: +₹12,500\n📈 Win Rate: 83%",
+        "message": "Daily Trading Summary\n─────────────────────\n Winning Trades: 5\n Losing Trades: 1\n Net P&L: +₹12,500\n Win Rate: 83%",
         "priority": 5,
     }
 
@@ -121,7 +121,7 @@ def test_price_alert():
     payload = {
         "apikey": API_KEY,
         "username": USERNAME,
-        "message": "🔔 Price Alert\nNIFTY crossed 24000!\nCurrent: 24,015.50\nChange: +1.2%",
+        "message": "Price Alert\nNIFTY crossed 24000!\nCurrent: 24,015.50\nChange: +1.2%",
         "priority": 8,
     }
 
@@ -148,7 +148,7 @@ def test_trade_signal():
     payload = {
         "apikey": API_KEY,
         "username": USERNAME,
-        "message": "📈 BUY Signal Detected\n\nSymbol: BANKNIFTY 48000 CE\nEntry: ₹245.50\nTarget: ₹265.00\nStop Loss: ₹238.00\nRisk-Reward: 1:2.5",
+        "message": "BUY Signal Detected\n\nSymbol: BANKNIFTY 48000 CE\nEntry: ₹245.50\nTarget: ₹265.00\nStop Loss: ₹238.00\nRisk-Reward: 1:2.5",
         "priority": 9,
     }
 
@@ -175,7 +175,7 @@ def test_risk_alert():
     payload = {
         "apikey": API_KEY,
         "username": USERNAME,
-        "message": "⚠️ Risk Alert\n\nDaily loss limit approaching\nCurrent Loss: -₹22,500\nLimit: -₹25,000\n\nReduce position sizes!",
+        "message": "Risk Alert\n\nDaily loss limit approaching\nCurrent Loss: -₹22,500\nLimit: -₹25,000\n\nReduce position sizes!",
         "priority": 10,
     }
 

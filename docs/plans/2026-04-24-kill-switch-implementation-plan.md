@@ -457,7 +457,7 @@ Kill switch is ACTIVE.
 Activated at 10:30 IST by UI. Reason: "manual test".
 To unlock, tap the button below.
 
-[🔓 Confirm UNLOCK]    [Cancel]
+[ Confirm UNLOCK]    [Cancel]
 ```
 
 Callback query handler enforces the 60-second min-unlock window.
@@ -467,7 +467,7 @@ Callback query handler enforces the 60-second min-unlock window.
 On activation, push to the user:
 
 ```
-🛑 KILL SWITCH ACTIVATED
+KILL SWITCH ACTIVATED
 Triggered by: Telegram (@username)
 Reason: panic test
 

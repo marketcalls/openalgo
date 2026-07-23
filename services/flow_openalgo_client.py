@@ -565,7 +565,7 @@ class FlowOpenAlgoClient:
             # Format the message with timestamp
             timestamp = datetime.now().strftime("%H:%M:%S")
             formatted_message = (
-                f"📢 *Flow Alert*\n─────────────────────\n{message}\n\n⏰ Time: {timestamp}"
+                f"*Flow Alert*\n─────────────────────\n{message}\n\nTime: {timestamp}"
             )
 
             # Submit to the shared telegram_alert_service thread pool (non-blocking).

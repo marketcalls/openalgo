@@ -134,7 +134,7 @@ def book_pnl(pnl_amount, description=""):
 │  2. Check Available Balance                                  │
 │     Available: ₹1,00,00,000                                  │
 │     Required: ₹62,000                                        │
-│     ✓ Sufficient                                             │
+│ Sufficient                                             │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼

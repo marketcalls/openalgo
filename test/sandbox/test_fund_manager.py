@@ -34,20 +34,20 @@ def test_fund_initialization():
 
     # Initialize funds
     success, message = initialize_user_funds(test_user)
-    print(f"✓ Initialize funds: {message}")
+    print(f"Initialize funds: {message}")
     assert success, "Fund initialization failed"
 
     # Get funds
     funds = get_user_funds(test_user)
-    print(f"✓ Available cash: ₹{funds['availablecash']:,.2f}")
+    print(f"Available cash: ₹{funds['availablecash']:,.2f}")
     assert funds["availablecash"] == 10000000.00, "Starting capital should be ₹1 Crore"
 
     # Try initializing again - should not fail
     success, message = initialize_user_funds(test_user)
-    print(f"✓ Re-initialize funds: {message}")
+    print(f"Re-initialize funds: {message}")
     assert success, "Re-initialization should not fail"
 
-    print("✅ PASSED: Fund Initialization\n")
+    print("PASSED: Fund Initialization\n")
 
 
 def test_margin_operations():
@@ -65,39 +65,39 @@ def test_margin_operations():
     # Get initial balance
     funds = fm.get_funds()
     initial_balance = Decimal(str(funds["availablecash"]))
-    print(f"✓ Initial balance: ₹{initial_balance:,.2f}")
+    print(f"Initial balance: ₹{initial_balance:,.2f}")
 
     # Block margin
     margin_amount = Decimal("100000.00")
     success, message = fm.block_margin(margin_amount, "Test trade")
-    print(f"✓ Block margin: {message}")
+    print(f"Block margin: {message}")
     assert success, "Margin blocking failed"
 
     funds = fm.get_funds()
     available = Decimal(str(funds["availablecash"]))
     used = Decimal(str(funds["utiliseddebits"]))
 
-    print(f"✓ Available after block: ₹{available:,.2f}")
-    print(f"✓ Used margin: ₹{used:,.2f}")
+    print(f"Available after block: ₹{available:,.2f}")
+    print(f"Used margin: ₹{used:,.2f}")
     assert available == initial_balance - margin_amount, "Available balance incorrect"
     assert used == margin_amount, "Used margin incorrect"
 
     # Release margin with profit
     profit = Decimal("5000.00")
     success, message = fm.release_margin(margin_amount, profit, "Test trade complete")
-    print(f"✓ Release margin: {message}")
+    print(f"Release margin: {message}")
     assert success, "Margin release failed"
 
     funds = fm.get_funds()
     final_balance = Decimal(str(funds["availablecash"]))
     realized_pnl = Decimal(str(funds["m2mrealized"]))
 
-    print(f"✓ Final balance: ₹{final_balance:,.2f}")
-    print(f"✓ Realized P&L: ₹{realized_pnl:,.2f}")
+    print(f"Final balance: ₹{final_balance:,.2f}")
+    print(f"Realized P&L: ₹{realized_pnl:,.2f}")
     assert final_balance == initial_balance + profit, "Final balance incorrect"
     assert realized_pnl == profit, "Realized P&L incorrect"
 
-    print("✅ PASSED: Margin Operations\n")
+    print("PASSED: Margin Operations\n")
 
 
 def test_insufficient_funds():
@@ -115,11 +115,11 @@ def test_insufficient_funds():
     # Try to block more than available
     excessive_amount = Decimal("15000000.00")  # More than 1 Crore
     success, message = fm.block_margin(excessive_amount, "Excessive trade")
-    print(f"✓ Block excessive margin: {message}")
+    print(f"Block excessive margin: {message}")
     assert not success, "Should fail for insufficient funds"
     assert "Insufficient funds" in message, "Error message should indicate insufficient funds"
 
-    print("✅ PASSED: Insufficient Funds\n")
+    print("PASSED: Insufficient Funds\n")
 
 
 def test_leverage_calculations():
@@ -168,12 +168,12 @@ def test_leverage_calculations():
         )
 
         if margin:
-            print(f"✓ {test_case['name']}")
+            print(f"{test_case['name']}")
             print(f"  Trade value: ₹{trade_value:,.2f}")
             print(f"  Required margin: ₹{float(margin):,.2f}")
             print(f"  Expected margin: ₹{expected_margin:,.2f}")
 
-    print("✅ PASSED: Leverage Calculations\n")
+    print("PASSED: Leverage Calculations\n")
 
 
 def test_unrealized_pnl():
@@ -191,19 +191,19 @@ def test_unrealized_pnl():
     # Update unrealized P&L
     unrealized = Decimal("25000.00")
     success, message = fm.update_unrealized_pnl(unrealized)
-    print(f"✓ Update unrealized P&L: {message}")
+    print(f"Update unrealized P&L: {message}")
     assert success, "Unrealized P&L update failed"
 
     funds = fm.get_funds()
     m2m = Decimal(str(funds["m2munrealized"]))
     total_pnl = Decimal(str(funds["totalpnl"]))
 
-    print(f"✓ Unrealized P&L: ₹{m2m:,.2f}")
-    print(f"✓ Total P&L: ₹{total_pnl:,.2f}")
+    print(f"Unrealized P&L: ₹{m2m:,.2f}")
+    print(f"Total P&L: ₹{total_pnl:,.2f}")
     assert m2m == unrealized, "Unrealized P&L incorrect"
     assert total_pnl == unrealized, "Total P&L incorrect"
 
-    print("✅ PASSED: Unrealized P&L\n")
+    print("PASSED: Unrealized P&L\n")
 
 
 def cleanup_test_data(user_id):
@@ -229,14 +229,14 @@ def run_all_tests():
         test_unrealized_pnl()
 
         print("\n" + "=" * 50)
-        print("✅ ALL TESTS PASSED")
+        print("ALL TESTS PASSED")
         print("=" * 50 + "\n")
 
     except AssertionError as e:
-        print(f"\n❌ TEST FAILED: {e}\n")
+        print(f"\n TEST FAILED: {e}\n")
         raise
     except Exception as e:
-        print(f"\n❌ TEST ERROR: {e}\n")
+        print(f"\n TEST ERROR: {e}\n")
         raise
 
 

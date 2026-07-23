@@ -106,15 +106,15 @@ Instance for domain.com already exists. Update code only? (y=update, n=skip, r=r
 |--------|----------|
 | **y (Update)** | Pulls latest code, preserves `.env` file (passwords remain valid), skips all config prompts |
 | **n (Skip)** | Skips this domain entirely |
-| **r (Reinstall)** | Fresh install with new config (⚠️ regenerates security keys, invalidates existing passwords) |
+| **r (Reinstall)** | Fresh install with new config ( regenerates security keys, invalidates existing passwords) |
 
 ### What Gets Preserved During Updates
 
 When you choose **Update (y)**:
-- ✅ `.env` file (APP_KEY, PEPPER, broker credentials)
-- ✅ User passwords and login sessions
-- ✅ SSL certificates
-- ✅ Database (stored in Docker volumes)
+- `.env` file (APP_KEY, PEPPER, broker credentials)
+- User passwords and login sessions
+- SSL certificates
+- Database (stored in Docker volumes)
 
 ### Portainer Smart Detection
 

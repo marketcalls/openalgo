@@ -5,7 +5,7 @@ Description: Backtests 10/20 EMA crossover strategy on RELIANCE 5m data
              Data fetched from OpenAlgo API, backtested with VectorBT
 """
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 from datetime import datetime
 
@@ -82,9 +82,9 @@ def fetch_historical_data():
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
 
-    print(f"✅ Fetched {len(df)} candles")
-    print(f"📅 Date range: {df.index.min()} to {df.index.max()}")
-    print(f"📊 Columns: {list(df.columns)}")
+    print(f"Fetched {len(df)} candles")
+    print(f"Date range: {df.index.min()} to {df.index.max()}")
+    print(f"Columns: {list(df.columns)}")
 
     return df
 
@@ -112,8 +112,8 @@ def run_backtest(df: pd.DataFrame):
     exits = fast_ema.ma_crossed_below(slow_ema)
 
     # Print signal counts
-    print(f"📈 Total Entry Signals: {entries.sum()}")
-    print(f"📉 Total Exit Signals: {exits.sum()}")
+    print(f"Total Entry Signals: {entries.sum()}")
+    print(f"Total Exit Signals: {exits.sum()}")
 
     # Create portfolio
     portfolio = vbt.Portfolio.from_signals(
@@ -140,7 +140,7 @@ def print_backtest_stats(portfolio):
     stats = portfolio.stats()
 
     print(f"\n{'=' * 60}")
-    print("📊 BACKTEST STATISTICS")
+    print("BACKTEST STATISTICS")
     print(f"{'=' * 60}")
     print(stats)
     print(f"{'=' * 60}\n")
@@ -155,7 +155,7 @@ def get_trade_details(portfolio):
     trades = portfolio.trades.records_readable
 
     print(f"\n{'=' * 60}")
-    print("📋 TRADE DETAILS")
+    print("TRADE DETAILS")
     print(f"{'=' * 60}")
     print(f"Total Trades: {len(trades)}")
     print("\nFirst 10 Trades:")
@@ -382,17 +382,17 @@ if __name__ == "__main__":
         # Save as HTML
         output_file = "reliance_ema_backtest.html"
         fig.write_html(output_file)
-        print(f"📈 Chart saved to: {output_file}")
+        print(f"Chart saved to: {output_file}")
 
         # Show the chart
         fig.show()
 
         # Also show VectorBT's built-in plot
-        print("\n📊 Opening VectorBT Portfolio Plot...")
+        print("\n Opening VectorBT Portfolio Plot...")
         portfolio.plot().show()
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         import traceback
 
         traceback.print_exc()

@@ -2,7 +2,7 @@ import os
 
 from openalgo import api
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 # ------------------------------------------
 # Initialize API client

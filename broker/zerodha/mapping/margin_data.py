@@ -228,10 +228,10 @@ def parse_margin_response(response_data):
             )
             logger.info("")
             logger.warning(
-                "⚠ IMPORTANT: Zerodha's basket initial.total is ALREADY partially optimized!"
+                "IMPORTANT: Zerodha's basket initial.total is ALREADY partially optimized!"
             )
             logger.warning(
-                "⚠ For TRUE margin benefit matching web UI, query each order separately first."
+                "For TRUE margin benefit matching web UI, query each order separately first."
             )
             logger.info("=" * 80)
 

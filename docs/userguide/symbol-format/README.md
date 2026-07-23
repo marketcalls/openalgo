@@ -477,30 +477,30 @@ POST /api/v1/search
 ### Mistake 1: Wrong Date Format
 
 ```
-❌ NIFTY25JAN2521500CE      (missing day)
-❌ NIFTYJAN2521500CE        (missing day and year format)
-✅ NIFTY30JAN2521500CE      (correct)
+NIFTY25JAN2521500CE      (missing day)
+NIFTYJAN2521500CE        (missing day and year format)
+NIFTY30JAN2521500CE      (correct)
 ```
 
 ### Mistake 2: Wrong Exchange Code
 
 ```
-❌ symbol: "NIFTY30JAN2521500CE", exchange: "NSE"  (wrong exchange)
-✅ symbol: "NIFTY30JAN2521500CE", exchange: "NFO"  (correct)
+symbol: "NIFTY30JAN2521500CE", exchange: "NSE"  (wrong exchange)
+symbol: "NIFTY30JAN2521500CE", exchange: "NFO"  (correct)
 ```
 
 ### Mistake 3: Wrong Product Type
 
 ```
-❌ Options with product: "CNC"  (CNC is for equity only)
-✅ Options with product: "NRML" (correct for F&O)
+Options with product: "CNC"  (CNC is for equity only)
+Options with product: "NRML" (correct for F&O)
 ```
 
 ### Mistake 4: Case Sensitivity
 
 ```
-❌ "sbin", "Sbin"  (lowercase/mixed case)
-✅ "SBIN"          (uppercase - correct)
+"sbin", "Sbin"  (lowercase/mixed case)
+"SBIN"          (uppercase - correct)
 ```
 
 ## Troubleshooting

@@ -20,7 +20,7 @@ om = OrderManager(user_id)
 # Get orderbook
 success, response, code = om.get_orderbook()
 
-print("📋 Orderbook API Response")
+print("Orderbook API Response")
 print("=" * 60)
 print(f"Success: {success}")
 print(f"Status Code: {code}")
@@ -49,7 +49,7 @@ if "data" in response:
     ]
 
     if rejected_orders:
-        print(f"\n  ❌ Rejected Orders: {len(rejected_orders)}")
+        print(f"\n Rejected Orders: {len(rejected_orders)}")
         for order in rejected_orders:
             print(f"\n    Order ID: {order['orderid']}")
             print(f"    Symbol: {order['symbol']}")
@@ -59,12 +59,12 @@ if "data" in response:
             print(f"    Status: {order['order_status']}")
             print(f"    Rejection Reason: {order.get('rejection_reason', 'N/A')}")
     else:
-        print("\n  ✅ No rejected orders")
+        print("\n No rejected orders")
 
     # Check statistics
     if "statistics" in response:
         stats = response["statistics"]
-        print("\n  📊 Statistics:")
+        print("\n Statistics:")
         print(f"    Total Buy Orders: {stats.get('total_buy_orders', 0)}")
         print(f"    Total Sell Orders: {stats.get('total_sell_orders', 0)}")
         print(f"    Open Orders: {stats.get('total_open_orders', 0)}")

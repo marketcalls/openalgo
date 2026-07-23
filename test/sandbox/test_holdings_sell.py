@@ -139,16 +139,16 @@ def test_partial_holdings_sell():
 
     ok = True
     if not holding or holding.quantity != 50:
-        print(f"❌ holding should be 50, got {holding.quantity if holding else None}")
+        print(f"holding should be 50, got {holding.quantity if holding else None}")
         ok = False
     if short is not None:
-        print(f"❌ a phantom short position was created: qty {short.quantity}")
+        print(f"a phantom short position was created: qty {short.quantity}")
         ok = False
     if _balance() != expected_balance:
-        print(f"❌ proceeds not credited: {_balance()} != {expected_balance}")
+        print(f"proceeds not credited: {_balance()} != {expected_balance}")
         ok = False
     if ok:
-        print("✅ PASS: holding 200→50, no short, ₹375000 proceeds credited")
+        print("PASS: holding 200→50, no short, ₹375000 proceeds credited")
     return ok
 
 
@@ -168,13 +168,13 @@ def test_full_holdings_sell():
 
     ok = True
     if holding is not None and holding.quantity != 0:
-        print(f"❌ holding should be gone/zero, got {holding.quantity}")
+        print(f"holding should be gone/zero, got {holding.quantity}")
         ok = False
     if short is not None:
-        print(f"❌ a phantom short position was created: qty {short.quantity}")
+        print(f"a phantom short position was created: qty {short.quantity}")
         ok = False
     if ok:
-        print("✅ PASS: holding fully sold, no short position")
+        print("PASS: holding fully sold, no short position")
     return ok
 
 
@@ -200,22 +200,22 @@ def test_position_then_holdings_sell():
 
     ok = True
     if not holding or holding.quantity != 30:
-        print(f"❌ holding should be 30, got {holding.quantity if holding else None}")
+        print(f"holding should be 30, got {holding.quantity if holding else None}")
         ok = False
     if short is not None:
-        print(f"❌ a phantom short position was created: qty {short.quantity}")
+        print(f"a phantom short position was created: qty {short.quantity}")
         ok = False
     if long_pos is not None:
-        print(f"❌ long position should be closed, still open at {long_pos.quantity}")
+        print(f"long position should be closed, still open at {long_pos.quantity}")
         ok = False
     if ok:
-        print("✅ PASS: position closed (50), holding 100→30, proceeds for 70")
+        print("PASS: position closed (50), holding 100→30, proceeds for 70")
     return ok
 
 
 if __name__ == "__main__":
     init_db()
-    print("\n🧪 TESTING SANDBOX HOLDINGS SELL (issue #1640)")
+    print("\n TESTING SANDBOX HOLDINGS SELL (issue #1640)")
 
     tests = [
         test_partial_holdings_sell,

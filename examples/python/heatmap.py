@@ -12,7 +12,7 @@ client = api(
     host="http://127.0.0.1:5000",
 )
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 # ---------------------------------------------------
 # NIFTY 50 SYMBOLS
@@ -78,7 +78,7 @@ response = client.multiquotes(symbols=quote_symbols)
 
 rows = []
 
-print("\n📊 Live Market Data:")
+print("\n Live Market Data:")
 for item in response["results"]:
     symbol = item["symbol"]
     ltp = item["data"]["ltp"]
@@ -96,7 +96,7 @@ for item in response["results"]:
 # ---------------------------------------------------
 df = pd.DataFrame(rows, columns=["Symbol", "Change"])
 
-# 🔥 SORT: TOP GAINERS → BOTTOM LOSERS
+# SORT: TOP GAINERS → BOTTOM LOSERS
 df = df.sort_values("Change", ascending=False).reset_index(drop=True)
 
 # Grid: 10 columns x 5 rows
@@ -119,7 +119,7 @@ fig.update_traces(
 )
 
 fig.update_layout(
-    title="🔥 NIFTY 50 Sorted Heatmap (%)",
+    title="NIFTY 50 Sorted Heatmap (%)",
     xaxis=dict(type="category", title=""),
     yaxis=dict(type="category", autorange="reversed", title=""),
     template="plotly_dark",
@@ -131,4 +131,4 @@ fig.update_layout(
 # ---------------------------------------------------
 fig.write_image("nifty50_heatmap.png", width=1200, height=600, scale=2)
 
-print("\n✅ Heatmap saved as nifty50_heatmap.png")
+print("\n Heatmap saved as nifty50_heatmap.png")

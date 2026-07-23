@@ -90,11 +90,11 @@ def initialize_scheduler():
 │  Stop Time:  [15:15] IST                                    │
 │                                                              │
 │  Trading Days:                                               │
-│  [✓] Monday                                                  │
-│  [✓] Tuesday                                                 │
-│  [✓] Wednesday                                               │
-│  [✓] Thursday                                                │
-│  [✓] Friday                                                  │
+│  [ ] Monday                                                  │
+│  [ ] Tuesday                                                 │
+│  [ ] Wednesday                                               │
+│  [ ] Thursday                                                │
+│  [ ] Friday                                                  │
 │  [ ] Saturday                                                │
 │                                                              │
 │  [Save Schedule] [Clear Schedule]                           │

@@ -382,7 +382,7 @@ class AliceBlueWebSocket:
             # Use subscription symbol if available, otherwise use broker symbol from data
             if original_instrument and hasattr(original_instrument, "symbol"):
                 symbol = original_instrument.symbol
-                logger.info(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
+                logger.info(f"Using subscription symbol: {symbol} for {subscription_key}")
             else:
                 # Fallback to broker symbol from AliceBlue data
                 symbol = data.get("ts", f"TOKEN_{token}")
@@ -489,7 +489,7 @@ class AliceBlueWebSocket:
                 self.last_quotes[key] = quote
 
             logger.info(
-                f"✓ Stored quote data for {key} with LTP {quote.get('ltp', 'N/A')}, Symbol: {quote.get('symbol', 'N/A')}, OI: {quote.get('open_interest', 'N/A')}"
+                f"Stored quote data for {key} with LTP {quote.get('ltp', 'N/A')}, Symbol: {quote.get('symbol', 'N/A')}, OI: {quote.get('open_interest', 'N/A')}"
             )
 
             # Log the first time we get data for a token
@@ -522,7 +522,7 @@ class AliceBlueWebSocket:
             # Use subscription symbol if available, otherwise use broker symbol from data
             if original_instrument and hasattr(original_instrument, "symbol"):
                 symbol = original_instrument.symbol
-                logger.info(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
+                logger.info(f"Using subscription symbol: {symbol} for {subscription_key}")
             else:
                 # Fallback to broker symbol from AliceBlue data
                 symbol = data.get("ts", f"TOKEN_{token}")
@@ -675,7 +675,7 @@ class AliceBlueWebSocket:
                 self.last_depth[key] = depth
 
             logger.info(
-                f"✓ Stored depth data for {key} with {len(depth.get('bids', []))} bid levels and {len(depth.get('asks', []))} ask levels, Symbol: {depth.get('symbol', 'N/A')}, OI: {depth.get('open_interest', 'N/A')}"
+                f"Stored depth data for {key} with {len(depth.get('bids', []))} bid levels and {len(depth.get('asks', []))} ask levels, Symbol: {depth.get('symbol', 'N/A')}, OI: {depth.get('open_interest', 'N/A')}"
             )
 
             # Log the first time we get data for a token

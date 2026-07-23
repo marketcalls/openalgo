@@ -27,13 +27,13 @@ def get_user_input(prompt):
     try:
         return input(prompt).strip()
     except (EOFError, KeyboardInterrupt):
-        print("\n❌ Operation cancelled by user")
+        print("\n Operation cancelled by user")
         sys.exit(0)
 
 
 def display_symbol_loading_menu():
     """Display interactive symbol loading menu"""
-    print("\n🎯 SYMBOL LOADING OPTIONS")
+    print("\n SYMBOL LOADING OPTIONS")
     print("=" * 50)
     print("1. Load ALL symbols from CSV")
     print("2. Load specific number of symbols")
@@ -50,7 +50,7 @@ def get_symbol_loading_choice():
         if choice in ["1", "2", "3"]:
             return int(choice)
         else:
-            print("❌ Invalid choice. Please select 1, 2, or 3.")
+            print("Invalid choice. Please select 1, 2, or 3.")
             print()
 
 
@@ -61,28 +61,28 @@ def get_symbol_count():
             count_input = get_user_input("Enter number of symbols to load (e.g., 1500, 2500): ")
             count = int(count_input)
             if count <= 0:
-                print("❌ Please enter a positive number.")
+                print("Please enter a positive number.")
                 continue
             return count
         except ValueError:
-            print("❌ Please enter a valid number.")
+            print("Please enter a valid number.")
 
 
 def load_test_symbols_interactive():
     """Load symbols based on user's interactive choice"""
     choice = get_symbol_loading_choice()
 
-    print("\n📊 Processing your selection...")
+    print("\n Processing your selection...")
 
     if choice == 1:
-        print("🔄 Loading ALL symbols from CSV...")
+        print("Loading ALL symbols from CSV...")
         return load_symbols_from_csv(limit=None)
     elif choice == 2:
         count = get_symbol_count()
-        print(f"🔄 Loading {count} symbols from CSV...")
+        print(f"Loading {count} symbols from CSV...")
         return load_symbols_from_csv(limit=count)
     else:  # choice == 3
-        print("🔄 Using fallback symbols...")
+        print("Using fallback symbols...")
         return get_fallback_symbols()
 
 
@@ -105,7 +105,7 @@ def load_symbols_from_csv(limit=None):
             break
 
     if csv_path:
-        print(f"✅ Found symbols file at: {csv_path}")
+        print(f"Found symbols file at: {csv_path}")
         try:
             with open(csv_path, encoding="utf-8") as file:
                 csv_reader = csv.DictReader(file)
@@ -122,19 +122,19 @@ def load_symbols_from_csv(limit=None):
                         symbols.append({"exchange": exchange, "symbol": symbol})
                         count += 1
 
-            print(f"✅ Successfully loaded {len(symbols)} symbols from CSV")
+            print(f"Successfully loaded {len(symbols)} symbols from CSV")
             return symbols
 
         except Exception as e:
-            print(f"❌ Error loading CSV: {e}")
-            print("🔄 Falling back to default symbols...")
+            print(f"Error loading CSV: {e}")
+            print("Falling back to default symbols...")
             return get_fallback_symbols()
 
     # CSV not found
-    print("❌ CSV file not found in expected locations:")
+    print("CSV file not found in expected locations:")
     for path in possible_paths:
         print(f"   - {path}")
-    print("🔄 Using fallback symbols instead...")
+    print("Using fallback symbols instead...")
     return get_fallback_symbols()
 
 
@@ -153,22 +153,22 @@ def get_fallback_symbols():
         {"exchange": "NSE", "symbol": "LT"},
     ]
 
-    print(f"✅ Using {len(fallback_symbols)} fallback symbols")
+    print(f"Using {len(fallback_symbols)} fallback symbols")
     return fallback_symbols
 
 
 def display_usage_examples():
     """Display usage examples for different scenarios"""
-    print("\n🔧 USAGE EXAMPLES")
+    print("\n USAGE EXAMPLES")
     print("=" * 50)
-    print("📈 For 1500 symbols test:")
+    print("For 1500 symbols test:")
     print("   Select option (1-3): 2")
     print("   Enter number of symbols: 1500")
     print()
-    print("📈 For all symbols:")
+    print("For all symbols:")
     print("   Select option (1-3): 1")
     print()
-    print("📈 For quick testing:")
+    print("For quick testing:")
     print("   Select option (1-3): 3")
     print("=" * 50)
 
@@ -235,16 +235,16 @@ def save_comprehensive_report(test_symbols, symbol_data, update_count, start_tim
                     for i, symbol in enumerate(sorted(symbols), 1):
                         f.write(f"{i:4d}. {symbol}\n")
 
-        print(f"📊 Comprehensive report saved to '{report_file}'")
+        print(f"Comprehensive report saved to '{report_file}'")
         return report_file
 
     except Exception as e:
-        print(f"❌ Error saving comprehensive report: {e}")
+        print(f"Error saving comprehensive report: {e}")
         return None
 
 
 def main():
-    print("🧪 Enhanced LTP Test - 30 minutes")
+    print("Enhanced LTP Test - 30 minutes")
     print("=" * 50)
 
     # Display usage examples
@@ -265,22 +265,22 @@ def main():
     test_symbols = load_test_symbols_interactive()
 
     if not test_symbols:
-        print("❌ No symbols loaded. Exiting...")
+        print("No symbols loaded. Exiting...")
         sys.exit(1)
 
     # Confirm with user before starting
-    print("\n📋 READY TO START")
+    print("\n READY TO START")
     print("-" * 30)
-    print(f"🔢 Symbols to monitor: {len(test_symbols)}")
-    print("⏱️  Test duration: 30 minutes")
-    print("📊 Stats interval: Every 60 seconds")
+    print(f"Symbols to monitor: {len(test_symbols)}")
+    print("Test duration: 30 minutes")
+    print("Stats interval: Every 60 seconds")
 
     # Show exchange breakdown
     exchange_count = defaultdict(int)
     for symbol in test_symbols:
         exchange_count[symbol["exchange"]] += 1
 
-    print("\n📈 Exchange breakdown:")
+    print("\n Exchange breakdown:")
     for exchange, count in sorted(exchange_count.items()):
         print(f"   {exchange}: {count} symbols")
 
@@ -330,7 +330,7 @@ def main():
                     )
 
         except Exception as e:
-            print(f"❌ Error processing data: {e}")
+            print(f"Error processing data: {e}")
 
     def print_statistics():
         """Print current statistics"""
@@ -339,18 +339,18 @@ def main():
             elapsed = (current_time - start_time).total_seconds() if start_time else 0
             remaining = max(0, TEST_DURATION - elapsed)
 
-            print(f"\n📊 STATISTICS - {current_time.strftime('%H:%M:%S')}")
+            print(f"\n STATISTICS - {current_time.strftime('%H:%M:%S')}")
             print("-" * 50)
-            print(f"⏱️  Time Elapsed: {elapsed / 60:.1f} minutes")
-            print(f"⏰ Time Remaining: {remaining / 60:.1f} minutes")
-            print(f"📈 Symbols Subscribed: {len(test_symbols)}")
-            print(f"✅ Symbols with Data: {len(symbol_data)}")
-            print(f"📊 Total Updates: {update_count}")
-            print(f"📡 Success Rate: {(len(symbol_data) / len(test_symbols) * 100):.1f}%")
+            print(f"Time Elapsed: {elapsed / 60:.1f} minutes")
+            print(f"Time Remaining: {remaining / 60:.1f} minutes")
+            print(f"Symbols Subscribed: {len(test_symbols)}")
+            print(f"Symbols with Data: {len(symbol_data)}")
+            print(f"Total Updates: {update_count}")
+            print(f"Success Rate: {(len(symbol_data) / len(test_symbols) * 100):.1f}%")
 
             if elapsed > 0:
                 rate = update_count / elapsed
-                print(f"⚡ Update Rate: {rate:.1f} updates/sec")
+                print(f"Update Rate: {rate:.1f} updates/sec")
 
             # Show missing symbols count
             subscribed_symbols = {s["symbol"] for s in test_symbols}
@@ -358,27 +358,27 @@ def main():
             missing_count = len(subscribed_symbols - symbols_with_data_set)
 
             if missing_count > 0:
-                print(f"⚠️  Missing Symbols: {missing_count}")
+                print(f"Missing Symbols: {missing_count}")
 
             print("-" * 50)
 
     try:
-        print("📡 Connecting to WebSocket...")
+        print("Connecting to WebSocket...")
         start_time = datetime.now()
         end_time = start_time + timedelta(seconds=TEST_DURATION)
 
         client.connect()
-        print("✅ Connected successfully!")
+        print("Connected successfully!")
 
-        print(f"📊 Subscribing to {len(test_symbols)} symbols...")
+        print(f"Subscribing to {len(test_symbols)} symbols...")
         client.subscribe_ltp(test_symbols, on_data_received=on_data_received)
-        print("✅ Subscription completed!")
+        print("Subscription completed!")
 
-        print("\n🚀 Starting 30-minute monitoring session...")
-        print(f"🕐 Start Time: {start_time.strftime('%H:%M:%S')}")
-        print(f"🕐 End Time: {end_time.strftime('%H:%M:%S')}")
-        print("📊 Statistics will be printed every minute")
-        print("🛑 Press Ctrl+C to stop early\n")
+        print("\n Starting 30-minute monitoring session...")
+        print(f"Start Time: {start_time.strftime('%H:%M:%S')}")
+        print(f"End Time: {end_time.strftime('%H:%M:%S')}")
+        print("Statistics will be printed every minute")
+        print("Press Ctrl+C to stop early\n")
 
         # Monitor for 30 minutes
         last_stats_time = start_time
@@ -397,25 +397,25 @@ def main():
 
             time.sleep(1)  # Check every second
 
-        print("\n✅ 30-minute test completed!")
+        print("\n 30-minute test completed!")
 
     except KeyboardInterrupt:
-        print("\n🛑 Test interrupted by user")
+        print("\n Test interrupted by user")
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         import traceback
 
         traceback.print_exc()
 
     finally:
-        print("\n🧹 Cleaning up...")
+        print("\n Cleaning up...")
         try:
             client.unsubscribe_ltp(test_symbols)
             client.disconnect()
-            print("✅ Cleanup completed")
+            print("Cleanup completed")
         except Exception as e:
-            print(f"❌ Cleanup error: {e}")
+            print(f"Cleanup error: {e}")
 
         # Final comprehensive report and statistics
         end_time_actual = datetime.now()
@@ -473,22 +473,22 @@ def main():
                     test_symbols, symbol_data, update_count, start_time, end_time_actual
                 )
                 if report_file:
-                    print(f"\n📄 Detailed report saved to: {report_file}")
+                    print(f"\n Detailed report saved to: {report_file}")
 
             # Show missing symbols summary
             if missing_symbols:
-                print(f"\n⚠️  Missing Symbols: {len(missing_symbols)}")
+                print(f"\n Missing Symbols: {len(missing_symbols)}")
                 if len(missing_symbols) <= 10:
                     print("Missing symbols:", ", ".join(sorted(list(missing_symbols))))
             else:
-                print("\n🎉 All symbols received data!")
+                print("\n All symbols received data!")
 
             if symbol_data:
                 # Show top 5 most active symbols
                 top_symbols = sorted(
                     symbol_data.items(), key=lambda x: x[1].get("update_count", 0), reverse=True
                 )[:5]
-                print("\n🏆 Most Active Symbols:")
+                print("\n Most Active Symbols:")
                 for i, (symbol, data) in enumerate(top_symbols, 1):
                     updates = data.get("update_count", 0)
                     ltp = data.get("ltp", 0)

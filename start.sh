@@ -180,11 +180,11 @@ done
 # This will work for local directories but skip for mounted volumes
 if [ -w "." ]; then
     # Set more permissive permissions for directories
-    chmod -R 755 db log strategies 2>/dev/null || echo "⚠️  Skipping chmod (may be mounted volume or permission restricted)"
+    chmod -R 755 db log strategies 2>/dev/null || echo "Skipping chmod (may be mounted volume or permission restricted)"
     # Set restrictive permissions for keys directory (only owner can access)
     chmod 700 keys 2>/dev/null || true
 else
-    echo "⚠️  Running with restricted permissions (mounted volume detected)"
+    echo "Running with restricted permissions (mounted volume detected)"
 fi
 
 # Ensure Python can create directories at runtime if needed

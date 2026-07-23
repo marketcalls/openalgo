@@ -310,8 +310,8 @@ However, `cachetools.TTLCache` handles `KeyError` internally for expired items, 
 | TTLCache instances | **Yes** | `maxsize` parameter + TTL eviction |
 | BrokerSymbolCache | **Partially** | No maxsize; bounded by total symbols in DB (~100K) |
 | `_freeze_qty_cache` | **Partially** | No maxsize; bounded by F&O symbols (~5K) |
-| `last_message_time` (WS) | **No** ⚠️ | Grows with unique (symbol, exchange, mode) tuples; periodic cleanup exists but relies on symbol unsubscription |
-| Rate limiter (`memory://`) | **No** ⚠️ | Flask-Limiter's in-memory storage grows with unique IPs |
+| `last_message_time` (WS) | **No** | Grows with unique (symbol, exchange, mode) tuples; periodic cleanup exists but relies on symbol unsubscription |
+| Rate limiter (`memory://`) | **No** | Flask-Limiter's in-memory storage grows with unique IPs |
 
 ---
 

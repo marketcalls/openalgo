@@ -7,7 +7,7 @@ Description: Plots Option Chain OI histogram for NIFTY 30JUN26 expiry
              White background
 """
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 from datetime import datetime
 
@@ -36,7 +36,7 @@ client = api(api_key=API_KEY, host=API_HOST)
 def fetch_option_chain():
     """Fetch option chain data from OpenAlgo API"""
 
-    print(f"\n📥 Fetching {UNDERLYING} Option Chain for {EXPIRY} expiry...")
+    print(f"\n Fetching {UNDERLYING} Option Chain for {EXPIRY} expiry...")
 
     chain_data = client.optionchain(
         underlying=UNDERLYING, exchange=EXCHANGE, expiry_date=EXPIRY, strike_count=STRIKE_COUNT
@@ -51,9 +51,9 @@ def fetch_option_chain():
     atm_strike = chain_data.get("atm_strike", 0)
     chain = chain_data.get("chain", [])
 
-    print(f"✅ Underlying LTP: {underlying_ltp}")
-    print(f"✅ ATM Strike: {atm_strike}")
-    print(f"✅ Total Strikes (raw): {len(chain)}")
+    print(f"Underlying LTP: {underlying_ltp}")
+    print(f"ATM Strike: {atm_strike}")
+    print(f"Total Strikes (raw): {len(chain)}")
 
     return chain_data
 
@@ -104,12 +104,12 @@ def process_chain_data(chain_data):
     # Round ATM to nearest 100
     atm_strike_100 = int(round(atm_strike / 100) * 100)
 
-    print(f"✅ Filtered Strikes (100s only): {len(df)}")
-    print(f"📊 Strike Range: {df['strike'].min()} to {df['strike'].max()}")
-    print(f"📊 Total CE OI (lots): {df['ce_oi_lots'].sum():,}")
-    print(f"📊 Total PE OI (lots): {df['pe_oi_lots'].sum():,}")
+    print(f"Filtered Strikes (100s only): {len(df)}")
+    print(f"Strike Range: {df['strike'].min()} to {df['strike'].max()}")
+    print(f"Total CE OI (lots): {df['ce_oi_lots'].sum():,}")
+    print(f"Total PE OI (lots): {df['pe_oi_lots'].sum():,}")
     print(
-        f"📊 PCR (OI): {df['pe_oi'].sum() / df['ce_oi'].sum():.2f}"
+        f"PCR (OI): {df['pe_oi'].sum() / df['ce_oi'].sum():.2f}"
         if df["ce_oi"].sum() > 0
         else "   PCR: N/A"
     )
@@ -337,21 +337,21 @@ def print_oi_table(df, atm_strike):
     """Print top OI strikes"""
 
     print(f"\n{'=' * 70}")
-    print("📊 TOP 10 STRIKES BY OI")
+    print("TOP 10 STRIKES BY OI")
     print(f"{'=' * 70}")
 
-    print("\n🟢 TOP 5 CALL OI (Resistance Levels):")
+    print("\n TOP 5 CALL OI (Resistance Levels):")
     top_ce = df.nlargest(5, "ce_oi_lots")[["strike", "ce_oi_lots", "ce_ltp"]]
     for _, row in top_ce.iterrows():
-        marker = " ⬅️ ATM" if row["strike"] == atm_strike else ""
+        marker = " ATM" if row["strike"] == atm_strike else ""
         print(
             f"   Strike {int(row['strike'])}: {int(row['ce_oi_lots']):>10,} lots | LTP: ₹{row['ce_ltp']:.2f}{marker}"
         )
 
-    print("\n🔴 TOP 5 PUT OI (Support Levels):")
+    print("\n TOP 5 PUT OI (Support Levels):")
     top_pe = df.nlargest(5, "pe_oi_lots")[["strike", "pe_oi_lots", "pe_ltp"]]
     for _, row in top_pe.iterrows():
-        marker = " ⬅️ ATM" if row["strike"] == atm_strike else ""
+        marker = " ATM" if row["strike"] == atm_strike else ""
         print(
             f"   Strike {int(row['strike'])}: {int(row['pe_oi_lots']):>10,} lots | LTP: ₹{row['pe_ltp']:.2f}{marker}"
         )
@@ -377,12 +377,12 @@ if __name__ == "__main__":
         # Save and show
         output_file = f"nifty_oi_chain_{EXPIRY}.html"
         fig.write_html(output_file)
-        print(f"📈 Chart saved to: {output_file}")
+        print(f"Chart saved to: {output_file}")
 
         fig.show()
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         import traceback
 
         traceback.print_exc()

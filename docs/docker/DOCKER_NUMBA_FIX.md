@@ -91,7 +91,7 @@ docker-compose build --no-cache
 docker-compose up -d
 
 # Verify the fix
-docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('✓ All imports successful')"
+docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('All imports successful')"
 ```
 
 ### Option 2: Using Docker Run
@@ -141,7 +141,7 @@ docker-compose up -d
 
 1. **Test Python imports:**
 ```bash
-docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('✓ Success')"
+docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('Success')"
 ```
 
 2. **Test numba JIT compilation:**
@@ -159,7 +159,7 @@ def sum_array(arr):
 
 arr = np.array([1, 2, 3, 4, 5])
 result = sum_array(arr)
-print(f'✓ Numba JIT works: sum={result}')
+print(f'Numba JIT works: sum={result}')
 "
 ```
 
@@ -167,7 +167,7 @@ print(f'✓ Numba JIT works: sum={result}')
 ```bash
 docker-compose exec openalgo python -c "
 from scipy import stats
-print('✓ SciPy works:', stats.norm.cdf(0))
+print('SciPy works:', stats.norm.cdf(0))
 "
 ```
 
@@ -242,14 +242,14 @@ These changes have minimal performance impact:
 ## Compatibility
 
 These changes are compatible with:
-- ✅ Python 3.12+ (required by pyproject.toml)
-- ✅ numba 0.63.1
-- ✅ llvmlite 0.46.0b1
-- ✅ scipy 1.17.0
-- ✅ All supported brokers
-- ✅ Railway, Render, and other cloud platforms
-- ✅ Local Docker installations
-- ✅ Windows (WSL2), macOS, and Linux
+- Python 3.12+ (required by pyproject.toml)
+- numba 0.63.1
+- llvmlite 0.46.0b1
+- scipy 1.17.0
+- All supported brokers
+- Railway, Render, and other cloud platforms
+- Local Docker installations
+- Windows (WSL2), macOS, and Linux
 
 ## References
 
