@@ -171,6 +171,7 @@ def _schedule_square_off_jobs(scheduler):
         def capture_daily_pnl_snapshot():
             """Capture end-of-day P&L snapshot for all users"""
             try:
+                from database.market_calendar_db import is_market_holiday
                 from database.sandbox_db import (
                     SandboxDailyPnL,
                     SandboxFunds,
@@ -180,6 +181,19 @@ def _schedule_square_off_jobs(scheduler):
                 )
 
                 today = date.today()
+
+                # Skip weekends and market holidays (issue #876): the cron
+                # fires every day, and on a non-trading day nothing has moved,
+                # so the snapshot just clones the previous session's numbers
+                # into a new dated row -- the "PnL copied to Saturday/Sunday"
+                # duplication. is_market_holiday covers weekends, exchange
+                # holidays, and correctly stays False for special sessions
+                # (e.g. Muhurat trading on a Saturday).
+                if is_market_holiday(today):
+                    logger.debug(
+                        f"Skipping daily P&L snapshot for {today}: not a trading day"
+                    )
+                    return
 
                 # Get all users with funds
                 all_funds = SandboxFunds.query.all()
