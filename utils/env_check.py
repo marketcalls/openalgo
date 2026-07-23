@@ -86,7 +86,7 @@ def check_tmp_noexec() -> None:
                     mount_options = parts[3].split(',')
                     if 'noexec' in mount_options:
                         print("\n" + "=" * 70)
-                        print("⚠️  WARNING: /tmp is mounted with 'noexec' flag")
+                        print("WARNING: /tmp is mounted with 'noexec' flag")
                         print("   This can cause issues with Python libraries like numba/llvmlite.")
                         print("")
                         print("   OpenAlgo has auto-configured alternative paths:")
@@ -152,7 +152,7 @@ def check_env_version_compatibility() -> bool:
     # If either version is missing, warn but continue
     if not env_version:
         print("\n" + "=" * 70)
-        print("⚠️  WARNING: No version found in your .env file")
+        print("WARNING: No version found in your .env file")
         print("   Your .env file may be outdated and missing new configuration options.")
         print("   Consider updating it with new variables from .sample.env")
         print("=" * 70)
@@ -180,24 +180,35 @@ def check_env_version_compatibility() -> bool:
         sample_ver = version_tuple(sample_version)
 
         if env_ver < sample_ver:
-            print("\n" + "🔴 " + "=" * 68)
-            print("🔴  CONFIGURATION UPDATE REQUIRED")
-            print("🔴 " + "=" * 68)
+            print("\n" + "=" * 70)
+            print("  CONFIGURATION UPDATE REQUIRED")
+            print("=" * 70)
             print(f"   Your .env version: {env_version}")
             print(f"   Required version:  {sample_version}")
             print("")
             print("   ACTION NEEDED:")
-            print("   1. Backup your current .env file")
+            print("   1. Backup your current .env file  (cp .env .env.backup)")
             print("   2. Compare .env with .sample.env")
             print("   3. Add any missing configuration variables to your .env")
             print("   4. Update ENV_CONFIG_VERSION in your .env to match .sample.env")
             print("")
+            print("   ADD the missing variables to your existing .env. Do NOT copy")
+            print("   .sample.env over it. These three values are unrecoverable and")
+            print("   must keep the values your install is already using:")
+            print("")
+            print("     API_KEY_PEPPER  - hashes your password and encrypts your")
+            print("                       broker tokens. Change it and you can never")
+            print("                       log in again; the hash is one-way.")
+            print("     FERNET_SALT     - encrypts the same data alongside the pepper.")
+            print("     APP_KEY         - signs session cookies (safe to change, but")
+            print("                       every logged-in browser is signed out).")
+            print("")
             print("   New features may not work properly with an outdated configuration!")
-            print("🔴 " + "=" * 68)
+            print("=" * 70)
 
             # Give user a chance to continue anyway
             try:
-                response = input("\n⚠️  Continue anyway? (y/N): ").lower().strip()
+                response = input("\nContinue anyway? (y/N): ").lower().strip()
                 if response not in ["y", "yes"]:
                     print("\nApplication startup cancelled. Please update your .env file.")
                     return False
@@ -206,7 +217,7 @@ def check_env_version_compatibility() -> bool:
                 return False
 
         elif env_ver > sample_ver:
-            print(f"\n✅ Your .env version ({env_version}) is newer than sample ({sample_version})")
+            print(f"\nYour .env version ({env_version}) is newer than sample ({sample_version})")
 
         else:
             # Only print success message in Flask child process (avoids duplicate message with debug reloader)
@@ -216,7 +227,7 @@ def check_env_version_compatibility() -> bool:
             is_reloader_parent = flask_debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
             if not is_reloader_parent:
                 print(
-                    f"\n\033[94m🔄\033[0m Configuration version check passed (\033[92m{env_version}\033[0m)"
+                    f"\nConfiguration version check passed (\033[92m{env_version}\033[0m)"
                 )
 
     except Exception as e:
@@ -1066,6 +1077,54 @@ def _generate_keys_on_first_run(env_path: str) -> None:
     # in-place would brick existing Argon2 password hashes and Fernet-encrypted
     # tokens. The dedicated upgrade/rotate_pepper.py migration handles that
     # case explicitly with re-encryption + password reset.
+    #
+    # But silence is the wrong default for that state, so warn — every startup,
+    # not once. Two things are true at the same time here and the operator can
+    # see neither of them:
+    #
+    #   1. The pepper is the value published in .sample.env, so every stored
+    #      broker token / API key / TOTP secret in this DB is decryptable by
+    #      anyone who obtains the file.
+    #   2. If the account was created while a *different* pepper was in effect
+    #      (the usual cause: .sample.env was copied over a working .env), every
+    #      login now fails with a bare "Invalid credentials" and nothing else
+    #      in the app explains why. See issue #1660.
+    if pepper_compromised and db_populated and not is_reloader_parent:
+        sys.stderr.write(
+            "\n\033[91m\033[1m[OpenAlgo security] API_KEY_PEPPER is the public sample value\033[0m\n"
+            "\033[91mYour .env still carries the API_KEY_PEPPER placeholder from\n"
+            ".sample.env, and this database already has a user account.\n"
+            "\n"
+            "It was NOT rotated automatically - rotating it would permanently\n"
+            "destroy your stored password hash and broker tokens.\n"
+            "\n"
+            "Two consequences, both active right now:\n"
+            "\n"
+            "  1. Every broker token, API key and TOTP secret in this database\n"
+            "     is encrypted with a publicly-known value. Treat them as\n"
+            "     exposed and re-issue them once the pepper is fixed.\n"
+            "\n"
+            "  2. If you cannot log in ('Invalid credentials' with a password\n"
+            "     you know is correct), this is why: your account was created\n"
+            "     while a different pepper was in effect, so the stored hash no\n"
+            "     longer matches. This usually happens when .sample.env is\n"
+            "     copied over a working .env during an upgrade.\n"
+            "\n"
+            "To fix:\n"
+            "  - If you have a backup of the .env you set up with, restore its\n"
+            "    API_KEY_PEPPER and FERNET_SALT lines and restart. This is the\n"
+            "    only route that keeps your existing password and tokens.\n"
+            "  - Otherwise, rotate deliberately and reset the password:\n"
+            "      uv run python upgrade/rotate_pepper.py\n"
+            "      uv run python upgrade/reset_admin_password.py\n"
+            "  - On a throwaway install with nothing to keep, deleting\n"
+            "    db/openalgo.db and restarting lets first-run setup generate a\n"
+            "    fresh pepper for you.\n"
+            "\n"
+            "Run 'uv run python upgrade/init_db.py' to see which of these\n"
+            "applies to your install.\n"
+            "\033[0m\n"
+        )
 
 
 def load_and_check_env_variables() -> None:
