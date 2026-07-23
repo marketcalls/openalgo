@@ -237,6 +237,18 @@ def catch_up_daily_pnl_snapshot():
         today = date.today()
         yesterday = today - timedelta(days=1)
 
+        # Skip non-trading days (issue #876): without this, an app started on
+        # Monday backfills a Sunday snapshot, and one started on Sunday
+        # backfills Saturday -- manufacturing the same weekend duplication the
+        # 23:59 cron gate now prevents.
+        from database.market_calendar_db import is_market_holiday
+
+        if is_market_holiday(yesterday):
+            logger.debug(
+                f"Catch-up: Skipping P&L snapshot backfill for {yesterday}: not a trading day"
+            )
+            return
+
         # Get all users with funds
         all_funds = SandboxFunds.query.all()
 
