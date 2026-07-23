@@ -15,6 +15,23 @@ export interface NormalizedDepth {
 /**
  * Combined quote and depth data
  */
+/**
+ * First usable price from the given sources, treating 0 as "not available".
+ *
+ * A real traded price is never 0, so a 0 from any source means that source has
+ * nothing to say yet rather than that the instrument is worthless. Using ??
+ * here would accept the 0 and stop, which is how a WebSocket tick with no
+ * last-traded price ends up displayed as 0.00 while REST has the real number.
+ */
+function firstPrice(...values: (number | undefined | null)[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return value
+    }
+  }
+  return undefined
+}
+
 export interface LiveQuoteData {
   ltp?: number
   open?: number
@@ -274,13 +291,20 @@ export function useLiveQuote(
       restDepthNormalized?.sell?.[0]?.quantity ??
       wsData?.ask_size
 
-    // Merge all data with priority: WebSocket > REST depth > REST quotes
+    // Merge all data with priority: WebSocket > REST depth > REST quotes.
+    //
+    // Price fields use firstPrice, not ??. A feed can deliver a tick whose ltp
+    // is 0 -- before the first trade of the session, or when the adapter has
+    // depth but no last-traded price yet. ?? only falls through on null and
+    // undefined, so a 0 would win and pin the display at 0.00 while depth shows
+    // a real bid/ask, with the REST fallback never consulted. Treating 0 as
+    // absent lets REST fill the gap.
     return {
-      ltp: wsData?.ltp ?? restDepth?.ltp ?? restQuotes?.ltp,
-      open: wsData?.open ?? restDepth?.open ?? restQuotes?.open,
-      high: wsData?.high ?? restDepth?.high ?? restQuotes?.high,
-      low: wsData?.low ?? restDepth?.low ?? restQuotes?.low,
-      close: wsData?.close ?? restDepth?.prev_close ?? restQuotes?.prev_close,
+      ltp: firstPrice(wsData?.ltp, restDepth?.ltp, restQuotes?.ltp),
+      open: firstPrice(wsData?.open, restDepth?.open, restQuotes?.open),
+      high: firstPrice(wsData?.high, restDepth?.high, restQuotes?.high),
+      low: firstPrice(wsData?.low, restDepth?.low, restQuotes?.low),
+      close: firstPrice(wsData?.close, restDepth?.prev_close, restQuotes?.prev_close),
       volume: wsData?.volume ?? restDepth?.volume ?? restQuotes?.volume,
       oi: restDepth?.oi ?? restQuotes?.oi,
       change: wsData?.change,
