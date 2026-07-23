@@ -157,7 +157,11 @@ export function PlaceOrderDialog({
       setFormPrice(0)
       setFormTriggerPrice(0)
       setIsDepthExpanded(false)
-      setQuantityMode('lots')
+      // Cash equity has no lots, so the quantity box must show the real share
+      // count. Defaulting to 'lots' here displayed lotMultiplier (1) while
+      // formQuantity held the actual size -- opening Exit on a 70-share holding
+      // showed "1" in the box and would have placed 70.
+      setQuantityMode(isFnOExchange(exchange) && lotSize > 1 ? 'lots' : 'shares')
       setLotMultiplier(1)
       setFormExchange(exchange)
     }
