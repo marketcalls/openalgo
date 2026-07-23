@@ -127,6 +127,27 @@ class WebSocketExecutionEngine:
                 pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
 
                 for order in pending_orders:
+                    # Skip orders on expired F&O contracts: the symbol is gone
+                    # from the master contract after the daily refresh, so
+                    # subscribing it just makes the broker adapter log
+                    # token-lookup errors on every boot ("No brsymbol found").
+                    # Cancellation (with margin release) is handled by the
+                    # square-off cycle's _cancel_expired_contract_orders --
+                    # deliberately NOT done here, since cancel_order re-enters
+                    # this engine via notify_order_completed and would deadlock
+                    # on self._lock.
+                    from datetime import date
+
+                    from sandbox.position_manager import get_contract_expiry
+
+                    expiry_date = get_contract_expiry(order.symbol, order.exchange)
+                    if expiry_date is not None and date.today() > expiry_date:
+                        logger.info(
+                            f"Skipping WS subscription for {order.symbol}: contract "
+                            f"expired {expiry_date}; order {order.orderid} awaits auto-cancel"
+                        )
+                        continue
+
                     symbol_key = f"{order.exchange}:{order.symbol}"
                     if symbol_key not in self._pending_orders_index:
                         self._pending_orders_index[symbol_key] = []
