@@ -1082,12 +1082,20 @@ class PositionManager:
                     ).first()
 
                     if holdings:
-                        # Update existing holdings
-                        holdings.quantity += position.quantity
+                        # Update existing holdings. Compute the weighted average
+                        # BEFORE mutating quantity -- the previous version
+                        # incremented quantity first, which double-counted the
+                        # new shares in the denominator and applied the old
+                        # average to the inflated total, skewing the cost basis
+                        # low on every repeat settlement of the same symbol
+                        # (100@100 + 100@110 gave 103.33 instead of 105).
+                        old_quantity = holdings.quantity
+                        new_quantity = old_quantity + position.quantity
                         holdings.average_price = (
-                            holdings.average_price * holdings.quantity
+                            holdings.average_price * old_quantity
                             + position.average_price * position.quantity
-                        ) / (holdings.quantity + position.quantity)
+                        ) / new_quantity
+                        holdings.quantity = new_quantity
                     else:
                         # Create new holdings
                         holdings = SandboxHoldings(
