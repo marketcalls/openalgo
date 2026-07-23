@@ -1,0 +1,38 @@
+meta {
+  name: Get Subscriptions
+  type: websocket
+  seq: 14
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Get the requesting client's own active subscriptions with symbol, mode, and summary stats
+}
+
+message:json {
+  {
+    "action": "get_subscriptions"
+  }
+}
+
+docs {
+  Returns the authenticated client's own active subscriptions.
+
+  Server responds with:
+  {
+    "type": "subscriptions",
+    "status": "success",
+    "summary": {
+      "subscriptions_count": 15,
+      "by_mode": {"LTP": 10, "Quote": 4, "Depth": 1},
+      "by_exchange": {"NSE": 12, "NSE_INDEX": 2, "BSE": 1},
+      "broker": "angel"
+    },
+    "subscriptions": [
+      {"symbol": "RELIANCE", "exchange": "NSE", "mode": "Quote", "depth": 5},
+      {"symbol": "NIFTY", "exchange": "NSE_INDEX", "mode": "LTP", "depth": 5}
+    ]
+  }
+
+  Must be authenticated first.
+}

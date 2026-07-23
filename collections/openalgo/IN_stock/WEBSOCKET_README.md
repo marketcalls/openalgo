@@ -86,6 +86,8 @@ Valid string modes: `"LTP"`, `"Quote"`, `"Depth"`
 | ws_unsubscribe_all.bru | unsubscribe_all | Unsubscribe from all |
 | ws_get_broker_info.bru | get_broker_info | Get broker information |
 | ws_get_supported_brokers.bru | get_supported_brokers | List supported brokers |
+| ws_get_subscriptions.bru | get_subscriptions | Get own active subscriptions |
+| ws_get_global_subscriptions.bru | get_global_subscriptions | Get client-wise subscription details & summary |
 | ws_ping.bru | ping | Test connection latency |
 
 ## Supported Exchanges
