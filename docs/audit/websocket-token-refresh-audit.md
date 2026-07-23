@@ -20,10 +20,10 @@ This is the root cause behind the recurring *"feed works after restart, dies aga
 
 | Category | Count | Brokers |
 |---|---|---|
-| ❌ **PRE-FIX FAILS** — reused stale token on reconnect, needed restart | **21** | aliceblue, definedge, deltaexchange\*, dhan, firstock, fivepaisa, flattrade, fyers, groww, iiflcapital, indmoney, motilal, mstock, nubra, paytm, pocketful, samco, tradejini, **upstox**, zebu, zerodha |
-| ✅ **SELF-HEALS (DB re-read)** — re-reads `get_auth_token` on reconnect | **3** | angel, kotak, shoonya |
-| ✅ **SELF-HEALS (env re-login)** — XTS/env market creds, re-login each reconnect | **7** | compositedge, fivepaisaxts, ibulls, iifl, jainamxts, rmoney, wisdom |
-| ➖ **N/A** — mock adapter, no token | **1** | dhan_sandbox |
+| **PRE-FIX FAILS** — reused stale token on reconnect, needed restart | **21** | aliceblue, definedge, deltaexchange\*, dhan, firstock, fivepaisa, flattrade, fyers, groww, iiflcapital, indmoney, motilal, mstock, nubra, paytm, pocketful, samco, tradejini, **upstox**, zebu, zerodha |
+| **SELF-HEALS (DB re-read)** — re-reads `get_auth_token` on reconnect | **3** | angel, kotak, shoonya |
+| **SELF-HEALS (env re-login)** — XTS/env market creds, re-login each reconnect | **7** | compositedge, fivepaisaxts, ibulls, iifl, jainamxts, rmoney, wisdom |
+| **N/A** — mock adapter, no token | **1** | dhan_sandbox |
 
 \* **deltaexchange** is crypto (24/7, no 3 AM IST rollover) and uses long-lived API key/secret HMAC, so it has the structural weakness but no daily trigger — practically unaffected.
 
@@ -41,7 +41,7 @@ The working tree now applies the durable fix to the 21 originally failing broker
 
 With these changes, the original "21 FAILS" list is now a **pre-fix baseline**, not the current expected behavior.
 
-### ⚠️ Original correction on Upstox (pre-fix)
+### Original correction on Upstox (pre-fix)
 
 An earlier read claimed Upstox self-heals because it "re-fetches the authorized URL" on reconnect. The deeper audit shows that is **misleading**: `upstox_client.py:159` does re-fetch the URL, but `_get_websocket_url()` signs that request with `Authorization: Bearer {self.auth_token}` (`:355`), where `self.auth_token` is the **construction-time** bearer set once at `upstox_client.py:44` (from `get_auth_token` in `upstox_adapter.py` `initialize()`), and is **never re-read from the DB**. After the rollover the stale bearer is rejected (401) and `_get_websocket_url()` returns `None`, so the reconnect cannot complete. **Upstox FAILS.** The real-world observation that "Upstox was fine while Zerodha failed" (issue #1419) is explained by that Upstox instance running in **Analyzer/sandbox mode**, which does not exercise the live broker WS path — not by adapter resilience.
 
@@ -49,38 +49,38 @@ An earlier read claimed Upstox self-heals because it "re-fetches the authorized 
 
 | Broker | Token delivery | Refresh on reconnect? | Stall watchdog | Verdict |
 |---|---|---|---|---|
-| aliceblue | auth_msg | NO — `aliceblue_adapter.py:977` reconnect→`connect()` reuses `self.session_id` | no | ❌ FAILS |
-| angel | constructor | **YES** — `angel_adapter.py:240-241` `get_auth_token`/`get_feed_token` in `_recreate_ws_client` | no | ✅ SELF-HEALS (DB) |
-| compositedge | url (XTS) | env re-login — `compositedge_websocket.py:168` `marketdata_login()` each reconnect | no | ✅ SELF-HEALS (env) |
-| definedge | auth_msg | NO — `definedge_adapter.py:212` reuses construction-time `susertoken` | no | ❌ FAILS |
-| deltaexchange | auth_msg | NO — `delta_websocket.py:255` reuses `api_key`/`secret` | no | ❌ FAILS\* (crypto, no 3 AM rollover) |
-| dhan | url (`?token=`) | NO — `dhan_websocket.py:129` reuses URL baked at `:100` | **yes** (`:390` `_health_check_loop`, DATA_TIMEOUT=90) | ❌ FAILS |
-| dhan_sandbox | N/A (mock) | N/A — synthetic tick generator, no token | no | ➖ N/A |
-| firstock | url (`jKey=`) | NO — `firstock_websocket.py:178` reuses `self.auth_token` | no (ping/pong only) | ❌ FAILS |
-| fivepaisa | url (`Value1=`) | NO — `fivepaisa_adapter.py:116` reuses baked URL | no | ❌ FAILS |
-| fivepaisaxts | constructor (env) | env re-login — `fivepaisaxts_websocket.py:176` `marketdata_login()` | no | ✅ SELF-HEALS (env) |
-| flattrade | auth_msg | NO — `flattrade_adapter.py:846-849` reuses `self.accesstoken` | yes (`flattrade_websocket.py:367`) | ❌ FAILS |
-| fyers | auth_msg (header) | NO — `fyers_hsm_websocket.py:863` reuses `self.access_token`; recovery delegated to pool | yes (`fyers_hsm_websocket.py:945`, DATA_TIMEOUT) | ❌ FAILS (pool-dependent) |
-| groww | auth_msg (Bearer) | NO — `nats_websocket.py:478→489` reuses `self.auth_token` | no | ❌ FAILS |
-| ibulls | constructor (env) | env re-login — `ibulls_websocket.py:173` `marketdata_login()` | no | ✅ SELF-HEALS (env) |
-| iifl | constructor (env) | env re-login — `iifl_websocket.py:176` `marketdata_login()` | no | ✅ SELF-HEALS (env) |
-| iiflcapital | constructor (JWT) | NO — `iiflcapital_websocket.py:640` `_reconnect_loop` reuses `self.user_session` | no (MQTT keepalive) | ❌ FAILS |
-| indmoney | constructor (header) | NO — `indWebSocket.py:287` / `indmoney_adapter.py:332` reuse `self.access_token` | no | ❌ FAILS |
-| jainamxts | url (XTS) | env re-login — `jainamxts_websocket.py:123` `marketdata_login()` | no | ✅ SELF-HEALS (env) |
-| kotak | constructor | **YES** — `kotak_adapter.py:729` `get_auth_token` in `_recreate_ws_client` | no | ✅ SELF-HEALS (DB) |
-| motilal | constructor | NO — `motilal_websocket.py:825→112` reuses `self.auth_token` | no | ❌ FAILS |
-| mstock | url (`ACCESS_TOKEN=`) | NO — `mstockwebsocket.py:193` reuses `self.ws_url`/`auth_token` | no | ❌ FAILS |
-| nubra | constructor (Bearer) | NO — `nubrawebsocket.py:102` reuses `self.bt` (`__init__:67`) | no | ❌ FAILS |
-| paytm | url (`x_jwt_token=`) | NO — `paytm_adapter.py:173` / `paytm_websocket.py:228` reuse `public_access_token` | no | ❌ FAILS |
-| pocketful | url (`access_token=`) | NO — `pocketful_adapter.py:95` reuses `self.access_token` | no | ❌ FAILS |
-| rmoney | url (XTS) | env re-login — `rmoney_websocket.py:340` `marketdata_login()` | no | ✅ SELF-HEALS (env) |
-| samco | auth_msg (header) | NO — `samco_adapter.py:111` reuses `session_token` | no | ❌ FAILS |
-| shoonya | auth_msg | **YES** — `shoonya_adapter.py:1007` `get_auth_token` in `_attempt_reconnection` | no | ✅ SELF-HEALS (DB) |
-| tradejini | url (`?token=`) | NO — `tradejini_adapter.py:118` reuses `self.ws_token` | no | ❌ FAILS |
-| upstox | url (authorized) | NO — `upstox_client.py:159` re-fetches URL but signs with stale `self.auth_token` (`:44/:355`) | yes (`:288` `_force_reconnect`) | ❌ FAILS |
-| wisdom | url (XTS) | env re-login — `wisdom_websocket.py:175` `marketdata_login()` | no | ✅ SELF-HEALS (env) |
-| zebu | auth_msg | NO — `zebu_adapter.py:781` reuses `self.susertoken` | no | ❌ FAILS |
-| zerodha | url (`&access_token=`) | NO — `zerodha_websocket.py:186` reuses `self.ws_url` (`:119`) | yes (`:533` `_health_check_loop`) | ❌ FAILS |
+| aliceblue | auth_msg | NO — `aliceblue_adapter.py:977` reconnect→`connect()` reuses `self.session_id` | no | FAILS |
+| angel | constructor | **YES** — `angel_adapter.py:240-241` `get_auth_token`/`get_feed_token` in `_recreate_ws_client` | no | SELF-HEALS (DB) |
+| compositedge | url (XTS) | env re-login — `compositedge_websocket.py:168` `marketdata_login()` each reconnect | no | SELF-HEALS (env) |
+| definedge | auth_msg | NO — `definedge_adapter.py:212` reuses construction-time `susertoken` | no | FAILS |
+| deltaexchange | auth_msg | NO — `delta_websocket.py:255` reuses `api_key`/`secret` | no | FAILS\* (crypto, no 3 AM rollover) |
+| dhan | url (`?token=`) | NO — `dhan_websocket.py:129` reuses URL baked at `:100` | **yes** (`:390` `_health_check_loop`, DATA_TIMEOUT=90) | FAILS |
+| dhan_sandbox | N/A (mock) | N/A — synthetic tick generator, no token | no | N/A |
+| firstock | url (`jKey=`) | NO — `firstock_websocket.py:178` reuses `self.auth_token` | no (ping/pong only) | FAILS |
+| fivepaisa | url (`Value1=`) | NO — `fivepaisa_adapter.py:116` reuses baked URL | no | FAILS |
+| fivepaisaxts | constructor (env) | env re-login — `fivepaisaxts_websocket.py:176` `marketdata_login()` | no | SELF-HEALS (env) |
+| flattrade | auth_msg | NO — `flattrade_adapter.py:846-849` reuses `self.accesstoken` | yes (`flattrade_websocket.py:367`) | FAILS |
+| fyers | auth_msg (header) | NO — `fyers_hsm_websocket.py:863` reuses `self.access_token`; recovery delegated to pool | yes (`fyers_hsm_websocket.py:945`, DATA_TIMEOUT) | FAILS (pool-dependent) |
+| groww | auth_msg (Bearer) | NO — `nats_websocket.py:478→489` reuses `self.auth_token` | no | FAILS |
+| ibulls | constructor (env) | env re-login — `ibulls_websocket.py:173` `marketdata_login()` | no | SELF-HEALS (env) |
+| iifl | constructor (env) | env re-login — `iifl_websocket.py:176` `marketdata_login()` | no | SELF-HEALS (env) |
+| iiflcapital | constructor (JWT) | NO — `iiflcapital_websocket.py:640` `_reconnect_loop` reuses `self.user_session` | no (MQTT keepalive) | FAILS |
+| indmoney | constructor (header) | NO — `indWebSocket.py:287` / `indmoney_adapter.py:332` reuse `self.access_token` | no | FAILS |
+| jainamxts | url (XTS) | env re-login — `jainamxts_websocket.py:123` `marketdata_login()` | no | SELF-HEALS (env) |
+| kotak | constructor | **YES** — `kotak_adapter.py:729` `get_auth_token` in `_recreate_ws_client` | no | SELF-HEALS (DB) |
+| motilal | constructor | NO — `motilal_websocket.py:825→112` reuses `self.auth_token` | no | FAILS |
+| mstock | url (`ACCESS_TOKEN=`) | NO — `mstockwebsocket.py:193` reuses `self.ws_url`/`auth_token` | no | FAILS |
+| nubra | constructor (Bearer) | NO — `nubrawebsocket.py:102` reuses `self.bt` (`__init__:67`) | no | FAILS |
+| paytm | url (`x_jwt_token=`) | NO — `paytm_adapter.py:173` / `paytm_websocket.py:228` reuse `public_access_token` | no | FAILS |
+| pocketful | url (`access_token=`) | NO — `pocketful_adapter.py:95` reuses `self.access_token` | no | FAILS |
+| rmoney | url (XTS) | env re-login — `rmoney_websocket.py:340` `marketdata_login()` | no | SELF-HEALS (env) |
+| samco | auth_msg (header) | NO — `samco_adapter.py:111` reuses `session_token` | no | FAILS |
+| shoonya | auth_msg | **YES** — `shoonya_adapter.py:1007` `get_auth_token` in `_attempt_reconnection` | no | SELF-HEALS (DB) |
+| tradejini | url (`?token=`) | NO — `tradejini_adapter.py:118` reuses `self.ws_token` | no | FAILS |
+| upstox | url (authorized) | NO — `upstox_client.py:159` re-fetches URL but signs with stale `self.auth_token` (`:44/:355`) | yes (`:288` `_force_reconnect`) | FAILS |
+| wisdom | url (XTS) | env re-login — `wisdom_websocket.py:175` `marketdata_login()` | no | SELF-HEALS (env) |
+| zebu | auth_msg | NO — `zebu_adapter.py:781` reuses `self.susertoken` | no | FAILS |
+| zerodha | url (`&access_token=`) | NO — `zerodha_websocket.py:186` reuses `self.ws_url` (`:119`) | yes (`:533` `_health_check_loop`) | FAILS |
 
 ## Key observations
 

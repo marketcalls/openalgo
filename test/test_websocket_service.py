@@ -361,15 +361,15 @@ def test_mode_switching(client, symbols):
         data = client.get_market_data(symbol["symbol"], symbol["exchange"])
         if data:
             if mode == "LTP" and "ltp" in data:
-                print(f"  ✓ Received LTP data: {format_price(data['ltp'].get('value', 0))}")
+                print(f"Received LTP data: {format_price(data['ltp'].get('value', 0))}")
             elif mode == "Quote" and "quote" in data:
-                print("  ✓ Received Quote data: OHLC available")
+                print("Received Quote data: OHLC available")
             elif mode == "Depth" and "depth" in data:
                 buy_levels = len(data["depth"].get("buy", []))
                 sell_levels = len(data["depth"].get("sell", []))
-                print(f"  ✓ Received Depth data: {buy_levels} buy, {sell_levels} sell levels")
+                print(f"Received Depth data: {buy_levels} buy, {sell_levels} sell levels")
         else:
-            print(f"  ⚠ No data received for {mode}")
+            print(f"No data received for {mode}")
 
     # Clean up
     client.unsubscribe([symbol], modes[-1])

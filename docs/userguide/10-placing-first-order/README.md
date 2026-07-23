@@ -24,7 +24,7 @@ The Playground is the best way to start - it's a visual interface to test orders
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  ⚠️ ANALYZER MODE ACTIVE                                        │
+│ ANALYZER MODE ACTIVE                                        │
 │  Orders will NOT go to your real broker                         │
 │  Sandbox Balance: ₹1,00,00,000                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -86,7 +86,7 @@ Fill in:
 4. Go to **Positions**
 5. See your new SBIN position
 
-Congratulations! You've placed your first order! 🎉
+Congratulations! You've placed your first order!
 
 ## Method 2: Using API (For Automation)
 
@@ -251,7 +251,7 @@ Once comfortable with sandbox testing:
 
 ### Step 2: Verify Broker Connection
 
-- Check broker status is 🟢 Connected
+- Check broker status is Connected
 - Verify available margin
 
 ### Step 3: Start Small

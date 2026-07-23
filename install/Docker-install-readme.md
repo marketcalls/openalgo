@@ -188,17 +188,17 @@ The script will ask you for:
 
 ### What the Script Does
 
-1. ✅ Updates system packages
-2. ✅ Installs Docker & Docker Compose
-3. ✅ Installs Nginx web server
-4. ✅ Installs Certbot for SSL
-5. ✅ Clones OpenAlgo repository to `/opt/openalgo`
-6. ✅ Configures environment variables
-7. ✅ Sets up firewall (UFW)
-8. ✅ Obtains SSL certificate from Let's Encrypt
-9. ✅ Configures Nginx with SSL and WebSocket support
-10. ✅ Builds and starts Docker container
-11. ✅ Creates management helper scripts
+1. Updates system packages
+2. Installs Docker & Docker Compose
+3. Installs Nginx web server
+4. Installs Certbot for SSL
+5. Clones OpenAlgo repository to `/opt/openalgo`
+6. Configures environment variables
+7. Sets up firewall (UFW)
+8. Obtains SSL certificate from Let's Encrypt
+9. Configures Nginx with SSL and WebSocket support
+10. Builds and starts Docker container
+11. Creates management helper scripts
 
 **Installation typically takes 5-10 minutes.**
 

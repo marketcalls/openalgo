@@ -27,13 +27,13 @@ def test_logout_csrf_protection(base_url="http://127.0.0.1:5000"):
     try:
         response = session.get(f"{base_url}/auth/logout", allow_redirects=False)
         if response.status_code == 405:  # Method Not Allowed
-            print("✓ PASS: GET request properly rejected with 405 Method Not Allowed")
+            print("PASS: GET request properly rejected with 405 Method Not Allowed")
             results.append(True)
         else:
-            print(f"✗ FAIL: GET request returned {response.status_code} instead of 405")
+            print(f"FAIL: GET request returned {response.status_code} instead of 405")
             results.append(False)
     except Exception as e:
-        print(f"✗ FAIL: Error making GET request: {e}")
+        print(f"FAIL: Error making GET request: {e}")
         results.append(False)
 
     # Test 2: POST without CSRF token should fail
@@ -41,13 +41,13 @@ def test_logout_csrf_protection(base_url="http://127.0.0.1:5000"):
     try:
         response = session.post(f"{base_url}/auth/logout", allow_redirects=False)
         if response.status_code in [400, 403]:  # Bad Request or Forbidden
-            print(f"✓ PASS: POST without CSRF token rejected with {response.status_code}")
+            print(f"PASS: POST without CSRF token rejected with {response.status_code}")
             results.append(True)
         else:
-            print(f"✗ FAIL: POST without CSRF returned {response.status_code}")
+            print(f"FAIL: POST without CSRF returned {response.status_code}")
             results.append(False)
     except Exception as e:
-        print(f"✗ FAIL: Error making POST request: {e}")
+        print(f"FAIL: Error making POST request: {e}")
         results.append(False)
 
     # Test 3: Verify logout form has CSRF token
@@ -61,15 +61,15 @@ def test_logout_csrf_protection(base_url="http://127.0.0.1:5000"):
         has_csrf_token = 'name="csrf_token"' in response.text
 
         if has_post_form and has_csrf_token:
-            print("✓ PASS: Logout form uses POST method with CSRF token")
+            print("PASS: Logout form uses POST method with CSRF token")
             results.append(True)
         else:
-            print("✗ FAIL: Logout form missing POST method or CSRF token")
+            print("FAIL: Logout form missing POST method or CSRF token")
             print(f"  Has POST form: {has_post_form}")
             print(f"  Has CSRF token: {has_csrf_token}")
             results.append(False)
     except Exception as e:
-        print(f"✗ FAIL: Error checking logout form: {e}")
+        print(f"FAIL: Error checking logout form: {e}")
         results.append(False)
 
     # Test 4: Verify no GET logout links remain
@@ -84,18 +84,18 @@ def test_logout_csrf_protection(base_url="http://127.0.0.1:5000"):
                 # Look for old-style GET logout links
                 if re.search(r'<a[^>]*href=["\'][^"\']*auth\.logout[^"\']*["\']', response.text):
                     get_logout_found = True
-                    print(f"  ✗ Found GET logout link in {page}")
+                    print(f"Found GET logout link in {page}")
             except Exception:
                 continue
 
         if not get_logout_found:
-            print("✓ PASS: No GET logout links found")
+            print("PASS: No GET logout links found")
             results.append(True)
         else:
-            print("✗ FAIL: GET logout links still exist")
+            print("FAIL: GET logout links still exist")
             results.append(False)
     except Exception as e:
-        print(f"✗ FAIL: Error checking for GET links: {e}")
+        print(f"FAIL: Error checking for GET links: {e}")
         results.append(False)
 
     # Summary
@@ -105,9 +105,9 @@ def test_logout_csrf_protection(base_url="http://127.0.0.1:5000"):
     print(f"Test Summary: {passed}/{total} tests passed")
 
     if passed == total:
-        print("✅ All tests passed! Logout is protected against CSRF attacks.")
+        print("All tests passed! Logout is protected against CSRF attacks.")
     else:
-        print("❌ Some tests failed. Please review the logout implementation.")
+        print("Some tests failed. Please review the logout implementation.")
 
     print(f"{'=' * 60}\n")
 

@@ -106,7 +106,7 @@ while true; do
     if [[ "$INSTANCES" =~ ^[0-9]+$ ]] && [ "$INSTANCES" -gt 0 ]; then
         break
     else
-        log_message "❌ Invalid number. Please enter a positive integer." "$RED"
+        log_message "Invalid number. Please enter a positive integer." "$RED"
     fi
 done
 
@@ -213,7 +213,7 @@ for ((i=1; i<=INSTANCES; i++)); do
         MCP_ENABLED_LIST+=("false")
     fi
 
-    log_message "✅ Instance $i configuration collected" "$GREEN"
+    log_message "Instance $i configuration collected" "$GREEN"
 done
 
 # System packages installation (one-time)
@@ -286,11 +286,11 @@ for ((i=1; i<=INSTANCES; i++)); do
 
     # Clone or update repository
     if [ ! -d "$INSTANCE_DIR" ]; then
-        log_message "📥 Cloning repository to $INSTANCE_DIR" "$BLUE"
+        log_message "Cloning repository to $INSTANCE_DIR" "$BLUE"
         sudo git clone "$REPO_URL" "$INSTANCE_DIR"
         check_status "Failed to clone repository"
     else
-        log_message "⚠️ Directory exists, skipping clone" "$YELLOW"
+        log_message "Directory exists, skipping clone" "$YELLOW"
     fi
 
     # Create virtual environment
@@ -624,7 +624,7 @@ EOL
     sudo systemctl start $SERVICE_NAME
     check_status "Failed to start service"
 
-    log_message "✅ Instance $i installed successfully!" "$GREEN"
+    log_message "Instance $i installed successfully!" "$GREEN"
     log_message "   URL: https://$DOMAIN" "$BLUE"
     log_message "   Flask:$FLASK_PORT | WS:$WS_PORT | ZMQ:$ZMQ_PORT" "$BLUE"
     log_message "   Service: $SERVICE_NAME" "$BLUE"
@@ -644,7 +644,7 @@ log_message "\n╔════════════════════�
 log_message "║          MULTI-INSTANCE INSTALLATION COMPLETE          ║" "$GREEN"
 log_message "╚════════════════════════════════════════════════════════╝" "$GREEN"
 
-log_message "\n📋 INSTANCE SUMMARY:" "$YELLOW"
+log_message "\n INSTANCE SUMMARY:" "$YELLOW"
 for ((i=1; i<=INSTANCES; i++)); do
     idx=$((i-1))
     log_message "\nInstance $i:" "$BLUE"
@@ -659,11 +659,11 @@ for ((i=1; i<=INSTANCES; i++)); do
     fi
 done
 
-log_message "\n📚 USEFUL COMMANDS:" "$YELLOW"
+log_message "\n USEFUL COMMANDS:" "$YELLOW"
 log_message "View all services: systemctl list-units 'openalgo*'" "$BLUE"
 log_message "Restart instance: sudo systemctl restart openalgo<N>" "$BLUE"
 log_message "View logs: sudo journalctl -u openalgo<N> -f" "$BLUE"
 log_message "Check status: sudo systemctl status openalgo<N>" "$BLUE"
 
-log_message "\n📝 Installation log saved to: $LOG_FILE" "$BLUE"
-log_message "\n🎉 All instances are ready to use!" "$GREEN"
+log_message "\n Installation log saved to: $LOG_FILE" "$BLUE"
+log_message "\n All instances are ready to use!" "$GREEN"

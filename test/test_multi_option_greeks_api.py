@@ -55,7 +55,7 @@ def test_multiple_nifty_options():
         print(json.dumps(result, indent=2))
 
         if result.get("status") in ["success", "partial"]:
-            print(f"\n📊 Summary: {result.get('summary', {})}")
+            print(f"\n Summary: {result.get('summary', {})}")
             for data in result.get("data", []):
                 if data.get("status") == "success":
                     print(
@@ -104,7 +104,7 @@ def test_with_custom_underlying():
         print(json.dumps(result, indent=2))
 
         if result.get("status") in ["success", "partial"]:
-            print(f"\n📊 Using Futures as Underlying - Summary: {result.get('summary', {})}")
+            print(f"\n Using Futures as Underlying - Summary: {result.get('summary', {})}")
 
     except Exception as e:
         print(f"Error: {e}")
@@ -139,7 +139,7 @@ def test_mixed_options():
         result = response.json()
 
         if result.get("status") in ["success", "partial"]:
-            print(f"\n📊 Summary: {result.get('summary', {})}")
+            print(f"\n Summary: {result.get('summary', {})}")
             for data in result.get("data", []):
                 if data.get("status") == "success":
                     print(
@@ -178,7 +178,7 @@ def test_invalid_symbol():
         print("Response Body:")
         print(json.dumps(result, indent=2))
 
-        print("\n✓ Expected: status='partial', summary showing 1 success, 1 failed")
+        print("\n Expected: status='partial', summary showing 1 success, 1 failed")
 
     except Exception as e:
         print(f"Error: {e}")
@@ -204,7 +204,7 @@ def test_empty_symbols():
         print("Response Body:")
         print(json.dumps(result, indent=2))
 
-        print("\n✓ Expected: Validation error (min 1 symbol required)")
+        print("\n Expected: Validation error (min 1 symbol required)")
 
     except Exception as e:
         print(f"Error: {e}")
@@ -216,7 +216,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"\nBase URL: {BASE_URL}")
     print(f"API Key: {API_KEY[:10]}..." if len(API_KEY) > 10 else f"API Key: {API_KEY}")
-    print("\n⚠️  Prerequisites:")
+    print("\n Prerequisites:")
     print("  1. Install opengreeks: pip install opengreeks")
     print("  2. OpenAlgo must be running")
     print("  3. Markets should be open for live prices")

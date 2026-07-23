@@ -54,7 +54,7 @@ def map_order_data(order_data):
                 elif order["prctyp"] == "SL-LMT":
                     order["prctyp"] = "SL"
 
-                # 🔥 NEW: Use avgprc if instname and avgprc are present (highest priority)
+                # NEW: Use avgprc if instname and avgprc are present (highest priority)
                 if order.get("instname") and order.get("avgprc"):
                     avgprc = order.get("avgprc", 0)
                     if avgprc and float(avgprc) > 0:
@@ -63,7 +63,7 @@ def map_order_data(order_data):
                             f"Updated price from avgprc for order with instname: {order.get('norenordno', '')} - Price: {avgprc}"
                         )
 
-                # 🔥 EXISTING: Price logic for MARKET and SL-M orders (fallback)
+                # EXISTING: Price logic for MARKET and SL-M orders (fallback)
                 elif order["prctyp"] in ["MARKET", "SL-M"] and float(order.get("prc", 0)) == 0.0:
                     rprc = order.get("rprc", 0)
                     if rprc and float(rprc) > 0:

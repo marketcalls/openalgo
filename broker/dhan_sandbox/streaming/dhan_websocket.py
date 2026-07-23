@@ -502,20 +502,20 @@ class DhanWebSocket:
                 if len(message) > 0:
                     msg_type = message[0]
                     logger.info(
-                        f"📨 Received binary message #{self.binary_message_count} (type={msg_type}, size={len(message)} bytes, hex={message[:16].hex()})"
+                        f"Received binary message #{self.binary_message_count} (type={msg_type}, size={len(message)} bytes, hex={message[:16].hex()})"
                     )
 
                     # Log specific message types for debugging
                     if msg_type == 5:  # Market depth message
                         logger.info(
-                            f"🔍 DEPTH MESSAGE RECEIVED: size={len(message)}, full_hex={message.hex()}"
+                            f"DEPTH MESSAGE RECEIVED: size={len(message)}, full_hex={message.hex()}"
                         )
                     elif msg_type == 15:  # LTP message
-                        logger.debug(f"📈 LTP message received: size={len(message)}")
+                        logger.debug(f"LTP message received: size={len(message)}")
                     elif msg_type == 17:  # Quote message
-                        logger.debug(f"📊 Quote message received: size={len(message)}")
+                        logger.debug(f"Quote message received: size={len(message)}")
                     else:
-                        logger.info(f"❓ Unknown message type {msg_type}: size={len(message)}")
+                        logger.info(f"Unknown message type {msg_type}: size={len(message)}")
                 else:
                     logger.debug(f"Received empty binary message #{self.binary_message_count}")
                 await self._process_binary_packet(message)
@@ -582,13 +582,13 @@ class DhanWebSocket:
 
                 # Debug header fields
                 logger.info(
-                    f"📦 Binary packet header: type={msg_type}, length={msg_length}, exchange={exchange_code}, token={token} (0x{token:04x})"
+                    f"Binary packet header: type={msg_type}, length={msg_length}, exchange={exchange_code}, token={token} (0x{token:04x})"
                 )
 
                 # Log all tokens for debugging
                 exchange_name = self.EXCHANGE_MAP.get(exchange_code, f"UNK_{exchange_code}")
                 logger.info(
-                    f"📦 Received message for {exchange_name} token {token}, type {msg_type}"
+                    f"Received message for {exchange_name} token {token}, type {msg_type}"
                 )
 
                 # Validate message length
@@ -622,7 +622,7 @@ class DhanWebSocket:
                 # Special logging for 20-level depth messages
                 if msg_type in [41, 51]:
                     logger.info(
-                        f"🎯 Received 20-level depth message type {msg_type} for token {token}"
+                        f"Received 20-level depth message type {msg_type} for token {token}"
                     )
 
                 if msg_type == self.TYPE_TICKER:  # 15 - LTP data
@@ -644,11 +644,11 @@ class DhanWebSocket:
                         self.on_ticks([tick])
 
                 elif msg_type == self.TYPE_DEPTH_20_BID:  # 41 - 20-level bid data
-                    logger.info(f"🎯 Processing 20-level BID data for token {token}")
+                    logger.info(f"Processing 20-level BID data for token {token}")
                     self._handle_depth_20_bid(message)
 
                 elif msg_type == self.TYPE_DEPTH_20_ASK:  # 51 - 20-level ask data
-                    logger.info(f"🎯 Processing 20-level ASK data for token {token}")
+                    logger.info(f"Processing 20-level ASK data for token {token}")
                     self._handle_depth_20_ask(message)
 
                 elif msg_type == self.TYPE_OI:  # 9 - Open Interest
@@ -680,11 +680,11 @@ class DhanWebSocket:
                     self._parse_disconnect(message)
 
                 elif msg_type == self.TYPE_DEPTH_20_BID:  # 41 - 20-level bid data
-                    logger.info(f"🎯 Processing 20-level BID data for token {token}")
+                    logger.info(f"Processing 20-level BID data for token {token}")
                     self._handle_depth_20_bid(message)
 
                 elif msg_type == self.TYPE_DEPTH_20_ASK:  # 51 - 20-level ask data
-                    logger.info(f"🎯 Processing 20-level ASK data for token {token}")
+                    logger.info(f"Processing 20-level ASK data for token {token}")
                     self._handle_depth_20_ask(message)
 
                 else:
@@ -1302,7 +1302,7 @@ class DhanWebSocket:
                     # MCX/BSE tokens use regular 5-level depth connection
                     request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
                     logger.info(
-                        "📊 Using 5-level depth (RequestCode 21) for MCX/BSE/other exchanges"
+                        "Using 5-level depth (RequestCode 21) for MCX/BSE/other exchanges"
                     )
 
             # Create instrument list with exchange codes
@@ -1345,7 +1345,7 @@ class DhanWebSocket:
             # Send subscription request
             if self.ws and self.connected:
                 # Log full subscription packet for debugging
-                logger.info(f"📤 Sending subscription packet: {json.dumps(packet, indent=2)}")
+                logger.info(f"Sending subscription packet: {json.dumps(packet, indent=2)}")
 
                 # Send the subscription
                 try:
@@ -1354,9 +1354,9 @@ class DhanWebSocket:
                     )
                     # Wait a bit to ensure it's sent
                     future.result(timeout=2.0)
-                    logger.info("✅ Subscription packet sent successfully")
+                    logger.info("Subscription packet sent successfully")
                 except Exception as e:
-                    logger.error(f"❌ Failed to send subscription packet: {e}")
+                    logger.error(f"Failed to send subscription packet: {e}")
                     return False
 
                 # Log subscription summary
@@ -1370,7 +1370,7 @@ class DhanWebSocket:
                 return True
             else:
                 logger.error(
-                    f"❌ WebSocket not connected for subscription. ws={self.ws}, connected={self.connected}"
+                    f"WebSocket not connected for subscription. ws={self.ws}, connected={self.connected}"
                 )
                 return False
 
@@ -1785,7 +1785,7 @@ class DhanWebSocket:
                 logger.warning("No NSE tokens found for 20-level depth subscription")
                 return False
 
-            logger.info(f"🎯 Starting 20-level depth subscription for {len(nse_tokens)} NSE tokens")
+            logger.info(f"Starting 20-level depth subscription for {len(nse_tokens)} NSE tokens")
 
             # Start 20-level depth connection if not already running
             if not self.depth_20_connected:
@@ -1793,7 +1793,7 @@ class DhanWebSocket:
                     logger.error("Failed to start 20-level depth connection")
                     # Fallback to regular 5-level depth on main connection
                     logger.warning(
-                        "📊 Falling back to 5-level depth on main connection for NSE tokens"
+                        "Falling back to 5-level depth on main connection for NSE tokens"
                     )
                     request_code = self.REQUEST_CODE_FULL  # 21 - 5-level depth
 
@@ -1821,7 +1821,7 @@ class DhanWebSocket:
                 logger.info("20-level depth connection already running")
                 return True
 
-            logger.info("🚀 Starting 20-level depth WebSocket connection...")
+            logger.info("Starting 20-level depth WebSocket connection...")
 
             # Create new event loop for 20-level depth (issue #1344 — use
             # _original_threading.Thread so eventlet does not green-thread
@@ -1844,7 +1844,7 @@ class DhanWebSocket:
                 logger.error("20-level depth connection timeout")
                 return False
 
-            logger.info("✅ 20-level depth connection established")
+            logger.info("20-level depth connection established")
             return True
 
         except Exception as e:
@@ -1897,7 +1897,7 @@ class DhanWebSocket:
 
                 retries = 0
                 self.depth_20_connected = True
-                logger.info("✅ 20-level depth WebSocket connected")
+                logger.info("20-level depth WebSocket connected")
 
                 # Start heartbeat task for 20-level depth
                 heartbeat_task = asyncio.create_task(self._depth_20_heartbeat_task())
@@ -1957,7 +1957,7 @@ class DhanWebSocket:
             self.depth_20_ws = await websockets.connect(
                 ws_url, ping_interval=30, ping_timeout=10, close_timeout=10, max_size=None
             )
-            logger.info("🔗 20-level depth WebSocket connection established")
+            logger.info("20-level depth WebSocket connection established")
 
         except Exception as e:
             logger.error(f"Error connecting to 20-level depth endpoint: {e}")
@@ -2158,7 +2158,7 @@ class DhanWebSocket:
             # Wait for send to complete
             future.result(timeout=2.0)
 
-            logger.info(f"🎯 Sent 20-level depth subscription for {len(tokens)} tokens")
+            logger.info(f"Sent 20-level depth subscription for {len(tokens)} tokens")
             return True
 
         except Exception as e:
@@ -2214,7 +2214,7 @@ class DhanWebSocket:
             asyncio.run_coroutine_threadsafe(self.ws.send(json.dumps(packet)), self.loop)
 
             logger.info(
-                f"📨 Sent subscription for {len(tokens)} tokens on main connection with RequestCode {request_code}"
+                f"Sent subscription for {len(tokens)} tokens on main connection with RequestCode {request_code}"
             )
             return True
 
@@ -2918,7 +2918,7 @@ class DhanWebSocket:
             # Send tick to callback
             if self.on_ticks:
                 logger.info(
-                    f"🎯 Sending 20-level depth for token {token}: {len(formatted_bids)} bids, {len(formatted_offers)} offers"
+                    f"Sending 20-level depth for token {token}: {len(formatted_bids)} bids, {len(formatted_offers)} offers"
                 )
 
                 # Log a few levels for debugging
