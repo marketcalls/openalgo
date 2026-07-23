@@ -454,13 +454,23 @@ def create_app():
         # orders never pay a fresh TCP+TLS handshake after an idle gap
         start_broker_keepalive()
 
+        # Signal for "background DB table creation has finished". Created here
+        # rather than in setup_environment() because the order-update boot
+        # thread started just below has to wait on it, and it runs before
+        # setup_environment() is ever called. setup_environment() reuses this
+        # same event instead of replacing it.
+        import threading as _th
+
+        app.db_ready = _th.Event()
+
         # Start real-time order-update adapters for any existing broker
         # session (broker order-WS / postback ingestion -> OrderUpdateEvent ->
-        # socketio + websocket_proxy relay). Runs on a background thread; DB
-        # may still be initializing.
+        # socketio + websocket_proxy relay). Runs on a background thread that
+        # warms the ZMQ publisher immediately, then waits for db_ready before
+        # touching the auth table.
         from services.order_update_service import start_order_update_adapters_on_boot
 
-        start_order_update_adapters_on_boot()
+        start_order_update_adapters_on_boot(db_ready=app.db_ready)
 
         # NOTE: Python strategy scheduler is initialized in setup_environment()
         # AFTER database tables are created, to avoid "no such table" errors on fresh install
@@ -651,8 +661,12 @@ def setup_environment(app):
     # Tables already exist after first run; this is a safety check
     import threading
 
-    # Event to signal when DB init is complete (cache restoration waits on this)
-    app.db_ready = threading.Event()
+    # Event to signal when DB init is complete (cache restoration and the
+    # order-update boot scan wait on this). create_app() already created it so
+    # the order-update thread could take a reference; only create one here if
+    # setup_environment is somehow called against an app that skipped that.
+    if not hasattr(app, "db_ready"):
+        app.db_ready = threading.Event()
 
     def _init_databases_and_schedulers():
         with app.app_context():
