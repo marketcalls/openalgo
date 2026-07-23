@@ -44,7 +44,7 @@ OPENALGO_DIR="$SCRIPT_DIR"
 XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
 
 # Valid brokers list
-VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 
 # Banner
 echo ""
@@ -210,7 +210,7 @@ do_setup() {
     echo "  Valid brokers:"
     echo "  fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,"
     echo "  definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,"
-    echo "  groww, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,"
+    echo "  groww, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,"
     echo "  mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,"
     echo "  tradejini, tradesmart, upstox, wisdom, zebu, zerodha"
     echo ""
