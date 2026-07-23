@@ -553,8 +553,13 @@ class BrokerData:
                     else:
                         logger.debug(f"No data available for period {chunk_start} to {chunk_end}")
 
-                    # Add a small delay between chunks to avoid rate limiting
-                    time.sleep(0.5)
+                    # No inter-chunk sleep here: get_api_response already paces
+                    # every Fyers call through the process-wide apply_rate_limit
+                    # (125ms spacing) and honours Retry-After on 429s. The old
+                    # unconditional 0.5s sleep ran even after the LAST chunk,
+                    # putting a half-second floor under every history request --
+                    # a single-chunk intraday fetch spent 500ms sleeping on
+                    # 184ms of actual HTTP.
 
                     # Move to next chunk
                     current_start = current_end + pd.Timedelta(days=1)
