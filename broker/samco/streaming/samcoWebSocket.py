@@ -9,7 +9,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
 
 import websocket
@@ -110,6 +109,9 @@ class SamcoWebSocket:
         self.current_retry_attempt = 0
         self.DISCONNECT_FLAG = False
 
+        # Auth-failure guard: once an auth error is detected, stop reconnecting
+        self._auth_failed = False
+
         # Logger
         self.logger = get_logger("samco_websocket")
 
@@ -177,6 +179,7 @@ class SamcoWebSocket:
         """Initialize WebSocket connection with authentication headers"""
         self.running = True
         self.DISCONNECT_FLAG = False
+        self._auth_failed = False
 
         # Build headers with session token
         # Log token info for debugging (first/last 4 chars only for security)
@@ -305,6 +308,19 @@ class SamcoWebSocket:
         try:
             # Try to parse as JSON
             data = json.loads(message)
+
+            # Short-circuit auth-failed messages before they reach the market-data path.
+            # Samco may wrap them in a response object or send them as top-level status.
+            from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+
+            auth_check_payload = ""
+            if "response" in data and isinstance(data["response"], dict):
+                auth_check_payload = f"{data['response'].get('status', '')} {data['response'].get('message', '')}"
+            else:
+                auth_check_payload = f"{data.get('status', '')} {data.get('message', '')}"
+            if BaseBrokerWebSocketAdapter.is_auth_error(auth_check_payload):
+                self._handle_auth_failure(auth_check_payload.strip())
+                return
 
             # Check for response wrapper from Samco
             if "response" in data:
@@ -479,9 +495,37 @@ class SamcoWebSocket:
         except (ValueError, TypeError):
             return 0
 
+    def _handle_auth_failure(self, reason: str) -> None:
+        """Stop reconnect loops once an authentication failure has been detected."""
+        if self._auth_failed:
+            return
+
+        self._auth_failed = True
+        self.logger.error(f"Samco authentication failure: {reason}. Stopping reconnect.")
+
+        # Drop the connection so the adapter's _on_close can see _auth_failed
+        # and give up instead of reconnecting.
+        self.running = False
+        self.connected = False
+        self._stop_heartbeat()
+        self._close_websocket()
+
     def _on_error(self, ws, error) -> None:
         """Handle WebSocket connection errors — reconnection is handled by the adapter"""
-        self.logger.error(f"Samco WebSocket error: {error}")
+        error_msg = str(error)
+        self.logger.error(f"Samco WebSocket error: {error_msg}")
+
+        from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+
+        if BaseBrokerWebSocketAdapter.is_auth_error(error_msg):
+            self._handle_auth_failure(error_msg)
+            # Propagate to the adapter so it can stop its retry loop immediately.
+            if self._on_error_callback:
+                try:
+                    self._on_error_callback(ws, error)
+                except Exception as e:
+                    self.logger.error(f"Error in on_error callback: {e}")
+            return
 
         if self._on_error_callback:
             try:
@@ -494,6 +538,19 @@ class SamcoWebSocket:
     ) -> None:
         """Handle WebSocket connection close event"""
         self.connected = False
+
+        # Auth failures may reach us through the close reason as well.
+        from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+
+        close_reason = f"{close_status_code or ''} {close_msg or ''}".strip()
+        if close_reason and BaseBrokerWebSocketAdapter.is_auth_error(close_reason):
+            if not self._auth_failed:
+                self._auth_failed = True
+                self.logger.error(
+                    f"Samco authentication failure: {close_reason}. Stopping reconnect."
+                )
+            self.running = False
+
         self.logger.info(f"Samco WebSocket closed: {close_status_code} - {close_msg}")
 
         self._stop_heartbeat()
