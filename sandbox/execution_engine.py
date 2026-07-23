@@ -789,6 +789,39 @@ class ExecutionEngine:
 
             db_session.commit()
 
+            # Event-driven MTM: keep the WS engine's position-feed refs in
+            # sync with the position book. After any fill, either the symbol
+            # has open quantity (subscribe so MarketDataService stays warm and
+            # the MTM loop reads ticks instead of REST) or it just went flat
+            # (release the subscription). Never allowed to break a fill.
+            try:
+                from sandbox.websocket_execution_engine import (
+                    get_websocket_execution_engine,
+                )
+
+                ws_engine = get_websocket_execution_engine()
+                if ws_engine is not None:
+                    has_open = (
+                        SandboxPositions.query.filter_by(
+                            user_id=order.user_id,
+                            symbol=order.symbol,
+                            exchange=order.exchange,
+                        )
+                        .filter(SandboxPositions.quantity != 0)
+                        .count()
+                        > 0
+                    )
+                    if has_open:
+                        ws_engine.notify_position_opened(
+                            order.user_id, order.symbol, order.exchange
+                        )
+                    else:
+                        ws_engine.notify_position_closed(
+                            order.user_id, order.symbol, order.exchange
+                        )
+            except Exception:
+                logger.debug("Position feed notify failed (non-fatal)", exc_info=True)
+
             # Validate margin consistency after position update
             is_consistent, discrepancy = validate_margin_consistency(order.user_id)
             if not is_consistent:
