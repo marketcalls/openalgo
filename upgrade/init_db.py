@@ -273,7 +273,7 @@ if main_db_path and os.path.exists(main_db_path):
                     print("  No account exists yet. Start OpenAlgo and visit /setup to")
                     print("  create one. This is the expected state on a fresh install.")
 
-            for table, label in (("auth", "Broker sessions"), ("apikeys", "API keys")):
+            for table, label in (("auth", "Broker sessions"), ("api_keys", "API keys")):
                 if table in tables:
                     n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     print(f"  {label:<18}: {n}")
