@@ -139,6 +139,14 @@ def api_get_configs():
                 "value": "5",
                 "description": "Interval to update MTM (0-60 sec)",
             },
+            "expiry_settlement_timing": {
+                "value": "expiry_day_close",
+                "description": "When expired F&O contracts settle",
+            },
+            "option_expiry_settlement": {
+                "value": "ltp",
+                "description": "Settlement price for expired options",
+            },
         }
 
         # Helper to get config with fallback to default
@@ -179,6 +187,13 @@ def api_get_configs():
                 "configs": {
                     "order_check_interval": get_config_value("order_check_interval"),
                     "mtm_update_interval": get_config_value("mtm_update_interval"),
+                },
+            },
+            "expiry": {
+                "title": "F&O Expiry Settlement",
+                "configs": {
+                    "expiry_settlement_timing": get_config_value("expiry_settlement_timing"),
+                    "option_expiry_settlement": get_config_value("option_expiry_settlement"),
                 },
             },
         }
@@ -860,6 +875,15 @@ def validate_config(config_key, config_value):
             ]
             if config_value not in valid_days:
                 return f"Reset day must be one of: {', '.join(valid_days)}"
+
+        # Validate expiry settlement enums
+        if config_key == "expiry_settlement_timing":
+            if config_value not in ("expiry_day_close", "next_day"):
+                return "Expiry settlement timing must be 'expiry_day_close' or 'next_day'"
+
+        if config_key == "option_expiry_settlement":
+            if config_value not in ("ltp", "zero"):
+                return "Option expiry settlement must be 'ltp' or 'zero'"
 
         return None  # No validation error
 

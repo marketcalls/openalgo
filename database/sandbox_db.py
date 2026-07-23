@@ -499,6 +499,16 @@ def init_default_config():
             "description": "Delay between multi-leg smart orders - Range: 0.1-10 seconds (for future use)",
         },
         {
+            "config_key": "expiry_settlement_timing",
+            "config_value": "expiry_day_close",
+            "description": "When expired F&O settles: 'expiry_day_close' (at exchange close on expiry day) or 'next_day' (from midnight after expiry)",
+        },
+        {
+            "config_key": "option_expiry_settlement",
+            "config_value": "ltp",
+            "description": "Expired option settlement price: 'ltp' (last traded price, keeps ITM value) or 'zero' (all options expire worthless)",
+        },
+        {
             "config_key": "gtt_oco_margin_mode",
             "config_value": "max",
             "description": "OCO GTT margin mode: 'max' (block only the larger leg) or 'sum'",
