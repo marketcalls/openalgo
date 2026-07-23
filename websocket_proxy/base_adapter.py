@@ -503,7 +503,8 @@ class BaseBrokerWebSocketAdapter(ABC):
         except Exception as e:
             self.logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
 
-    def is_auth_error(self, error_message: str) -> bool:
+    @staticmethod
+    def is_auth_error(error_message: str) -> bool:
         """
         Check if an error message indicates an authentication failure.
 
@@ -523,6 +524,7 @@ class BaseBrokerWebSocketAdapter(ABC):
             "401",
             "403",
             "unauthorized",
+            "unauthenticated",
             "forbidden",
             "authentication failed",
             "auth failed",
