@@ -182,6 +182,22 @@ EXCHANGE_CLOSE_TIMES = {
 DEFAULT_CLOSE_TIME = dt_time(15, 30)
 
 
+def _notify_position_feed_closed(user_id, symbol, exchange):
+    """Tell the WS engine a settled position no longer needs its MTM feed.
+
+    Best-effort by design (event-driven MTM is an enhancement): failure to
+    release a subscription costs a few stray ticks, never correctness.
+    """
+    try:
+        from sandbox.websocket_execution_engine import get_websocket_execution_engine
+
+        engine = get_websocket_execution_engine()
+        if engine is not None:
+            engine.notify_position_closed(user_id, symbol, exchange)
+    except Exception:
+        logger.debug("Position feed release failed (non-fatal)", exc_info=True)
+
+
 def is_contract_expired_now(expiry_date, exchange, now=None):
     """Return True when an F&O contract should be treated as expired right now.
 
@@ -416,6 +432,10 @@ class PositionManager:
             db_session.commit()
 
         logger.info(f"Expired position {symbol} settled successfully for user {position.user_id}")
+
+        # Release the position's MTM feed subscription (event-driven MTM);
+        # the contract is dead, no further ticks are wanted.
+        _notify_position_feed_closed(position.user_id, symbol, position.exchange)
 
     def get_open_positions(self, update_mtm=True):
         """
@@ -1409,6 +1429,7 @@ def cleanup_expired_contracts():
                         db_session.commit()
 
                         logger.info(f"Expired contract {symbol} cleaned up for user {user_id}")
+                        _notify_position_feed_closed(user_id, symbol, position.exchange)
 
                     except Exception as e:
                         db_session.rollback()

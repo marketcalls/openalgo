@@ -304,9 +304,6 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except ValueError:
                 return {"status": "error", "message": f"Invalid token format: {token}"}
 
-            # Map mode to Zerodha format
-            zerodha_mode = self.mode_map.get(mode, ZerodhaWebSocket.MODE_QUOTE)
-
             # Check if WebSocket is actually connected
             if not self.ws_client.is_connected():
                 self.logger.warning("WebSocket not connected, waiting for connection...")
@@ -317,26 +314,15 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Track subscription with mapped exchange for consistency
             subscription_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
 
-            # Add to queue for batch processing
             with self.lock:
-                self.subscription_queue.append(
-                    {
-                        "token": token,
-                        "mode": zerodha_mode,
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "subscription_exchange": subscription_exchange,
-                        "mode_int": mode,
-                    }
-                )
-
-                # If this is the first subscription in queue, start the batch timer
-                if len(self.subscription_queue) == 1:
-                    self._start_batch_timer()
-
-            # Immediately track subscription (even before actual WebSocket subscription)
-            with self.lock:
-                self.subscribed_symbols[f"{exchange}:{symbol}"] = {
+                # Per-mode subscription tracking (issue #1664). The protocol
+                # subscribes/unsubscribes per (symbol, mode) -- a client can
+                # legitimately hold LTP and Depth on the same symbol at once.
+                # The old symbol-only key made the second mode overwrite the
+                # first, so _handle_ticks stopped publishing the overwritten
+                # mode's topic and LTP consumers (the /trading chart) froze
+                # while depth kept flowing.
+                self.subscribed_symbols[f"{exchange}:{symbol}:{mode}"] = {
                     "exchange": exchange,  # Original exchange for unsubscribe
                     "symbol": symbol,
                     "token": token,
@@ -344,6 +330,33 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "mapped_exchange": subscription_exchange,  # Mapped exchange for data matching
                 }
                 self.token_to_symbol[token] = (symbol, exchange)
+
+                # The kite stream itself carries ONE mode per token, so request
+                # the highest subscribed mode -- its payload is a superset of
+                # the lower modes and _handle_ticks fans it out per mode.
+                # Without the max(), a later LTP subscribe would downgrade an
+                # active full-depth stream at the broker.
+                highest_mode = max(
+                    info["mode"]
+                    for info in self.subscribed_symbols.values()
+                    if info["token"] == token
+                )
+                zerodha_mode = self.mode_map.get(highest_mode, ZerodhaWebSocket.MODE_QUOTE)
+
+                self.subscription_queue.append(
+                    {
+                        "token": token,
+                        "mode": zerodha_mode,
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "subscription_exchange": subscription_exchange,
+                        "mode_int": highest_mode,
+                    }
+                )
+
+                # If this is the first subscription in queue, start the batch timer
+                if len(self.subscription_queue) == 1:
+                    self._start_batch_timer()
 
             self.logger.info(
                 f"Subscribed to {exchange}:{symbol} (token: [REDACTED], mode: {zerodha_mode})"
@@ -366,24 +379,39 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             depth_level: Optional depth level parameter (for compatibility)
         """
         try:
-            key = f"{exchange}:{symbol}"
-
             with self.lock:
-                if key not in self.subscribed_symbols:
+                # Per-mode keys (issue #1664). A mode-specific unsubscribe
+                # removes only that mode; mode=None (legacy callers) removes
+                # every mode for the symbol.
+                prefix = f"{exchange}:{symbol}:"
+                if mode is not None:
+                    keys = [k for k in self.subscribed_symbols if k == f"{prefix}{mode}"]
+                else:
+                    keys = [k for k in self.subscribed_symbols if k.startswith(prefix)]
+
+                if not keys:
                     return {"status": "error", "message": f"Not subscribed to {symbol}"}
 
-                subscription = self.subscribed_symbols[key]
-                token = subscription["token"]
+                token = self.subscribed_symbols[keys[0]]["token"]
+                for k in keys:
+                    del self.subscribed_symbols[k]
 
-                # Unsubscribe using WebSocket client
-                if self.ws_client:
-                    self.ws_client.unsubscribe([token])
+                # Only drop the kite-level stream when NO mode still needs the
+                # token. If lower modes remain we keep the existing (possibly
+                # higher-mode) stream -- its payload is a superset, and
+                # _handle_ticks fans out per remaining mode.
+                still_needed = any(
+                    info["token"] == token for info in self.subscribed_symbols.values()
+                )
+                if not still_needed:
+                    if self.ws_client:
+                        self.ws_client.unsubscribe([token])
+                    self.token_to_symbol.pop(token, None)
 
-                # Remove from tracking
-                del self.subscribed_symbols[key]
-                self.token_to_symbol.pop(token, None)
-
-            self.logger.info(f"Unsubscribed from {exchange}:{symbol}")
+            self.logger.info(
+                f"Unsubscribed from {exchange}:{symbol}"
+                f"{f' (mode {mode})' if mode is not None else ''}"
+            )
             return {"status": "success", "message": f"Unsubscribed from {symbol}"}
 
         except Exception as e:
@@ -501,7 +529,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 f"LTP Data should be available for polling: {subscription_exchange}:{symbol}"
                             )
                     else:
-                        # For non-full modes, just publish as-is
+                        # For non-full modes, publish as-is
                         mode_str = {"ltp": "LTP", "quote": "QUOTE", "full": "DEPTH"}.get(
                             original_tick_mode, "LTP"
                         )
@@ -512,6 +540,24 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                         # Publish to ZeroMQ
                         self.publish_market_data(topic, transformed_tick)
+
+                        # Quote ticks are a superset of LTP: when the kite
+                        # stream runs in quote mode because modes 1 and 2 are
+                        # both subscribed, fan the LTP topic out too --
+                        # otherwise the mode-1 subscriber starves exactly like
+                        # the depth case above (issue #1664).
+                        if original_tick_mode == "quote" and 1 in subscribed_modes:
+                            ltp_tick = {
+                                "symbol": symbol,
+                                "exchange": data_exchange,
+                                "mode": "ltp",
+                                "ltp": transformed_tick.get("ltp", 0),
+                                "timestamp": transformed_tick.get(
+                                    "timestamp", int(time.time() * 1000)
+                                ),
+                            }
+                            ltp_topic = self._generate_topic(symbol, subscription_exchange, "LTP")
+                            self.publish_market_data(ltp_topic, ltp_tick)
 
         except Exception as e:
             self.logger.error(f"Error handling ticks: {e}")
