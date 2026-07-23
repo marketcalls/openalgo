@@ -74,6 +74,20 @@ class SquareOffManager:
             # WebSocket engine log token-lookup errors on every boot.
             cancelled_count += self._cancel_expired_contract_orders()
 
+            # Step 1c: Settle positions on expired F&O contracts. Runs the
+            # same cleanup the boot catch-up uses, so expiry settlement is
+            # proactive (every minute via the backup job) instead of waiting
+            # for someone to open the positionbook. Cheap when nothing has
+            # expired: one query, no matches, return. Timing (expiry-day
+            # close vs next day) and option settlement price are governed by
+            # the expiry_settlement_timing / option_expiry_settlement configs.
+            try:
+                from sandbox.position_manager import cleanup_expired_contracts
+
+                cleanup_expired_contracts()
+            except Exception as e:
+                logger.exception(f"Error settling expired positions: {e}")
+
             # Step 2: Get all open MIS positions (quantity != 0)
             mis_positions = (
                 SandboxPositions.query.filter_by(product="MIS")
@@ -140,18 +154,21 @@ class SquareOffManager:
         """
         cancelled_count = 0
         try:
-            from datetime import date
-
             from database.sandbox_db import SandboxOrders
             from sandbox.order_manager import OrderManager
-            from sandbox.position_manager import get_contract_expiry
+            from sandbox.position_manager import (
+                get_contract_expiry,
+                is_contract_expired_now,
+            )
 
-            today = date.today()
             open_orders = SandboxOrders.query.filter_by(order_status="open").all()
 
             for order in open_orders:
                 expiry_date = get_contract_expiry(order.symbol, order.exchange)
-                if expiry_date is None or today <= expiry_date:
+                # Same timing rule as position settlement: with the default
+                # expiry_day_close config an order dies at the closing bell of
+                # expiry day, not the following midnight.
+                if not is_contract_expired_now(expiry_date, order.exchange):
                     continue
 
                 try:
