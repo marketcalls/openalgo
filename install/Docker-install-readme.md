@@ -506,6 +506,7 @@ sudo rm -rf /var/lib/docker
 | Flattrade | `flattrade` | No |
 | Fyers | `fyers` | No |
 | Groww | `groww` | No |
+| HDFC Sky | `hdfcsky` | No |
 | IBulls | `ibulls` | Yes |
 | IIFL | `iifl` | Yes |
 | Iiflcapital | `iiflcapital` | No |
