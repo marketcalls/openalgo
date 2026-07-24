@@ -44,7 +44,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from broker.hdfcsky.api.baseurl import SECURITY_MASTER_URL, USER_AGENT
-from broker.hdfcsky.mapping.transform_data import INDEX_SEGMENTS, classify_index_symbol
 from database.engine_factory import create_db_engine
 from extensions import socketio
 from utils.httpx_client import get_httpx_client
@@ -191,6 +190,152 @@ def _strip_broker_suffix(trading_symbols, monthly_suffix, weekly_suffix, weekly_
                 break
         out.append(base)
     return out
+
+
+# --- index symbol mapping -----------------------------------------------
+#
+# HDFC Sky flags index rows via the `segment` column: NSE indices carry
+# "INDICES" and BSE indices carry "IDX". These are NOT a separate exchange in
+# the CSV, so the master builder pulls them out of the parent cash exchange
+# into OpenAlgo's NSE_INDEX / BSE_INDEX.
+INDEX_SEGMENTS = {"NSE": "INDICES", "BSE": "IDX"}
+
+# HDFC Sky ships index rows with human display names on NSE ("Nifty 50",
+# "Nifty Bank") and short codes on BSE ("SENSEX", "SNSX50", "BSE HC").
+# OpenAlgo standardizes both to the symbols documented in
+# docs/prompt/symbol-format.md -- the same set the Zerodha reference
+# implementation produces, so option tools that start from an index LTP
+# (option chain, IV smile, max pain, GEX, OI tracker) resolve identically
+# across brokers.
+#
+# Lookup keys are uppercased with all whitespace removed. Anything not listed
+# falls back to its cleaned (uppercased, space-stripped) name, which keeps new
+# indices addressable the moment HDFC adds them.
+
+_NSE_INDEX_MAP = {
+    # Derivative underlyings -- these five MUST match the NFO `name` column
+    # so the options tools can join index spot to its option chain.
+    "NIFTY50": "NIFTY",
+    "NIFTYBANK": "BANKNIFTY",
+    "NIFTYFINSERVICE": "FINNIFTY",
+    "NIFTYMIDSELECT": "MIDCPNIFTY",
+    "NIFTYNEXT50": "NIFTYNXT50",
+    "INDIAVIX": "INDIAVIX",
+    # Broad market
+    "NIFTY100": "NIFTY100",
+    "NIFTY200": "NIFTY200",
+    "NIFTY500": "NIFTY500",
+    # Sectoral
+    "NIFTYALPHA50": "NIFTYALPHA50",
+    "NIFTYAUTO": "NIFTYAUTO",
+    "NIFTYCHEMICALS": "NIFTYCHEMICALS",
+    "NIFTYCOMMODITIES": "NIFTYCOMMODITIES",
+    "NIFTYCONSUMPTION": "NIFTYCONSUMPTION",
+    "NIFTYCPSE": "NIFTYCPSE",
+    "NIFTYDIVOPPS50": "NIFTYDIVOPPS50",
+    "NIFTYENERGY": "NIFTYENERGY",
+    "NIFTYFMCG": "NIFTYFMCG",
+    "NIFTYGROWSECT15": "NIFTYGROWSECT15",
+    "NIFTYHEALTHCARE": "NIFTYHEALTHCARE",
+    "NIFTYINFRA": "NIFTYINFRA",
+    "NIFTYIT": "NIFTYIT",
+    "NIFTYMEDIA": "NIFTYMEDIA",
+    "NIFTYMETAL": "NIFTYMETAL",
+    "NIFTYMNC": "NIFTYMNC",
+    "NIFTYOILANDGAS": "NIFTYOILANDGAS",
+    "NIFTYPHARMA": "NIFTYPHARMA",
+    "NIFTYPSE": "NIFTYPSE",
+    "NIFTYPSUBANK": "NIFTYPSUBANK",
+    "NIFTYPVTBANK": "NIFTYPVTBANK",
+    "NIFTYREALTY": "NIFTYREALTY",
+    "NIFTYSERVSECTOR": "NIFTYSERVSECTOR",
+    # Market cap
+    "NIFTYMIDLIQ15": "NIFTYMIDLIQ15",
+    "NIFTYMIDCAP50": "NIFTYMIDCAP50",
+    "NIFTYMIDCAP100": "NIFTYMIDCAP100",
+    "NIFTYMIDCAP150": "NIFTYMIDCAP150",
+    "NIFTYMIDSML400": "NIFTYMIDSML400",
+    "NIFTYSMLCAP50": "NIFTYSMLCAP50",
+    "NIFTYSMLCAP100": "NIFTYSMLCAP100",
+    "NIFTYSMLCAP250": "NIFTYSMLCAP250",
+    # Strategy
+    "NIFTY100EQLWGT": "NIFTY100EQLWGT",
+    "NIFTY100LIQ15": "NIFTY100LIQ15",
+    "NIFTY100LOWVOL30": "NIFTY100LOWVOL30",
+    "NIFTY100QUALTY30": "NIFTY100QUALTY30",
+    "NIFTY200QUALTY30": "NIFTY200QUALTY30",
+    "NIFTY50DIVPOINT": "NIFTY50DIVPOINT",
+    "NIFTY50EQLWGT": "NIFTY50EQLWGT",
+    "NIFTY50PR1XINV": "NIFTY50PR1XINV",
+    "NIFTY50PR2XLEV": "NIFTY50PR2XLEV",
+    "NIFTY50TR1XINV": "NIFTY50TR1XINV",
+    "NIFTY50TR2XLEV": "NIFTY50TR2XLEV",
+    "NIFTY50VALUE20": "NIFTY50VALUE20",
+    # Government securities
+    "NIFTYGS10YR": "NIFTYGS10YR",
+    "NIFTYGS10YRCLN": "NIFTYGS10YRCLN",
+    "NIFTYGS1115YR": "NIFTYGS1115YR",
+    "NIFTYGS15YRPLUS": "NIFTYGS15YRPLUS",
+    "NIFTYGS48YR": "NIFTYGS48YR",
+    "NIFTYGS813YR": "NIFTYGS813YR",
+    "NIFTYGSCOMPSITE": "NIFTYGSCOMPSITE",
+}
+
+# BSE short codes (the CSV's `trading_symbol` for IDX rows) -> OpenAlgo symbol.
+_BSE_INDEX_MAP = {
+    "SENSEX": "SENSEX",
+    "BANKEX": "BANKEX",
+    "SNSX50": "SENSEX50",
+    "SNXT50": "BSESENSEXNEXT50",
+    "BSE100": "BSE100",
+    "BSE200": "BSE200",
+    "BSE500": "BSE500",
+    "MID150": "BSE150MIDCAPINDEX",
+    "LMI250": "BSE250LARGEMIDCAPINDEX",
+    "MSL400": "BSE400MIDSMALLCAPINDEX",
+    "AUTO": "BSEAUTO",
+    "BSECG": "BSECAPITALGOODS",
+    "BSECD": "BSECONSUMERDURABLES",
+    "CPSE": "BSECPSE",
+    "ENERGY": "BSEENERGY",
+    "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+    "FINSER": "BSEFINANCIALSERVICES",
+    "BSEHC": "BSEHEALTHCARE",
+    "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+    "INDSTR": "BSEINDUSTRIALS",
+    "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+    "BSEIPO": "BSEIPO",
+    "METAL": "BSEMETAL",
+    "MIDSEL": "BSEMIDCAPSELECTINDEX",
+    "OILGAS": "BSEOIL&GAS",
+    "POWER": "BSEPOWER",
+    "BSEPSU": "BSEPSU",
+    "REALTY": "BSEREALTY",
+    "SMLSEL": "BSESMALLCAPSELECTINDEX",
+    "SMEIPO": "BSESMEIPO",
+    "TECK": "BSETECK",
+    "TELCOM": "BSETELECOM",
+    "UTILS": "BSEUTILITIES",
+    "ESG100": "ESG100",
+    "BHRT22": "BHRT22",
+    "FOCIT": "FOCIT",
+}
+
+_INDEX_MAPS = {"NSE_INDEX": _NSE_INDEX_MAP, "BSE_INDEX": _BSE_INDEX_MAP}
+
+
+def _norm(name):
+    return "".join(str(name).upper().split())
+
+
+def classify_index_symbol(display_name, oa_exchange):
+    """HDFC Sky index display name -> the OpenAlgo index symbol.
+
+    Unmapped names fall back to their normalized (uppercase, space-free) form
+    so newly listed indices are still addressable.
+    """
+    key = _norm(display_name)
+    return _INDEX_MAPS.get(oa_exchange, {}).get(key, key)
 
 
 def process_security_master(df):
