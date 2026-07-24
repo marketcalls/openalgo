@@ -82,8 +82,12 @@ class ExecutionEngine:
         Respects rate limits through batch processing
         """
         try:
-            # Get all pending orders
-            pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
+            # Get all pending orders - "open" (resting in the regular book) and
+            # "trigger pending" (SL/SL-M resting in the exchange's Stop-Loss
+            # book, not yet released) both need tick-by-tick monitoring.
+            pending_orders = SandboxOrders.query.filter(
+                SandboxOrders.order_status.in_(["open", "trigger pending"])
+            ).all()
 
             if not pending_orders:
                 logger.debug("No pending orders to process")
@@ -363,6 +367,14 @@ class ExecutionEngine:
                 )
                 return
 
+            # SL/SL-M orders resting in "trigger pending" (the Stop-Loss book,
+            # not the regular book) only ever get a trigger check here - never
+            # the full open-order price-type logic below, which assumes an
+            # order that is already live in the regular book.
+            if order.order_status == "trigger pending":
+                self._process_trigger_pending_order(order, ltp)
+                return
+
             # Determine if order should be executed based on price type
             should_execute = False
             execution_price = None
@@ -420,6 +432,69 @@ class ExecutionEngine:
 
         except Exception as e:
             logger.exception(f"Error processing order {order.orderid}: {e}")
+
+    def _process_trigger_pending_order(self, order, ltp):
+        """
+        Check an SL/SL-M order resting in "trigger pending" against the
+        current LTP and release it from the Stop-Loss book once triggered.
+
+        SL-M has no resting phase once triggered: a real exchange converts it
+        straight to a market order, so it goes directly to "complete" here.
+
+        SL only fills immediately if the limit price is ALSO satisfiable on
+        this same tick (mirrors the "trigger already met at placement" fast
+        path in order_manager.py's place_order - both places treat a
+        simultaneous trigger+limit match as an instant fill rather than an
+        observable middle state). Otherwise it transitions to "open" - now
+        resting live in the regular order book, unfilled - and the unmodified
+        SL branch in _process_order picks it up on subsequent ticks exactly
+        like any other open SL order (re-checking the trigger condition there
+        is safe: once crossed, BUY prices staying at/above trigger, or SELL
+        prices staying at/below it, keep satisfying the same comparison).
+        """
+        try:
+            trigger_met = False
+            if order.action == "BUY" and ltp >= order.trigger_price:
+                trigger_met = True
+            elif order.action == "SELL" and ltp <= order.trigger_price:
+                trigger_met = True
+
+            if not trigger_met:
+                return  # Still resting in the Stop-Loss book, nothing to do
+
+            if order.price_type == "SL-M":
+                logger.info(
+                    f"SL-M order {order.orderid} triggered at LTP {ltp} "
+                    f"(trigger={order.trigger_price}) - executing at market"
+                )
+                self._execute_order(order, ltp)
+                return
+
+            # SL: triggered - check whether the limit price is also
+            # satisfiable right now, same tick.
+            limit_met = (order.action == "BUY" and ltp <= order.price) or (
+                order.action == "SELL" and ltp >= order.price
+            )
+            if limit_met:
+                logger.info(
+                    f"SL order {order.orderid} triggered and limit satisfied at LTP {ltp} "
+                    f"(trigger={order.trigger_price}, limit={order.price}) - executing"
+                )
+                self._execute_order(order, ltp)
+                return
+
+            logger.info(
+                f"SL order {order.orderid} triggered at LTP {ltp} "
+                f"(trigger={order.trigger_price}) but limit {order.price} not yet "
+                f"satisfiable - now resting open in the regular book"
+            )
+            order.order_status = "open"
+            order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+            db_session.commit()
+            self._publish_order_update_event(order, order_status="open")
+
+        except Exception as e:
+            logger.exception(f"Error processing trigger-pending order {order.orderid}: {e}")
 
     def _execute_order(self, order, execution_price):
         """
@@ -544,19 +619,23 @@ class ExecutionEngine:
         try:
             fund_manager = FundManager(order.user_id)
 
-            # Quantity that impacts the intraday position book. For a CNC SELL,
-            # any shares beyond an open long position are sold from settled
-            # holdings — reduce the holding directly (crediting the sale
-            # proceeds) instead of opening a phantom short position the user can
-            # never square off (issue #1640).
+            # A CNC SELL takes the same route as every other fill: it nets
+            # against any open position and, beyond that, leaves a negative CNC
+            # carry-forward position. T+1 settlement then reduces the holding and
+            # credits the proceeds (holdings_manager.process_t1_settlement, which
+            # already handles negative positions).
+            #
+            # It deliberately does NOT reduce the holding at fill time. Real
+            # delivery selling settles on T+1, and the buy side already behaves
+            # that way. Reducing instantly made the two halves of one product
+            # disagree.
+            #
+            # Issue #1640 was the opposite failure: a short was opened for shares
+            # the user owned AND the holding was left untouched, so nothing could
+            # square it off. What makes the negative position safe now is that
+            # settlement nets it against the holding, and order validation counts
+            # the signed position so the same shares cannot be sold twice.
             effective_qty = order.quantity
-            if order.product == "CNC" and order.action == "SELL":
-                effective_qty = self._settle_cnc_sell_from_holdings(
-                    order, execution_price, fund_manager
-                )
-                if effective_qty <= 0:
-                    # Fully settled from holdings — no position to create/update.
-                    return
 
             # Check if position exists
             position = SandboxPositions.query.filter_by(
@@ -836,71 +915,6 @@ class ExecutionEngine:
             db_session.rollback()
             logger.exception(f"Error updating position for order {order.orderid}: {e}")
             raise
-
-    def _settle_cnc_sell_from_holdings(self, order, execution_price, fund_manager):
-        """Settle the holdings-backed portion of a CNC SELL (issue #1640).
-
-        Shares sold beyond any open long intraday position come from settled
-        holdings: reduce the holding and credit the sale proceeds to available
-        balance (mirrors T+1 settlement's reduce-holding accounting). This
-        prevents a phantom short position from being opened for shares the user
-        actually owns — which previously left the holding unsellable.
-
-        Args:
-            order: the filled SELL order (needs user_id/symbol/exchange/quantity)
-            execution_price: Decimal fill price
-            fund_manager: FundManager for the user
-
-        Returns:
-            int: quantity still to net against the open position (0 if fully from holdings)
-        """
-        position = SandboxPositions.query.filter_by(
-            user_id=order.user_id,
-            symbol=order.symbol,
-            exchange=order.exchange,
-            product=order.product,
-        ).first()
-        open_long_qty = position.quantity if (position and position.quantity > 0) else 0
-
-        # Draw from holdings only for the part an open long position can't cover.
-        from_holdings = order.quantity - open_long_qty
-        if from_holdings <= 0:
-            return order.quantity  # fully covered by the open long position
-
-        holding = SandboxHoldings.query.filter_by(
-            user_id=order.user_id, symbol=order.symbol, exchange=order.exchange
-        ).first()
-        if not holding or holding.quantity <= 0:
-            # No holdings to draw from. Order validation already blocks a CNC sell
-            # beyond position + holdings, so leave the remainder to the position
-            # logic rather than silently swallowing quantity here.
-            return order.quantity
-
-        reduce_qty = min(from_holdings, holding.quantity)
-        holding.quantity -= reduce_qty
-        holding.updated_at = datetime.now(pytz.timezone("Asia/Kolkata"))
-
-        # Credit sale proceeds to available balance (holdings carry no blocked
-        # margin — it was transferred out at T+1 settlement).
-        proceeds = Decimal(str(reduce_qty)) * execution_price
-        fund_manager.credit_sale_proceeds(
-            proceeds,
-            f"CNC SELL from holdings: {order.symbol} x{reduce_qty} @ {execution_price}",
-        )
-
-        if holding.quantity == 0:
-            db_session.delete(holding)
-            logger.info(f"Holdings fully sold: {order.symbol} x{reduce_qty}, proceeds ₹{proceeds}")
-        else:
-            logger.info(
-                f"Reduced holdings on CNC SELL: {order.symbol} by {reduce_qty} → "
-                f"{holding.quantity}, proceeds ₹{proceeds}"
-            )
-
-        db_session.commit()
-
-        # Remaining quantity nets against the open long position (may be 0).
-        return order.quantity - reduce_qty
 
     def _calculate_realized_pnl(self, old_quantity, avg_price, close_quantity, close_price, contract_value=1.0):
         """Calculate realized P&L for closed positions, multiplied by contract_value (e.g. 0.01 for ETHUSD.P)."""

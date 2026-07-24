@@ -70,7 +70,7 @@ class SandboxOrders(Base):
     product = Column(String(20), nullable=False)  # CNC, NRML, MIS
     order_status = Column(
         String(20), nullable=False, default="open", index=True
-    )  # open, complete, cancelled, rejected
+    )  # open, trigger pending, complete, cancelled, rejected
     average_price = Column(DECIMAL(10, 2), nullable=True)  # Filled price
     filled_quantity = Column(Integer, default=0)  # Always 0 or quantity (no partial fills)
     pending_quantity = Column(Integer, nullable=False)  # Remaining quantity
@@ -85,7 +85,7 @@ class SandboxOrders(Base):
         Index("idx_sandbox_user_status", "user_id", "order_status"),
         Index("idx_sandbox_symbol_exchange", "symbol", "exchange"),
         CheckConstraint(
-            "order_status IN ('open', 'complete', 'cancelled', 'rejected')",
+            "order_status IN ('open', 'trigger pending', 'complete', 'cancelled', 'rejected')",
             name="check_order_status",
         ),
         CheckConstraint("action IN ('BUY', 'SELL')", name="check_action"),
