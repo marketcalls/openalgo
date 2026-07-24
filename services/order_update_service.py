@@ -53,6 +53,10 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
     "zerodha": ("broker.zerodha.streaming.zerodha_order_adapter", "create_zerodha_order_adapter"),
     "nubra": ("broker.nubra.streaming.nubra_order_adapter", "create_nubra_order_adapter"),
     "arrow": ("broker.arrow.streaming.arrow_order_adapter", "create_arrow_order_adapter"),
+    "iiflcapital": (
+        "broker.iiflcapital.streaming.iiflcapital_order_adapter",
+        "create_iiflcapital_order_adapter",
+    ),
 }
 
 # Brokers with no push mechanism fall back to REST-orderbook polling.

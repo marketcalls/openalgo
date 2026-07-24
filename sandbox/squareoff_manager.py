@@ -161,7 +161,9 @@ class SquareOffManager:
                 is_contract_expired_now,
             )
 
-            open_orders = SandboxOrders.query.filter_by(order_status="open").all()
+            open_orders = SandboxOrders.query.filter(
+                SandboxOrders.order_status.in_(["open", "trigger pending"])
+            ).all()
 
             for order in open_orders:
                 expiry_date = get_contract_expiry(order.symbol, order.exchange)
@@ -210,8 +212,12 @@ class SquareOffManager:
             from database.sandbox_db import SandboxOrders
             from sandbox.order_manager import OrderManager
 
-            # Get all open MIS orders
-            open_orders = SandboxOrders.query.filter_by(product="MIS", order_status="open").all()
+            # Get all open MIS orders - "open" and "trigger pending" (SL/SL-M
+            # still resting in the Stop-Loss book) both need square-off
+            open_orders = SandboxOrders.query.filter(
+                SandboxOrders.product == "MIS",
+                SandboxOrders.order_status.in_(["open", "trigger pending"]),
+            ).all()
 
             if not open_orders:
                 return 0

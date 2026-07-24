@@ -86,7 +86,7 @@ def create_all_tables(conn):
             trigger_price DECIMAL(10, 2),
             price_type VARCHAR(20) NOT NULL CHECK(price_type IN ('MARKET', 'LIMIT', 'SL', 'SL-M')),
             product VARCHAR(20) NOT NULL CHECK(product IN ('CNC', 'NRML', 'MIS')),
-            order_status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK(order_status IN ('open', 'complete', 'cancelled', 'rejected')),
+            order_status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK(order_status IN ('open', 'trigger pending', 'complete', 'cancelled', 'rejected')),
             average_price DECIMAL(10, 2),
             filled_quantity INTEGER DEFAULT 0,
             pending_quantity INTEGER NOT NULL,
