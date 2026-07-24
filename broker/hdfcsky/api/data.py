@@ -28,10 +28,11 @@ import pandas as pd
 
 from broker.hdfcsky.api.baseurl import base_params, get_hdfcsky_headers, get_root_url
 from broker.hdfcsky.database.master_contract_db import SymToken, db_session
-from broker.hdfcsky.mapping.exchange import (
+from broker.hdfcsky.mapping.transform_data import (
     BFO_INDEX_UNDERLYINGS,
     NFO_INDEX_UNDERLYINGS,
     is_index_exchange,
+    to_ltp_exchange,
     to_rest_exchange,
 )
 from database.token_db import get_br_symbol
@@ -145,12 +146,26 @@ class BrokerData:
             return {}
         try:
             client = get_httpx_client()
-            response = client.put(
-                f"{get_root_url()}/oapi/v1/fetch-ltp",
-                headers=get_hdfcsky_headers(self.auth_token, with_json=True),
-                params=base_params(self.auth_token, client_id=False),
-                json={"data": instruments},
-            )
+            for attempt in range(self._HISTORY_MAX_ATTEMPTS):
+                response = client.put(
+                    f"{get_root_url()}/oapi/v1/fetch-ltp",
+                    headers=get_hdfcsky_headers(self.auth_token, with_json=True),
+                    params=base_params(self.auth_token, client_id=False),
+                    json={"data": instruments},
+                )
+                # A rate-limited batch must be retried, not dropped: returning
+                # {} here surfaces as an LTP of 0.0, which silently corrupts
+                # anything derived from it (option greeks, synthetic futures).
+                if response.status_code == 429 and attempt < self._HISTORY_MAX_ATTEMPTS - 1:
+                    delay = self._HISTORY_RETRY_BACKOFF * (2**attempt)
+                    logger.warning(
+                        f"HDFC Sky LTP rate-limited for {len(instruments)} instruments, "
+                        f"retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                    continue
+                break
+
             # Check the status by hand: raise_for_status()'s message embeds the
             # request URL, which carries the API key as a query parameter.
             if response.status_code != 200:
@@ -174,7 +189,9 @@ class BrokerData:
         return result
 
     def _ltp_for_row(self, row):
-        exchange_code = to_rest_exchange(row.exchange)
+        # fetch-ltp addresses indices by NSE_INDEX / BSE_INDEX, not by their
+        # parent cash exchange - see to_ltp_exchange.
+        exchange_code = to_ltp_exchange(row.exchange)
         quotes = self._fetch_ltp([{"exchange": exchange_code, "token": str(row.token)}])
         return quotes.get((exchange_code, str(row.token)), {"ltp": 0.0, "prev_close": 0.0})
 
@@ -335,7 +352,7 @@ class BrokerData:
                 logger.warning(f"Skipping {item.get('exchange')}:{item.get('symbol')}: {e}")
                 skipped.append(self._leg_error(item, str(e)))
                 continue
-            exchange_code = to_rest_exchange(row.exchange)
+            exchange_code = to_ltp_exchange(row.exchange)
             key = (exchange_code, str(row.token))
             instruments.append({"exchange": exchange_code, "token": str(row.token)})
             key_map[key] = item

@@ -18,11 +18,11 @@ import threading
 import time
 
 from broker.hdfcsky.api.baseurl import base_params, get_hdfcsky_headers, get_root_url
-from broker.hdfcsky.mapping.exchange import to_oa_exchange
 from broker.hdfcsky.mapping.order_data import CANCELLABLE_STATUSES
 from broker.hdfcsky.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
+    to_oa_exchange,
     transform_data,
     transform_modify_order_data,
 )
