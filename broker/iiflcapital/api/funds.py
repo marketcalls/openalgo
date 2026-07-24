@@ -1,3 +1,11 @@
+import time
+
+from broker.iiflcapital.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from broker.iiflcapital.baseurl import BASE_URL
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -34,7 +42,19 @@ def _extract_result(payload):
     return {}
 
 
-def _fetch_limits(client, endpoint, auth_token):
+def _fetch_limits(client, endpoint, auth_token, _retry_count: int = 0):
+    """
+    Fetch one limits/margin endpoint through the shared connection pool.
+
+    This is its own request helper, separate from data.py's _post and
+    order_api.py's _request, but routes through the same process-wide pacer
+    (broker.iiflcapital.api.rate_limiter) so funds calls share one clock with
+    data and order calls. On a rate-limit rejection (HTTP 429, detected
+    primarily; a generic retry-hint message as fallback) this retries with
+    backoff before falling back to an empty result.
+    """
+    apply_rate_limit()
+
     try:
         response = client.get(f"{BASE_URL}{endpoint}", headers=_headers(auth_token))
     except Exception:
@@ -44,6 +64,15 @@ def _fetch_limits(client, endpoint, auth_token):
     logger.info(f"IIFL Capital limits API response status [{endpoint}]: {response.status_code}")
     # Raw body may carry account IDs / token echoes — debug only.
     logger.debug(f"IIFL Capital limits API raw response [{endpoint}]: {response.text}")
+
+    if is_rate_limited(response.status_code, response.text) and _retry_count < MAX_RETRIES:
+        delay = retry_delay_from_headers(response.headers, _retry_count)
+        logger.warning(
+            f"IIFL Capital limits API rate limited on {endpoint}. Retrying in "
+            f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+        )
+        time.sleep(delay)
+        return _fetch_limits(client, endpoint, auth_token, _retry_count + 1)
 
     if response.status_code != 200:
         return {}
