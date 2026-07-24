@@ -77,12 +77,11 @@ def _lookup_rows(positions):
 def _underlying_prices(auth, resolved):
     """Last traded price of each leg's underlying, keyed by (exchange, token).
 
-    The docs' sample sends `underlying` alongside `token` with a value of the
-    same magnitude as the index spot (SENSEX "76000"), i.e. the underlying's
-    price rather than its id. One batched /fetch-ltp covers every distinct
-    underlying; failures degrade to 0, which the calculator tolerates.
-    TODO(hdfcsky): confirm against the live calculator whether `underlying`
-    is the spot price or the underlying instrument token.
+    `underlying` is the spot PRICE of the leg's underlying, not its instrument
+    id -- confirmed live: the calculator only computes a real margin when it
+    receives the integer spot (e.g. NIFTY ~23767), and build_margin_leg rounds
+    it to a whole number for that reason. One batched /fetch-ltp covers every
+    distinct underlying; failures degrade to 0, which the calculator tolerates.
     """
     from broker.hdfcsky.api.data import BrokerData
 
