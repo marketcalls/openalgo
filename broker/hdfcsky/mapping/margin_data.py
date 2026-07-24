@@ -73,7 +73,11 @@ def build_margin_leg(position, row, series_type, underlying_price):
         "side": str(position.get("action", "BUY")).upper(),
         "mode": "NEW",
         "symbol": row.brsymbol,
-        "underlying": str(underlying_price or 0),
+        # `underlying` is a numeric field: the calculator rejects the whole
+        # request ("Unable to read request Data") when it carries a decimal
+        # string like "23767.45", so send the spot rounded to a whole number.
+        # (The docs' "76000" sample only worked by being integral already.)
+        "underlying": int(round(_float(underlying_price))),
         "token": str(row.token),
         "quantity": str(int(float(position.get("quantity", 0) or 0))),
         "price": str(_float(position.get("price", 0))),
