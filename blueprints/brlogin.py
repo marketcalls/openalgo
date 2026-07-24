@@ -878,6 +878,20 @@ def broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "hdfcsky":
+        # HDFC Sky's docs describe the redirect only as carrying "a Request
+        # Token" without naming the query parameter, so accept every plausible
+        # spelling rather than silently dropping the token.
+        code = (
+            request.args.get("request_token")
+            or request.args.get("requestToken")
+            or request.args.get("request-token")
+            or request.args.get("code")
+        )
+        logger.debug(f"HDFC Sky broker - request token present: {bool(code)}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     else:
         code = request.args.get("code") or request.args.get("request_token")
         logger.debug(f"Generic broker - The code is {code}")
