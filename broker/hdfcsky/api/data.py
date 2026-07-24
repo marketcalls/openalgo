@@ -21,6 +21,8 @@
 #     get_history -> chart-data candles, resampled for the intervals HDFC does
 #                    not serve natively (it only has 1-minute and daily).
 
+import sys
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -34,12 +36,24 @@ from broker.hdfcsky.mapping.transform_data import (
     is_index_exchange,
     to_ltp_exchange,
     to_rest_exchange,
+    ws_scrip_id,
 )
 from database.token_db import get_br_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# The OI snapshot's WebSocket callback fires on a REAL OS thread (the feed
+# client uses eventlet-original threads), so the OI dict it writes must be
+# guarded with a REAL lock -- a green (monkey-patched) lock shared across the
+# real/green boundary can deadlock under eventlet. Mirror the streaming client.
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 
 class HDFCSkyAPIError(Exception):
@@ -291,11 +305,11 @@ class BrokerData:
         return self.get_depth(symbol, exchange)
 
     # The /fetch-ltp endpoint takes a list, so multiquotes is one request per
-    # chunk. The per-request cap is not documented; 100 matches the batch size
-    # other Indian brokers accept and keeps request bodies small.
-    # TODO(hdfcsky): binary-search the real cap against the live endpoint
-    # (1 / 50 / 100 / 200 / 300) and raise this if the server allows more.
-    _MULTIQUOTE_MAX_PER_REQUEST = 100
+    # chunk. The server caps a request at 10 instruments -- a larger batch is
+    # rejected wholesale with HTTP 400 "maximum 10 items allowed" (verified live
+    # against a 94-symbol option-chain request), so anything above 10 silently
+    # zeroes the whole page. Keep this at 10.
+    _MULTIQUOTE_MAX_PER_REQUEST = 10
     _MULTIQUOTE_RATE_DELAY = 0.15
     _HISTORY_RATE_DELAY = 0.15
     # The chart service answers 429 "merchantKeyRateLimit" under bursts, so
@@ -327,24 +341,18 @@ class BrokerData:
             One entry per requested leg: {'symbol', 'exchange', 'data'} or
             {'symbol', 'exchange', 'error'}.
 
-        Only LTP and previous close are available in batch -- open/high/low/
-        volume would need one chart request per symbol, which would defeat the
-        purpose of a batch call, so they are reported as 0 here. Use
-        get_quotes() for a single enriched quote.
+        LTP and previous close come from the REST fetch-ltp batch. open/high/
+        low/volume would each need a chart request, so they stay 0 -- use
+        get_quotes() for a single enriched quote. Open interest is not in any
+        REST response at all (fetch-ltp is LTP-only), so for derivative legs it
+        is filled from a short market-data WebSocket snapshot; cash legs have no
+        OI and skip the feed entirely.
         """
-        results = []
-        for start in range(0, len(symbols), self._MULTIQUOTE_MAX_PER_REQUEST):
-            batch = symbols[start : start + self._MULTIQUOTE_MAX_PER_REQUEST]
-            results.extend(self._process_quotes_batch(batch))
-            if start + self._MULTIQUOTE_MAX_PER_REQUEST < len(symbols):
-                time.sleep(self._MULTIQUOTE_RATE_DELAY)
-        return results
-
-    def _process_quotes_batch(self, symbols: list) -> list:
-        instruments = []
-        key_map = {}  # (exchange_code, token) -> original request item
+        # Resolve every leg to its master-contract row once -- both the LTP
+        # batch and the OI snapshot need the token, and _lookup is the only DB
+        # hit per symbol.
+        resolved = []  # (item, oa_exchange, token, ltp_exchange_code)
         skipped = []
-
         for item in symbols:
             try:
                 row = self._lookup(item["symbol"], item["exchange"])
@@ -352,19 +360,27 @@ class BrokerData:
                 logger.warning(f"Skipping {item.get('exchange')}:{item.get('symbol')}: {e}")
                 skipped.append(self._leg_error(item, str(e)))
                 continue
-            exchange_code = to_ltp_exchange(row.exchange)
-            key = (exchange_code, str(row.token))
-            instruments.append({"exchange": exchange_code, "token": str(row.token)})
-            key_map[key] = item
+            resolved.append((item, row.exchange, str(row.token), to_ltp_exchange(row.exchange)))
 
-        if not key_map:
+        if not resolved:
             return skipped
 
-        quotes = self._fetch_ltp(instruments)
+        # LTP + previous close, chunked to the endpoint's 10-item cap.
+        ltp = {}
+        instruments = [{"exchange": lx, "token": tok} for _, _, tok, lx in resolved]
+        for start in range(0, len(instruments), self._MULTIQUOTE_MAX_PER_REQUEST):
+            batch = instruments[start : start + self._MULTIQUOTE_MAX_PER_REQUEST]
+            ltp.update(self._fetch_ltp(batch))
+            if start + self._MULTIQUOTE_MAX_PER_REQUEST < len(instruments):
+                time.sleep(self._MULTIQUOTE_RATE_DELAY)
 
-        results = []
-        for key, item in key_map.items():
-            quote = quotes.get(key)
+        # OI for derivative legs only, from a single WebSocket snapshot.
+        oi_targets = [(oax, tok) for _, oax, tok, _ in resolved if oax in self._OI_EXCHANGES]
+        oi_by_token = self._fetch_oi_snapshot(oi_targets)
+
+        results = list(skipped)
+        for item, _, tok, ltp_code in resolved:
+            quote = ltp.get((ltp_code, tok))
             if quote is None:
                 results.append(self._leg_error(item, "No quote data available"))
                 continue
@@ -381,11 +397,77 @@ class BrokerData:
                         "open": 0.0,
                         "prev_close": quote["prev_close"],
                         "volume": 0,
-                        "oi": 0,
+                        "oi": oi_by_token.get(tok, 0),
                     },
                 }
             )
-        return skipped + results
+        return results
+
+    # OpenAlgo exchanges whose instruments carry open interest. OI is served
+    # only on the market-data WebSocket (REST fetch-ltp is LTP-only), so a
+    # multiquote batch touches the feed only when it contains one of these.
+    _OI_EXCHANGES = frozenset({"NFO", "BFO", "CDS", "MCX"})
+    # Transient OI-snapshot budget: how long to wait for the feed handshake and
+    # how long to hold it open collecting OI packets. The collection early-exits
+    # as soon as every requested token has reported OI.
+    _OI_SNAPSHOT_CONNECT_TIMEOUT = 8.0
+    _OI_SNAPSHOT_COLLECT_WINDOW = 3.0
+
+    def _fetch_oi_snapshot(self, instruments):
+        """Best-effort open interest for derivative legs via the WebSocket feed.
+
+        HDFC Sky publishes OI only over the market-data WebSocket, so this opens
+        a short-lived feed connection, subscribes the batch, collects the OI
+        packets, and closes it. `instruments` is [(oa_exchange, token), ...].
+        Returns {token_str: oi}. Never raises and always closes the socket -- on
+        any failure it returns whatever OI it gathered (possibly empty) so the
+        LTP quotes still flow.
+        """
+        if not instruments:
+            return {}
+        # Lazy import keeps the streaming stack out of the plain REST paths.
+        from broker.hdfcsky.streaming.hdfcsky_websocket import HDFCSkyWebSocket
+
+        scrip_ids = [ws_scrip_id(oa_exchange, tok) for oa_exchange, tok in instruments]
+        wanted = {str(tok) for _, tok in instruments}
+        oi_by_token = {}
+        # The callback runs on the feed client's real OS thread; guard the dict
+        # with a real lock (see the _real_threading note at module top).
+        lock = _real_threading.Lock()
+
+        def on_ticks(ticks):
+            with lock:
+                for tick in ticks:
+                    oi = tick.get("oi")
+                    if oi:
+                        oi_by_token[str(tick.get("token"))] = oi
+
+        ws = HDFCSkyWebSocket(access_token=self.auth_token, on_ticks=on_ticks)
+        try:
+            ws.start()
+            if not ws.wait_for_connection(timeout=self._OI_SNAPSHOT_CONNECT_TIMEOUT):
+                logger.warning("HDFC Sky OI snapshot: feed did not connect; returning no OI")
+                return {}
+            ws.subscribe_scrips(scrip_ids, subscription_type="ALL")
+            deadline = time.monotonic() + self._OI_SNAPSHOT_COLLECT_WINDOW
+            while time.monotonic() < deadline:
+                with lock:
+                    have_all = wanted <= oi_by_token.keys()
+                if have_all:
+                    break
+                time.sleep(0.1)
+        except Exception as e:
+            logger.warning(f"HDFC Sky OI snapshot failed: {e}")
+        finally:
+            ws.stop()
+
+        with lock:
+            snapshot = dict(oi_by_token)
+        if len(snapshot) < len(wanted):
+            logger.info(
+                f"HDFC Sky OI snapshot: OI for {len(snapshot)}/{len(wanted)} instruments"
+            )
+        return snapshot
 
     # --- history --------------------------------------------------------
 
