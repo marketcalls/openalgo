@@ -73,6 +73,17 @@ class FlattradeWebSocket:
         self.running = False
         self.connected = False
 
+        # Auth failure state - set when the broker explicitly rejects the
+        # session token (structured "ak" nack or a fatal error/close frame).
+        # The adapter checks this after _on_close/_on_error to route into a
+        # tighter-bounded auth-retry path instead of the generic reconnect loop.
+        self.auth_failed = False
+        self.auth_failure_message = ""
+
+        # Set by stop() to interrupt any in-progress sleep/wait loop immediately
+        # instead of waiting out the full polling granularity.
+        self._stop_event = threading.Event()
+
         # Callbacks
         self.on_message = on_message
         self.on_error = on_error
@@ -109,6 +120,12 @@ class FlattradeWebSocket:
     def _initialize_connection(self) -> None:
         """Initialize WebSocket connection and start thread"""
         self.running = True
+        self._stop_event.clear()
+
+        # Reset auth failure state so a stale flag from a previous failed
+        # attempt doesn't block this fresh connection attempt.
+        self.auth_failed = False
+        self.auth_failure_message = ""
 
         self.ws = websocket.WebSocketApp(
             self.WS_URL,
@@ -134,7 +151,9 @@ class FlattradeWebSocket:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True
-            time.sleep(0.1)
+            if self._stop_event.wait(0.1):
+                self.logger.info("Wait for connection interrupted by stop()")
+                return False
 
         self.logger.error("Connection timeout")
         self.stop()
@@ -160,6 +179,7 @@ class FlattradeWebSocket:
 
         self.running = False
         self.connected = False
+        self._stop_event.set()
 
         self._close_websocket()
         self._wait_for_thread_completion()
@@ -181,9 +201,13 @@ class FlattradeWebSocket:
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
-                # Don't clear reference - thread still running, could interfere with reconnect
-                return
-        # Only clear reference if thread actually stopped
+                # Safe to clear the reference even if the join timed out: the
+                # thread is daemon=True so it cannot block process exit, and
+                # _initialize_connection()/_start_heartbeat() overwrite this
+                # attribute with a brand-new thread object on the next connect
+                # regardless. With the _stop_event fix above, the join should
+                # reliably complete near-instantly in practice anyway.
+        # Clear reference unconditionally - see comment above
         self.ws_thread = None
 
     # WebSocket Event Handlers
@@ -270,12 +294,44 @@ class FlattradeWebSocket:
             self.logger.info("Authentication successful")
         else:
             self.logger.error(f"Authentication failed: {data}")
+            self.auth_failed = True
+            self.auth_failure_message = str(data.get("emsg") or data.get("s") or "unknown reason")
+            # Flattrade does not proactively close the socket on auth rejection -
+            # it just sits open, silently rejected. Force the close ourselves so
+            # _on_close fires promptly and the adapter's reconnect logic engages
+            # instead of the connection hanging around with a dead session.
+            self._close_websocket()
 
         return True
+
+    # Conservative auth-failure indicators for the (less likely but possible)
+    # case Flattrade signals rejection via a raw error/close frame instead of
+    # the structured "ak" nack handled in _handle_auth_response. Kept tight to
+    # avoid false positives on transient network errors (we DO want to retry
+    # those). Matched case-insensitively against the str() of the payload.
+    _AUTH_FAILURE_INDICATORS = (
+        "401",
+        "403",
+        "unauthorized",
+        "forbidden",
+        "invalid session",
+        "invalid token",
+        "session expired",
+    )
+
+    def _is_fatal_auth_error(self, payload) -> bool:
+        """Return True iff the error payload looks like an auth failure."""
+        if payload is None:
+            return False
+        text = str(payload).lower()
+        return any(token in text for token in self._AUTH_FAILURE_INDICATORS)
 
     def _on_error(self, ws, error) -> None:
         """Handle WebSocket connection errors"""
         self.logger.error(f"WebSocket error: {error}")
+        if not self.auth_failed and self._is_fatal_auth_error(error):
+            self.auth_failed = True
+            self.auth_failure_message = str(error)
         self._call_external_callback(self.on_error, ws, error)
 
     def _on_close(self, ws, close_status_code: int | None, close_msg: str | None) -> None:
@@ -323,16 +379,21 @@ class FlattradeWebSocket:
             self._heartbeat_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
             if self._heartbeat_thread.is_alive():
                 self.logger.warning("Heartbeat thread did not terminate within timeout")
-                # Don't clear reference - thread still running, could cause duplicate heartbeats
-                return
-        # Only clear reference if thread actually stopped
+                # Safe to clear the reference even if the join timed out: the
+                # thread is daemon=True so it cannot block process exit, and
+                # _start_heartbeat() overwrites this attribute with a brand-new
+                # thread object on the next connect regardless. With the
+                # _stop_event fix below, the join should reliably complete
+                # near-instantly in practice anyway.
+        # Clear reference unconditionally - see comment above
         self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
         while self.running and self.connected:
             try:
-                time.sleep(self.HEARTBEAT_INTERVAL)
+                if self._stop_event.wait(self.HEARTBEAT_INTERVAL):
+                    break
 
                 if self.running and self.connected:
                     if not self._send_heartbeat():
