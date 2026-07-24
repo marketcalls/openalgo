@@ -270,6 +270,7 @@ class TestPositionCache:
 # List of all brokers to test
 ALL_BROKERS = [
     "aliceblue", "angel", "compositedge", "definedge", "deltaexchange",
+    "deltaexchange_demo",
     "dhan", "dhan_sandbox", "firstock", "fivepaisa", "fivepaisaxts",
     "flattrade", "fyers", "groww", "ibulls", "iifl", "indmoney",
     "jainamxts", "kotak", "motilal", "mstock", "nubra", "paytm",
