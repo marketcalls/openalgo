@@ -54,6 +54,7 @@ MIGRATIONS = [
     ("migrate_sandbox.py", "Sandbox Mode"),
     ("migrate_order_mode.py", "Order Mode & Action Center"),
     ("migrate_sandbox_pnl.py", "Sandbox Day-wise PnL Tracking"),
+    ("migrate_sandbox_trigger_pending.py", "Sandbox Trigger-Pending Order Status"),
     ("migrate_gtt.py", "GTT Order Support"),
     # Performance migrations
     ("migrate_indexes.py", "Database Performance Indexes"),
