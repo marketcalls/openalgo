@@ -12,12 +12,14 @@
 #   last-traded quantity are delivered exclusively over the protobuf WebSocket
 #   feed (streaming/).
 #
-#   So this module composes what REST does give us:
+#   So this module composes what REST does give us, and fills the rest from a
+#   short-lived WebSocket snapshot where the caller needs it:
 #     get_quotes  -> LTP + previous close from /fetch-ltp, and open/high/low/
 #                    volume from the current session's chart candle.
-#     get_depth   -> the same fields with the five bid/ask levels zero-filled,
-#                    since REST cannot supply them. Subscribe to the WebSocket
-#                    feed in DEPTH mode (mode 3) for a real order book.
+#     get_multiquotes -> LTP batch, plus OI for derivative legs from a WS snapshot.
+#     get_depth   -> REST scalars plus the five bid/ask levels, last-traded qty,
+#                    total buy/sell qty and OI from a WS snapshot (there is no
+#                    REST depth endpoint); the book zero-fills if it times out.
 #     get_history -> chart-data candles, resampled for the intervals HDFC does
 #                    not serve natively (it only has 1-minute and daily).
 
@@ -270,28 +272,46 @@ class BrokerData:
             logger.exception(f"Error fetching HDFC Sky quotes: {e}")
             raise HDFCSkyAPIError(f"Error fetching quotes: {e}") from e
 
+    @staticmethod
+    def _depth_levels(levels):
+        """Normalize a WebSocket depth side to exactly five {price, quantity}."""
+        out = [
+            {
+                "price": float(level.get("price", 0) or 0),
+                "quantity": int(level.get("quantity", 0) or 0),
+            }
+            for level in (levels or [])[:5]
+        ]
+        while len(out) < 5:
+            out.append({"price": 0.0, "quantity": 0})
+        return out
+
     def get_depth(self, symbol, exchange):
         """OpenAlgo 5-level market depth.
 
-        HDFC Sky publishes the order book ONLY over its WebSocket feed, so the
-        five levels here are zero-filled. Subscribe in DEPTH mode (mode 3) via
-        the streaming adapter for a live book.
+        HDFC Sky has no REST depth endpoint, so the scalar fields come from REST
+        (fetch-ltp + the session chart candle) and the five bid/ask levels, last-
+        traded qty, total buy/sell qty and OI are filled from a short WebSocket
+        snapshot. If the snapshot does not arrive in time the book is zero-filled
+        and the REST scalars still return, so depth never fails outright.
         """
         try:
+            row = self._lookup(symbol, exchange)
             quote = self.get_quotes(symbol, exchange)
-            empty_levels = [{"price": 0.0, "quantity": 0} for _ in range(5)]
+            tick = self._fetch_depth_snapshot(row.exchange, str(row.token))
+            book = tick.get("depth") or {}
             return {
-                "asks": list(empty_levels),
-                "bids": list(empty_levels),
+                "asks": self._depth_levels(book.get("sell")),
+                "bids": self._depth_levels(book.get("buy")),
                 "high": quote["high"],
                 "low": quote["low"],
                 "ltp": quote["ltp"],
-                "ltq": 0,
-                "oi": 0,
+                "ltq": int(tick.get("ltq", 0) or 0),
+                "oi": int(tick.get("oi", 0) or 0),
                 "open": quote["open"],
                 "prev_close": quote["prev_close"],
-                "totalbuyqty": 0,
-                "totalsellqty": 0,
+                "totalbuyqty": int(tick.get("total_buy_quantity", 0) or 0),
+                "totalsellqty": int(tick.get("total_sell_quantity", 0) or 0),
                 "volume": quote["volume"],
             }
         except HDFCSkyAPIError:
@@ -407,21 +427,28 @@ class BrokerData:
     # only on the market-data WebSocket (REST fetch-ltp is LTP-only), so a
     # multiquote batch touches the feed only when it contains one of these.
     _OI_EXCHANGES = frozenset({"NFO", "BFO", "CDS", "MCX"})
-    # Transient OI-snapshot budget: how long to wait for the feed handshake and
-    # how long to hold it open collecting OI packets. The collection early-exits
-    # as soon as every requested token has reported OI.
-    _OI_SNAPSHOT_CONNECT_TIMEOUT = 8.0
-    _OI_SNAPSHOT_COLLECT_WINDOW = 3.0
+    # Transient feed-snapshot budget: how long to wait for the handshake and how
+    # long to hold the socket open collecting packets. Collection early-exits as
+    # soon as every requested token has satisfied the caller's completeness test.
+    _SNAPSHOT_CONNECT_TIMEOUT = 8.0
+    _SNAPSHOT_COLLECT_WINDOW = 3.0
 
-    def _fetch_oi_snapshot(self, instruments):
-        """Best-effort open interest for derivative legs via the WebSocket feed.
+    def _collect_feed_snapshot(self, instruments, is_complete):
+        """Collect one market-data packet per instrument from the WebSocket feed.
 
-        HDFC Sky publishes OI only over the market-data WebSocket, so this opens
-        a short-lived feed connection, subscribes the batch, collects the OI
-        packets, and closes it. `instruments` is [(oa_exchange, token), ...].
-        Returns {token_str: oi}. Never raises and always closes the socket -- on
-        any failure it returns whatever OI it gathered (possibly empty) so the
-        LTP quotes still flow.
+        HDFC Sky serves depth, OI, last-traded-qty and total buy/sell qty only
+        over the market-data WebSocket, so REST-facing methods that need them
+        open a short-lived feed connection, subscribe the batch, keep the most
+        complete tick seen per token, and close the socket.
+
+        Args:
+            instruments: [(oa_exchange, token), ...].
+            is_complete: predicate on a tick; a token stops updating once one of
+                its ticks satisfies it, and the collection ends early when every
+                requested token is complete.
+        Returns {token_str: tick}. Never raises and always closes the socket --
+        on any failure it returns whatever it gathered (possibly empty) so the
+        REST-derived fields still flow.
         """
         if not instruments:
             return {}
@@ -430,7 +457,7 @@ class BrokerData:
 
         scrip_ids = [ws_scrip_id(oa_exchange, tok) for oa_exchange, tok in instruments]
         wanted = {str(tok) for _, tok in instruments}
-        oi_by_token = {}
+        snapshot = {}
         # The callback runs on the feed client's real OS thread; guard the dict
         # with a real lock (see the _real_threading note at module top).
         lock = _real_threading.Lock()
@@ -438,36 +465,72 @@ class BrokerData:
         def on_ticks(ticks):
             with lock:
                 for tick in ticks:
-                    oi = tick.get("oi")
-                    if oi:
-                        oi_by_token[str(tick.get("token"))] = oi
+                    tok = str(tick.get("token"))
+                    if tok not in wanted:
+                        continue
+                    # Merge successive packets per token: depth rides on the MBP
+                    # packet while OI can arrive on a separate one, so accumulate
+                    # fields and never let a later partial frame zero-out a value
+                    # an earlier one already filled.
+                    merged = snapshot.setdefault(tok, {})
+                    for key, value in tick.items():
+                        if not value and merged.get(key):
+                            continue
+                        merged[key] = value
 
         ws = HDFCSkyWebSocket(access_token=self.auth_token, on_ticks=on_ticks)
         try:
             ws.start()
-            if not ws.wait_for_connection(timeout=self._OI_SNAPSHOT_CONNECT_TIMEOUT):
-                logger.warning("HDFC Sky OI snapshot: feed did not connect; returning no OI")
+            if not ws.wait_for_connection(timeout=self._SNAPSHOT_CONNECT_TIMEOUT):
+                logger.warning("HDFC Sky feed snapshot: did not connect; returning nothing")
                 return {}
             ws.subscribe_scrips(scrip_ids, subscription_type="ALL")
-            deadline = time.monotonic() + self._OI_SNAPSHOT_COLLECT_WINDOW
+            deadline = time.monotonic() + self._SNAPSHOT_COLLECT_WINDOW
             while time.monotonic() < deadline:
                 with lock:
-                    have_all = wanted <= oi_by_token.keys()
-                if have_all:
+                    done = all(t in snapshot and is_complete(snapshot[t]) for t in wanted)
+                if done:
                     break
                 time.sleep(0.1)
         except Exception as e:
-            logger.warning(f"HDFC Sky OI snapshot failed: {e}")
+            logger.warning(f"HDFC Sky feed snapshot failed: {e}")
         finally:
             ws.stop()
 
         with lock:
-            snapshot = dict(oi_by_token)
-        if len(snapshot) < len(wanted):
+            return dict(snapshot)
+
+    def _fetch_oi_snapshot(self, instruments):
+        """Open interest for derivative legs, {token_str: oi}. See
+        _collect_feed_snapshot; empty for any leg that never reported OI."""
+        snapshot = self._collect_feed_snapshot(
+            instruments, is_complete=lambda tick: bool(tick.get("oi"))
+        )
+        oi_by_token = {tok: tick["oi"] for tok, tick in snapshot.items() if tick.get("oi")}
+        if instruments and len(oi_by_token) < len(instruments):
             logger.info(
-                f"HDFC Sky OI snapshot: OI for {len(snapshot)}/{len(wanted)} instruments"
+                f"HDFC Sky OI snapshot: OI for {len(oi_by_token)}/{len(instruments)} instruments"
             )
-        return snapshot
+        return oi_by_token
+
+    def _fetch_depth_snapshot(self, oa_exchange, token):
+        """Full order book for one instrument via the WebSocket feed.
+
+        Returns the market-data tick carrying the 5-level book (with `depth`,
+        `ltq`, total buy/sell qty and `oi`), or {} if none arrived in time so
+        the caller can fall back to a REST-only, book-less quote. For derivative
+        instruments it also waits for the OI packet, which the feed sends
+        separately from the depth packet.
+        """
+        need_oi = oa_exchange in self._OI_EXCHANGES
+
+        def is_complete(tick):
+            if need_oi and not tick.get("oi"):
+                return False
+            return bool(tick.get("depth"))
+
+        snapshot = self._collect_feed_snapshot([(oa_exchange, token)], is_complete=is_complete)
+        return snapshot.get(str(token), {})
 
     # --- history --------------------------------------------------------
 
