@@ -19,6 +19,7 @@ import base64
 import binascii
 import json
 import os
+from urllib.parse import urlencode
 
 from utils.logging import get_logger
 
@@ -53,12 +54,15 @@ def get_root_url():
 def get_ws_url(auth_token):
     """WebSocket URL for the market-data feed.
 
-    The access token is passed as a query parameter because the browser/
-    websocket-client handshake for this endpoint does not carry the
-    Authorization header reliably; the adapter also sends it as a header.
+    The feed gateway authenticates purely on the query string: it wants the
+    access token as `token` (NOT `access_token`) together with the app
+    `api_key`. Verified against the live handshake -- `token` alone, or the
+    Authorization header, returns 401 "Full authentication is required"; only
+    `token` + `api_key` upgrades (HTTP 101).
     """
     host = get_root_url().replace("https://", "wss://").replace("http://", "ws://")
-    return f"{host}{WS_MARKET_DATA_PATH}?access_token={auth_token}"
+    query = urlencode({"token": auth_token, "api_key": get_api_key()})
+    return f"{host}{WS_MARKET_DATA_PATH}?{query}"
 
 
 def get_hdfcsky_headers(auth_token, with_json=False):
