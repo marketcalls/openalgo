@@ -84,6 +84,10 @@ class HDFCSkyWebSocket:
     MAX_INSTRUMENTS_PER_CONNECTION = HDFCSkyCapabilityRegistry.MAX_INSTRUMENTS_PER_CONNECTION
     MAX_SCRIPS_PER_SUBSCRIBE = 100
     SUBSCRIPTION_DELAY = 0.3
+    # Brief window to let a burst of per-symbol subscribe() calls (the proxy
+    # subscribes an option chain one symbol at a time) pile up before draining,
+    # so they coalesce into as few frames as possible.
+    SUBSCRIPTION_COLLECT_DELAY = 0.2
 
     RECONNECT_BASE_DELAY = 5
     RECONNECT_MAX_DELAY = 60
@@ -274,41 +278,52 @@ class HDFCSkyWebSocket:
             )
             self._subscription_thread.start()
 
+    def _requeue(self, frames):
+        """Put unsent (type, scrip_ids) frames back on the pending queue so a
+        connection drop mid-drain never loses a subscription."""
+        with self.lock:
+            for sub_type, scrip_ids in frames:
+                for scrip_id in scrip_ids:
+                    self.pending_subscriptions.append((scrip_id, sub_type))
+
     def _process_pending_subscriptions(self):
-        consecutive_failures = 0
         while self.pending_subscriptions and self.running:
             if not self.connected:
-                consecutive_failures += 1
-                if consecutive_failures > 3:
-                    self.logger.error("Connection not ready; clearing pending subscriptions")
-                    with self.lock:
-                        self.pending_subscriptions.clear()
-                    break
-                if self._stop_event.wait(min(2 * consecutive_failures, 10)):
-                    break
+                # Never drop queued subscriptions here: _resubscribe_all replays
+                # only already-sent scrips, so clearing pending would lose these
+                # permanently. Wait for the (re)connection instead -- the drain
+                # resumes once the feed is back, and stop() ends the wait.
+                if self._stop_event.wait(1.0):
+                    return
                 continue
-            consecutive_failures = 0
 
-            batch = []
-            batch_type = None
+            # Let the burst finish arriving, then drain everything queued and
+            # group by subscription type so each type goes out in as few frames
+            # as possible regardless of the order it was queued in.
+            if self._stop_event.wait(self.SUBSCRIPTION_COLLECT_DELAY):
+                return
             with self.lock:
-                while self.pending_subscriptions and len(batch) < self.MAX_SCRIPS_PER_SUBSCRIBE:
-                    scrip_id, sub_type = self.pending_subscriptions[0]
-                    if batch_type is None:
-                        batch_type = sub_type
-                    elif batch_type != sub_type:
-                        break
-                    self.pending_subscriptions.popleft()
-                    batch.append(scrip_id)
+                by_type = {}
+                while self.pending_subscriptions:
+                    scrip_id, sub_type = self.pending_subscriptions.popleft()
+                    by_type.setdefault(sub_type, []).append(scrip_id)
 
-            if batch:
-                if not self._send_subscribe(batch, batch_type):
-                    with self.lock:
-                        for scrip_id in batch:
-                            self.pending_subscriptions.append((scrip_id, batch_type))
-                    if self._stop_event.wait(5):
-                        break
-                elif self.pending_subscriptions and self._stop_event.wait(self.SUBSCRIPTION_DELAY):
+            frames = [
+                (sub_type, scrip_ids[start : start + self.MAX_SCRIPS_PER_SUBSCRIBE])
+                for sub_type, scrip_ids in by_type.items()
+                for start in range(0, len(scrip_ids), self.MAX_SCRIPS_PER_SUBSCRIBE)
+            ]
+
+            for index, (sub_type, batch) in enumerate(frames):
+                # Space multi-frame sends so a large chain does not flood the
+                # server; requeue the remainder if we are told to stop mid-send.
+                if index and self._stop_event.wait(self.SUBSCRIPTION_DELAY):
+                    self._requeue(frames[index:])
+                    return
+                if not self._send_subscribe(batch, sub_type):
+                    # Send failed (connection likely dropped): requeue this frame
+                    # and everything after it, then loop back to wait for reconnect.
+                    self._requeue(frames[index:])
                     break
 
     def _send_subscribe(self, scrip_ids, subscription_type):
