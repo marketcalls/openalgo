@@ -31,6 +31,7 @@ const allBrokers = [
   { id: 'motilal', name: 'Motilal Oswal', authType: 'totp' },
   { id: 'fyers', name: 'Fyers', authType: 'oauth' },
   { id: 'groww', name: 'Groww', authType: 'totp' },
+  { id: 'hdfcsky', name: 'HDFC Sky', authType: 'oauth' },
   { id: 'ibulls', name: 'Ibulls', authType: 'totp' },
   { id: 'iifl', name: 'IIFL', authType: 'totp' },
   { id: 'iiflcapital', name: 'IIFL Capital', authType: 'oauth' },
@@ -192,6 +193,12 @@ export default function BrokerSelect() {
       case 'arrow':
         // Arrow hosted login; redirects back to /arrow/callback with request-token.
         loginUrl = `https://app.arrow.trade/app/login?appID=${broker_api_key}`
+        break
+
+      case 'hdfcsky':
+        // HDFC Sky hosted login (credentials + 2FA + consent); redirects back
+        // to the app's registered callback with a request token.
+        loginUrl = `https://developer.hdfcsky.com/oapi/v1/login?api_key=${broker_api_key}`
         break
 
       case 'paytm':

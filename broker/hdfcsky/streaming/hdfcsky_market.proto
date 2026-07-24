@@ -1,0 +1,990 @@
+syntax = "proto3";
+
+package hdfcsky;
+
+message GenericDTOList {
+  repeated GenericDTO genericDTOList = 1;
+}
+
+message GenericDTO {
+
+  int64 instrumentId = 1;
+  MBPData mbpData = 2;
+  IndexData indexData = 3 ;
+  MarketStatus marketStatus = 4;
+  Order order = 5;
+  Trade trade = 6;
+  int64 sequenceNo = 7;
+  int64 packetTimestamp = 8;
+  PacketType packetType = 9;
+  GreekData greekData = 10;
+}
+
+message GreekData {
+  // Delta represents the rate of change of the option price with respect to the underlying asset's price
+  double delta = 1;
+  // Gamma represents the rate of change of delta with respect to the underlying asset's price
+  double gamma = 2;
+  // Vega represents the sensitivity of the option price to volatility changes
+  double vega = 3;
+  // Theta represents the rate of decline in the option's value due to time decay
+  double theta = 4;
+  // Rho represents the sensitivity of the option price to interest rate changes
+  double rho = 5;
+  // ScripId is a unique identifier for the option/script
+  string scrip_id = 6;
+  string exch = 7;
+}
+
+message MBPData {
+
+  double lastTradedPrice = 1;
+  int64 lastTradeTime = 2; // timestamp from BSE
+  string netChangeIndicator = 3;
+  int32 netPriceChangeFromClosingPrice = 4;
+  double openPrice = 5;
+  double highPrice = 6;
+  double closingPrice = 7;
+  double lowPrice = 8;
+  int64 volumeTradedToday = 9;
+  int64 lastTradeQuantity = 10;
+  double averageTradePrice = 11;
+  MarketDepthDTOList marketDepthDTOList = 12;
+  int64 totalBuyQuantity = 13;
+  int64 totalSellQuantity = 14;
+  double lowerCircuitLimit = 15;
+  double upperCircuitLimit = 16;
+  int64 oi = 17;
+}
+
+
+message IndexData {
+  string indexName = 1;
+  double indexValue = 2;
+  double highIndexValue = 3;
+  double lowIndexValue = 4;
+  double openingIndex = 5;
+  double closingIndex = 6;
+  double percentChange = 7;
+  double yearlyHigh = 8;
+  double yearlyLow = 9;
+  int64 packetTimeStamp = 10;
+  //double noOfUpMoves = 10;
+  //double noOfDownMoves = 11;
+  //double marketCapitalisation = 12;
+  //string netChangeIndicator = 13;
+  //string filler = 14;
+}
+
+message MarketDepthDTOList {
+  repeated MarketDepthDTO marketDepthDTO = 1;
+}
+
+message MarketDepthDTO {
+  int64 quantity = 1;
+  double price = 2;
+  int64 numberOfOrders = 3;
+  bool buyFlag = 4;
+}
+
+
+message ContractDescription {
+  string instrumentName = 1;
+  string symbol = 2;
+  string tradingSymbol = 3;
+  int32 expiryDate = 4;
+  int32 strikePrice = 5;
+  string optionType = 6;
+  int32 caLevel = 7;
+  int32 underlyingTokenID = 8;
+  string isin = 9;
+  int32 boardLotQty = 10;
+  double tradingUnitFactor = 11;
+  bool tradeToTrade = 12;
+  int32 surveillanceIndicator = 13;
+}
+
+message ParentUser {
+  string id = 1;
+  ParentType parentType = 2;
+}
+
+message Order {
+  string orderID = 1;
+  string clientOrderID = 2;
+  string exchangeOrderID = 3;
+
+  string loginID = 4;
+  string clientID = 5;
+  string vLoginID = 6; // treat this as vlogin ID
+
+  int32 tokenID = 7;
+
+  double price = 8;
+  double avgPrice = 9;
+  double triggerPrice = 10;
+  int32 quantity = 11;
+  int32 fillQuantity = 12;
+  int32 remainingQuantity = 13;
+  int32 volFilledToday = 14;
+  int32 disclosedQuantity = 15;
+  int64 createdAt = 16;
+  int64 canceledAt = 17;
+  int64 modifiedAt = 18;
+
+  string pan = 19;
+  double nnfid = 20; // TODO: replace with dealer id  (string)
+  string device = 21;
+
+  int64 marketProtectionPercentage = 22;
+  int64 lastActivityReference = 23;
+  int64 omsEntryTime = 24;
+
+  string ctclID = 25; //DNAID, adapter login USERID
+  string brokerID = 26; //MEMBERID
+  string dealerID = 27;
+  int64 gtcGtdTime = 28; //MCX & NCDEX
+  int32 cpMemberID = 29;
+  string participantID = 30;
+  string memberClientCode = 31;
+  int32 orderPlacedBy = 32;  // this variable is used to differentiate the preopen orders and regular orders in OMS and Adapter
+  int32 remDisclosedQty = 33;
+  string vendorCode = 34;
+  int32  orderSeqNum = 35;
+  string ParentOrderID = 36;
+  string BasketID = 37;
+  string orderLegs = 38;
+  string algoPriceType = 39;
+  OrderConfig orderConfig = 40;
+  repeated MultiLegOrder multiLegOrder = 41;
+  int64 lastTradedQty = 42;
+  int32 auctionNumber = 43;
+
+  ProCli procli = 51;
+  OrderSide side = 52;
+  OrderType type = 53;
+  OrderMode mode = 54;
+  Validity validity = 55;
+  ProdType prodType = 56;
+  ContractDescription description = 57;
+
+  Exchange exchange = 58;
+  Segment segment = 59;
+  string series = 60;
+  Status status = 61;
+  Error error = 62;
+  ExecutionType execType = 63;
+  OrderEligibility ordEligibility = 64;
+
+  double prevModifyPrice = 65;
+  int64 prevModifyQuantity = 66;
+  string spreadToken = 67;
+  double stopLossValue = 68;
+  string ModifiedOrCancelledBy = 69;
+  int32 MarketSegmentID = 70;
+
+  double squareOffValue = 75;
+  double trailingStopLoss = 76;
+  bool isTrailingStopLoss = 77;
+  bool isOrderSliced = 78;
+  string vendorSource = 79;
+  repeated string vendorTags = 80;
+  string orderExTimestamp = 81;
+  int32  partitionID = 82;
+
+  bool isOrderDownload = 91;
+  repeated ParentUser parentUser = 101;
+}
+
+message MultiLegOrder {
+  int32 TokenID2 = 1;
+  ContractDescription description2 = 2;
+  OrderType type2 = 3;
+  OrderSide side2 = 4;
+  int32 disclosedQty2 = 5;
+  int32 remDisclosedQty2 = 6;
+  int32 totalQtyRemaining2 = 7;
+  int32 quantity2 = 8;
+  int32 volumeFilledToday2 = 9;
+  double price2 = 10;
+  double triggerPrice2 = 11;
+  string orderID = 12;
+  string parentOrderID = 13;
+  string basketID = 14;
+  ExecutionType execType = 15;
+  string clientOrdID = 16;
+}
+
+message AuctionInquiry {
+  string  exchange = 1;
+  string segment = 2;
+  string userID = 3;
+  string symbol = 4;
+  string series = 5;
+  int32 auctionNumber = 6;
+  string pageIndicator = 7;
+  int32 token = 8;
+  int32 auctionPrice = 9;
+  int32 auctionQty = 10;
+  int32 auctionStatus = 11;
+  int32 initiatorType = 12;
+  int32 totalBuy = 13;
+  int32 bestBuyPrice = 14;
+  int32 totalSell = 15;
+  int32 bestSellPrice = 16;
+  int32 settlementPeriod = 17;
+}
+
+message SyncInfo {
+  int32  partitionID = 1;
+  string ordReSyncTime = 2;
+  string tradeReSyncTime = 3;
+  string orderNumber = 4;
+  string tradeNumber = 5;
+}
+
+message OrderResync {
+  string ctclID = 1;
+  string exchange = 2;
+  repeated SyncInfo syncInfo = 3;
+  string msgType = 4;
+  string remarks = 5;
+  string resyncTime = 6;
+}
+
+message SecurityInfo {
+  string  symbol = 1;
+  string  series = 2;  // for derivative instrument name
+  int32   expiryDate = 3;
+  int32   strikePrice = 4;
+  string  optionType = 5;
+  int32   caLevel = 6;
+  int32   marketSegmentID = 7;
+}
+
+message KillSwitch {
+  string ctclID = 1;
+  string exchange = 2;
+  repeated SecurityInfo securityInfo = 3;
+  bool isMassCancel = 4;
+  string msgType = 5;
+  string remarks = 6;
+}
+
+message Trade {
+
+  string TradeID = 1;
+  string OrderID = 2;
+  string ExchangeOrderID = 3;
+  string ClientOrderID = 4;
+
+  string ClientID = 5;
+  string BrokerID = 6;
+  string VLoginID = 7;
+  string LoginID = 8;
+  string basketID = 9;
+  string parentOrderID = 10;
+  ExecutionType execType = 11;
+  string orderLegs = 12;
+
+  int64 RemainingVolume = 51;
+  int64 VolFilledToday = 52;
+  int64 DisclosedVolume = 53;
+  int64 GoodTillDate = 54;
+  int64 ExchangeTime = 55;
+  double FillPrice = 56;
+  int64 FillQty = 57;
+  int64 Token = 58;
+  string BookType = 59;
+  double Price = 60;
+  string PAN = 61;
+  int32 BuySell = 62;
+  int64 OriginalVol = 63;
+  int64 DisclosedVolRemaining = 64;
+  ProCli ProClient = 65;
+  int32 OrderType = 66;
+  int64 OmsEntryTime = 67;
+  int64 UnderlyingToken = 68;
+  int64 LastActivityReference = 69;
+  string TradingSymbol = 70;
+
+  string ctclID = 71;
+  string dealerID = 72;
+  int32 cpMemberID = 73;
+  string participantID = 74;
+  string memberClientCode = 75;
+  int32 orderPlacedBy = 76;
+  int32 remDisclosedQty = 77;
+  string Isin = 78;
+  double Nnfid = 79;
+  //new fields added 19Apr2022
+  int32 transactionCode = 80;
+  int32 branchID = 81;
+  int32 settlementDays = 82;
+  int32 algoID = 83;
+  int32 auctionType = 84;
+  int32 auctionNumber = 85;
+  string cpExOrderID = 86;
+  string openClose = 87;
+  int64  orderActivityTime = 88;
+  string tradeType = 89;
+
+  string symbol = 90;
+  bool isTradeDownload = 91;
+  OrderConfig orderConfig = 92;
+  string vendorSource = 93;
+  repeated string vendorTags = 94;
+  string tradeExTimestamp = 95;
+  int32  partitionID = 96;
+
+  Exchange exchange = 101;
+  Segment segment = 102;
+  ProdType prodType = 103;
+  OrderSide side = 104;
+  string series = 105;
+  OrderEligibility orderEligibility = 106;
+}
+
+enum ErrorCode {
+  NONE = 0;
+  InvalidOrderEntry = 1;
+
+  MaxSingleOrderQtyBreach = 5001;
+  MinSingleOrderQtyBreach = 5002;
+  MaxSingleOrderValueBreach = 5003;
+  MinSingleOrderValueBreach = 5004;
+  DailyGrossBuyQtyBreach = 5005;
+  DailyGrossBuyValueBreach = 5006;
+  DailyNetQtyBreach = 5007;
+  DailyNetBuyValueBreach = 5008;
+  DailyGrossSellQtyBreach = 5009;
+  DailyGrossSellValueBreach = 5010;
+  DailyNetSellValueBreach = 5011;
+  DailyTurnOverLimitBreach = 5012;
+  PendingOrderValueBreach = 5013;
+  PendingBuyOrderValueBreach = 5014;
+  PendingSellOrderValueBreach = 5015;
+
+  InvalidCombinationOfExchangeSegment = 5016;
+  InvalidExecutionType = 5017;
+
+  BadPricePercentageBreach = 5050;
+  MaxOrderValueBreach = 5051;
+
+  TemplateFetchInternalError = 5097;
+  TemplateUnassigned = 5098;
+  LimitUpdateFailed = 5099;
+
+  AbruptSellQuantity = 5101;
+  AbruptBuyQuantity = 5102;
+  AbruptBuyValue = 5103;
+  AbruptSellValue = 5104;
+  RmLimitPass = 6000;
+  RmSingleOrderQtyCrossed = 6101;
+  RmSingleOrderQtyNotAllowed = 6102;
+  RmOverallQtyCrossed = 6103;
+  RmSingleOrderValueCrossed = 6104;
+  RmLossLimitCrossed = 6105;
+  RmGrossExposureCrossed = 6106;
+  RmExecutedQtyMoreThanMaxQty = 6107;
+  RmPriceOutsideDpr = 7001;
+  RmActionOrderNotFired = 7002;
+  RmBannedInstrument = 7003;
+  UnknownErrorOccured = 9001;
+  InvalidOrder = 1001;
+  NegativePrice = 1002;
+  NegativeQty = 1003;
+  InvalidToken = 1004;
+  InvalidSide = 1005;
+  InvalidUserUniqueId = 1006;
+  InvalidOmsUniqueId = 1007;
+  InvalidSymbol = 1008;
+  OrderDoesNotExist = 8001;
+  TotalTradedQtyNotMatched = 8002;
+  ExchangeNotHandled = 8999;
+  InvalidInstrumentType = 293;
+  OrderNumberInvalid = 509;
+  OrderCancelInitiatorAucNotAllowed = 8049;
+  AuctionNumberInvalid = 8485;
+  InvalidCTCLId = 1009;
+  InstrumentSettingFailed = 1010;
+  ClientDisabledDueToMtmBreach = 1011;
+  ClientPositionLimitBreach = 1012;
+  ConvertPositionFailed = 1013;
+  AMOOrderIsNotAllowedAtThisTime = 1014;
+  PreOpenIsNotAllowedAtThisTime = 1015;
+  OptionOutOfRange = 1016;
+  StrikePriceIsNotInRange = 1017;
+
+  MarketClosed = 16000;
+  OeInvalidUserType = 16001;
+  OeBadTransCode = 16003;
+  UserAlreadySignedOn = 16004;
+  InvalidSignOff = 16005;
+  InvalidSignOn = 16006;
+  OeSignOnNotPossible = 16007;
+  DuplicateReportRequest = 16011;
+  ErrInvalidSymbol = 16012;
+  NotYourOrder = 16014;
+  NotYourFill = 16015;
+  InvalidFillNumber = 16016;
+  StockNotFound = 16019;
+  SecurityNotAvailable = 16035;
+  BrokerNotFound = 16041;
+  DuplicateRecord = 16043;
+  OrderModified = 16044;
+  StockSuspended = 16049;
+  FunctionNotAvailable = 16052;
+  ChangeExpiredPassword = 16053;
+  ErrInvalidBranch = 16054;
+  OeProgramError = 16056;
+  OeOrderNotFound = 16060;
+  DupTrdCxlRequest = 16086;
+  ErrInvalidBuyerUserId = 16098;
+  ErrInvalidSellerUserId = 16099;
+  OeSystemError = 16104;
+  ModOrCanReject = 16115;
+  SystemNotAvailable = 16123;
+  InvalidStockStatus = 16145;
+  ErrInvalidUserId = 16148;
+  ErrInvalidTraderId = 16154;
+  OeAtoInOpen = 16169;
+  OeOrderNotAllowedInPreOpen = 16197;
+  DupRequest = 16198;
+  ProParticipantInvalid = 16233;
+  OnlyCpAllowed = 16227;
+  SlMitNtNotAllowedPClose = 16228;
+  GtcGtdOrdNotAllowedPClose = 16229;
+  OeContModNotAllowed = 16230;
+  TrdContModNotAllowed = 16231;
+  InvalidPrice = 16247;
+  TradeModDiffVolume = 16251;
+  CanceledTradeModifyRequest = 16252;
+  DeleteFlagNotSet = 16260;
+  PartialOrderReject = 16706;
+  PartialQuickOrderCancellReject = 16708;
+  RecordNotFound = 16273;
+  OeMarketsClosed = 16278;
+  OeSecurityNotAdmitted = 16279;
+  OeSecurityMatured = 16280;
+  OeSecurityExpelled = 16281;
+  OeIssuedCapExceeds = 16282;
+  OePriceNotMult = 16283;
+  OePriceExceedsDayMinMax = 16284;
+  OeIsNotActive = 16285;
+  OeVolNotEnough = 16310;
+  SystemWrongState = 16300;
+  OeAuctionPending = 16303;
+  OeQtyFreezeCanceled = 16307;
+  OePriceFreezeCan = 16308;
+  OeSolPeriodOver = 16311;
+  OeCompPeriodOver = 16312;
+  OeAucPeriodGreater = 16313;
+  OeLimitTrigger = 16315;
+  OeTriggerPriceNotMult = 16316;
+  OeNoAonAttrib = 16317;
+  OeNoMfAttrib = 16318;
+  OeNoAonInAttrib1 = 16319;
+  OeNoMfAttrib1 = 16320;
+  OeMfGreaterDisc = 16321;
+  OeMfNotMult = 16322;
+  OeMfGreaterOriginal = 16323;
+  OeDiscGreaterOriginal = 16324;
+  OeDiscNotMult = 16325;
+  OeGtdGreater = 16326;
+  OeQuantityGreaterRl = 16327;
+  OeQuantityNotMultRl = 16328;
+  OeBrokerNotPermitted = 16329;
+  OeSecuritySuspended = 16330;
+  OeBranchLimitExceeded = 16333;
+  OeOrdToBeCancelledChanged = 16334;
+  OeOrdCannotCancelled = 16344;
+  OeInitOrdCancel = 16345;
+  OeOrdCannotModify = 16346;
+  ErrTradingNotAllowed = 16348;
+  OeNegotiatedTradeRejected = 16357;
+  ChgStExists = 16363;
+  OeSecurityInPreopen = 16369;
+  OeInqNotAllowed = 16372;
+  OeSecurityIneligible = 16387;
+  TurnoverLimitNotProvided = 16392;
+  InvalidOrderParam = 16415;
+  InvalidOrderData = 16418;
+  InvalidAlphaCharInSymbol = 16420;
+  InvalidAccountInAccountField = 16431;
+  OrderCannotBeModified = 16615;
+  OrderCannotBeCancelled = 16616;
+  OrderRejectedDueToExpiryOfContract = 16617;
+  QuantityLimitExceedsQuantityValueLimit = 17045;
+  PriceOutOfCurrentExecutionRange = 17070;
+  OrderCouldHaveResultedInSelfTrade = 17080;
+  InvalidPacket = 17101;
+  HeartbeatNotReceived = 17102;
+  InvalidBoxID = 17104;
+  SequenceNumberMismatch = 17105;
+  InvalidPanID = 17177;
+  InvalidAlgoID = 17179;
+  SqlExceptionError = 50000;
+  AdapterDown = 50001;
+  OrderAlreadyPresent = 50002;
+  AdapterDownRMQ = 50003;
+
+  BalanceNotFound = 11001;
+
+  MarginUnavailable = 12001;
+  MarginBlockFailed = 12002;
+  MarginReleaseFailed = 12003;
+  ClientMarginRetrieveFailed = 12004;
+  NetClientMarginRetrieveFailed = 12005;
+  MarginEvaluationFailed = 12006;
+  UpdateSquareOffQtyEvaluationFailed = 12090;
+
+  NseDisabled = 15000;
+  CapitalMarketDisabled = 15001;
+  FutureOptionDisabled = 15002;
+  CommodityDisabled = 15012;
+  CurrencyDerivativeDisabled = 15003;
+  CapitalMarketNotReadyToPlaceOrders = 15004;
+  FutureOptionNotReadyToPlaceOrders = 15005;
+  CommodityNotReadyToPlaceOrders = 15013;
+  CurrencyDerivativeNotReadyToPlaceOrders = 15006;
+  OrderTypeNotAvailable = 15007;
+  InvalidExchangeName = 15008;
+  MISOrdersNotAllowed = 15009;
+  ShortSellNotAllowed = 15010;
+  PledgeQtySellValidationFailed = 15011;
+  SLBMDisabled = 15014;
+  SLBMNotReadyToPlaceOrders = 15015;
+
+
+  //BSE Error codes       will started with 20 or 200 for differentiating purpose
+  BseDisabled = 20000;
+  RejectDueToExceededThrottleLimit = 20100;
+  ExposureLimitExceeded = 20101;
+  ServiceTemporarilyNotAvailable = 20102;
+  ServiceNotAvailable = 20103;
+  ResultOfTransactionUnknown = 20104;
+  UserAlreadyLoggedIn = 20211;
+  OrderNotFound = 2010000;
+  PriceReasonabilityCheckFailed = 2010001;
+  //BSE order entry rejection reason
+  UnknownSecurity = 201 ;
+  DuplicateQuote = 206   ;
+  BSE_InvalidPrice = 208    ;
+  NoReferencePriceAvailable = 2016 ;
+  NoSingleSidedQuotesAllowed = 200100; // concatenated 200 for differentianting
+  InvalidQuotiingModel = 200103;
+  InvalidSize = 200106;
+  InvalidUnderlyingPrice = 200107;
+  BidPriceNotReasonable = 200108;
+  AskPriceNotReasonable = 200109;
+  BidPriceExceedRange = 200110;
+  AskPriceExceedRange = 200111;
+  InstrumentStateFreeze = 200115;
+  CancellationAlreadyPending = 200116;
+  IncompatibleInstrumentState = 200131;
+  OrderDataError = 210;
+  AllowedScriptNotFound = 18000;
+
+
+  DseDisabled = 60000;
+  NcdexDisabled = 70000;
+
+
+  OmsStartError = 51000;
+  OmsStartTimeZoneError = 51001;
+  OmsDBConnectionError = 51002;
+  OmsWebServerStartError = 51003;
+  OmsArangoStartError = 51004;
+
+}
+
+message Error {
+  ErrorCode Code = 1;
+  string Message = 2;
+}
+
+message OrderConfig {
+  string DontCrash = 1;
+  double BoTargetPrice = 2;
+  double BoCoStoplossPrice = 3;
+  string spreadToken = 4;
+  bool   isTrailing = 5;
+  double trailingStopLoss = 6;
+  OrderTag orderTag = 7;
+  double prevModifyBoTargetPrice = 8;
+  double prevModifyBoCoSlPrice = 9;
+  double prevModifyTrailSl = 10;
+  bool   prevModifyIsTrailing = 11;
+  string algoPriceType = 12;
+  string prevModifyAlgoPriceType = 13;
+  int64 prevModifyDiscQty = 20;
+  string vendorSource = 21;
+  repeated string vendorTags = 22;
+  bool   isPledgeSell = 23;
+  bool   isFreeSell = 24;
+  bool   isPositionSell = 25;
+  bool   isClientSuspended = 26;
+  bool   individualClientPledgeSell = 27;
+  bool   isMtfObligationSquareOff = 28;
+  bool   isClientFreeSell = 29;
+  string orderExTimestamp = 30;
+  string tradeExTimestamp = 31;
+  int32  partitionID = 32;
+}
+
+enum PacketType {
+  NSE_CM_ALL = 0;
+  NSE_CD_ALL = 1;
+  NSE_INDEX = 2;
+  NSE_FO_ALL = 3;
+  BSE_CM = 4;
+  BSE_INDEX = 5;
+  BSE_FO_ALL = 6;
+  MCX_PKT = 7;
+  ORDER = 8;
+  TRADE = 9;
+  NSE_CM_CIRC = 10;
+  NSE_CD_CIRC = 11;
+  NSE_CD_OI = 12;
+  NSE_FO_CIRC = 13;
+  NSE_FO_OI = 14;
+  BSE_FO_OI = 15;
+  HEARTBEAT = 16;
+  NSE_FO_GREEK = 17;
+  BSE_FO_GREEK = 18;
+}
+
+enum MarketStatus {
+  PRE_OPEN_START = 0;
+  PRE_OPEN_END = 1;
+  OPEN = 2;
+  CLOSE = 3;
+  POST_CLOSE_START = 4;
+  POST_CLOSE_END = 5;
+  UNAVAILABLE = 6;
+}
+
+enum Exchange {
+  NSE = 0;
+  BSE = 1;
+  MCX = 2;
+  NEPSE = 3;
+  DSE = 4;
+  NCDEX = 5;
+}
+
+enum BasketValidity {
+  Basket_DAY = 0;
+}
+
+enum BasketMode {
+  Basket_New = 0;
+}
+
+enum Segment {
+  Capital = 0;
+  FutOpt = 1;
+  Currency = 2;
+  Commodities = 3;
+  SLBM = 4;
+}
+
+enum Series {
+  EQ = 0;
+  XX = 1;
+  FUTIDX = 2;
+  FUTSTK = 3;
+  OPTSTK = 4;
+  OPTIDX = 5;
+  FUTCUR = 6;
+  OPTCUR = 7;
+  FUTIRC = 8;
+  FUTIRT = 9;
+  A = 10;
+  B = 11;
+  C = 12;
+  E = 13;
+  G = 14;
+  F = 15;
+  M = 16;
+  P = 17;
+  T = 18;
+  Y = 19;
+  X = 20;
+  R = 21;
+  Z = 22;
+  MS = 23;
+  MT = 24;
+  FC = 25;
+  //    GC = 26;
+  IF = 27;
+  ZP = 28;
+  XT = 29;
+  ZY = 30;
+  FUTCOM = 31;
+  OPTFUT = 32;
+  GC = 33;
+  GS = 34;
+  MF = 35;
+  BE = 36;
+  BL = 37;
+  BT = 38;
+  IL = 39;
+  IQ = 40;
+  RL = 41;
+  IZ = 42;
+  L1 = 43;
+  SI = 44;
+  //    SL=45;
+  SM = 46;
+  SO = 47;
+  SP = 48;
+  SQ = 49;
+  ST = 50;
+  N9 = 51;
+  IT = 52;
+  AF = 53;
+  R1 = 54;
+  V1 = 55;
+  L2 = 56;
+  L3 = 57;
+  L4 = 58;
+  R2 = 59;
+  R3 = 60;
+  R4 = 61;
+  V2 = 62;
+  V3 = 63;
+  V4 = 64;
+  BZ = 65;
+  I1 = 66;
+  E1 = 67;
+  I2 = 68;
+  T1 = 69;
+  O1 = 70;
+  TO = 71;
+  W3 = 72;
+  OPTCOM = 73;
+  GB = 74;
+  W1 = 75;
+  IV = 76;
+  N7 = 77;
+}
+
+enum OrderType
+{
+  LIMIT = 0;
+  MARKET = 1;
+  SL = 2;
+  SLM = 3;
+  SPREAD = 4;
+}
+
+enum OrderSide
+{
+  BUY = 0;
+  SELL = 1;
+  NEUTRAL = 2;
+}
+
+enum OrderMode
+{
+  NEW = 0;
+  MODIFY = 1;
+  CANCEL = 2;
+  SQUAREOFF = 3;
+}
+
+enum Validity {
+  DAY = 0;
+  IOC = 1;
+  GTC = 2;
+  GTD = 3;
+  GTT = 4;
+  FOK = 5;
+  AON = 6;
+}
+
+enum ProdType
+{
+  NRML = 0;
+  CNC = 1;
+  MIS = 2;
+  BTST = 3;
+  AMO_MIS = 4;
+  AMO_NRML = 5;
+  AMO_CNC = 6;
+  AMO_BTST = 7;
+  BO_MIS = 8;
+  BO_NRML = 9;
+  BO_CNC = 10;
+  BO_BTST = 11;
+  CO_MIS = 12;
+  CO_NRML = 13;
+  CO_CNC = 14;
+  CO_BTST = 15;
+  MTF = 16;
+  OCO_MIS = 17;
+  OCO_NRML = 18;
+  OCO_CNC = 19;
+  OCO_BTST = 20;
+}
+
+enum ProCli
+{
+  CLIENT = 0;
+  PROP = 1;
+  WAREHOUSE = 2;
+}
+
+enum BSEProCli
+{
+  UNKNOWN = 0;
+  OWN = 20;
+  BSE_CLIENT = 30;
+  SPECIAL_CLIENT = 40;
+  INSTITUTION = 90;
+}
+
+enum Status
+{
+  ACCEPTED = 0;
+  CONFIRMED = 1;
+  REJECTED = 2;
+  PENDING = 3;
+  MODIFY_ACCEPTED = 4;
+  MODIFY_CONFIRMED = 5;
+  MODIFY_REJECTED = 6;
+  MODIFY_PENDING = 7;
+  CANCEL_ACCEPTED = 8;
+  CANCEL_CONFIRMED = 9;
+  CANCEL_REJECTED = 10;
+  CANCEL_PENDING = 11;
+
+  PARTIAL_TRADE = 12;
+  SL_TRIGGER_CONFIRMED = 13;
+
+  COMPLETE = 14;
+  BATCH_CANCEL_CONFIRMED = 15;
+
+  AMO_REQ_RECEIVED = 16;
+  AMO_REQ_CONFIRMED = 17;
+  AMO_REQ_MODIFIED = 18;
+  AMO_CANCEL_CONFIRMED = 19;
+
+  AMO_NEW_CONFIRMED = 20;
+  AMO_MODIFY_CONFIRMED = 21;
+
+  BRACKET_ORDER_CONFIRMED = 22;
+  BRACKET_ORDER_MODIFIED = 23;
+  BRACKET_ORDER_CANCELLED = 24;
+  BRACKET_ORDER_COMPLETE_TRADE = 25;
+
+  ORDER_PRICE_CONFIRMATION = 26;
+
+  BRACKET_ORDER_REJECTED = 31;
+  BASKET_ORDER_ACCEPTED = 32;
+
+  RRM_PENDING_AT_EXCHANGE = 33;
+  RMS_VALIDATION_COMPLETED = 49;
+  EXCHANGE_RESPONSE_PENDING = 50; //introduced to remove DB lock based on unaccepted order.
+  UNACCEPTED = 51; //Don't change the value, 51 is hardcoded in code.
+}
+
+//Highest level in the hierarchy at the top with value 0
+enum ParentType
+{
+  BRANCH = 0;
+  DEALER = 1;
+}
+
+enum MtmSquareOffLevel {
+  NETWISE = 0;
+  DAYWISE = 1;
+  HOLDINGS = 2;
+  HOLDINGS_NETWISE = 3;
+  HOLDINGS_DAYWISE = 4;
+}
+
+enum OrderEligibility {
+  MarginApplicable = 0;
+  MarginNotApplicable = 1;
+  MisNotSquaredOff = 2;
+  MisSquaredOff = 3;
+  MarginApplicableOnPool = 4;
+  MarginPledgeChanges = 5;
+  CurrentMonth = 6;
+  NearMonth = 7;
+  FarMonth = 8;
+}
+
+enum ExecutionType {
+  UNKNOWN_TYPE = 0;
+  REGULAR = 1;
+  AMO = 2;
+  BO = 3;
+  CO = 4;
+  SPD = 5;
+  HDG = 6;
+  OCO = 7;
+  NML = 8;
+  AUCTION = 9;
+  ICEBERG = 10;
+}
+
+enum BasketType {
+  NORMAL = 0;
+  CONDITIONAL = 1;
+  HEDGE = 2;
+  SIP = 3;
+}
+
+enum AlgoPriceType {
+  ABSOLUTE = 0;
+  PERCENTAGE = 1;
+  TICK = 2; //difference
+}
+
+enum OrderLegs
+{
+  ENTRY = 0;
+  SECOND = 1;
+  THIRD = 2;
+  SQUAREOFF_LEG = 3;
+  GTT_ENTRY = 4;
+  SIP_ENTRY = 5;
+}
+
+enum LegsAction
+{
+  UNKNOWN_ACTION = 0;
+}
+
+enum TradingSession {
+  Unknown_Session = 0;
+  Full_Day_Session = 1;
+  Morning_Day_Session = 2;
+  Evening_Day_Session = 3;
+  Special_Day_Session = 4;
+}
+
+enum SquareOffInExchange {
+  Default = 0;
+  SquareOffInNse = 1;
+  SquareOffInBse = 2;
+}
+
+enum ReconcileType {
+  Recalculation = 0;
+}
+
+enum OrderTag {
+  Regular = 0;
+  RegAmo = 1;
+  EtfAmo = 2;
+  TransitAmo = 3;
+  ClosingAmo = 4;
+  AuctionAmo = 5;
+  RegAuction = 6;
+  SpecialAmo = 7;
+}
