@@ -11,7 +11,7 @@ BSE_INDEX_ scripId prefixes, and the publish topic keeps the OpenAlgo exchange
 topics).
 """
 
-from broker.hdfcsky.mapping.exchange import ws_scrip_id
+from broker.hdfcsky.mapping.transform_data import ws_scrip_id
 from broker.hdfcsky.streaming.hdfcsky_mapping import HDFCSkyCapabilityRegistry
 from broker.hdfcsky.streaming.hdfcsky_websocket import HDFCSkyWebSocket
 from database.auth_db import get_auth_token

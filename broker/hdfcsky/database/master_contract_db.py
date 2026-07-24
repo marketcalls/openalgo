@@ -44,7 +44,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from broker.hdfcsky.api.baseurl import SECURITY_MASTER_URL, USER_AGENT
-from broker.hdfcsky.mapping.exchange import INDEX_SEGMENTS, classify_index_symbol
+from broker.hdfcsky.mapping.transform_data import INDEX_SEGMENTS, classify_index_symbol
 from database.engine_factory import create_db_engine
 from extensions import socketio
 from utils.httpx_client import get_httpx_client

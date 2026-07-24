@@ -16,8 +16,8 @@ import json
 from broker.hdfcsky.api.baseurl import base_params, get_hdfcsky_headers, get_root_url
 from broker.hdfcsky.api.data import _series_type
 from broker.hdfcsky.database.master_contract_db import SymToken, db_session
-from broker.hdfcsky.mapping.exchange import to_rest_exchange
 from broker.hdfcsky.mapping.margin_data import build_margin_leg, parse_margin_response
+from broker.hdfcsky.mapping.transform_data import to_ltp_exchange
 from database.token_db import get_br_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -102,8 +102,12 @@ def _underlying_prices(auth, resolved):
                     .first()
                 )
                 if match:
+                    # Index underlyings must be addressed as NSE_INDEX /
+                    # BSE_INDEX here: fetch-ltp silently omits them when they
+                    # are sent as the parent cash exchange, which would leave
+                    # every index leg's underlying price at zero.
                     wanted[(row.exchange, row.brsymbol)] = (
-                        to_rest_exchange(match.exchange),
+                        to_ltp_exchange(match.exchange),
                         str(match.token),
                     )
                     break

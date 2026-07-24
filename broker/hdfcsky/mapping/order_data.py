@@ -9,10 +9,10 @@
 #   positions  : {"data": [...],               "status": "success"}   <- flat list
 #   holdings   : {"data": {"holdings": [...]}, "status": "success"}
 
-from broker.hdfcsky.mapping.exchange import to_oa_exchange
 from broker.hdfcsky.mapping.transform_data import (
     reverse_map_order_type,
     reverse_map_product_type,
+    to_oa_exchange,
 )
 from database.token_db import get_oa_symbol
 from utils.logging import get_logger
