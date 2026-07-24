@@ -963,6 +963,14 @@ def calculate_portfolio_statistics(holdings_data):
             "totalprofitandloss": 0,
         }
 
+    # Handle tuple input (response, status_code) — get_holdings returns a
+    # (data, status_code) tuple, and it reaches here unchanged via
+    # map_portfolio_data. Unwrap it the same way transform_holdings_data does;
+    # otherwise the isinstance(list) check below fails and this returns all-zero
+    # statistics (and logs "Invalid holdings data format: tuple" on every call).
+    if isinstance(holdings_data, tuple):
+        holdings_data = holdings_data[0]
+
     # Extract holdings from the API response structure
     if isinstance(holdings_data, dict):
         # Check if statistics are already provided
