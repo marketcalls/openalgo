@@ -18,7 +18,11 @@
 import time
 
 from broker.hdfcsky.api.baseurl import get_client_id
-from database.token_db import get_token
+from database.token_db import get_symbol_info, get_token
+from utils.logging import get_logger
+from utils.mpp_slab import calculate_protected_price
+
+logger = get_logger(__name__)
 
 # --- exchange codes -------------------------------------------------------
 #
@@ -205,6 +209,62 @@ def _resolve_token(symbol, exchange):
     return str(token)
 
 
+# HDFC Sky rejects market-type orders placed through a merchant/API key
+# ("algo orders from merchant can only of Limit type", HTTP 403). Convert them
+# to their limit equivalents with a Market-Price-Protection buffer, matching the
+# Flattrade/Dhan approach (utils/mpp_slab.py):
+#   MARKET -> LIMIT  (buffer off the live LTP)
+#   SL-M   -> SL     (buffer off the user's trigger price; keeps the trigger)
+_MARKET_PRICETYPES = {"MARKET", "SL-M"}
+
+
+def _protect_market_order(data, auth_token, pricetype, action, fallback_price):
+    """Turn a market-type order into its limit equivalent with an MPP buffer.
+
+    Returns (hdfcsky_order_type, price). MARKET buffers off the live LTP; SL-M
+    buffers off the user's trigger price so the protective limit sits on the
+    correct side of the trigger. On any failure the original market order_type
+    is kept (with fallback_price) so the broker's own rejection surfaces instead
+    of a silently mis-priced order.
+    """
+    # Lazy import: api/data.py imports this module, so a top-level import cycles.
+    from broker.hdfcsky.api.data import BrokerData
+
+    symbol = data["symbol"]
+    exchange = data["exchange"]
+    limit_type = "SL" if pricetype == "SL-M" else "LIMIT"
+    try:
+        if pricetype == "SL-M":
+            base_price = float(data.get("trigger_price", 0) or 0)
+        else:
+            quote = BrokerData(auth_token).get_quotes(symbol, exchange)
+            base_price = float(quote.get("ltp") or 0)
+
+        if base_price <= 0:
+            logger.warning(
+                f"HDFC Sky MPP: no reference price for {exchange}:{symbol}; cannot convert "
+                f"{pricetype} to a limit order, broker may reject it"
+            )
+            return map_order_type(pricetype), fallback_price
+
+        info = get_symbol_info(symbol, exchange)
+        tick_size = getattr(info, "tick_size", None)
+        protected = calculate_protected_price(
+            price=base_price, action=action, symbol=symbol, tick_size=tick_size
+        )
+        logger.info(
+            f"HDFC Sky MPP: {exchange}:{symbol} {pricetype}->{limit_type}, "
+            f"base={base_price}, protected={protected}"
+        )
+        return map_order_type(limit_type), protected
+    except Exception as e:
+        logger.warning(
+            f"HDFC Sky MPP: could not protect {pricetype} order for {exchange}:{symbol}: {e}; "
+            f"sending original order type"
+        )
+        return map_order_type(pricetype), fallback_price
+
+
 def transform_data(data, auth_token):
     """OpenAlgo order dict -> HDFC Sky place-order payload.
 
@@ -212,17 +272,23 @@ def transform_data(data, auth_token):
     product, price, trigger_price, disclosed_quantity, strategy.
     """
     exchange = data["exchange"]
-    order_type = map_order_type(data.get("pricetype", "MARKET"))
+    pricetype = str(data.get("pricetype", "MARKET")).upper()
+    action = map_transaction_type(data["action"])
+    order_type = map_order_type(pricetype)
+    price = float(data.get("price", 0) or 0)
+
+    if pricetype in _MARKET_PRICETYPES:
+        order_type, price = _protect_market_order(data, auth_token, pricetype, action, price)
 
     payload = {
         "exchange": to_rest_exchange(exchange),
         "instrument_token": _resolve_token(data["symbol"], exchange),
         "client_id": get_client_id(auth_token),
         "order_type": order_type,
-        "order_side": map_transaction_type(data["action"]),
+        "order_side": action,
         "product": map_product_type(data.get("product", "MIS")),
         "quantity": int(data.get("quantity", 0)),
-        "price": float(data.get("price", 0) or 0),
+        "price": price,
         "trigger_price": float(data.get("trigger_price", 0) or 0),
         "disclosed_quantity": int(data.get("disclosed_quantity", 0) or 0),
         "validity": "DAY",

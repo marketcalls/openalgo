@@ -184,9 +184,7 @@ def place_order_api(data, auth):
     service layer's `res.status == 200` success check works.
     """
     payload = transform_data(data, auth)
-    # debug, not info: console writes from the order hot path cost real
-    # milliseconds on Windows terminals; use LOG_LEVEL=DEBUG to see payloads
-    logger.debug(f"Payload for HDFC Sky place_order_api: {payload}")
+    logger.info(f"Payload for HDFC Sky place_order_api: {payload}")
 
     client = get_httpx_client()
     response = client.post(
@@ -195,7 +193,7 @@ def place_order_api(data, auth):
         params=base_params(auth, client_id=False),
         json=payload,
     )
-    logger.debug(f"HDFC Sky raw response: status={response.status_code}, body={response.text}")
+    logger.info(f"HDFC Sky raw response: status={response.status_code}, body={response.text}")
 
     try:
         response_data = response.json()
