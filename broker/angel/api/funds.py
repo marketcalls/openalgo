@@ -38,7 +38,19 @@ def get_margin_data(auth_token):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    margin_data = json.loads(response.text)
+    # Angel can return a NON-JSON body on some errors — notably an HTTP 403
+    # rate-limit ("Access denied because of exceeding access rate"). Calling
+    # json.loads() on that raises a JSONDecodeError that crashes the funds flow
+    # (surfaced to the caller as a 500 "Expecting value: line 1 column 1"). Guard
+    # the parse and treat an unparseable/error response as "no margin data",
+    # consistent with the empty-data path below.
+    try:
+        margin_data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(
+            f"Non-JSON margin response (HTTP {response.status_code}): {response.text[:200]}"
+        )
+        return {}
 
     logger.info(f"Margin Data: {margin_data}")
 
