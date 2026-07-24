@@ -5,7 +5,7 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from openalgo import api
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 # ===============================
 # OpenAlgo Client
@@ -78,7 +78,7 @@ def schedule_straddle():
     )
 
     scheduler.start()
-    print("✅ Scheduled NIFTY 09DEC25 ATM Straddle for 09:20 IST (Mon–Sun).")
+    print("Scheduled NIFTY 09DEC25 ATM Straddle for 09:20 IST (Mon–Sun).")
 
     return scheduler
 

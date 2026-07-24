@@ -757,9 +757,25 @@ export class TradingTerminal {
         this.depthActive = true
         if (this.tradeBtns) this.tradeBtns.setPrices(bid, ask)
       }
+      // Depth is the terminal's ONLY subscription for tradeable instruments,
+      // so the chart ticks off depth.ltp -- a first-class field in every mode-3
+      // payload per the WebSocket protocol (docs/prompt/websockets-format.md).
+      // This replaced the old dual LTP+Depth subscribe, which broke on brokers
+      // whose adapters track one mode per symbol (Depth overwrote LTP and the
+      // chart froze while depth kept flowing -- issue #1664).
+      if (typeof depth.ltp === 'number' && depth.ltp > 0) {
+        this.cb.onWsState('live')
+        this.stopLtpFallback()
+        this.onTick({ ltp: depth.ltp })
+      }
     })
-    this.ws.subscribe('LTP', this.sym.symbol, this.sym.exchange)
-    if (!this.sym.quoteOnly) this.ws.subscribe('Depth', this.sym.symbol, this.sym.exchange, 5)
+    // One subscription per symbol, mode picked by instrument type: indices
+    // have no order book (LTP), tradeables get Depth which embeds ltp.
+    if (this.sym.quoteOnly) {
+      this.ws.subscribe('LTP', this.sym.symbol, this.sym.exchange)
+    } else {
+      this.ws.subscribe('Depth', this.sym.symbol, this.sym.exchange, 5)
+    }
   }
 
   /* periodic history reconcile: snap completed bars to broker OHLC/volume */
@@ -806,13 +822,14 @@ export class TradingTerminal {
       this.sym &&
       (this.sym.symbol !== pick.symbol || this.sym.exchange !== pick.exchange)
     ) {
+      // Mirror connectLive's single-subscription model: the outgoing symbol
+      // holds exactly one mode -- LTP when quote-only, Depth otherwise.
       try {
-        this.ws.unsubscribe('LTP', this.sym.symbol, this.sym.exchange)
-      } catch {
-        /* not subscribed */
-      }
-      try {
-        this.ws.unsubscribe('Depth', this.sym.symbol, this.sym.exchange)
+        if (this.sym.quoteOnly) {
+          this.ws.unsubscribe('LTP', this.sym.symbol, this.sym.exchange)
+        } else {
+          this.ws.unsubscribe('Depth', this.sym.symbol, this.sym.exchange)
+        }
       } catch {
         /* not subscribed */
       }

@@ -121,15 +121,15 @@ Phase-1 fixes (login rate reduction, webhook HMAC, WebSocket/ZMQ binding, sessio
 
 ### INFORMATIONAL (Positive findings)
 
-- ✅ **Password hashing:** Argon2 + pepper.
-- ✅ **CSRF:** Enabled by default, exemptions justified and enumerated in `app.py:275–293`.
-- ✅ **Session cookies:** `HttpOnly`, `SameSite=Lax`, `Secure` when HTTPS, `__Host-` prefix where applicable.
-- ✅ **SQL:** SQLAlchemy ORM throughout; no `f"... {user_input} ..."` SQL strings found.
-- ✅ **Dependencies:** Pinned in `pyproject.toml`; pre-commit hooks for secret detection.
-- ✅ **Logging:** `SensitiveDataFilter` redacts `api_key`, `apikey`, `token`, `password`, `Authorization` in all three handlers.
-- ✅ **File uploads:** `secure_filename()` + path validation.
-- ✅ **TOTP 2FA:** Implemented for password reset.
-- ✅ **MCP server:** `mcp/mcpserver.py` speaks stdio only — no network listener.
+- **Password hashing:** Argon2 + pepper.
+- **CSRF:** Enabled by default, exemptions justified and enumerated in `app.py:275–293`.
+- **Session cookies:** `HttpOnly`, `SameSite=Lax`, `Secure` when HTTPS, `__Host-` prefix where applicable.
+- **SQL:** SQLAlchemy ORM throughout; no `f"... {user_input} ..."` SQL strings found.
+- **Dependencies:** Pinned in `pyproject.toml`; pre-commit hooks for secret detection.
+- **Logging:** `SensitiveDataFilter` redacts `api_key`, `apikey`, `token`, `password`, `Authorization` in all three handlers.
+- **File uploads:** `secure_filename()` + path validation.
+- **TOTP 2FA:** Implemented for password reset.
+- **MCP server:** `mcp/mcpserver.py` speaks stdio only — no network listener.
 
 ---
 

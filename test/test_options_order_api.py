@@ -261,16 +261,16 @@ def test_iron_condor_legs():
             data = response.json()
 
             if data.get("status") == "success":
-                print(f"✓ Order ID: {data.get('orderid')}")
+                print(f"Order ID: {data.get('orderid')}")
                 print(f"  Symbol: {data.get('symbol')}")
                 print(f"  Exchange: {data.get('exchange')}")
                 if "mode" in data:
                     print(f"  Mode: {data.get('mode')}")
             else:
-                print(f"✗ Error: {data.get('message')}")
+                print(f"Error: {data.get('message')}")
 
         except Exception as e:
-            print(f"✗ Exception: {e}")
+            print(f"Exception: {e}")
 
 
 def test_validation_error():

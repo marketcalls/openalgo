@@ -6,9 +6,9 @@
 
 | Script | Desktop/Server | Platform | Status |
 |--------|---------------|----------|--------|
-| `docker-run.sh` | Desktop | macOS/Linux | ✅ Updated |
-| `docker-run.bat` | Desktop | Windows | ✅ Updated |
-| `install-docker.sh` | Server | Ubuntu/Debian | ✅ Updated |
+| `docker-run.sh` | Desktop | macOS/Linux | Updated |
+| `docker-run.bat` | Desktop | Windows | Updated |
+| `install-docker.sh` | Server | Ubuntu/Debian | Updated |
 
 ---
 
@@ -52,7 +52,7 @@ docker inspect openalgo --format='{{range .Mounts}}{{.Destination}} {{end}}'
 
 ### Test numba/scipy
 ```bash
-docker exec openalgo python -c "import numba, llvmlite, scipy; print('✓ Working')"
+docker exec openalgo python -c "import numba, llvmlite, scipy; print('Working')"
 ```
 
 ### Test Strategy Indicators
@@ -69,7 +69,7 @@ def ema(prices, period):
         ema[i] = alpha * prices[i] + (1 - alpha) * ema[i-1]
     return ema
 result = ema(np.array([100.0, 102.0, 98.0, 101.0]), 3)
-print('✓ EMA calculation works:', result[-1])
+print('EMA calculation works:', result[-1])
 "
 ```
 
@@ -121,16 +121,16 @@ sudo ./install-docker.sh
 
 | Error | Status | Solution |
 |-------|--------|----------|
-| `KeyError: 'LLVMPY_AddSymbol'` | ✅ Fixed | Added /app/tmp volume |
-| `OSError: failed to map segment` | ✅ Fixed | Added shm_size=2g |
-| `FileNotFoundError: tmp/NSE_CM.csv` | ✅ Fixed | Added /app/tmp volume |
-| API keys lost on restart | ✅ Fixed | Added /app/keys volume |
+| `KeyError: 'LLVMPY_AddSymbol'` | Fixed | Added /app/tmp volume |
+| `OSError: failed to map segment` | Fixed | Added shm_size=2g |
+| `FileNotFoundError: tmp/NSE_CM.csv` | Fixed | Added /app/tmp volume |
+| API keys lost on restart | Fixed | Added /app/keys volume |
 
 ---
 
 ## Backward Compatibility
 
-✅ **100% Compatible**
+**100% Compatible**
 - Existing installations won't break
 - New volumes created automatically
 - No database migrations needed

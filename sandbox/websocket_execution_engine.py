@@ -51,6 +51,14 @@ class WebSocketExecutionEngine:
         # {user_id: {symbol_key: count}}
         self._user_symbol_refcounts: dict[str, dict[str, int]] = {}
 
+        # Event-driven MTM: open POSITIONS hold a feed subscription just like
+        # open orders do, so the proxy keeps MarketDataService warm and the
+        # MTM loop reads tick-fresh prices instead of falling back to REST
+        # multiquotes for unwatched symbols. One ref per (user_id, symbol_key)
+        # regardless of how many products hold the symbol; the ref is released
+        # only when every product's position is flat.
+        self._position_refs: set[tuple[str, str]] = set()
+
         # Fallback settings
         self.fallback_enabled = os.getenv("SANDBOX_ENGINE_FALLBACK", "true").lower() == "true"
         self.stale_data_threshold = 30  # seconds
@@ -122,11 +130,33 @@ class WebSocketExecutionEngine:
             self._pending_orders_index.clear()
             self._monitored_symbols.clear()
             self._user_symbol_refcounts.clear()
+            self._position_refs.clear()
 
             try:
                 pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
 
                 for order in pending_orders:
+                    # Skip orders on expired F&O contracts: the symbol is gone
+                    # from the master contract after the daily refresh, so
+                    # subscribing it just makes the broker adapter log
+                    # token-lookup errors on every boot ("No brsymbol found").
+                    # Cancellation (with margin release) is handled by the
+                    # square-off cycle's _cancel_expired_contract_orders --
+                    # deliberately NOT done here, since cancel_order re-enters
+                    # this engine via notify_order_completed and would deadlock
+                    # on self._lock.
+                    from datetime import date
+
+                    from sandbox.position_manager import get_contract_expiry
+
+                    expiry_date = get_contract_expiry(order.symbol, order.exchange)
+                    if expiry_date is not None and date.today() > expiry_date:
+                        logger.info(
+                            f"Skipping WS subscription for {order.symbol}: contract "
+                            f"expired {expiry_date}; order {order.orderid} awaits auto-cancel"
+                        )
+                        continue
+
                     symbol_key = f"{order.exchange}:{order.symbol}"
                     if symbol_key not in self._pending_orders_index:
                         self._pending_orders_index[symbol_key] = []
@@ -137,6 +167,35 @@ class WebSocketExecutionEngine:
                 logger.debug(
                     f"Built order index: {len(pending_orders)} orders across {len(self._monitored_symbols)} symbols"
                 )
+
+                # Event-driven MTM: open positions hold feed subscriptions too,
+                # so a restart re-warms MarketDataService for every held symbol
+                # (the poll loop then reads ticks instead of REST-fetching).
+                # Contracts already past expiry are skipped -- their positions
+                # are awaiting settlement, and the symbol may already be gone
+                # from the master contract.
+                from datetime import date
+
+                from database.sandbox_db import SandboxPositions
+                from sandbox.position_manager import get_contract_expiry
+
+                open_positions = SandboxPositions.query.filter(
+                    SandboxPositions.quantity != 0
+                ).all()
+                pos_subscribed = 0
+                for pos in open_positions:
+                    expiry = get_contract_expiry(pos.symbol, pos.exchange)
+                    if expiry is not None and date.today() > expiry:
+                        continue
+                    key = f"{pos.exchange}:{pos.symbol}"
+                    if (pos.user_id, key) not in self._position_refs:
+                        self._position_refs.add((pos.user_id, key))
+                        self._increment_user_symbol_refcount(pos.user_id, key)
+                        pos_subscribed += 1
+                if pos_subscribed:
+                    logger.info(
+                        f"Position feed: {pos_subscribed} open-position symbols added to index"
+                    )
 
             except Exception as e:
                 logger.exception(f"Error building order index: {e}")
@@ -207,6 +266,61 @@ class WebSocketExecutionEngine:
         if unsubscribe_user and unsubscribe_symbol:
             exchange, symbol = unsubscribe_symbol.split(":", 1)
             self._unsubscribe_ws_symbols(unsubscribe_user, [(symbol, exchange)])
+
+    def notify_position_opened(self, user_id: str, symbol: str, exchange: str):
+        """Hold a feed subscription for an open position (event-driven MTM).
+
+        Called after a fill leaves a non-zero position. Idempotent per
+        (user, symbol): repeat fills on an already-referenced symbol are
+        no-ops, and a symbol some open order already subscribed just gains
+        a second refcount -- the pool sees one subscription either way.
+        """
+        if not self._running:
+            return
+        symbol_key = f"{exchange}:{symbol}"
+        subscribe = False
+        with self._lock:
+            if (user_id, symbol_key) not in self._position_refs:
+                self._position_refs.add((user_id, symbol_key))
+                subscribe = self._increment_user_symbol_refcount(user_id, symbol_key)
+        if subscribe:
+            logger.info(f"Position feed: subscribing {symbol_key} for MTM (user {user_id})")
+            self._subscribe_ws_symbols(user_id, [(symbol, exchange)])
+
+    def notify_position_closed(self, user_id: str, symbol: str, exchange: str):
+        """Release the position's feed subscription once the symbol is flat.
+
+        Flat means NO product (MIS/NRML/CNC) still holds quantity -- an MIS
+        close while an NRML position remains must keep the feed up. On any
+        doubt (query failure) the subscription is kept; a stray subscription
+        costs a few ticks, a dropped one costs live MTM.
+        """
+        if not self._running:
+            return
+        try:
+            from database.sandbox_db import SandboxPositions
+
+            remaining = (
+                SandboxPositions.query.filter_by(
+                    user_id=user_id, symbol=symbol, exchange=exchange
+                )
+                .filter(SandboxPositions.quantity != 0)
+                .count()
+            )
+        except Exception:
+            logger.debug("Position feed: flatness check failed; keeping subscription")
+            return
+        if remaining:
+            return
+        symbol_key = f"{exchange}:{symbol}"
+        unsubscribe = False
+        with self._lock:
+            if (user_id, symbol_key) in self._position_refs:
+                self._position_refs.discard((user_id, symbol_key))
+                unsubscribe = self._decrement_user_symbol_refcount(user_id, symbol_key)
+        if unsubscribe:
+            logger.info(f"Position feed: releasing {symbol_key} (user {user_id}, flat)")
+            self._unsubscribe_ws_symbols(user_id, [(symbol, exchange)])
 
     def _on_market_data(self, data: dict):
         """

@@ -57,34 +57,14 @@ def setup_logging(verbose=False):
 
 
 def safe_print(message, use_emoji=True):
-    """Print with fallback for systems that don't support emojis"""
-    if use_emoji:
-        try:
-            print(message)
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            # Fallback: print without emojis
-            message_no_emoji = message
-            emoji_map = {
-                "🚀": "[START]",
-                "📋": "[INFO]",
-                "✅": "[OK]",
-                "❌": "[ERROR]",
-                "⚠️": "[WARN]",
-                "ℹ️": "[INFO]",
-                "🔍": "[CHECK]",
-                "🔄": "[RUN]",
-                "🔧": "[SETUP]",
-                "➕": "+",
-                "🎉": "[SUCCESS]",
-                "📖": "[DOCS]",
-                "⏹️": "[STOP]",
-                "📁": "[DIR]",
-            }
-            for emoji, text in emoji_map.items():
-                message_no_emoji = message_no_emoji.replace(emoji, text)
-            print(message_no_emoji)
-    else:
-        print(message)
+    """Print a message.
+
+    This used to translate emoji to text labels for consoles that cannot encode
+    pictographs (cp1252 on Windows). Every message in this script is plain ASCII
+    now, so there is nothing left to translate. The signature is kept because
+    callers throughout the script pass ``use_emoji``.
+    """
+    print(message)
 
 
 def resolve_database_path(db_url):
@@ -109,7 +89,7 @@ def load_environment():
     """Load environment variables from .env file if it exists"""
     env_file = project_root / ".env"
     if env_file.exists():
-        safe_print(f"📋 Loading environment from: {env_file}")
+        safe_print(f"Loading environment from: {env_file}")
         try:
             with open(env_file, encoding="utf-8") as f:
                 for line in f:
@@ -136,15 +116,15 @@ def load_environment():
                             if key == "DATABASE_URL" and value.startswith("sqlite:///"):
                                 original_value = value
                                 value = resolve_database_path(value)
-                                safe_print(f"📁 Resolved database path: {original_value} → {value}")
+                                safe_print(f"Resolved database path: {original_value} → {value}")
 
                             os.environ[key] = value
 
-            safe_print("✅ Environment variables loaded")
+            safe_print("Environment variables loaded")
         except Exception as e:
-            safe_print(f"⚠️  Warning: Could not load .env file: {e}")
+            safe_print(f"Warning: Could not load .env file: {e}")
     else:
-        safe_print("ℹ️  No .env file found")
+        safe_print("ℹ No .env file found")
 
 
 def check_dependencies():
@@ -155,7 +135,7 @@ def check_dependencies():
 
         return True
     except ImportError as e:
-        safe_print(f"❌ Missing dependencies: {e}")
+        safe_print(f"Missing dependencies: {e}")
         safe_print("Please ensure SQLAlchemy is installed")
         return False
 
@@ -168,21 +148,21 @@ def add_smtp_columns():
         # Get database URL from environment
         database_url = os.getenv("DATABASE_URL")
         if not database_url:
-            safe_print("❌ DATABASE_URL not found in environment")
+            safe_print("DATABASE_URL not found in environment")
             safe_print("Current environment variables:")
             for key in sorted(os.environ.keys()):
                 if "DATABASE" in key or "DB" in key:
                     safe_print(f"  {key}: {os.environ[key]}")
             return False
 
-        safe_print("🔧 Creating database connection...")
-        safe_print(f"📁 Database URL: {database_url}")
+        safe_print("Creating database connection...")
+        safe_print(f"Database URL: {database_url}")
 
         # Check if database file exists (for SQLite)
         if database_url.startswith("sqlite:///"):
             db_path = database_url[10:]
             if not Path(db_path).exists():
-                safe_print(f"📁 Database file doesn't exist, will be created: {db_path}")
+                safe_print(f"Database file doesn't exist, will be created: {db_path}")
 
         engine = create_engine(database_url)
 
@@ -191,7 +171,7 @@ def add_smtp_columns():
 
         # Check if settings table exists
         if "settings" not in inspector.get_table_names():
-            safe_print("❌ Settings table does not exist. Creating it...")
+            safe_print("Settings table does not exist. Creating it...")
             # Create minimal settings table
             with engine.connect() as conn:
                 conn.execute(
@@ -203,11 +183,11 @@ def add_smtp_columns():
                 """)
                 )
                 conn.commit()
-                safe_print("✅ Created settings table")
+                safe_print("Created settings table")
 
         # Get existing columns
         existing_columns = [col["name"] for col in inspector.get_columns("settings")]
-        safe_print(f"📋 Existing columns: {existing_columns}")
+        safe_print(f"Existing columns: {existing_columns}")
 
         # Define SMTP columns to add
         smtp_columns = {
@@ -226,10 +206,10 @@ def add_smtp_columns():
         }
 
         if not missing_columns:
-            safe_print("✅ All SMTP columns already exist - no migration needed")
+            safe_print("All SMTP columns already exist - no migration needed")
             return True
 
-        safe_print(f"🔄 Adding {len(missing_columns)} missing columns...")
+        safe_print(f"Adding {len(missing_columns)} missing columns...")
 
         # Add missing columns
         added = 0
@@ -238,31 +218,31 @@ def add_smtp_columns():
                 try:
                     # Use raw SQL for maximum compatibility
                     sql = f"ALTER TABLE settings ADD COLUMN {column_name} {column_type}"
-                    safe_print(f"  ➕ Adding: {column_name}")
+                    safe_print(f"Adding: {column_name}")
                     conn.execute(text(sql))
                     added += 1
                 except Exception as e:
-                    safe_print(f"  ⚠️  Warning adding {column_name}: {e}")
+                    safe_print(f"Warning adding {column_name}: {e}")
                     # Continue with other columns
 
             if added > 0:
                 conn.commit()
-                safe_print(f"✅ Successfully added {added} SMTP columns")
+                safe_print(f"Successfully added {added} SMTP columns")
 
         # Ensure at least one settings row exists
         with engine.connect() as conn:
             result = conn.execute(text("SELECT COUNT(*) FROM settings"))
             count = result.scalar()
             if count == 0:
-                safe_print("📋 Creating default settings row...")
+                safe_print("Creating default settings row...")
                 conn.execute(text("INSERT INTO settings (analyze_mode) VALUES (0)"))
                 conn.commit()
-                safe_print("✅ Created default settings row")
+                safe_print("Created default settings row")
 
         return True
 
     except Exception as e:
-        safe_print(f"❌ Migration failed: {e}")
+        safe_print(f"Migration failed: {e}")
         if hasattr(e, "__traceback__"):
             traceback.print_exc()
         return False
@@ -276,14 +256,14 @@ def verify_smtp_columns():
         # Get database URL from environment
         database_url = os.getenv("DATABASE_URL")
         if not database_url:
-            safe_print("❌ DATABASE_URL not found in environment")
+            safe_print("DATABASE_URL not found in environment")
             return False
 
         engine = create_engine(database_url)
         inspector = inspect(engine)
 
         if "settings" not in inspector.get_table_names():
-            safe_print("❌ Settings table does not exist")
+            safe_print("Settings table does not exist")
             return False
 
         existing_columns = [col["name"] for col in inspector.get_columns("settings")]
@@ -301,14 +281,14 @@ def verify_smtp_columns():
         missing = [col for col in expected_columns if col not in existing_columns]
 
         if missing:
-            safe_print(f"❌ Missing columns: {missing}")
+            safe_print(f"Missing columns: {missing}")
             return False
         else:
-            safe_print("✅ All SMTP columns verified successfully")
+            safe_print("All SMTP columns verified successfully")
             return True
 
     except Exception as e:
-        safe_print(f"❌ Verification failed: {e}")
+        safe_print(f"Verification failed: {e}")
         return False
 
 
@@ -340,7 +320,7 @@ Examples:
     logger = setup_logging(args.verbose)
     use_emoji = not args.no_emoji
 
-    safe_print("🚀 OpenAlgo SMTP Migration (Universal Path Version)", use_emoji)
+    safe_print("OpenAlgo SMTP Migration (Universal Path Version)", use_emoji)
     safe_print("=" * 50, False)
     safe_print(f"Python: {sys.version}", False)
     safe_print(f"Platform: {sys.platform}", False)
@@ -356,46 +336,46 @@ Examples:
     if not check_dependencies():
         return 1
 
-    safe_print("🔍 Checking database status...", use_emoji)
+    safe_print("Checking database status...", use_emoji)
 
     # Verify current state
     if args.check_only:
         success = verify_smtp_columns()
         if success:
-            safe_print("ℹ️  Migration not needed - all columns exist", use_emoji)
+            safe_print("ℹ Migration not needed - all columns exist", use_emoji)
             return 0
         else:
-            safe_print("⚠️  Migration needed - some columns missing", use_emoji)
+            safe_print("Migration needed - some columns missing", use_emoji)
             return 1
 
     # Run migration
-    safe_print("🔄 Running SMTP migration...", use_emoji)
+    safe_print("Running SMTP migration...", use_emoji)
     try:
         success = add_smtp_columns()
 
         if success:
-            safe_print("\n🔍 Verifying migration...", use_emoji)
+            safe_print("\n Verifying migration...", use_emoji)
             if verify_smtp_columns():
-                safe_print("\n🎉 SMTP migration completed successfully!", use_emoji)
+                safe_print("\n SMTP migration completed successfully!", use_emoji)
                 safe_print("\nNext steps:", False)
                 safe_print("1. Restart your OpenAlgo application", False)
                 safe_print("2. Go to Profile → SMTP Configuration", False)
                 safe_print("3. Configure your email settings", False)
                 safe_print("4. Test your configuration", False)
-                safe_print("\n📖 See docs/SMTP_SETUP.md for configuration instructions", use_emoji)
+                safe_print("\n See docs/SMTP_SETUP.md for configuration instructions", use_emoji)
                 return 0
             else:
-                safe_print("\n⚠️  Migration completed but verification failed", use_emoji)
+                safe_print("\n Migration completed but verification failed", use_emoji)
                 return 1
         else:
-            safe_print("\n❌ Migration failed!", use_emoji)
+            safe_print("\n Migration failed!", use_emoji)
             return 1
 
     except KeyboardInterrupt:
-        safe_print("\n\n⏹️  Migration interrupted by user", use_emoji)
+        safe_print("\n\nMigration interrupted by user", use_emoji)
         return 1
     except Exception as e:
-        safe_print(f"\n❌ Unexpected error: {e}", use_emoji)
+        safe_print(f"\n Unexpected error: {e}", use_emoji)
         if args.verbose:
             traceback.print_exc()
         return 1

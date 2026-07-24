@@ -240,9 +240,9 @@ probe() {
     # URL is to validate that the deployment is reachable from outside.
     code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")
     if [[ "$code" =~ ^(200|401|403)$ ]]; then
-        log "  ✓ ${label}  → ${code}" "$GREEN"
+        log "${label}  → ${code}" "$GREEN"
     else
-        log "  ✗ ${label}  → ${code}" "$RED"
+        log "${label}  → ${code}" "$RED"
         PROBE_FAILURES=$((PROBE_FAILURES + 1))
     fi
 }

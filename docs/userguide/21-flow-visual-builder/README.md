@@ -316,13 +316,13 @@ OpenAlgo provides pre-built templates:
 │  Execution #12345                                   2025-01-21 10:30:15     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  ✅ Webhook Input         Duration: 2ms                                     │
+│ Webhook Input         Duration: 2ms                                     │
 │     Input: {"symbol": "SBIN", "action": "BUY"}                             │
 │                                                                              │
-│  ✅ Place Order           Duration: 150ms                                   │
+│ Place Order           Duration: 150ms                                   │
 │     Output: {"status": "success", "orderid": "12345"}                       │
 │                                                                              │
-│  ✅ Telegram Notify       Duration: 300ms                                   │
+│ Telegram Notify       Duration: 300ms                                   │
 │     Output: {"status": "sent"}                                              │
 │                                                                              │
 │  Total Duration: 452ms                                                      │

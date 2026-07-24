@@ -39,6 +39,34 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def quote_looks_stale(quote) -> bool:
+    """Return True when a quote's LTP contradicts its own OHLC range.
+
+    Guards against filling at a stale last-traded price (issue #1638): for a
+    symbol that has not printed a fresh tick, the broker's REST quote can carry
+    a last_price that is days or weeks old while the same payload's day-OHLC is
+    current. Observed fill at 1047.60 against a day low of 1262 -- a fake +22%
+    P&L. An LTP outside the day's own [low, high] is the broker contradicting
+    itself, so the fill is deferred until a coherent quote arrives.
+
+    Deliberately conservative: when high/low are missing or zero (symbol has
+    not traded this session, or a WebSocket tick-built quote with no OHLC)
+    there is nothing to cross-check and this returns False -- a tick-built
+    quote is live by construction, and blocking every pre-first-trade fill
+    would stall legitimate orders. The truly-untraded stale case needs quote
+    timestamps, which the broker quote contract does not carry today.
+    """
+    try:
+        ltp = Decimal(str(quote.get("ltp", 0)))
+        high = Decimal(str(quote.get("high", 0)))
+        low = Decimal(str(quote.get("low", 0)))
+    except Exception:
+        return False
+    if ltp <= 0 or high <= 0 or low <= 0:
+        return False
+    return not (low <= ltp <= high)
+
+
 class ExecutionEngine:
     """Executes pending orders based on market data"""
 
@@ -320,6 +348,19 @@ class ExecutionEngine:
 
             if ltp <= 0:
                 logger.warning(f"Invalid LTP for order {order.orderid}: {ltp}")
+                return
+
+            # Stale-quote guard (issue #1638): defer, don't fill. The order
+            # stays open and fills on a later cycle once a coherent quote
+            # arrives. Covers every path into a fill -- immediate MARKET
+            # execution at placement and the polling loop both come through
+            # here.
+            if quote_looks_stale(quote):
+                logger.warning(
+                    f"Deferring order {order.orderid} ({order.symbol}): quote LTP {ltp} "
+                    f"is outside its own day range [{quote.get('low')}, {quote.get('high')}] "
+                    f"-- treating as stale (see issue #1638)"
+                )
                 return
 
             # Determine if order should be executed based on price type
@@ -747,6 +788,39 @@ class ExecutionEngine:
                     )
 
             db_session.commit()
+
+            # Event-driven MTM: keep the WS engine's position-feed refs in
+            # sync with the position book. After any fill, either the symbol
+            # has open quantity (subscribe so MarketDataService stays warm and
+            # the MTM loop reads ticks instead of REST) or it just went flat
+            # (release the subscription). Never allowed to break a fill.
+            try:
+                from sandbox.websocket_execution_engine import (
+                    get_websocket_execution_engine,
+                )
+
+                ws_engine = get_websocket_execution_engine()
+                if ws_engine is not None:
+                    has_open = (
+                        SandboxPositions.query.filter_by(
+                            user_id=order.user_id,
+                            symbol=order.symbol,
+                            exchange=order.exchange,
+                        )
+                        .filter(SandboxPositions.quantity != 0)
+                        .count()
+                        > 0
+                    )
+                    if has_open:
+                        ws_engine.notify_position_opened(
+                            order.user_id, order.symbol, order.exchange
+                        )
+                    else:
+                        ws_engine.notify_position_closed(
+                            order.user_id, order.symbol, order.exchange
+                        )
+            except Exception:
+                logger.debug("Position feed notify failed (non-fatal)", exc_info=True)
 
             # Validate margin consistency after position update
             is_consistent, discrepancy = validate_margin_consistency(order.user_id)

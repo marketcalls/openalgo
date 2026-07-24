@@ -207,7 +207,7 @@ Once configured, you can ask your AI assistant to:
 
 ## Security Note
 
-⚠️ **Important**: This server is designed for local use. For production environments, consider implementing additional security measures such as environment variables for sensitive data and restricting network access.
+**Important**: This server is designed for local use. For production environments, consider implementing additional security measures such as environment variables for sensitive data and restricting network access.
 
 ## Troubleshooting
 

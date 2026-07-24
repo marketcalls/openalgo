@@ -97,7 +97,7 @@ Current Price: ₹625
 You place: LIMIT BUY 100 at ₹620
 
 Scenario 1: Price drops to ₹620
-Result: Order executes at ₹620 ✓
+Result: Order executes at ₹620
 
 Scenario 2: Price stays above ₹620
 Result: Order remains pending

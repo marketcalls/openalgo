@@ -17,7 +17,7 @@ The currently supported tools are listed below. The live MCP `tools/list` schema
 
 ---
 
-## 📦 Order Management
+## Order Management
 
 ### `place_order`
 
@@ -132,7 +132,7 @@ Change price / quantity / type / trigger on a working order.
 
 ---
 
-## 📊 Positions & Holdings
+## Positions & Holdings
 
 ### `close_all_positions`
 
@@ -178,7 +178,7 @@ Cash, collateral, realized/unrealized M2M, utilized margin.
 
 ---
 
-## 📋 Order Tracking
+## Order Tracking
 
 ### `get_order_status`
 
@@ -204,7 +204,7 @@ Only executed fills.
 
 ---
 
-## 📈 Market Data
+## Market Data
 
 ### `get_quote`
 
@@ -255,7 +255,7 @@ Real-time chain with CE/PE data per strike — LTP, bid/ask, OHLC, volume, OI, `
 
 ---
 
-## 🔍 Instrument Search & Symbols
+## Instrument Search & Symbols
 
 ### `search_instruments`
 
@@ -341,7 +341,7 @@ Returns the full standardized OpenAlgo index symbol list (57 NSE + 40 BSE), roll
 
 ---
 
-## 💰 Margin
+## Margin
 
 ### `calculate_margin`
 
@@ -353,7 +353,7 @@ SPAN + exposure margin for a hypothetical position set. Accepts an array of legs
 
 ---
 
-## 🧪 Analyzer
+## Analyzer
 
 ### `analyzer_status`
 
@@ -373,7 +373,7 @@ Flip between simulated and live trading. Analyzer mode returns `SB-xxx` pseudo-o
 
 ---
 
-## 📅 Market Calendar
+## Market Calendar
 
 ### `get_holidays`
 
@@ -393,7 +393,7 @@ Exchange open/close epoch timestamps for a given date (date optional → default
 
 ---
 
-## 🛠️ Utilities
+## Utilities
 
 ### `get_openalgo_version`
 
@@ -477,7 +477,7 @@ Align two symbols on common timestamps and return rolling correlation, rolling b
 
 ---
 
-## 🧠 Worked Multi-Tool Workflows
+## Worked Multi-Tool Workflows
 
 Real strength shows when the assistant chains tools on its own. Example prompts:
 

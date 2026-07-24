@@ -115,16 +115,26 @@ export function PlaceOrderDialog({
   const [quantityMode, setQuantityMode] = useState<'lots' | 'shares'>('lots')
   const [lotMultiplier, setLotMultiplier] = useState(1)
 
+  // Equity trades on either cash exchange. The caller supplies the starting
+  // exchange; for NSE/BSE the user may switch, since the same scrip is listed
+  // on both. Everything else is contract-specific and stays fixed.
+  const [formExchange, setFormExchange] = useState(exchange)
+  const exchange_ = formExchange || exchange
+  const isEquityExchange = exchange_ === 'NSE' || exchange_ === 'BSE'
+
   // Get available product types based on exchange
-  const productTypes = isFnOExchange(exchange) ? FNO_PRODUCT_TYPES : EQUITY_PRODUCT_TYPES
+  const productTypes = isFnOExchange(exchange_) ? FNO_PRODUCT_TYPES : EQUITY_PRODUCT_TYPES
+
+  // Lots are a derivatives concept. Cash equity has no lot size worth showing.
+  const usesLots = isFnOExchange(exchange_) && lotSize > 1
 
   // Centralized live quote + depth with REST fallback (like useLivePrice for Holdings/Positions)
   const {
     data: liveData,
     isLoading: isLoadingQuotes,
     isConnected,
-  } = useLiveQuote(symbol, exchange, {
-    enabled: open && !!symbol && !!exchange,
+  } = useLiveQuote(symbol, exchange_, {
+    enabled: open && !!symbol && !!exchange_,
     mode: 'Depth',
     useQuotesFallback: true,
     useDepthFallback: true,
@@ -147,8 +157,13 @@ export function PlaceOrderDialog({
       setFormPrice(0)
       setFormTriggerPrice(0)
       setIsDepthExpanded(false)
-      setQuantityMode('lots')
+      // Cash equity has no lots, so the quantity box must show the real share
+      // count. Defaulting to 'lots' here displayed lotMultiplier (1) while
+      // formQuantity held the actual size -- opening Exit on a 70-share holding
+      // showed "1" in the box and would have placed 70.
+      setQuantityMode(isFnOExchange(exchange) && lotSize > 1 ? 'lots' : 'shares')
       setLotMultiplier(1)
+      setFormExchange(exchange)
     }
   }, [open, initialAction, initialQuantity, lotSize, initialPriceType, initialProduct, exchange])
 
@@ -183,7 +198,7 @@ export function PlaceOrderDialog({
   const needsTrigger = formPriceType === 'SL-M' || formPriceType === 'SL'
 
   const isValid = useCallback(() => {
-    if (!symbol || !exchange) return false
+    if (!symbol || !exchange_) return false
     if (!apiKey) return false
     if (formQuantity <= 0) return false
     if (needsPrice && formPrice <= 0) return false
@@ -191,7 +206,7 @@ export function PlaceOrderDialog({
     return true
   }, [
     symbol,
-    exchange,
+    exchange_,
     apiKey,
     formQuantity,
     needsPrice,
@@ -222,7 +237,7 @@ export function PlaceOrderDialog({
       const orderRequest = {
         apikey: apiKey,
         strategy,
-        exchange,
+        exchange: exchange_,
         symbol,
         action: formAction,
         quantity: formQuantity,
@@ -301,7 +316,7 @@ export function PlaceOrderDialog({
         <div className="space-y-4 py-2">
           {/* Quote Header - merged WebSocket + REST data */}
           <QuoteHeader
-            exchange={exchange}
+            exchange={exchange_}
             ltp={mergedData.ltp}
             prevClose={mergedData.close}
             change={displayChange}
@@ -348,32 +363,37 @@ export function PlaceOrderDialog({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-xs">Quantity</Label>
-              <div className="flex gap-1">
-                <button
-                  type="button"
-                  onClick={() => setQuantityMode('lots')}
-                  className={cn(
-                    'px-2 py-0.5 text-[10px] rounded',
-                    quantityMode === 'lots'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                  )}
-                >
-                  Lots
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setQuantityMode('shares')}
-                  className={cn(
-                    'px-2 py-0.5 text-[10px] rounded',
-                    quantityMode === 'shares'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                  )}
-                >
-                  Shares
-                </button>
-              </div>
+              {/* Cash equity trades in shares - there is no lot. Showing a
+                  Lots/Shares toggle and "Lot size: 1" on NSE/BSE is noise that
+                  implies a concept the segment does not have. */}
+              {usesLots && (
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setQuantityMode('lots')}
+                    className={cn(
+                      'px-2 py-0.5 text-[10px] rounded',
+                      quantityMode === 'lots'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    )}
+                  >
+                    Lots
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuantityMode('shares')}
+                    className={cn(
+                      'px-2 py-0.5 text-[10px] rounded',
+                      quantityMode === 'shares'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    )}
+                  >
+                    Shares
+                  </button>
+                </div>
+              )}
             </div>
             <Input
               type="number"
@@ -381,11 +401,31 @@ export function PlaceOrderDialog({
               onChange={(e) => handleQuantityChange(e.target.value)}
               min={1}
             />
-            <div className="flex justify-between text-[10px] text-muted-foreground">
-              <span>Lot size: {lotSize}</span>
-              <span>Total qty: {formQuantity}</span>
-            </div>
+            {usesLots && (
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>Lot size: {lotSize}</span>
+                <span>Total qty: {formQuantity}</span>
+              </div>
+            )}
           </div>
+
+          {/* Exchange, for cash equity only. The same scrip is listed on both
+              NSE and BSE, so the user picks where to route. Derivatives are
+              contract-specific and stay on the exchange they came from. */}
+          {isEquityExchange && (
+            <div className="space-y-2">
+              <Label className="text-xs">Exchange</Label>
+              <Select value={exchange_} onValueChange={setFormExchange}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="NSE">NSE</SelectItem>
+                  <SelectItem value="BSE">BSE</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Price Type and Product in row */}
           <div className="grid grid-cols-2 gap-3">

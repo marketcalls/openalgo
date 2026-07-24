@@ -2,12 +2,12 @@
 
 This folder contains test scripts for the Telegram Alert API.
 
-## ⚠️ Important Note
+## Important Note
 
 **Username Clarification**: The `username` parameter in the API refers to your **OpenAlgo login username** (the username you use to login to the OpenAlgo application), NOT your Telegram username (@handle).
 
-- ✅ **Correct**: Use `"rajandran"` (your OpenAlgo login username)
-- ❌ **Wrong**: Use `"@rajandranr"` (your Telegram username)
+- **Correct**: Use `"rajandran"` (your OpenAlgo login username)
+- **Wrong**: Use `"@rajandranr"` (your Telegram username)
 
 ## Test Files
 
@@ -161,8 +161,8 @@ ConnectionError: Failed to send notification
 2. Send `/link your_api_key http://127.0.0.1:5000`
 3. Verify with `/status` command
 4. **Ensure you're using OpenAlgo login username, NOT Telegram username**
-   - ✅ Correct: `"rajandran"` (OpenAlgo login)
-   - ❌ Wrong: `"@rajandranr"` (Telegram handle)
+   - Correct: `"rajandran"` (OpenAlgo login)
+   - Wrong: `"@rajandranr"` (Telegram handle)
 5. Ensure username in test matches exactly (case-sensitive)
 
 ### Invalid API Key Error
@@ -221,14 +221,14 @@ uv pip install requests
 ### Emojis (Copy-Paste Ready)
 
 ```
-📈 📉 📊 Charts/Trends
-💰 💵 💸 Money
-✅ ❌ ⚠️ Status
-🚨 🔔 🎯 Alerts
-🔴 🟢 🟡 Indicators
-📱 💻 🖥️ Devices
-⏰ 🕐 ⏱️ Time
-🏆 🎉 ✨ Success
+Charts/Trends
+Money
+Status
+Alerts
+Indicators
+Devices
+Time
+Success
 ```
 
 ### Line Breaks
@@ -269,7 +269,7 @@ def send_alert(message, priority=5):
 order_response = place_order(...)
 if order_response['status'] == 'success':
     send_alert(
-        f"✅ Order placed: {symbol} {action} {quantity}",
+        f"Order placed: {symbol} {action} {quantity}",
         priority=7
     )
 ```
@@ -285,7 +285,7 @@ def monitor_price(symbol, target_price):
 
         if current_price >= target_price:
             send_alert(
-                f"🎯 Target reached!\n{symbol}: ₹{current_price}",
+                f"Target reached!\n{symbol}: ₹{current_price}",
                 priority=9
             )
             break
@@ -299,7 +299,7 @@ def monitor_price(symbol, target_price):
 def send_daily_summary():
     stats = get_daily_stats()
 
-    message = f"""📊 Daily Summary
+    message = f"""Daily Summary
 ─────────────────────
 Trades: {stats['total_trades']}
 Win Rate: {stats['win_rate']}%

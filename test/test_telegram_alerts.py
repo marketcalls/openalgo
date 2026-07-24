@@ -189,11 +189,11 @@ if __name__ == "__main__":
     success = test_telegram_alerts()
     if success:
         try:
-            print("\n✅ All tests passed!")
+            print("\n All tests passed!")
         except UnicodeEncodeError:
             print("\n[CHECKMARK] All tests passed!")
     else:
         try:
-            print("\n❌ Some tests failed!")
+            print("\n Some tests failed!")
         except UnicodeEncodeError:
             print("\n[X] Some tests failed!")

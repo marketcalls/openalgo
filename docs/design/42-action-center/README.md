@@ -52,8 +52,8 @@ The Action Center is a centralized order approval system for semi-automated trad
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  Strategy │ Symbol │ Exchange │ Action │ Qty │ Price │ Actions      │   │
 │  ├─────────────────────────────────────────────────────────────────────┤   │
-│  │  MyStrat  │ SBIN   │ NSE      │ BUY    │ 100 │ MKT   │ ✓ Approve    │   │
-│  │           │        │          │        │     │       │ ✗ Reject     │   │
+│  │  MyStrat  │ SBIN   │ NSE      │ BUY    │ 100 │ MKT   │ Approve    │   │
+│  │           │        │          │        │     │       │ Reject     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 │                         [Approve All Pending]                               │

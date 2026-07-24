@@ -86,7 +86,7 @@ Keep your token secure and store it safely!
 │  │     Save     │  │  Test Send   │                                        │
 │  └──────────────┘  └──────────────┘                                        │
 │                                                                              │
-│  Status: ✅ Connected                                                       │
+│  Status: Connected                                                       │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -105,7 +105,7 @@ Keep your token secure and store it safely!
 When an order is placed:
 
 ```
-📊 ORDER PLACED
+ORDER PLACED
 
 Symbol: SBIN
 Exchange: NSE
@@ -124,7 +124,7 @@ Time: 10:30:15
 When an order is executed:
 
 ```
-✅ ORDER EXECUTED
+ORDER EXECUTED
 
 Symbol: SBIN
 Exchange: NSE
@@ -142,7 +142,7 @@ Time: 10:30:17
 Daily P&L summary:
 
 ```
-📈 DAILY P&L SUMMARY
+DAILY P&L SUMMARY
 
 Date: 2025-01-21
 
@@ -161,7 +161,7 @@ Win Rate: 66.7%
 When something goes wrong:
 
 ```
-⚠️ ERROR ALERT
+ERROR ALERT
 
 Order Failed: SBIN BUY 100
 Reason: Insufficient margin
@@ -180,12 +180,12 @@ Go to **Settings** → **Telegram** → **Notification Settings**
 
 | Notification | Default | Description |
 |--------------|---------|-------------|
-| Order Placed | ✅ On | When order is sent |
-| Order Executed | ✅ On | When order fills |
-| Order Failed | ✅ On | When order fails |
-| Position Updates | ❌ Off | Position changes |
-| P&L Alerts | ✅ On | Daily P&L summary |
-| Error Alerts | ✅ On | System errors |
+| Order Placed | On | When order is sent |
+| Order Executed | On | When order fills |
+| Order Failed | On | When order fails |
+| Position Updates | Off | Position changes |
+| P&L Alerts | On | Daily P&L summary |
+| Error Alerts | On | System errors |
 
 ### Alert Thresholds
 
@@ -214,7 +214,7 @@ Configure when to receive P&L alerts:
 ### /positions Command
 
 ```
-📊 OPEN POSITIONS
+OPEN POSITIONS
 
 Symbol    Qty    Avg     LTP      P&L
 ─────────────────────────────────────
@@ -228,7 +228,7 @@ Total Unrealized P&L: ₹3,500
 ### /orders Command
 
 ```
-📋 TODAY'S ORDERS
+TODAY'S ORDERS
 
 Time     Symbol  Action  Qty   Status
 ──────────────────────────────────────
@@ -243,7 +243,7 @@ Executed: 2 | Pending: 1
 ### /pnl Command
 
 ```
-📈 P&L STATUS
+P&L STATUS
 
 Realized P&L: ₹5,250
 Unrealized P&L: ₹3,500
@@ -257,11 +257,11 @@ Win Rate: 66.7%
 ### /status Command
 
 ```
-🔧 SYSTEM STATUS
+SYSTEM STATUS
 
-OpenAlgo: ✅ Running
-Broker: ✅ Connected
-WebSocket: ✅ Active
+OpenAlgo: Running
+Broker: Connected
+WebSocket: Active
 Last Order: 10:45:10
 
 Uptime: 5h 30m
@@ -343,7 +343,7 @@ client.send_telegram("Custom alert: Strategy triggered!")
 
 Expected message:
 ```
-🔔 OpenAlgo Test
+OpenAlgo Test
 
 This is a test message.
 Your Telegram integration is working correctly!
@@ -384,30 +384,30 @@ Time: 2025-01-21 10:30:15
 Signal Received
       │
       ▼
-Order Placed → 📊 Notification
+Order Placed → Notification
       │
       ▼
-Order Executed → ✅ Notification
+Order Executed → Notification
       │
       ▼
-Position Updated → 📈 Optional Notification
+Position Updated → Optional Notification
 ```
 
 ### Daily Summary Example
 
 ```
-📊 DAILY TRADING SUMMARY
+DAILY TRADING SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 Date: 2025-01-21 (Tuesday)
 
-📈 P&L
+P&L
 ───────────────────────
 Realized: ₹8,500
 Unrealized: ₹2,300
 Total: ₹10,800 (+2.16%)
 
-📋 TRADES
+TRADES
 ───────────────────────
 Total: 15
 Winning: 10 (66.7%)
@@ -415,18 +415,18 @@ Losing: 5 (33.3%)
 Avg Win: ₹1,200
 Avg Loss: ₹550
 
-📊 POSITIONS (EOD)
+POSITIONS (EOD)
 ───────────────────────
 SBIN: +100 @ 625 (P&L: +₹500)
 HDFC: -50 @ 1650 (P&L: +₹800)
 
-🎯 TOP PERFORMERS
+TOP PERFORMERS
 ───────────────────────
 1. NIFTY30JAN25FUT: +₹3,500
 2. SBIN: +₹2,000
 3. HDFC: +₹1,500
 
-Happy Trading! 🚀
+Happy Trading!
 ```
 
 ---

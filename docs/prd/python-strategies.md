@@ -1,6 +1,6 @@
 # PRD: Python Strategies - Automated Strategy Execution
 
-> **Status:** ✅ Stable - Fully implemented, production-ready
+> **Status:** Stable - Fully implemented, production-ready
 
 ## Overview
 

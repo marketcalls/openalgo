@@ -1,10 +1,10 @@
-# ⚙️ How to Integrate Any XTS API-Supported Broker in OpenAlgo (5-Minute Setup)
+# How to Integrate Any XTS API-Supported Broker in OpenAlgo (5-Minute Setup)
 
 OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker using XTS (like IIFL, Nirmal Bang, Anand Rathi, Jainam, 5paisa, etc.) can be added with **zero code duplication**—just a few config updates.
 
 ---
 
-## ✅ Minimal Changes Required
+## Minimal Changes Required
 
 | File            | What to Change                                      |
 |-----------------|-----------------------------------------------------|
@@ -13,13 +13,13 @@ OpenAlgo already supports XTS API through the `compositedge` plugin. Any broker 
 | `broker.html`   | Add broker option and JS login switch               |
 | `.sample.env`   | Add the new broker’s credentials                    |
 
-> ⚡️ *No other backend or API changes are needed if the broker supports `apibinarymarketdata`.*
+> *No other backend or API changes are needed if the broker supports `apibinarymarketdata`.*
 
 ---
 
-## 🧩 Step-by-Step Integration Guide
+## Step-by-Step Integration Guide
 
-### 1. 🗂 Copy or Repurpose `compositedge`
+### 1. Copy or Repurpose `compositedge`
 
 ```bash
 cp -r broker/compositedge broker/<yourbroker>
@@ -29,7 +29,7 @@ Or reuse the same folder and override dynamically via `.env`.
 
 ---
 
-### 2. ✏️ Edit `baseurl.py`
+### 2. Edit `baseurl.py`
 
 Update the base API endpoints:
 
@@ -42,7 +42,7 @@ INTERACTIVE_URL = f"{BASE_URL}/interactive"
 
 ---
 
-### 3. 🌐 Update `brlogin.py`
+### 3. Update `brlogin.py`
 
 Add a new block similar to `compositedge`:
 
@@ -56,7 +56,7 @@ This ensures session redirection from XTS works correctly.
 
 ---
 
-### 4. 🖼️ Update `broker.html`
+### 4. Update `broker.html`
 
 #### A. Add broker to the dropdown:
 
@@ -72,11 +72,11 @@ case 'xtsalpha':
     break;
 ```
 
-> ✅ No need to add a broker login card section with `<a>` or `<img>`.
+> No need to add a broker login card section with `<a>` or `<img>`.
 
 ---
 
-### 5. 🔐 Update `.env` or `.sample.env`
+### 5. Update `.env` or `.sample.env`
 
 ```env
 # Broker Configuration
@@ -96,7 +96,7 @@ VALID_BROKERS='fivepaisa,aliceblue,angel,compositedge,dhan,firstock,flattrade,fy
 
 ---
 
-### ✅ Update Required in `.env` / `.sample.env`
+### Update Required in `.env` / `.sample.env`
 
 To allow login for your new broker, you **must** add it to `VALID_BROKERS`.
 
@@ -112,11 +112,11 @@ VALID_BROKERS='fivepaisa,aliceblue,angel,...'
 VALID_BROKERS='fivepaisa,aliceblue,angel,...,xtsalpha'
 ```
 
-> 🔐 This whitelist mechanism is used by `brlogin.py` or router logic to restrict unauthorized brokers.
+> This whitelist mechanism is used by `brlogin.py` or router logic to restrict unauthorized brokers.
 
 ---
 
-## 🔁 Update Required in `brlogin.py` for New XTS Broker
+## Update Required in `brlogin.py` for New XTS Broker
 
 You must add a block like this:
 
@@ -167,7 +167,7 @@ elif broker == 'xtsalpha':
 
 ---
 
-## 📁 Breakdown: `broker/compositedge/` Folder Structure
+## Breakdown: `broker/compositedge/` Folder Structure
 
 ```
 broker/compositedge/
@@ -190,7 +190,7 @@ broker/compositedge/
 
 ---
 
-### 📦 `plugin.json` Sample
+### `plugin.json` Sample
 
 ```json
 {
@@ -203,11 +203,11 @@ broker/compositedge/
 }
 ```
 
-> 📦 Currently used for plugin metadata. Future versions may support dynamic plugin discovery.
+> Currently used for plugin metadata. Future versions may support dynamic plugin discovery.
 
 ---
 
-## 🧪 Final Integration Checklist
+## Final Integration Checklist
 
 - [x] Login from UI via `broker.html`
 - [x] Token exchange successful
@@ -219,8 +219,8 @@ broker/compositedge/
 
 ---
 
-## 🚀 Conclusion
+## Conclusion
 
 Thanks to OpenAlgo’s modular and broker-agnostic design:
 
-> 💡 You can integrate **any XTS broker in under 5 minutes** by changing only `baseurl.py`, `.env`, and a few UI/backend hooks.
+> You can integrate **any XTS broker in under 5 minutes** by changing only `baseurl.py`, `.env`, and a few UI/backend hooks.

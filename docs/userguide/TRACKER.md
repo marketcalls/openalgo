@@ -12,38 +12,38 @@ This comprehensive user guide is designed for **traders of all levels** - from c
 
 | # | Module | Status | Difficulty |
 |---|--------|--------|------------|
-| 01 | What is OpenAlgo | ✅ Complete | Beginner |
+| 01 | What is OpenAlgo | Complete | Beginner |
 | 02 | Why Build with OpenAlgo | Complete | Beginner |
 | 03 | Key Concepts | Complete | Beginner |
 | 03A | System Requirements | Complete | Beginner |
-| 04 | Installation Guide | ✅ Complete | Beginner |
-| 05 | First-Time Setup | ✅ Complete | Beginner |
-| 06 | Broker Connection | ✅ Complete | Beginner |
-| 07 | Dashboard Overview | ✅ Complete | Beginner |
-| 08 | Understanding the Interface | ✅ Complete | Beginner |
-| 09 | API Key Management | ✅ Complete | Beginner |
-| 10 | Placing Your First Order | ✅ Complete | Beginner |
-| 11 | Order Types Explained | ✅ Complete | Intermediate |
-| 12 | Smart Orders | ✅ Complete | Intermediate |
-| 13 | Basket Orders | ✅ Complete | Intermediate |
-| 14 | Positions & Holdings | ✅ Complete | Beginner |
-| 15 | Analyzer Mode (Sandbox Testing) | ✅ Complete | Beginner |
-| -- | **Symbol Format Guide** | ✅ Complete | All Levels |
-| 16 | TradingView Integration | ✅ Complete | Intermediate |
-| 17 | Amibroker Integration | ✅ Complete | Intermediate |
-| 18 | ChartInk Integration | ✅ Complete | Intermediate |
-| 19 | GoCharting Integration | ✅ Complete | Intermediate |
-| 20 | Python Strategies | ✅ Complete | Advanced |
-| 21 | Flow Visual Builder | ✅ Complete | Intermediate |
-| 22 | Action Center | ✅ Complete | Intermediate |
-| 23 | Telegram Bot | ✅ Complete | Beginner |
-| 24 | PnL Tracker | ✅ Complete | Beginner |
-| 25 | Latency Monitor | ✅ Complete | Intermediate |
-| 26 | Traffic Logs | ✅ Complete | Intermediate |
-| 27 | Security Settings | ✅ Complete | Beginner |
-| 28 | Two-Factor Authentication | ✅ Complete | Beginner |
-| 29 | Troubleshooting | ✅ Complete | All Levels |
-| 30 | FAQs | ✅ Complete | All Levels |
+| 04 | Installation Guide | Complete | Beginner |
+| 05 | First-Time Setup | Complete | Beginner |
+| 06 | Broker Connection | Complete | Beginner |
+| 07 | Dashboard Overview | Complete | Beginner |
+| 08 | Understanding the Interface | Complete | Beginner |
+| 09 | API Key Management | Complete | Beginner |
+| 10 | Placing Your First Order | Complete | Beginner |
+| 11 | Order Types Explained | Complete | Intermediate |
+| 12 | Smart Orders | Complete | Intermediate |
+| 13 | Basket Orders | Complete | Intermediate |
+| 14 | Positions & Holdings | Complete | Beginner |
+| 15 | Analyzer Mode (Sandbox Testing) | Complete | Beginner |
+| -- | **Symbol Format Guide** | Complete | All Levels |
+| 16 | TradingView Integration | Complete | Intermediate |
+| 17 | Amibroker Integration | Complete | Intermediate |
+| 18 | ChartInk Integration | Complete | Intermediate |
+| 19 | GoCharting Integration | Complete | Intermediate |
+| 20 | Python Strategies | Complete | Advanced |
+| 21 | Flow Visual Builder | Complete | Intermediate |
+| 22 | Action Center | Complete | Intermediate |
+| 23 | Telegram Bot | Complete | Beginner |
+| 24 | PnL Tracker | Complete | Beginner |
+| 25 | Latency Monitor | Complete | Intermediate |
+| 26 | Traffic Logs | Complete | Intermediate |
+| 27 | Security Settings | Complete | Beginner |
+| 28 | Two-Factor Authentication | Complete | Beginner |
+| 29 | Troubleshooting | Complete | All Levels |
+| 30 | FAQs | Complete | All Levels |
 
 ## Learning Path
 
