@@ -15,9 +15,16 @@ export interface PriceableItem {
   pnl?: number
   pnlpercent?: number
   quantity?: number
+  t1_quantity?: number
+  pledged_quantity?: number
   average_price?: number
   today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
   lot_size?: number // Contract multiplier (e.g. 0.01 for Delta Exchange ETHUSD.P)
+}
+
+/** Free + T1 + pledged — the total held quantity, not just the freely-sellable portion. */
+function totalQuantity(item: PriceableItem): number {
+  return (item.quantity || 0) + (item.t1_quantity || 0) + (item.pledged_quantity || 0)
 }
 
 /**
@@ -214,7 +221,9 @@ export function useLivePrice<T extends PriceableItem>(
       const wsData = marketData.get(key)
       const mqData = multiQuotes.get(key)
 
-      const qty = item.quantity || 0
+      // Total held (free + T1 + pledged) — a fully-pledged/T1 holding still
+      // needs live pricing even though its free `quantity` is 0.
+      const qty = totalQuantity(item)
       const avgPrice = item.average_price || 0
 
       // Check if market is open for this exchange
@@ -331,7 +340,7 @@ export function calculateLiveStats<T extends PriceableItem>(
   items.forEach((item) => {
     totalPnl += item.pnl || 0
     const avgPrice = item.average_price || 0
-    const qty = item.quantity || 0
+    const qty = totalQuantity(item)
     const ltp = item.ltp || avgPrice
     totalInvestment += avgPrice * qty
     totalHoldingValue += ltp * qty

@@ -413,6 +413,8 @@ def transform_holdings_data(holdings_data):
             "symbol": symbol,
             "exchange": exchange,
             "quantity": dp_qty,
+            "t1_quantity": int(holdings.get("btstquantity", 0)),
+            "pledged_quantity": int(holdings.get("collateralquantity", 0)),
             "product": "CNC",  # Holdings are always CNC/DELIVERY
             "pnl": 0.0,  # Would need current price to calculate P&L
             "pnlpercent": 0.0,

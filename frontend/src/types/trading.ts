@@ -41,6 +41,8 @@ export interface Holding {
   symbol: string
   exchange: string
   quantity: number
+  t1_quantity?: number
+  pledged_quantity?: number
   product: string
   pnl: number
   pnlpercent: number

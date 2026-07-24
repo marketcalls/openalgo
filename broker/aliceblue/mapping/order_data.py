@@ -126,6 +126,7 @@ def normalize_holding(h):
         "Exchange": exchange,
         "Holdqty": str(h.get("dpQuantity", h.get("totalQuantity", 0))),
         "HUqty": str(h.get("t1Quantity", 0)),
+        "CollateralQty": str(h.get("collateralQuantity", 0)),
         "Ltp": str(h.get("ltp", 0)),
         "Price": str(h.get("averageTradedPrice", h.get("investedPrice", 0))),
         "Pcode": "CNC",
@@ -524,6 +525,7 @@ def transform_holdings_data(holdings_data):
             # Use HUqty if Holdqty is 0 or empty
             holdqty = int(holdings.get("Holdqty", 0) or 0)
             huqty = int(holdings.get("HUqty", 0) or 0)
+            collateral_qty = int(holdings.get("CollateralQty", 0) or 0)
             quantity = holdqty if holdqty > 0 else huqty
 
             pnl = round((ltp - price) * quantity, 2) if quantity else 0
@@ -565,7 +567,10 @@ def transform_holdings_data(holdings_data):
                 "symbol": symbol,
                 "exchange": exchange,
                 "quantity": quantity,
+                "t1_quantity": huqty if holdqty > 0 else 0,
+                "pledged_quantity": collateral_qty,
                 "product": holdings.get("Pcode", "CNC"),
+                "ltp": ltp,
                 "pnl": pnl,  # Rounded to two decimals
                 "pnlpercent": pnlpercent,  # Rounded to two decimals
             }
@@ -639,10 +644,12 @@ def calculate_portfolio_statistics(holdings_data):
         }
 
     def get_quantity(item):
-        """Get holding quantity - prefer Holdqty if > 0, else HUqty"""
+        """Get total holding quantity including T1 and pledged (collateral) shares"""
         holdqty = int(item.get("Holdqty", 0) or 0)
         huqty = int(item.get("HUqty", 0) or 0)
-        return holdqty if holdqty > 0 else huqty
+        collateral_qty = int(item.get("CollateralQty", 0) or 0)
+        free_and_t1 = holdqty if holdqty > 0 else huqty
+        return free_and_t1 + collateral_qty
 
     try:
         totalholdingvalue = sum(
