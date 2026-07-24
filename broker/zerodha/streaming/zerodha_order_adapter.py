@@ -80,10 +80,15 @@ class ZerodhaOrderUpdateAdapter(BaseOrderUpdateAdapter):
 
         # Kite's order_type (MARKET/LIMIT/SL/SL-M) and product (CNC/NRML/MIS)
         # already match OpenAlgo's constants — no mapping tables needed.
-        # Symbol is mapped to OpenAlgo format the same way the REST orderbook
-        # mapping does (get_oa_symbol on Kite's tradingsymbol).
+        # The postback also carries "instrument_token" (see
+        # broker-api-docs/zerodha-api-docs/12-postbacks.md's sample payload);
+        # passing it lets to_openalgo_symbol try the more reliable
+        # token-keyed lookup first, same as upstox_order_adapter.py, falling
+        # back to get_oa_symbol on Kite's tradingsymbol if that misses.
         exchange = data.get("exchange", "")
-        symbol = to_openalgo_symbol(data.get("tradingsymbol", ""), exchange)
+        symbol = to_openalgo_symbol(
+            data.get("tradingsymbol", ""), exchange, token=data.get("instrument_token")
+        )
 
         return {
             "orderid": str(data.get("order_id", "")),
