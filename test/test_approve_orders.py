@@ -85,7 +85,7 @@ def test_order_execution():
         print("Failed to approve order")
         return
 
-    print("✓ Order approved successfully")
+    print("Order approved successfully")
     print()
     print("Attempting execution...")
     print()
@@ -101,14 +101,14 @@ def test_order_execution():
 
         if success:
             print()
-            print("✓ ORDER EXECUTED SUCCESSFULLY!")
+            print("ORDER EXECUTED SUCCESSFULLY!")
         else:
             print()
-            print("✗ ORDER EXECUTION FAILED")
+            print("ORDER EXECUTION FAILED")
             print(f"  Error: {response_data.get('message', 'Unknown error')}")
 
     except Exception as e:
-        print("✗ EXCEPTION DURING EXECUTION:")
+        print("EXCEPTION DURING EXECUTION:")
         print(f"  {type(e).__name__}: {str(e)}")
         import traceback
 

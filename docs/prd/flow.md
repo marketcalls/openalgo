@@ -1,6 +1,6 @@
 # PRD: Flow - Visual Workflow Automation
 
-> **Status:** ✅ Stable - Fully implemented with 53 node types
+> **Status:** Stable - Fully implemented with 53 node types
 
 ## Overview
 

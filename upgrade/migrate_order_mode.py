@@ -75,7 +75,7 @@ def add_order_mode_column(engine):
     try:
         # Check if column already exists
         if check_column_exists(engine, "api_keys", "order_mode"):
-            logger.info("✓ order_mode column already exists in api_keys table")
+            logger.info("order_mode column already exists in api_keys table")
             return True
 
         logger.info("Adding order_mode column to api_keys table...")
@@ -90,11 +90,11 @@ def add_order_mode_column(engine):
             )
             conn.commit()
 
-        logger.info("✓ order_mode column added successfully")
+        logger.info("order_mode column added successfully")
         return True
 
     except Exception as e:
-        logger.error(f"✗ Error adding order_mode column: {e}")
+        logger.error(f"Error adding order_mode column: {e}")
         return False
 
 
@@ -103,7 +103,7 @@ def create_pending_orders_table(engine):
     try:
         # Check if table already exists
         if check_table_exists(engine, "pending_orders"):
-            logger.info("✓ pending_orders table already exists")
+            logger.info("pending_orders table already exists")
             return True
 
         logger.info("Creating pending_orders table...")
@@ -147,11 +147,11 @@ def create_pending_orders_table(engine):
             )
             conn.commit()
 
-        logger.info("✓ pending_orders table created successfully")
+        logger.info("pending_orders table created successfully")
         return True
 
     except Exception as e:
-        logger.error(f"✗ Error creating pending_orders table: {e}")
+        logger.error(f"Error creating pending_orders table: {e}")
         return False
 
 
@@ -171,12 +171,12 @@ def set_default_mode(engine):
             conn.commit()
 
             rows_updated = result.rowcount
-            logger.info(f"✓ Updated {rows_updated} users with default order_mode='auto'")
+            logger.info(f"Updated {rows_updated} users with default order_mode='auto'")
 
         return True
 
     except Exception as e:
-        logger.error(f"✗ Error setting default mode: {e}")
+        logger.error(f"Error setting default mode: {e}")
         return False
 
 
@@ -187,12 +187,12 @@ def verify_migration(engine):
 
         # Check order_mode column
         if not check_column_exists(engine, "api_keys", "order_mode"):
-            logger.error("✗ order_mode column not found in api_keys table")
+            logger.error("order_mode column not found in api_keys table")
             return False
 
         # Check pending_orders table
         if not check_table_exists(engine, "pending_orders"):
-            logger.error("✗ pending_orders table not found")
+            logger.error("pending_orders table not found")
             return False
 
         # Check indexes
@@ -201,20 +201,20 @@ def verify_migration(engine):
         index_names = [idx["name"] for idx in indexes]
 
         if "idx_user_status" not in index_names:
-            logger.warning("⚠ idx_user_status index not found")
+            logger.warning("idx_user_status index not found")
         else:
-            logger.info("✓ idx_user_status index exists")
+            logger.info("idx_user_status index exists")
 
         if "idx_created_at" not in index_names:
-            logger.warning("⚠ idx_created_at index not found")
+            logger.warning("idx_created_at index not found")
         else:
-            logger.info("✓ idx_created_at index exists")
+            logger.info("idx_created_at index exists")
 
-        logger.info("✓ Migration verified successfully")
+        logger.info("Migration verified successfully")
         return True
 
     except Exception as e:
-        logger.error(f"✗ Error verifying migration: {e}")
+        logger.error(f"Error verifying migration: {e}")
         return False
 
 
@@ -236,9 +236,9 @@ def main():
     # Create engine
     try:
         engine = create_engine(database_url)
-        logger.info("✓ Database connection established")
+        logger.info("Database connection established")
     except Exception as e:
-        logger.error(f"✗ Failed to connect to database: {e}")
+        logger.error(f"Failed to connect to database: {e}")
         return False
 
     # Run migrations
@@ -263,7 +263,7 @@ def main():
     print()
     if success:
         print("=" * 60)
-        print("✓ Migration completed successfully!")
+        print("Migration completed successfully!")
         print("=" * 60)
         print()
         print("Summary:")
@@ -277,7 +277,7 @@ def main():
         print()
     else:
         print("=" * 60)
-        print("✗ Migration completed with errors")
+        print("Migration completed with errors")
         print("=" * 60)
         print("Please check the logs above for details")
         print()

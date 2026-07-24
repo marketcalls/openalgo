@@ -223,11 +223,11 @@ def get_open_positionss(tradingsymbol, exchange, product, auth):
 
             if security_match and exchange_match and product_match:
                 net_qty = str(position.get("net_qty", position.get("netQty", "0")))
-                logger.debug(f"✓ Found matching position for {tradingsymbol}!")
+                logger.debug(f"Found matching position for {tradingsymbol}!")
                 logger.debug(f"Net Quantity: {net_qty}")
                 break
             else:
-                logger.debug("✗ Position does not match criteria")
+                logger.debug("Position does not match criteria")
     else:
         logger.warning(f"No positions data available or error in API response: {positions_data}")
 

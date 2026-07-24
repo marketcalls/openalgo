@@ -24,15 +24,15 @@ print_header() {
 }
 
 print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN} $1${NC}"
 }
 
 print_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "${RED} $1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
+    echo -e "${YELLOW} $1${NC}"
 }
 
 print_info() {
@@ -265,7 +265,7 @@ print('SUCCESS' if len(result) == 3 else 'FAILED')
 show_access_info() {
     print_header "Deployment Complete!"
 
-    echo -e "${GREEN}✓ OpenAlgo is now running${NC}\n"
+    echo -e "${GREEN} OpenAlgo is now running${NC}\n"
 
     echo -e "${BLUE}Access URLs:${NC}"
     echo -e "  Web UI:       ${GREEN}http://127.0.0.1:5000${NC}"

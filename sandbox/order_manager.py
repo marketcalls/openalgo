@@ -650,9 +650,25 @@ class OrderManager:
             # duplicate execution (WebSocket tick arriving before immediate execution completes)
             if price_type == "MARKET" or (cached_quote and price_type in ["LIMIT", "SL", "SL-M"]):
                 try:
-                    from sandbox.execution_engine import ExecutionEngine
+                    from sandbox.execution_engine import ExecutionEngine, quote_looks_stale
 
                     exec_engine = ExecutionEngine()
+
+                    # Stale-quote guard (issue #1638): if the quote's LTP
+                    # contradicts its own day OHLC, skip the immediate fill and
+                    # leave the order open -- the WebSocket/polling engines will
+                    # fill it once a coherent quote arrives. MARKET orders get
+                    # the same guard inside _process_order; this covers the
+                    # marketable LIMIT / SL / SL-M branches below, which call
+                    # _execute_order directly.
+                    if cached_quote and quote_looks_stale(cached_quote):
+                        logger.warning(
+                            f"Deferring immediate execution of {orderid} ({symbol}): quote LTP "
+                            f"{cached_quote.get('ltp')} is outside its own day range "
+                            f"[{cached_quote.get('low')}, {cached_quote.get('high')}] "
+                            f"-- treating as stale (see issue #1638)"
+                        )
+                        cached_quote = None
 
                     # Use cached quote from earlier check (already fetched above)
                     if cached_quote:

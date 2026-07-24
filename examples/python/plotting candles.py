@@ -5,7 +5,7 @@ Author : OpenAlgo GPT
 Description: Plots RELIANCE 5m candlestick chart using Plotly with category x-axis
 """
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 from datetime import datetime
 

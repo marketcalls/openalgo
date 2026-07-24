@@ -4,7 +4,7 @@
 **Companion:** [roadmap](../roadmap/2026-07-13-phased-roadmap.md) ·
 [reviews](../reviews/) · [spec](../specs/2026-07-13-global-market-architecture-design.md)
 
-Legend: 🔴 open · 🟡 needs a decision · 🟢 resolved
+Legend: open · needs a decision · resolved
 
 ## Verdict at a glance
 
@@ -15,7 +15,7 @@ Legend: 🔴 open · 🟡 needs a decision · 🟢 resolved
 
 ## Active blockers (dependency order)
 
-### 🔴 B1 — P0A inventory & surface enumeration not done
+### B1 — P0A inventory & surface enumeration not done
 - **Blocks:** P1 (true scope unknown until this exists).
 - **Detail:** doc-consistency is complete, but the *real* AST/schema coupling
   inventory and the full enumeration of the 34 adapters + every order-entry
@@ -23,7 +23,7 @@ Legend: 🔴 open · 🟡 needs a decision · 🟢 resolved
   for token coupling.
 - **Cleared by:** P0A.
 
-### 🔴 B2 — P0B compatibility & migration foundation missing  *(highest priority)*
+### B2 — P0B compatibility & migration foundation missing  *(highest priority)*
 - **Blocks:** the "zero breaks" guarantee, and everything that changes schema (P2+).
 - **Detail:** CI has no golden tests; migrations are a hardcoded central list
   (`upgrade/migrate_all.py`); **`start.sh:291` continues after a migration failure**
@@ -31,7 +31,7 @@ Legend: 🔴 open · 🟡 needs a decision · 🟢 resolved
   tests exist, additive-zero-breaks is unenforceable.
 - **Cleared by:** P0B.
 
-### 🔴 B3 — `SymToken` schema ownership undecided
+### B3 — `SymToken` schema ownership undecided
 - **Blocks:** P2 (cannot add columns / Decimal precision).
 - **Detail:** 34 `class SymToken` definitions in `broker/` + 1 shared
   (`database/symbol.py`) + the `token_db_enhanced` cache. Ownership model (shared
@@ -39,7 +39,7 @@ Legend: 🔴 open · 🟡 needs a decision · 🟢 resolved
   cache serialization must be decided first.
 - **Cleared by:** P2 prerequisite (or a P2A slice — see D1).
 
-### 🔴 B4 — the four design gates are scoped but not yet designed
+### B4 — the four design gates are scoped but not yet designed
 - **Blocks:** P1 implementation (not P0A).
 - **Detail:** (a) manifest `capability_scopes` JSON Schema; (b) registry bootstrap
   + pre-auth `BrokerDescriptor`; (c) operation matrix; (d) idempotency ledger.
@@ -47,15 +47,15 @@ Legend: 🔴 open · 🟡 needs a decision · 🟢 resolved
   phase specs.
 - **Cleared by:** P1 (with P0B for migration bits).
 
-### 🔴 B5 — sandbox replatform  *(downstream, not immediate)*
+### B5 — sandbox replatform  *(downstream, not immediate)*
 - **Blocks:** crypto sandbox.
 - **Detail:** integer quantity / `DECIMAL(10,2)` / no-partial-fills /
   single-INR-account (`database/sandbox_db.py`); schema + execution changes.
 - **Cleared by:** P5 (depends on P2+P3+P4).
 
-## Owner decisions (🟡 needs your call)
+## Owner decisions ( needs your call)
 
-### 🟡 D1 — precision sequencing (P1.5 ↔ P2 boundary)
+### D1 — precision sequencing (P1.5 ↔ P2 boundary)
 Narrow **P1.5 to Decimal DTOs only** and defer persisted precision to P2, **or**
 insert a **P2A** (schema-ownership + precision-migration) slice *before* P1.5.
 - **Recommendation:** the P2A slice — cleaner than proving Delta on DTOs you then
@@ -64,12 +64,12 @@ insert a **P2A** (schema-ownership + precision-migration) slice *before* P1.5.
 
 ## Resolved (kept for history)
 
-### 🟢 R1 — out-of-tree plugins not feasible → **dissolved**
+### R1 — out-of-tree plugins not feasible → **dissolved**
 Superseded by [ADR-0003](../decisions/2026-07-13-in-tree-broker-model.md):
 brokers are in-tree (PR-contributed). `packages = []` is a non-issue; the unified
 registry remains, but purely for internal decoupling.
 
-### 🟢 R2 — design docs internally inconsistent → **fixed**
+### R2 — design docs internally inconsistent → **fixed**
 All stale statements reconciled in review-3
 ([response](../reviews/2026-07-13-codex-review-3-response.md)); P0A's
 "no doc contradicts the spec" criterion is met.

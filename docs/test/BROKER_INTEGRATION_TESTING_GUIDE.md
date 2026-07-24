@@ -76,7 +76,7 @@ Only include segments the broker supports.
 | Currency | CDS | `USDINR<DDMMMYY>FUT` |
 | Commodity | MCX | `CRUDEOIL<DDMMMYY>FUT` |
 
-> ⚠️ Live order tests place **real orders**. Use **qty = 1**, prefer a low-price
+> Live order tests place **real orders**. Use **qty = 1**, prefer a low-price
 > equity (e.g. `YESBANK`), keep LIMIT prices away from LTP to avoid fills, and
 > cancel promptly. Use the **Analyzer (sandbox)** toggle for dry runs that never
 > reach the broker.

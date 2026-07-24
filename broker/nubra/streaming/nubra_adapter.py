@@ -809,13 +809,47 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 key = f"{exchange}:{symbol}"
                 modes = self.symbol_modes.get(key, set()).copy()
 
-            if not modes or 3 not in modes:
+            if not modes:
                 return
 
             # Extract common data
             ltp = obj.ltp / 100.0 if obj.ltp else 0
             volume = obj.volume if obj.volume else 0
             timestamp = obj.timestamp if obj.timestamp else int(time.time() * 1000)
+
+            # The orderbook channel is the ONLY feed for non-index
+            # instruments, so fan out every subscribed mode from it
+            # (issue #1664). The old early-return on "3 not in modes"
+            # starved LTP/Quote subscribers entirely for stocks.
+            if 1 in modes:
+                self.publish_market_data(
+                    f"{exchange}_{symbol}_LTP",
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "mode": "ltp",
+                        "ltp": ltp,
+                        "timestamp": timestamp,
+                    },
+                )
+            if 2 in modes:
+                bid0 = obj.bids[0].price / 100.0 if obj.bids and obj.bids[0].price else 0
+                ask0 = obj.asks[0].price / 100.0 if obj.asks and obj.asks[0].price else 0
+                self.publish_market_data(
+                    f"{exchange}_{symbol}_QUOTE",
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "mode": "quote",
+                        "ltp": ltp,
+                        "volume": volume,
+                        "bid": bid0,
+                        "ask": ask0,
+                        "timestamp": timestamp,
+                    },
+                )
+            if 3 not in modes:
+                return
 
             # Build depth data
             bids = [

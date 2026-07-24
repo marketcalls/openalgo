@@ -358,7 +358,7 @@ def get_kotak_master_filepaths():
                                 file_dict["NSE_COM"] = url
 
                         logger.info(
-                            f"✅ Successfully retrieved {len(file_dict)} master contract files from {base_url_attempt}"
+                            f"Successfully retrieved {len(file_dict)} master contract files from {base_url_attempt}"
                         )
                         logger.info(f"Available files: {list(file_dict.keys())}")
                         return file_dict
@@ -404,13 +404,13 @@ def get_kotak_master_filepaths():
             response = client.head(url, timeout=10, follow_redirects=True)
             if response.status_code == 200:
                 accessible_urls[key] = url
-                logger.info(f"✅ Direct URL accessible: {key}")
+                logger.info(f"Direct URL accessible: {key}")
             else:
-                logger.warning(f"❌ Direct URL returned {response.status_code}: {key}")
+                logger.warning(f"Direct URL returned {response.status_code}: {key}")
         except httpx.HTTPError as e:
-            logger.warning(f"❌ Direct URL HTTP error: {key} - {e}")
+            logger.warning(f"Direct URL HTTP error: {key} - {e}")
         except Exception as e:
-            logger.warning(f"❌ Direct URL failed: {key} - {e}")
+            logger.warning(f"Direct URL failed: {key} - {e}")
 
     if accessible_urls:
         logger.info(f"Using {len(accessible_urls)} direct URLs")

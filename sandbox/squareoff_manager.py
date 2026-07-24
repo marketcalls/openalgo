@@ -66,6 +66,28 @@ class SquareOffManager:
             # Step 1: Cancel all open MIS orders past square-off time
             cancelled_count = self._cancel_open_mis_orders(current_time)
 
+            # Step 1b: Cancel open orders on expired F&O contracts. Expired
+            # POSITIONS are settled by position_manager, but an unfilled
+            # LIMIT/SL order on an expired contract had no reaper: it sat
+            # "open" forever, kept its margin blocked, and its symbol -- gone
+            # from the master contract after the daily refresh -- made the
+            # WebSocket engine log token-lookup errors on every boot.
+            cancelled_count += self._cancel_expired_contract_orders()
+
+            # Step 1c: Settle positions on expired F&O contracts. Runs the
+            # same cleanup the boot catch-up uses, so expiry settlement is
+            # proactive (every minute via the backup job) instead of waiting
+            # for someone to open the positionbook. Cheap when nothing has
+            # expired: one query, no matches, return. Timing (expiry-day
+            # close vs next day) and option settlement price are governed by
+            # the expiry_settlement_timing / option_expiry_settlement configs.
+            try:
+                from sandbox.position_manager import cleanup_expired_contracts
+
+                cleanup_expired_contracts()
+            except Exception as e:
+                logger.exception(f"Error settling expired positions: {e}")
+
             # Step 2: Get all open MIS positions (quantity != 0)
             mis_positions = (
                 SandboxPositions.query.filter_by(product="MIS")
@@ -119,6 +141,63 @@ class SquareOffManager:
 
         except Exception as e:
             logger.exception(f"Error checking square-off conditions: {e}")
+
+    def _cancel_expired_contract_orders(self):
+        """Cancel open orders whose F&O contract has expired.
+
+        Mirrors _check_and_close_expired_positions (which settles expired
+        positions) for the order book. Cancelling via OrderManager.cancel_order
+        releases the blocked margin, exactly like the MIS auto-cancel above.
+        Equity orders (no parseable expiry) are never touched.
+
+        Returns the number of orders cancelled.
+        """
+        cancelled_count = 0
+        try:
+            from database.sandbox_db import SandboxOrders
+            from sandbox.order_manager import OrderManager
+            from sandbox.position_manager import (
+                get_contract_expiry,
+                is_contract_expired_now,
+            )
+
+            open_orders = SandboxOrders.query.filter_by(order_status="open").all()
+
+            for order in open_orders:
+                expiry_date = get_contract_expiry(order.symbol, order.exchange)
+                # Same timing rule as position settlement: with the default
+                # expiry_day_close config an order dies at the closing bell of
+                # expiry day, not the following midnight.
+                if not is_contract_expired_now(expiry_date, order.exchange):
+                    continue
+
+                try:
+                    order_manager = OrderManager(order.user_id)
+                    success, response, status_code = order_manager.cancel_order(order.orderid)
+                    if success:
+                        logger.info(
+                            f"Auto-cancelled order {order.orderid} for {order.symbol}: "
+                            f"contract expired {expiry_date}"
+                        )
+                        cancelled_count += 1
+                    else:
+                        logger.error(
+                            f"Failed to cancel expired-contract order {order.orderid}: "
+                            f"{response.get('message', 'Unknown error')}"
+                        )
+                except Exception as e:
+                    logger.exception(
+                        f"Error cancelling expired-contract order {order.orderid}: {e}"
+                    )
+
+            if cancelled_count > 0:
+                logger.info(
+                    f"Auto-cancelled {cancelled_count} open orders on expired contracts"
+                )
+        except Exception as e:
+            logger.exception(f"Error in _cancel_expired_contract_orders: {e}")
+
+        return cancelled_count
 
     def _cancel_open_mis_orders(self, current_time):
         """Cancel all open MIS orders past their exchange's square-off time.

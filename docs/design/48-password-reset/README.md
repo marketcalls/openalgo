@@ -72,11 +72,11 @@ OpenAlgo provides a secure multi-step password reset flow that supports both ema
 │  │  Confirm Password: [••••••••••••••••                 ]               │   │
 │  │                                                                      │   │
 │  │  Requirements:                                                       │   │
-│  │  ✓ At least 8 characters                                            │   │
-│  │  ✓ Contains uppercase letter                                        │   │
-│  │  ✓ Contains lowercase letter                                        │   │
-│  │  ✓ Contains number                                                  │   │
-│  │  ✓ Contains special character                                       │   │
+│  │ At least 8 characters                                            │   │
+│  │ Contains uppercase letter                                        │   │
+│  │ Contains lowercase letter                                        │   │
+│  │ Contains number                                                  │   │
+│  │ Contains special character                                       │   │
 │  │                                                                      │   │
 │  │  [Reset Password]                                                    │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │

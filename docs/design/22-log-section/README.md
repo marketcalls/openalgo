@@ -51,10 +51,10 @@ Displays all API request/response pairs for order operations.
 │ ┌─────────────────────────────────────────────────────────────────────────┐│
 │ │ Time          │ API Type    │ Request          │ Response      │ Status ││
 │ ├───────────────┼─────────────┼──────────────────┼───────────────┼────────┤│
-│ │ 09:30:15 IST  │ placeorder  │ SBIN BUY 100 MIS │ orderid: 123  │ ✓      ││
-│ │ 09:31:20 IST  │ placeorder  │ INFY SELL 50 CNC │ orderid: 124  │ ✓      ││
-│ │ 09:35:45 IST  │ cancelorder │ orderid: 124     │ Cancelled     │ ✓      ││
-│ │ 10:15:00 IST  │ placeorder  │ RELIANCE BUY 25  │ Margin error  │ ✗      ││
+│ │ 09:30:15 IST  │ placeorder  │ SBIN BUY 100 MIS │ orderid: 123  │ ││
+│ │ 09:31:20 IST  │ placeorder  │ INFY SELL 50 CNC │ orderid: 124  │ ││
+│ │ 09:35:45 IST  │ cancelorder │ orderid: 124     │ Cancelled     │ ││
+│ │ 10:15:00 IST  │ placeorder  │ RELIANCE BUY 25  │ Margin error  │ ││
 │ └─────────────────────────────────────────────────────────────────────────┘│
 │                                                                             │
 │ Pagination: [< Prev] Page 1 of 25 [Next >]                                 │

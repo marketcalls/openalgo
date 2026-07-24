@@ -330,6 +330,19 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self._reconnect_timer = None  # Track reconnection timer for cleanup
 
+        # Auth-failure retry counter - deliberately SEPARATE from and much
+        # tighter-bounded than reconnect_attempts/Config.MAX_RECONNECT_ATTEMPTS
+        # above, which are for ordinary network drops. This gives the daily
+        # ~3 AM IST token rollover a few chances to self-heal via a fresh DB
+        # read (_attempt_reconnection() already calls get_auth_token with
+        # bypass_cache=True before rebuilding the ws client - reused as-is,
+        # not duplicated here), but stops well short of the full 10-attempt
+        # generic backoff so a genuinely dead token is not hammered for many
+        # minutes against a possibly rate-limited IP (SEBI static-IP mandate,
+        # effective April 1, 2026).
+        self.auth_refresh_retries = 0
+        self.max_auth_refresh_retries = 3
+
         # Batch subscription management - coalesce rapid subscribe calls into a
         # single touchline/depth message to avoid hammering the WebSocket
         self.subscription_queue = []
@@ -392,6 +405,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if connected:
             self.connected = True
             self.reconnect_attempts = 0
+            self.auth_refresh_retries = 0
             self.logger.info("Connected to Flattrade WebSocket successfully")
         else:
             raise ConnectionError("Failed to connect to Flattrade WebSocket")
@@ -780,14 +794,59 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.subscription_queue.clear()
 
         if self.running:
-            self._schedule_reconnection()
+            if self.ws_client and getattr(self.ws_client, "auth_failed", False):
+                self._handle_auth_failure(
+                    self.ws_client.auth_failure_message or "authentication rejected"
+                )
+            else:
+                self._schedule_reconnection()
 
     def _handle_websocket_error(self, error: Exception) -> None:
         """Centralized error handling for WebSocket operations"""
         self.logger.error(f"WebSocket error: {error}")
 
         if self.running:
-            self._schedule_reconnection()
+            if self.ws_client and getattr(self.ws_client, "auth_failed", False):
+                self._handle_auth_failure(
+                    self.ws_client.auth_failure_message or "authentication rejected"
+                )
+            else:
+                self._schedule_reconnection()
+
+    def _handle_auth_failure(self, reason: str) -> None:
+        """Handle an explicit auth rejection from the broker.
+
+        Separate, tighter-bounded retry path from the generic reconnect loop
+        in _schedule_reconnection()/_attempt_reconnection() - see the comment
+        on self.auth_refresh_retries in _setup_connection_management() for why.
+        Reuses the existing Timer-based reconnect machinery (_schedule_reconnection)
+        rather than duplicating it; _attempt_reconnection() already re-reads a
+        fresh token from the DB before rebuilding the ws client, which is what
+        gives a daily token rollover a chance to self-heal.
+        """
+        with self.lock:
+            if not self.running:
+                return
+
+            if self.auth_refresh_retries >= self.max_auth_refresh_retries:
+                self.logger.error(
+                    f"Auth failure retries exhausted ({self.auth_refresh_retries}/"
+                    f"{self.max_auth_refresh_retries}) - giving up. Last reason: {reason}"
+                )
+                self.running = False
+                return
+
+            self.auth_refresh_retries += 1
+            self.logger.warning(
+                f"Auth failure detected (attempt {self.auth_refresh_retries}/"
+                f"{self.max_auth_refresh_retries}): {reason}. Will retry with a fresh token."
+            )
+
+            # Don't inherit a long exponential delay meant for network blips -
+            # an auth retry should attempt again promptly.
+            self.reconnect_attempts = 0
+
+        self._schedule_reconnection()
 
     def _schedule_reconnection(self) -> None:
         """Schedule reconnection with exponential backoff"""
@@ -867,6 +926,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if self.ws_client.connect():
                     self.connected = True
                     self.reconnect_attempts = 0
+                    self.auth_refresh_retries = 0
                     self.logger.info("Reconnected successfully")
                 else:
                     self.logger.error("Reconnection failed")
