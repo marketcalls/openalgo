@@ -133,7 +133,12 @@ class WebSocketExecutionEngine:
             self._position_refs.clear()
 
             try:
-                pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
+                # "open" (resting in the regular book) and "trigger pending"
+                # (SL/SL-M resting in the Stop-Loss book) both need tick
+                # monitoring for their respective price conditions.
+                pending_orders = SandboxOrders.query.filter(
+                    SandboxOrders.order_status.in_(["open", "trigger pending"])
+                ).all()
 
                 for order in pending_orders:
                     # Skip orders on expired F&O contracts: the symbol is gone
@@ -363,8 +368,12 @@ class WebSocketExecutionEngine:
         Check if an order should execute at the current LTP and execute if conditions are met.
         """
         try:
-            # Fetch the order from database
-            order = SandboxOrders.query.filter_by(orderid=order_id, order_status="open").first()
+            # Fetch the order from database - "open" or "trigger pending"
+            # (SL/SL-M not yet released from the Stop-Loss book)
+            order = SandboxOrders.query.filter(
+                SandboxOrders.orderid == order_id,
+                SandboxOrders.order_status.in_(["open", "trigger pending"]),
+            ).first()
 
             if not order:
                 # Order no longer pending, remove from index and unsubscribe if possible
@@ -386,10 +395,13 @@ class WebSocketExecutionEngine:
             # Use the existing execution engine's order processing logic
             self._execution_engine._process_order(order, quote)
 
-            # If order was executed, remove from index
+            # Remove from index only once the order leaves BOTH actively-
+            # monitored states. A trigger pending -> open transition (SL
+            # released from the Stop-Loss book, still unfilled) must keep the
+            # order - and its symbol subscription - in the index.
             # Refresh the order to check status
             db_session.refresh(order)
-            if order.order_status != "open":
+            if order.order_status not in ("open", "trigger pending"):
                 symbol_key = f"{order.exchange}:{order.symbol}"
                 self.notify_order_completed(order_id, symbol_key, order.user_id)
 
