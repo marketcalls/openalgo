@@ -506,7 +506,7 @@ class BrokerData:
                 chunk_end_str = chunk_end.strftime("%Y-%m-%d")
                 chunk_count += 1
 
-                print(f"Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}")
+                logger.info(f"Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}")
 
                 try:
                     # Fetch data for this chunk
@@ -516,22 +516,19 @@ class BrokerData:
 
                     if not chunk_data.empty:
                         all_data.append(chunk_data)
-                        print(f"Chunk {chunk_count}: Retrieved {len(chunk_data)} candles")
+                        logger.info(f"Chunk {chunk_count}: Retrieved {len(chunk_data)} candles")
                     else:
-                        print(f"Chunk {chunk_count}: No data returned")
+                        logger.warning(f"Chunk {chunk_count}: No data returned")
 
                 except Exception as e:
                     failed_chunks += 1
-                    print(
-                        f"Error fetching chunk {chunk_count} ({chunk_start_str} to {chunk_end_str}): {e}"
-                    )
                     logger.error(
                         f"Error fetching chunk {chunk_count} ({chunk_start_str} to {chunk_end_str}): {e}"
                     )
 
                     # If too many chunks fail, suggest smaller chunk size
                     if failed_chunks >= 3:
-                        print(
+                        logger.warning(
                             f"Multiple chunks failing. Consider using smaller chunk size (current: {max_days} days)"
                         )
 
@@ -546,13 +543,13 @@ class BrokerData:
 
             # Combine all chunks
             if not all_data:
-                print("No data retrieved from any chunks")
+                logger.warning("No data retrieved from any chunks")
                 if failed_chunks > 0:
-                    print(f"All {failed_chunks} chunks failed. This might be due to:")
-                    print("1. Network connectivity issues")
-                    print("2. API rate limiting")
-                    print("3. Invalid symbol or date range")
-                    print("4. Firstock API service issues")
+                    logger.warning(
+                        f"All {failed_chunks} chunks failed. This might be due to: "
+                        "network connectivity issues, API rate limiting, invalid symbol or "
+                        "date range, or Firstock API service issues"
+                    )
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
             # Concatenate all DataFrames
@@ -567,20 +564,20 @@ class BrokerData:
             success_rate = (
                 ((chunk_count - failed_chunks) / chunk_count) * 100 if chunk_count > 0 else 0
             )
-            print(
+            logger.info(
                 f"Chunked loading complete: Retrieved {len(combined_df)} total candles from {chunk_count} chunks"
             )
-            print(
+            logger.info(
                 f"Success rate: {success_rate:.1f}% ({chunk_count - failed_chunks}/{chunk_count} chunks successful)"
             )
 
             if failed_chunks > 0:
-                print(f"{failed_chunks} chunks failed - data may be incomplete")
+                logger.warning(f"{failed_chunks} chunks failed - data may be incomplete")
 
             if len(combined_df) > 0:
                 start_time = datetime.fromtimestamp(combined_df["timestamp"].min())
                 end_time = datetime.fromtimestamp(combined_df["timestamp"].max())
-                print(f"Final data range: {start_time} to {end_time}")
+                logger.info(f"Final data range: {start_time} to {end_time}")
 
             return combined_df
 

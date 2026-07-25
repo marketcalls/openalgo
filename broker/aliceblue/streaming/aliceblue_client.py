@@ -134,7 +134,9 @@ class Aliceblue:
         url = self.base + sub_url
         headers = self._user_agent()
 
-        response = requests.get(url, headers=headers, params=data, verify=not self.disable_ssl)
+        response = requests.get(
+            url, headers=headers, params=data, verify=not self.disable_ssl, timeout=10
+        )
 
         if response.status_code == 200:
             if "json" in response.headers.get("content-type"):
@@ -148,7 +150,9 @@ class Aliceblue:
     def _post(self, sub_url, data=None):
         url = self.base + sub_url
         headers = self._user_agent()
-        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+        response = requests.post(
+            url, json=data, headers=headers, verify=not self.disable_ssl, timeout=10
+        )
 
         if response.status_code == 200:
             if "json" in response.headers.get("content-type"):
@@ -161,7 +165,9 @@ class Aliceblue:
     # Post method declaration
     def _dummypost(self, url, data=None):
         headers = self._user_agent()
-        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+        response = requests.post(
+            url, json=data, headers=headers, verify=not self.disable_ssl, timeout=10
+        )
 
         if response.status_code == 200:
             if "json" in response.headers.get("content-type"):
@@ -195,7 +201,9 @@ class Aliceblue:
             logger.info(f"Request headers: {headers}")
             logger.info(f"Request data: {data}")
 
-        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+        response = requests.post(
+            url, json=data, headers=headers, verify=not self.disable_ssl, timeout=10
+        )
 
         # Debug logging for WebSocket session response
         if "createWsSession" in method:
@@ -299,7 +307,7 @@ class Aliceblue:
 
     def get_contract_master(self, exchange):
         url = self.base_url_c % exchange
-        response = requests.get(url)
+        response = requests.get(url, timeout=30)
 
         if response.status_code == 200:
             return response.content

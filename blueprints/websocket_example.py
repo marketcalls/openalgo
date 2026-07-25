@@ -452,7 +452,7 @@ def example_usage():
 
     # Example 3: Subscribe to updates
     def my_callback(data):
-        print(f"Received update: {data}")
+        logger.debug(f"Received update: {data}")
 
     subscriber_id = subscribe_to_market_updates("ltp", my_callback, {"NSE:RELIANCE", "NSE:TCS"})
 
