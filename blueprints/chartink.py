@@ -90,7 +90,9 @@ def process_orders():
 
                 try:
                     response = requests.post(
-                        f"{BASE_URL}/api/v1/placesmartorder", json=smart_order["payload"]
+                        f"{BASE_URL}/api/v1/placesmartorder",
+                        json=smart_order["payload"],
+                        timeout=30,
                     )
                     if response.ok:
                         logger.info(
@@ -126,7 +128,9 @@ def process_orders():
 
                     try:
                         response = requests.post(
-                            f"{BASE_URL}/api/v1/placeorder", json=regular_order["payload"]
+                            f"{BASE_URL}/api/v1/placeorder",
+                            json=regular_order["payload"],
+                            timeout=30,
                         )
                         if response.ok:
                             logger.info(

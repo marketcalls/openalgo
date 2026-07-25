@@ -181,7 +181,7 @@ def map_segment(exchange):
         "MCX": "DERIVATIVE",
     }
     result = segment_mapping.get(exchange, "EQUITY")
-    print(f"map_segment: {exchange} -> {result}")
+    logger.debug(f"map_segment: {exchange} -> {result}")
     return result
 
 
