@@ -1,7 +1,6 @@
 ---
 name: indicator-setup
 description: Set up the Python environment for OpenAlgo indicator analysis. Installs openalgo, plotly, dash, streamlit, yfinance, matplotlib, seaborn, and creates the project folder structure.
-argument-hint: "[python-version]"
 allowed-tools: Bash, Read, Write, Glob, AskUserQuestion
 ---
 
@@ -9,12 +8,23 @@ Set up the complete Python environment for OpenAlgo indicator analysis, charting
 
 ## Arguments
 
-- `$0` = Python version (optional, default: `python3`). Examples: `python3.12`, `python3.13`
+**None.** This skill takes no Python-version argument.
 
-**Note**: openalgo 2.x requires **Python 3.12 or newer** (3.12 / 3.13 / 3.14). Check the version before going further and abort with a clear message if it is older:
+It used to, back when it built a standalone venv. Now that it uses OpenAlgo's
+own project environment, the interpreter is the repo's to decide — pinned by
+`requires-python = ">=3.12"` in `pyproject.toml` and by the existing `.venv`.
+Re-pinning the shared environment from an analysis skill would rebuild the
+application's venv on a different interpreter, which is a good way to break the
+running platform.
+
+If the project environment genuinely needs a different interpreter, that is a
+deliberate repo-level change: `uv sync -p 3.13` from the repo root, made
+knowingly and not as a side effect of setting up charting.
+
+Confirm what you have:
 
 ```bash
-python3 --version   # must be 3.12+
+uv run python -V     # must be 3.12+; openalgo 2.x supports 3.12 / 3.13 / 3.14
 ```
 
 ## Steps
@@ -192,7 +202,7 @@ print('Indicator library ready')
 
 Print a summary showing:
 - Detected OS
-- Python version used
+- Python version reported by `uv run python -V`
 - Environment: OpenAlgo's own uv-managed .venv (no separate venv)
 - Installed packages and versions
 - Output location: workspace/indicators/ (created on demand)

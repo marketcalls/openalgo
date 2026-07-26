@@ -19,8 +19,8 @@ If no arguments, ask the user what they want to scan for.
 ## Instructions
 
 1. Read the indicator-expert rules for reference
-2. Create `scanners/{scan_type}/` directory (on-demand)
-3. Create `{scan_type}_scanner.py`
+2. Create `workspace/indicators/scanners/` (`mkdir -p`)
+3. Write the script to `workspace/indicators/scanners/{scan_type}_{watchlist}.py`
 4. The script must:
    - Load `.env` from project root
    - Define the watchlist (predefined or custom)

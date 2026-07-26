@@ -27,8 +27,8 @@ If no arguments, ask the user what kind of dashboard they want and whether they 
    - `rules/streamlit-patterns.md` — Streamlit app patterns
    - `rules/plotting.md` — Chart patterns
    - `rules/data-fetching.md` — Data loading
-2. Create `dashboards/{dashboard_name}/` directory (on-demand)
-3. Create `app.py` in `dashboards/{dashboard_name}/`
+2. Create `workspace/indicators/dashboards/{dashboard_name}/` (`mkdir -p`)
+3. Create `app.py` inside it
 4. Use the matching template from `rules/assets/`
 
 ### Dashboard Requirements
@@ -100,15 +100,13 @@ After creating the app, provide instructions:
 
 **Dash:**
 ```bash
-cd dashboards/{dashboard_name}
-uv run --group analysis python app.py
+uv run --group analysis python workspace/indicators/dashboards/{dashboard_name}/app.py
 # Open http://127.0.0.1:8050 in browser
 ```
 
 **Streamlit:**
 ```bash
-cd dashboards/{dashboard_name}
-uv run --group analysis streamlit run app.py
+uv run --group analysis streamlit run workspace/indicators/dashboards/{dashboard_name}/app.py
 # Open http://localhost:8501 in browser
 ```
 
