@@ -100,5 +100,7 @@ nul
 # NOTE: gitignore is not a secrecy boundary. `git add -f` bypasses it, and
 # the Docker build copies the repo tree, so workspace/ is excluded in
 # .dockerignore too. Real secrets belong in .env or keys/, never here.
-workspace/*
+workspace/**
+!workspace/**/
 !workspace/readme.md
+!workspace/**/readme.md

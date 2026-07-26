@@ -48,12 +48,18 @@ material belongs in `keys/`.
 ## What is tracked
 
 ```
-workspace/*
+workspace/**
+!workspace/**/
 !workspace/readme.md
+!workspace/**/readme.md
 ```
 
-One file. Everything else is yours and stays local. The subfolders will not
-exist on a fresh clone — the skills `mkdir -p` what they need before writing.
+Every folder ships a `readme.md` explaining what belongs in it — that is what
+makes the directory exist after a clone, since git does not track empty
+directories. Everything else you put here stays local.
+
+The skills still `mkdir -p` before writing, so a folder you delete is recreated
+on demand.
 
 ## Running
 
