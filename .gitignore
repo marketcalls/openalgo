@@ -94,3 +94,26 @@ yarn-error.log*
 
 # Windows NUL file
 nul
+
+# Personal workspace: your own indicators, research, backtests and notes.
+# Only the readme is tracked -- everything else is yours and stays local.
+# NOTE: gitignore is not a secrecy boundary. `git add -f` bypasses it, and
+# the Docker build copies the repo tree, so workspace/ is excluded in
+# .dockerignore too. Real secrets belong in .env or keys/, never here.
+workspace/**
+!workspace/**/
+!workspace/readme.md
+!workspace/**/readme.md
+
+# Environment files, everywhere and in every variant. Plain `.env` was
+# already covered, but `.env.production` / `.env.bak` / `env.backup` were
+# not -- `.env.local` only escaped by accidentally matching `*.local`.
+# A committed secret must be rotated, not just deleted, so cast wide.
+.env.*
+*.env
+env.backup
+!.sample.env
+!**/.sample.env
+# ...but the negation above must not punch a hole in workspace/, whose
+# promise is that only readmes are tracked. Last matching rule wins.
+workspace/**/.sample.env
