@@ -22,8 +22,8 @@ If no arguments, ask user for symbol and what data they want.
 1. Read the indicator-expert rules, especially:
    - `rules/websocket-feeds.md` — WebSocket connection and subscription
    - `rules/data-fetching.md` — Historical data for buffer initialization
-2. Create `charts/live/` directory (on-demand)
-3. Create `{symbol}_live_feed.py`
+2. Create `workspace/indicators/feeds/` (`mkdir -p`)
+3. Write the script to `workspace/indicators/feeds/{mode}_{symbol}.py`
 4. Use the template from `rules/assets/live_feed/template.py`
 
 ### Feed Types
@@ -33,6 +33,11 @@ If no arguments, ask user for symbol and what data they want.
 - Maintain rolling buffer (last 200 ticks)
 - Compute EMA, RSI on buffer
 - Print real-time indicator values
+
+**These are tick-window values, not bar values.** An EMA over 200 ticks is not
+EMA(20) on a chart and must not be compared to one. Label the output
+accordingly, and see the verification section before using any of it for
+trading logic.
 
 #### `quote` — Full Quote + Indicators
 - Subscribe to Quote feed
@@ -152,9 +157,19 @@ A live feed can look healthy while delivering nothing. Check all six:
 - [ ] **Cleanup releases everything.** On Ctrl-C, confirm the socket closes and any subscription is cancelled. Long-running feeds are the most common source of descriptor leaks; the `fd-audit` skill covers the audit, and `soak.py` measures it.
 - [ ] **Outside market hours, absence of ticks is expected.** Do not debug a "broken" feed at 21:00 IST. Confirm against `/api/v1/quotes` returning a stale-but-valid last close.
 
-**Do not compute indicators on every tick.** Aggregate into bars first. A
-20-period EMA recomputed per tick is both meaningless and a CPU sink at
-1000+ ticks/second.
+**Tick-window indicators are not bar indicators — label them as such.** The
+`ltp` template deliberately keeps a rolling buffer of the last 200 *ticks* and
+recomputes on each one. That is a legitimate design for a live monitor, but
+`ta.ema(ticks, 20)` is an EMA over 20 trades, not over 20 bars, and it will not
+match any chart. Never compare the two, and never feed a tick-window value into
+logic that assumes bar semantics.
+
+If you need bar semantics — anything a strategy or a chart will act on —
+aggregate ticks into interval bars first and compute on bar closes.
+
+Either way, recomputing the full buffer on every tick is O(buffer) per tick and
+becomes a CPU sink above a few hundred ticks/second. Throttle to every Nth tick
+or to a wall-clock interval once the feed is busy.
 
 ## Where to write files
 

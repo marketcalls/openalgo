@@ -20,7 +20,10 @@ If no arguments, ask the user what indicator they want to build.
    - `rules/performance.md` — Rust core performance, O(n) guarantees, benchmarking
    - `rules/indicator-catalog.md` — Check if indicator already exists in openalgo.ta
 2. **Check first**: If the indicator already exists in `openalgo.ta` (100+ indicators), tell the user and show the existing API
-3. Create `workspace/indicators/custom/` if needed (`mkdir -p`)
+3. Create `workspace/indicators/custom/{indicator_name}/` (`mkdir -p`). Each
+   indicator gets its own directory because the companion files below use
+   fixed names -- a flat folder would have the second indicator overwrite the
+   first indicator's `chart.py` and `benchmark.py`.
 4. Create `{indicator_name}.py` with:
 
 ### File Structure
@@ -162,15 +165,22 @@ Rust-backed reference implementation and are both faster and already correct.
 
 ## Where to write files
 
-Default location is **`workspace/indicators/custom/`** in the repo root. Create it
-immediately before writing — it does not exist on a fresh clone:
+One directory per indicator under **`workspace/indicators/custom/`**:
 
 ```bash
-mkdir -p workspace/indicators/custom
+mkdir -p workspace/indicators/custom/{indicator_name}
 ```
 
-Name the file `<indicator>_<symbol>_<interval>.py` so the folder stays
-scannable as it grows, e.g. `workspace/indicators/custom/squeeze_momentum.py`.
+```
+workspace/indicators/custom/squeeze_momentum/
+  squeeze_momentum.py   the indicator module
+  chart.py              visualization
+  benchmark.py          performance check
+```
+
+The per-indicator directory is required: `chart.py` and `benchmark.py` are
+fixed names, so a flat layout would silently overwrite them on the next
+indicator.
 
 **If the user names a different folder, use it** and keep the same layout
 beneath it. Note that only `workspace/` is gitignored (except its readme), so
@@ -180,5 +190,5 @@ doing it.
 Run from the repo root:
 
 ```bash
-uv run --group analysis python workspace/indicators/custom/squeeze_momentum.py
+uv run --group analysis python workspace/indicators/custom/squeeze_momentum/chart.py
 ```
