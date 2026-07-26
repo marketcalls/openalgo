@@ -156,7 +156,7 @@ echo   Broker Configuration
 echo   ========================================
 echo.
 echo   Valid brokers:
-echo   fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,
+echo   fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge,
 echo   definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,
 echo   groww, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,
 echo   mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,
