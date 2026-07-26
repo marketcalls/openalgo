@@ -114,7 +114,7 @@ Trend: RSI has been declining from 65 over the past 5 bars, suggesting weakening
 A chart that renders is not a chart that is correct. Check all five:
 
 - [ ] **Bar count matches the request.** `len(df)` against the interval and date range. A silently short series usually means the broker's history endpoint capped the range, or the symbol has no data on that exchange.
-- [ ] **Warmup NaNs are present and correct.** Every windowed indicator returns NaN for its first `period-1` bars (`ema(close, 20)` -> 19 NaNs). Zero NaNs means the indicator silently back-filled; more than expected means the input had gaps.
+- [ ] **Warmup behaviour matches the indicator.** This is per-indicator in `openalgo.ta`, not universal — verified against 2.0.3: `sma(close, 20)` gives 19 leading NaNs and `rsi(close, 14)` gives 14, but **`ema` gives zero** because it seeds from the first value and recurses. Do not "fix" an EMA that has no NaNs. What matters is that the count is *stable* for that indicator; a sudden change means the input gained gaps.
 - [ ] **Indicator length equals input length.** `len(result) == len(close)`. A shorter array means it was computed on a slice and will misalign against the price axis.
 - [ ] **Spot-check one value against an independent source.** Read the last close and the last indicator value off the chart and compare with the broker's own chart or a hand calculation. Plotting the wrong column is invisible unless you check a number.
 - [ ] **The overlay sits on the right axis.** Price-scale indicators (EMA, Bollinger, Supertrend, VWAP) belong on the candlestick axis; bounded oscillators (RSI, MACD, Stochastic) belong in a subplot. An RSI drawn on the price axis renders as a flat line at the bottom.
@@ -122,3 +122,33 @@ A chart that renders is not a chart that is correct. Check all five:
 **Timestamps:** daily candles should land at IST midnight, intraday at the true
 bar time. A daily candle showing 18:30 the previous day means the epoch was not
 shifted; 05:30 means it was shifted twice.
+
+## Where to write files
+
+Default location is **`indicators/charts/`** in the repo root. Create it
+immediately before writing — it does not exist on a fresh clone:
+
+```bash
+mkdir -p indicators/charts
+```
+
+Name the file `<indicator>_<symbol>_<interval>.py` so the folder stays
+scannable as it grows, e.g. `indicators/charts/ema_SBIN_D.py`.
+
+Rendered output goes to `indicators/output/` under the same stem, keeping the
+script and its artifact associated without cluttering the source folder:
+
+```
+indicators/charts/ema_SBIN_D.py  ->  indicators/output/ema_SBIN_D.html
+```
+
+**If the user names a different folder, use it** and keep the same layout
+beneath it. Note that only `indicators/` is gitignored (except its readme), so
+writing elsewhere inside the repo produces tracked files — mention that before
+doing it.
+
+Run from the repo root:
+
+```bash
+uv run --group analysis python indicators/charts/ema_SBIN_D.py
+```

@@ -138,3 +138,33 @@ Prove it works before trusting a result:
 **Lookahead check:** a scan run at 11:00 must not use the completed daily
 candle. If the result changes when you re-run the same scan against a
 date-truncated dataset, the condition is reading a bar that had not closed.
+
+## Where to write files
+
+Default location is **`indicators/scanners/`** in the repo root. Create it
+immediately before writing — it does not exist on a fresh clone:
+
+```bash
+mkdir -p indicators/scanners
+```
+
+Name the file `<indicator>_<symbol>_<interval>.py` so the folder stays
+scannable as it grows, e.g. `indicators/scanners/rsi_oversold_nifty50.py`.
+
+Rendered output goes to `indicators/output/` under the same stem, keeping the
+script and its artifact associated without cluttering the source folder:
+
+```
+indicators/scanners/rsi_oversold_nifty50.py  ->  indicators/output/rsi_oversold_nifty50.csv
+```
+
+**If the user names a different folder, use it** and keep the same layout
+beneath it. Note that only `indicators/` is gitignored (except its readme), so
+writing elsewhere inside the repo produces tracked files — mention that before
+doing it.
+
+Run from the repo root:
+
+```bash
+uv run --group analysis python indicators/scanners/rsi_oversold_nifty50.py
+```

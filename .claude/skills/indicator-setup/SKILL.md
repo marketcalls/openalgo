@@ -91,13 +91,33 @@ print('analysis stack ready')"
 Expect 127 indicators from `openalgo.ta` — it ships in the base package, so
 there is no extra to request.
 
-### Step 4: Create Project Folders
+### Step 4: Output folders
 
-Create only the top-level directories. Subdirectories are created on-demand by other skills.
+Everything the indicator skills generate goes under **`indicators/`** in the
+repo root, one subfolder per artifact type:
 
-```bash
-mkdir -p charts dashboards custom_indicators scanners
 ```
+indicators/
+  charts/       chart scripts        (/indicator-chart)
+  scanners/     scanner scripts      (/indicator-scanner)
+  custom/       indicator modules    (/custom-indicator)
+  dashboards/   Dash / Streamlit     (/indicator-dashboard)
+  feeds/        live WebSocket        (/live-feed)
+  data/         cached OHLCV
+  output/       rendered .html / .png / .csv
+```
+
+**Do not pre-create these.** Each skill runs `mkdir -p` for the one folder it
+needs, immediately before writing. `indicators/` is gitignored except its
+readme, so the subfolders will not exist on a fresh clone and nothing you
+generate here is ever committed by accident.
+
+**The location is overridable.** If the user names a different folder, use it
+and keep the same subfolder layout beneath it. Only `indicators/` carries the
+gitignore rule, so if the user points at another path inside the repo, say so
+before writing there.
+
+See `indicators/readme.md` for the naming convention.
 
 ### Step 5: Configure .env File
 

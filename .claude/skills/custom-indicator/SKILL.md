@@ -152,10 +152,33 @@ A custom indicator is wrong in ways that still plot beautifully. Check all six:
 
 - [ ] **Length preservation.** `len(output) == len(input)`. Vectorized NumPy operations that slice (`arr[1:] - arr[:-1]`) shorten the array; pad the front with NaN rather than returning a shorter one, or every downstream alignment is off by one.
 - [ ] **No lookahead bias.** This is the failure that makes a bad indicator look brilliant. The value at index `i` may only use data from `0..i`. Test it: compute over the full series, then recompute over `series[:i+1]` for several `i` and assert the value at `i` is identical. If it changes, the indicator is reading the future and any backtest built on it is worthless.
-- [ ] **Warmup NaNs, not zeros.** The first `period-1` values must be NaN. Zero-filling makes the indicator look valid while silently biasing every early signal and any average computed over it.
+- [ ] **Warmup is NaN, never zero — but match the convention of what you wrap.** Zero-filling makes an indicator look valid while silently biasing every early signal and any average over it. Note `openalgo.ta` is not uniform here (verified against 2.0.3): `sma(close, 20)` leaves 19 leading NaNs and `rsi(close, 14)` leaves 14, but **`ema` leaves none** — it seeds from the first value. If your indicator builds on `ema`, inheriting zero warmup NaNs is correct; if it builds on `sma`, propagate the NaNs rather than filling them.
 - [ ] **Cross-check against a reference.** If the indicator is a variation on a standard one, compute both and compare where they should agree. A z-score of a constant series should be 0 or NaN, never a large number.
 - [ ] **Edge cases return cleanly.** Empty input, a series shorter than the period, all-identical values (zero variance -> division by zero), and a series containing NaN. Each should return NaNs, not raise and not emit `inf`.
 - [ ] **O(n), not O(n*period).** Confirm it is vectorized. Time it on 100k bars; a Python loop over a rolling window will be visibly slow and will not scale to a scan across a watchlist.
 
 Compare against `openalgo.ta` primitives where one exists — they are the
 Rust-backed reference implementation and are both faster and already correct.
+
+## Where to write files
+
+Default location is **`indicators/custom/`** in the repo root. Create it
+immediately before writing — it does not exist on a fresh clone:
+
+```bash
+mkdir -p indicators/custom
+```
+
+Name the file `<indicator>_<symbol>_<interval>.py` so the folder stays
+scannable as it grows, e.g. `indicators/custom/squeeze_momentum.py`.
+
+**If the user names a different folder, use it** and keep the same layout
+beneath it. Note that only `indicators/` is gitignored (except its readme), so
+writing elsewhere inside the repo produces tracked files — mention that before
+doing it.
+
+Run from the repo root:
+
+```bash
+uv run --group analysis python indicators/custom/squeeze_momentum.py
+```
