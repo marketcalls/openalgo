@@ -16,7 +16,7 @@ single broker session and WebSocket feed:
 | Unified Broker API | `/api/v1/` | External platforms (TradingView, Amibroker, ChartInk, Excel, Python, MCP) |
 | Python Strategy Host | `/python` | In-browser editor; scripts scheduled on IST times, run as isolated subprocesses with live logs |
 | Flow (No-Code Builder) | `/flow` | Node graph: market data to indicators to conditions to order execution |
-| Options Trading Suite | `/tools` | 12 analytical tools (Strategy Builder, Option Chain, IV Smile, Max Pain, Vol Surface, GEX, ...) |
+| Options Trading Suite | `/tools` | 15 analytical tools (Strategy Builder, Option Chain, Option Greeks, OI Tracker, Max Pain, Vol Surface, GEX, IV Smile, Arbitrage, ...) |
 | Charting Terminal | `/trading` | Line-based chart trading, powered by the `openalgo-charts` package |
 | Scalping Terminal | `/scalping` | Keyboard-driven options scalping (`blueprints/scalping.py` resolves underlying/expiry/strike; index options only — NRML/MIS, never CNC) |
 
