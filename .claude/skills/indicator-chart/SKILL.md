@@ -108,3 +108,17 @@ Trend: RSI has been declining from 65 over the past 5 bars, suggesting weakening
 `/indicator-chart supertrend NIFTY NSE_INDEX D`
 `/indicator-chart multi SBIN NSE D`
 `/indicator-chart bbands INFY NSE 1h`
+
+## Verify before calling it done
+
+A chart that renders is not a chart that is correct. Check all five:
+
+- [ ] **Bar count matches the request.** `len(df)` against the interval and date range. A silently short series usually means the broker's history endpoint capped the range, or the symbol has no data on that exchange.
+- [ ] **Warmup NaNs are present and correct.** Every windowed indicator returns NaN for its first `period-1` bars (`ema(close, 20)` -> 19 NaNs). Zero NaNs means the indicator silently back-filled; more than expected means the input had gaps.
+- [ ] **Indicator length equals input length.** `len(result) == len(close)`. A shorter array means it was computed on a slice and will misalign against the price axis.
+- [ ] **Spot-check one value against an independent source.** Read the last close and the last indicator value off the chart and compare with the broker's own chart or a hand calculation. Plotting the wrong column is invisible unless you check a number.
+- [ ] **The overlay sits on the right axis.** Price-scale indicators (EMA, Bollinger, Supertrend, VWAP) belong on the candlestick axis; bounded oscillators (RSI, MACD, Stochastic) belong in a subplot. An RSI drawn on the price axis renders as a flat line at the bottom.
+
+**Timestamps:** daily candles should land at IST midnight, intraday at the true
+bar time. A daily candle showing 18:30 the previous day means the epoch was not
+shifted; 05:30 means it was shifted twice.

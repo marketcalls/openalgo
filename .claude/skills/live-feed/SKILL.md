@@ -140,3 +140,18 @@ Inform user about verbose options:
 `/live-feed NIFTY NSE_INDEX quote`
 `/live-feed SBIN NSE depth`
 `/live-feed multi NSE`
+
+## Verify before calling it done
+
+A live feed can look healthy while delivering nothing. Check all six:
+
+- [ ] **Ticks actually arrive.** Count messages over 60 seconds during market hours. Zero ticks with a connected socket is the classic symptom of subscribing to the wrong exchange for the symbol type — index underlyings need `NSE_INDEX`/`BSE_INDEX`, stocks need `NSE`/`BSE`.
+- [ ] **Values are plausible.** Compare a streamed LTP against `/api/v1/quotes` for the same symbol. A price off by 100x is a paise-scaling bug; a "close" that matches the last traded quantity is a binary-offset bug in the broker adapter.
+- [ ] **Reconnect works.** Kill the network for 30 seconds and confirm the client reconnects, re-authenticates and re-subscribes. Subscriptions are not automatically restored by every path, so an apparently-recovered connection can be silently dead.
+- [ ] **Indicator state survives a gap.** After a reconnect, a rolling indicator must not treat the gap as contiguous bars. Either backfill from history or reset the window.
+- [ ] **Cleanup releases everything.** On Ctrl-C, confirm the socket closes and any subscription is cancelled. Long-running feeds are the most common source of descriptor leaks; the `fd-audit` skill covers the audit, and `soak.py` measures it.
+- [ ] **Outside market hours, absence of ticks is expected.** Do not debug a "broken" feed at 21:00 IST. Confirm against `/api/v1/quotes` returning a stale-but-valid last close.
+
+**Do not compute indicators on every tick.** Aggregate into bars first. A
+20-period EMA recomputed per tick is both meaningless and a CPU sink at
+1000+ ticks/second.

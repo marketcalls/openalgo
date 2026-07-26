@@ -122,3 +122,19 @@ Results saved to: scanners/rsi_oversold/rsi_oversold_results.csv
 `/indicator-scanner supertrend-buy nifty50`
 `/indicator-scanner volume-spike nifty50`
 `/indicator-scanner custom`
+
+## Verify before calling it done
+
+A scanner that returns nothing looks identical to a scanner that is broken.
+Prove it works before trusting a result:
+
+- [ ] **Seed a known positive.** Pick a symbol you have already confirmed meets the condition (chart it first) and check the scan finds it. An empty result set is only meaningful once you have seen a non-empty one.
+- [ ] **Invert the condition.** Flip `rsi < 30` to `rsi > 30` and confirm the result count roughly complements. If both return zero, the data is not loading and the condition is never the problem.
+- [ ] **Count the universe actually scanned**, not the universe requested. Log `scanned / requested`. Symbols dropped for missing data, a wrong exchange, or a delisted ticker vanish silently and quietly shrink the result set.
+- [ ] **Check the last bar is today's.** Scanning on stale history produces yesterday's signals with no error. Print `df.index[-1]` for one symbol and compare against the current session.
+- [ ] **Confirm no NaN leakage.** A symbol with fewer bars than the indicator period yields NaN, and `NaN < 30` is `False` — so short-history symbols are silently excluded rather than flagged. Report them separately.
+- [ ] **Exchange is correct per symbol.** Index underlyings use `NSE_INDEX`/`BSE_INDEX`; stocks use `NSE`/`BSE`. Passing the wrong one returns no data rather than an error. See `docs/prompt/symbol-format.md`.
+
+**Lookahead check:** a scan run at 11:00 must not use the completed daily
+candle. If the result changes when you re-run the same scan against a
+date-truncated dataset, the condition is reading a bar that had not closed.
