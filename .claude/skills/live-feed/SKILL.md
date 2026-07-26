@@ -158,23 +158,23 @@ A live feed can look healthy while delivering nothing. Check all six:
 
 ## Where to write files
 
-Default location is **`indicators/feeds/`** in the repo root. Create it
+Default location is **`workspace/indicators/feeds/`** in the repo root. Create it
 immediately before writing — it does not exist on a fresh clone:
 
 ```bash
-mkdir -p indicators/feeds
+mkdir -p workspace/indicators/feeds
 ```
 
 Name the file `<indicator>_<symbol>_<interval>.py` so the folder stays
-scannable as it grows, e.g. `indicators/feeds/ltp_SBIN.py`.
+scannable as it grows, e.g. `workspace/indicators/feeds/ltp_SBIN.py`.
 
 **If the user names a different folder, use it** and keep the same layout
-beneath it. Note that only `indicators/` is gitignored (except its readme), so
+beneath it. Note that only `workspace/` is gitignored (except its readme), so
 writing elsewhere inside the repo produces tracked files — mention that before
 doing it.
 
 Run from the repo root:
 
 ```bash
-uv run --group analysis python indicators/feeds/ltp_SBIN.py
+uv run --group analysis python workspace/indicators/feeds/ltp_SBIN.py
 ```

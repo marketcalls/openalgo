@@ -95,8 +95,10 @@ yarn-error.log*
 # Windows NUL file
 nul
 
-# Indicator skill workspace: generated scripts, cached market data and
-# rendered artifacts. Only the readme is tracked -- everything else is
-# reproducible from the skills, and market data does not belong in git.
-indicators/*
-!indicators/readme.md
+# Personal workspace: your own indicators, research, backtests and notes.
+# Only the readme is tracked -- everything else is yours and stays local.
+# NOTE: gitignore is not a secrecy boundary. `git add -f` bypasses it, and
+# the Docker build copies the repo tree, so workspace/ is excluded in
+# .dockerignore too. Real secrets belong in .env or keys/, never here.
+workspace/*
+!workspace/readme.md
