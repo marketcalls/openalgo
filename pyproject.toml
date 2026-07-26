@@ -208,6 +208,25 @@ filterwarnings = [
 ]
 
 [dependency-groups]
+# Indicator analysis, charting and dashboards. Kept out of the main
+# dependency list so streamlit/yfinance/seaborn never reach a production
+# install -- PEP 735 groups are opt-in, so `uv sync` alone does not pull
+# these. Install with `uv sync --group analysis`, run with
+# `uv run --group analysis python script.py`.
+# openalgo, plotly, pandas, numpy, python-dotenv, websocket-client, httpx
+# and nbformat are already main dependencies and are not repeated here.
+# Floors track the current resolved versions; `>=` keeps you on the latest
+# release, and `uv sync --group analysis --upgrade` re-resolves to newest.
+analysis = [
+    "dash>=4.4.1",
+    "dash-bootstrap-components>=2.0.4",
+    "ipywidgets>=8.1.8",
+    "matplotlib>=3.11.1",
+    "scipy>=1.18.0",
+    "seaborn>=0.13.2",
+    "streamlit>=1.60.0",
+    "yfinance>=1.5.2",
+]
 dev = [
     "bandit[sarif]>=1.9.3",
     "detect-secrets>=1.5.0",

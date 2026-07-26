@@ -27,8 +27,8 @@ If no arguments, ask the user what kind of dashboard they want and whether they 
    - `rules/streamlit-patterns.md` — Streamlit app patterns
    - `rules/plotting.md` — Chart patterns
    - `rules/data-fetching.md` — Data loading
-2. Create `dashboards/{dashboard_name}/` directory (on-demand)
-3. Create `app.py` in `dashboards/{dashboard_name}/`
+2. Create `workspace/indicators/dashboards/{dashboard_name}/` (`mkdir -p`)
+3. Create `app.py` inside it
 4. Use the matching template from `rules/assets/`
 
 ### Dashboard Requirements
@@ -100,15 +100,13 @@ After creating the app, provide instructions:
 
 **Dash:**
 ```bash
-cd dashboards/{dashboard_name}
-python app.py
+uv run --group analysis python workspace/indicators/dashboards/{dashboard_name}/app.py
 # Open http://127.0.0.1:8050 in browser
 ```
 
 **Streamlit:**
 ```bash
-cd dashboards/{dashboard_name}
-streamlit run app.py
+uv run --group analysis streamlit run workspace/indicators/dashboards/{dashboard_name}/app.py
 # Open http://localhost:8501 in browser
 ```
 
@@ -120,3 +118,41 @@ streamlit run app.py
 `/indicator-dashboard streamlit-single SBIN`
 `/indicator-dashboard streamlit-multi RELIANCE`
 `/indicator-dashboard streamlit-scanner`
+
+## Verify before calling it done
+
+- [ ] **It starts clean.** `uv run --group analysis python app.py` (Dash) or `uv run --group analysis streamlit run app.py` with no traceback, and the page renders at the printed URL.
+- [ ] **Every panel has data.** An empty chart in one panel usually means that symbol/exchange pair returned nothing, not that the layout is broken. Check each panel individually rather than assuming a shared failure.
+- [ ] **Refresh actually refetches.** Note the last bar timestamp, wait for one refresh cycle, confirm it advances. A dashboard that renders once and then shows a frozen snapshot looks identical to a working one.
+- [ ] **The browser console is clean.** Callback errors in Dash surface there, not in the terminal.
+- [ ] **Refresh interval respects the broker's rate limit.** A 5-second refresh across 20 symbols is 240 requests/minute — above several brokers' quote caps (Dhan allows 1 quote request/second). Batch symbols into one multi-quote call rather than looping, and match the interval to the limit.
+- [ ] **It survives a data failure.** Kill the network and confirm the dashboard shows a stale-data indicator rather than crashing the callback or silently rendering a blank chart.
+
+**Never hardcode the API key in the app file** — read it from `.env` via
+`os.getenv`. Dashboards are the artifact most likely to get screenshotted or
+shared.
+
+## Where to write files
+
+Default location is **`workspace/indicators/dashboards/`** in the repo root. Create it
+immediately before writing — it does not exist on a fresh clone:
+
+```bash
+mkdir -p workspace/indicators/dashboards
+```
+
+Name the file `<indicator>_<symbol>_<interval>.py` so the folder stays
+scannable as it grows, e.g. `workspace/indicators/dashboards/multi_timeframe_RELIANCE.py`.
+
+**If the user names a different folder, use it** and keep the same layout
+beneath it. Note that only `workspace/` is gitignored (except its readme), so
+writing elsewhere inside the repo produces tracked files — mention that before
+doing it.
+
+Run from the repo root:
+
+```bash
+uv run --group analysis python workspace/indicators/dashboards/multi_timeframe_RELIANCE.py
+# Streamlit apps:
+uv run --group analysis streamlit run workspace/indicators/dashboards/multi_timeframe_RELIANCE.py
+```

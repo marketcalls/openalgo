@@ -37,6 +37,51 @@ Both files must agree. `utils/version.py` is what the running app reports; `pypr
 
 The platform version surfaces in the UI footer / about page (via `get_version()`), API responses carrying version metadata, and Docker image tags built by CI.
 
+### Release notes are part of the bump, not a follow-up
+
+A platform bump is only half a release. Every recent release commit also adds a
+notes file — the last one was literally titled "bump platform to 2.0.1.6 **and
+add release notes**" and touched four paths:
+
+```
+utils/version.py
+pyproject.toml
+uv.lock
+docs/releases/version-2.0.1.6-released.md      <- the user-facing half
+```
+
+Create `docs/releases/version-<x.y.z.w>-released.md` following the existing
+files in that directory. The established structure:
+
+1. `# Version <x.y.z.w> Released` and `**Date: <Nth Month Year>**`
+2. A one-paragraph bold summary naming the release theme
+3. A prose overview stating the commit count since the previous tag and what
+   changed at a system level
+4. `**Highlights**` — a bullet per significant change, **each citing its commit
+   SHA** (and issue number where one exists), e.g.
+   `**HDFC Sky broker integration (`cb4ec7d56` + 9 follow-up fixes)** — ...`
+
+Get the commit range with:
+
+```bash
+git log --oneline v<previous>..HEAD | wc -l        # commit count for the summary
+git log --oneline v<previous>..HEAD                # source material for highlights
+```
+
+If no tags exist, diff against the previous release notes file's date.
+
+**`docs/CHANGELOG.md` is for major releases only.** It was last written for
+2.0.0.0 and is not updated per point release — do not add a stanza there for a
+routine bump.
+
+### Order of work
+
+1. `utils/version.py` and `pyproject.toml`
+2. `uv sync`
+3. Write `docs/releases/version-<x.y.z.w>-released.md`
+4. Verify: `uv run python -c "from utils.version import get_version; print(get_version())"`
+5. Commit all four paths together — a version bump without its notes leaves the release undocumented, and the notes are what users actually read.
+
 ## 2. OpenAlgo Python SDK pin (e.g. `openalgo==1.0.49`)
 
 A **separate** client library published on PyPI (https://pypi.org/project/openalgo/) that the platform consumes internally. It has its own release cycle. Touches the dependency lists, **not** `utils/version.py`.

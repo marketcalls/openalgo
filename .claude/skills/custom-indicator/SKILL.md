@@ -20,7 +20,10 @@ If no arguments, ask the user what indicator they want to build.
    - `rules/performance.md` — Rust core performance, O(n) guarantees, benchmarking
    - `rules/indicator-catalog.md` — Check if indicator already exists in openalgo.ta
 2. **Check first**: If the indicator already exists in `openalgo.ta` (100+ indicators), tell the user and show the existing API
-3. Create `custom_indicators/{indicator_name}/` directory (on-demand)
+3. Create `workspace/indicators/custom/{indicator_name}/` (`mkdir -p`). Each
+   indicator gets its own directory because the companion files below use
+   fixed names -- a flat folder would have the second indicator overwrite the
+   first indicator's `chart.py` and `benchmark.py`.
 4. Create `{indicator_name}.py` with:
 
 ### File Structure
@@ -145,3 +148,47 @@ from openalgo import ta
 `/custom-indicator squeeze-momentum`
 `/custom-indicator vwap-bands`
 `/custom-indicator range-filter`
+
+## Verify before calling it done
+
+A custom indicator is wrong in ways that still plot beautifully. Check all six:
+
+- [ ] **Length preservation.** `len(output) == len(input)`. Vectorized NumPy operations that slice (`arr[1:] - arr[:-1]`) shorten the array; pad the front with NaN rather than returning a shorter one, or every downstream alignment is off by one.
+- [ ] **No lookahead bias.** This is the failure that makes a bad indicator look brilliant. The value at index `i` may only use data from `0..i`. Test it: compute over the full series, then recompute over `series[:i+1]` for several `i` and assert the value at `i` is identical. If it changes, the indicator is reading the future and any backtest built on it is worthless.
+- [ ] **Warmup is NaN, never zero — but match the convention of what you wrap.** Zero-filling makes an indicator look valid while silently biasing every early signal and any average over it. Note `openalgo.ta` is not uniform here (verified against 2.0.3): `sma(close, 20)` leaves 19 leading NaNs and `rsi(close, 14)` leaves 14, but **`ema` leaves none** — it seeds from the first value. If your indicator builds on `ema`, inheriting zero warmup NaNs is correct; if it builds on `sma`, propagate the NaNs rather than filling them.
+- [ ] **Cross-check against a reference.** If the indicator is a variation on a standard one, compute both and compare where they should agree. A z-score of a constant series should be 0 or NaN, never a large number.
+- [ ] **Edge cases return cleanly.** Empty input, a series shorter than the period, all-identical values (zero variance -> division by zero), and a series containing NaN. Each should return NaNs, not raise and not emit `inf`.
+- [ ] **O(n), not O(n*period).** Confirm it is vectorized. Time it on 100k bars; a Python loop over a rolling window will be visibly slow and will not scale to a scan across a watchlist.
+
+Compare against `openalgo.ta` primitives where one exists — they are the
+Rust-backed reference implementation and are both faster and already correct.
+
+## Where to write files
+
+One directory per indicator under **`workspace/indicators/custom/`**:
+
+```bash
+mkdir -p workspace/indicators/custom/{indicator_name}
+```
+
+```
+workspace/indicators/custom/squeeze_momentum/
+  squeeze_momentum.py   the indicator module
+  chart.py              visualization
+  benchmark.py          performance check
+```
+
+The per-indicator directory is required: `chart.py` and `benchmark.py` are
+fixed names, so a flat layout would silently overwrite them on the next
+indicator.
+
+**If the user names a different folder, use it** and keep the same layout
+beneath it. Note that only `workspace/` is gitignored (except its readme), so
+writing elsewhere inside the repo produces tracked files — mention that before
+doing it.
+
+Run from the repo root:
+
+```bash
+uv run --group analysis python workspace/indicators/custom/squeeze_momentum/chart.py
+```
