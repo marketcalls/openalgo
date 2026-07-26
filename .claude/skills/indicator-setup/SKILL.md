@@ -27,31 +27,51 @@ uname -s 2>/dev/null || echo "Windows"
 
 Map: `Darwin` = macOS, `Linux` = Linux, `MINGW*`/`CYGWIN*`/`Windows` = Windows.
 
-### Step 2: Create Virtual Environment
+### Step 2: Create the analysis environment
 
-**macOS / Linux:**
+> **This is a separate environment from the OpenAlgo application.** The repo's
+> `CLAUDE.md` mandates `uv run` for the app itself and forbids hand-managed
+> venvs — that rule governs the OpenAlgo codebase. Indicator analysis pulls in
+> packages the app does not ship (yfinance, streamlit, seaborn, ipywidgets), so
+> it gets its own environment rather than polluting the app's. Use `uv` here
+> too: it is the project standard, it is far faster, and it removes the
+> activate/deactivate step entirely.
+
+**Preferred — uv:**
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
+uv venv --python 3.12          # or the version passed as $0
 ```
 
-**Windows:**
-```bash
-python -m venv venv
-venv\Scripts\activate
-pip install --upgrade pip
-```
+`uv` creates `.venv/` and you never activate it — prefix commands with
+`uv run` instead. If the user passed a Python version, use it; `uv` will
+download that interpreter if it is not installed.
 
-If user specified a Python version argument, use that instead of `python3`.
+**Fallback — stdlib venv**, only when `uv` is unavailable and cannot be
+installed (`pip install uv`):
+
+```bash
+# macOS / Linux
+python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip
+
+# Windows
+python -m venv venv && venv\Scripts\activate && pip install --upgrade pip
+```
 
 ### Step 3: Install Python Packages
 
-Install all required packages:
-
+**Preferred — uv:**
 ```bash
-pip install openalgo yfinance plotly dash dash-bootstrap-components streamlit numpy pandas python-dotenv websocket-client httpx scipy nbformat matplotlib seaborn ipywidgets
+uv pip install openalgo yfinance plotly dash dash-bootstrap-components streamlit \
+  numpy pandas python-dotenv websocket-client httpx scipy nbformat \
+  matplotlib seaborn ipywidgets
 ```
+
+**Fallback — pip** (inside the activated venv): same package list with
+`pip install`.
+
+Every later command in these skills then runs as `uv run python script.py`
+rather than requiring an activated shell. Note `openalgo` ships the `ta`
+indicator library in the base package — there is no extra to request.
 
 ### Step 4: Create Project Folders
 

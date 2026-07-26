@@ -101,14 +101,14 @@ After creating the app, provide instructions:
 **Dash:**
 ```bash
 cd dashboards/{dashboard_name}
-python app.py
+uv run python app.py
 # Open http://127.0.0.1:8050 in browser
 ```
 
 **Streamlit:**
 ```bash
 cd dashboards/{dashboard_name}
-streamlit run app.py
+uv run streamlit run app.py
 # Open http://localhost:8501 in browser
 ```
 
@@ -120,3 +120,16 @@ streamlit run app.py
 `/indicator-dashboard streamlit-single SBIN`
 `/indicator-dashboard streamlit-multi RELIANCE`
 `/indicator-dashboard streamlit-scanner`
+
+## Verify before calling it done
+
+- [ ] **It starts clean.** `uv run python app.py` (Dash) or `uv run streamlit run app.py` with no traceback, and the page renders at the printed URL.
+- [ ] **Every panel has data.** An empty chart in one panel usually means that symbol/exchange pair returned nothing, not that the layout is broken. Check each panel individually rather than assuming a shared failure.
+- [ ] **Refresh actually refetches.** Note the last bar timestamp, wait for one refresh cycle, confirm it advances. A dashboard that renders once and then shows a frozen snapshot looks identical to a working one.
+- [ ] **The browser console is clean.** Callback errors in Dash surface there, not in the terminal.
+- [ ] **Refresh interval respects the broker's rate limit.** A 5-second refresh across 20 symbols is 240 requests/minute — above several brokers' quote caps (Dhan allows 1 quote request/second). Batch symbols into one multi-quote call rather than looping, and match the interval to the limit.
+- [ ] **It survives a data failure.** Kill the network and confirm the dashboard shows a stale-data indicator rather than crashing the callback or silently rendering a blank chart.
+
+**Never hardcode the API key in the app file** — read it from `.env` via
+`os.getenv`. Dashboards are the artifact most likely to get screenshotted or
+shared.
