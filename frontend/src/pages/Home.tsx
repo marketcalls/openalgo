@@ -203,7 +203,7 @@ export default function Home() {
             >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60" />
               <span className="text-amber-700 dark:text-amber-500">New in V2</span>
-              <span className="text-muted-foreground">- 12-Tool Options Analytics Suite</span>
+              <span className="text-muted-foreground">- 15+ Tool Options Analytics Suite</span>
               <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
             </Link>
             <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
