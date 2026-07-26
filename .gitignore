@@ -104,3 +104,13 @@ workspace/**
 !workspace/**/
 !workspace/readme.md
 !workspace/**/readme.md
+
+# Environment files, everywhere and in every variant. Plain `.env` was
+# already covered, but `.env.production` / `.env.bak` / `env.backup` were
+# not -- `.env.local` only escaped by accidentally matching `*.local`.
+# A committed secret must be rotated, not just deleted, so cast wide.
+.env.*
+*.env
+env.backup
+!.sample.env
+!**/.sample.env

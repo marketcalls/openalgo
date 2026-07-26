@@ -21,7 +21,11 @@ venv/
 
 # Environment and secrets
 .env
+.env.*
+*.env
+env.backup
 !.sample.env
+!**/.sample.env
 secrets.*
 *.key
 *.pem
