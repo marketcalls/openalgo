@@ -27,51 +27,69 @@ uname -s 2>/dev/null || echo "Windows"
 
 Map: `Darwin` = macOS, `Linux` = Linux, `MINGW*`/`CYGWIN*`/`Windows` = Windows.
 
-### Step 2: Create the analysis environment
+### Step 2: Use OpenAlgo's existing environment
 
-> **This is a separate environment from the OpenAlgo application.** The repo's
-> `CLAUDE.md` mandates `uv run` for the app itself and forbids hand-managed
-> venvs — that rule governs the OpenAlgo codebase. Indicator analysis pulls in
-> packages the app does not ship (yfinance, streamlit, seaborn, ipywidgets), so
-> it gets its own environment rather than polluting the app's. Use `uv` here
-> too: it is the project standard, it is far faster, and it removes the
-> activate/deactivate step entirely.
+**Do not create a separate venv.** Work inside the OpenAlgo repo and use its
+own uv-managed environment — the platform already ships more than half of what
+indicator analysis needs, and `CLAUDE.md` mandates `uv run` with no
+hand-managed virtualenvs.
 
-**Preferred — uv:**
-```bash
-uv venv --python 3.12          # or the version passed as $0
-```
+Already present as main dependencies, nothing to install:
 
-`uv` creates `.venv/` and you never activate it — prefix commands with
-`uv run` instead. If the user passed a Python version, use it; `uv` will
-download that interpreter if it is not installed.
+`openalgo` (which bundles the Rust-backed `ta` library), `plotly`, `pandas`,
+`numpy`, `python-dotenv`, `websocket-client`, `httpx`, `nbformat`
 
-**Fallback — stdlib venv**, only when `uv` is unavailable and cannot be
-installed (`pip install uv`):
+The remainder live in an opt-in `analysis` dependency group in
+`pyproject.toml`, so charting and dashboard packages never reach a production
+install:
 
 ```bash
-# macOS / Linux
-python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip
-
-# Windows
-python -m venv venv && venv\Scripts\activate && pip install --upgrade pip
+uv sync --group analysis
 ```
 
-### Step 3: Install Python Packages
+That installs `dash`, `dash-bootstrap-components`, `ipywidgets`, `matplotlib`,
+`scipy`, `seaborn`, `streamlit` and `yfinance`.
 
-**Preferred — uv:**
+**To pull the newest releases**, re-resolve rather than reinstalling:
+
 ```bash
-uv pip install openalgo yfinance plotly dash dash-bootstrap-components streamlit \
-  numpy pandas python-dotenv websocket-client httpx scipy nbformat \
-  matplotlib seaborn ipywidgets
+uv sync --group analysis --upgrade
 ```
 
-**Fallback — pip** (inside the activated venv): same package list with
-`pip install`.
+The group uses `>=` constraints, so a plain sync already gives you the latest
+compatible release; `--upgrade` additionally re-resolves transitive pins in
+`uv.lock`. Run it whenever you want to move forward deliberately.
 
-Every later command in these skills then runs as `uv run python script.py`
-rather than requiring an activated shell. Note `openalgo` ships the `ta`
-indicator library in the base package — there is no extra to request.
+If a package is genuinely one-off and not worth adding to the group, use
+`uv run --with <pkg>` for an ephemeral install instead of editing
+`pyproject.toml`.
+
+### Step 3: Running anything
+
+Every command in these skills runs through uv, from the repo root. There is no
+environment to activate:
+
+```bash
+uv run --group analysis python your_script.py
+uv run --group analysis streamlit run app.py
+```
+
+Only scripts that touch the analysis packages need `--group analysis`; anything
+using just `openalgo`, `pandas`, `numpy` or `plotly` runs under a plain
+`uv run python`.
+
+Verify the environment before going further:
+
+```bash
+uv run --group analysis python -c "
+from openalgo import ta
+import dash, streamlit, yfinance, scipy, matplotlib, seaborn
+print(f'ta indicators: {len([f for f in dir(ta) if not f.startswith(chr(95))])}')
+print('analysis stack ready')"
+```
+
+Expect 127 indicators from `openalgo.ta` — it ships in the base package, so
+there is no extra to request.
 
 ### Step 4: Create Project Folders
 
