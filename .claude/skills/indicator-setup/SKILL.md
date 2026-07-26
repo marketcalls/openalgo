@@ -11,7 +11,7 @@ Set up the complete Python environment for OpenAlgo indicator analysis, charting
 
 - `$0` = Python version (optional, default: `python3`). Examples: `python3.12`, `python3.13`
 
-**Note**: openalgo 2.x requires **Python 3.12 or newer** (3.12 / 3.13 / 3.14). Check the version before creating the venv and abort with a clear message if it is older:
+**Note**: openalgo 2.x requires **Python 3.12 or newer** (3.12 / 3.13 / 3.14). Check the version before going further and abort with a clear message if it is older:
 
 ```bash
 python3 --version   # must be 3.12+
@@ -93,11 +93,11 @@ there is no extra to request.
 
 ### Step 4: Output folders
 
-Everything the indicator skills generate goes under **`indicators/`** in the
+Everything the indicator skills generate goes under **`workspace/indicators/`** in the
 repo root, one subfolder per artifact type:
 
 ```
-indicators/
+workspace/indicators/
   charts/       chart scripts        (/indicator-chart)
   scanners/     scanner scripts      (/indicator-scanner)
   custom/       indicator modules    (/custom-indicator)
@@ -108,16 +108,16 @@ indicators/
 ```
 
 **Do not pre-create these.** Each skill runs `mkdir -p` for the one folder it
-needs, immediately before writing. `indicators/` is gitignored except its
+needs, immediately before writing. `workspace/` is gitignored except its
 readme, so the subfolders will not exist on a fresh clone and nothing you
 generate here is ever committed by accident.
 
 **The location is overridable.** If the user names a different folder, use it
-and keep the same subfolder layout beneath it. Only `indicators/` carries the
+and keep the same subfolder layout beneath it. Only `workspace/` carries the
 gitignore rule, so if the user points at another path inside the repo, say so
 before writing there.
 
-See `indicators/readme.md` for the naming convention.
+See `workspace/readme.md` for the naming convention.
 
 ### Step 5: Configure .env File
 
@@ -152,7 +152,7 @@ grep -qxF '.env' .gitignore 2>/dev/null || echo '.env' >> .gitignore
 ### Step 6: Verify Installation
 
 ```bash
-python -c "
+uv run --group analysis python -c "
 import openalgo
 from openalgo import ta
 import plotly
@@ -190,16 +190,16 @@ print('Indicator library ready')
 Print a summary showing:
 - Detected OS
 - Python version used
-- Virtual environment path
+- Environment: OpenAlgo's own uv-managed .venv (no separate venv)
 - Installed packages and versions
-- Project folders created
+- Output location: workspace/indicators/ (created on demand)
 - `.env` file status
 - Available skills: `/indicator-chart`, `/custom-indicator`, `/indicator-dashboard`, `/indicator-scanner`, `/live-feed`
 
 ## Important Notes
 
-- Never install packages globally — always use the virtual environment
-- If the user already has a virtual environment, ask before creating a new one
+- Never install packages globally and never create a separate venv — use OpenAlgo's uv environment with `uv run`
+- Analysis-only packages belong in the `analysis` dependency group, never the main list, so they never ship to production
 - NEVER commit `.env` files — they contain API keys
 - `python-dotenv` is used by all scripts to load `.env` via `find_dotenv()`
 - openalgo 2.x indicators run on a compiled Rust core inside the wheel — no JIT compilation or warmup; requires Python 3.12+

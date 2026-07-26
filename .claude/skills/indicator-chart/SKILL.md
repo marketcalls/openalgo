@@ -21,8 +21,8 @@ If no arguments, ask the user which indicator and symbol they want.
 ## Instructions
 
 1. Read the indicator-expert skill rules for reference patterns
-2. Create `charts/{indicator_name}/` directory if it doesn't exist (on-demand)
-3. Create a `.py` file in `charts/{indicator_name}/` named `{symbol}_{indicator}_chart.py`
+2. Create `workspace/indicators/charts/` if it doesn't exist (`mkdir -p`)
+3. Write the script to `workspace/indicators/charts/{indicator}_{symbol}_{interval}.py`
 4. Use the matching template from `rules/assets/{indicator}_chart/chart.py` as starting point (if available)
 5. The script must:
    - Load `.env` from project root using `find_dotenv()`
@@ -35,7 +35,7 @@ If no arguments, ask the user which indicator and symbol they want.
    - Use `make_subplots` for multi-panel layouts
    - Add horizontal reference lines where appropriate (RSI 30/70, Stochastic 20/80)
    - Print a plain-language explanation of the current indicator reading
-   - Save chart as HTML: `{symbol}_{indicator}_chart.html`
+   - Save the rendered HTML to `workspace/indicators/output/` under the same stem as the script
    - Show chart with `fig.show()`
 6. Never use icons/emojis in code or output
 
@@ -125,30 +125,30 @@ shifted; 05:30 means it was shifted twice.
 
 ## Where to write files
 
-Default location is **`indicators/charts/`** in the repo root. Create it
+Default location is **`workspace/indicators/charts/`** in the repo root. Create it
 immediately before writing — it does not exist on a fresh clone:
 
 ```bash
-mkdir -p indicators/charts
+mkdir -p workspace/indicators/charts
 ```
 
 Name the file `<indicator>_<symbol>_<interval>.py` so the folder stays
-scannable as it grows, e.g. `indicators/charts/ema_SBIN_D.py`.
+scannable as it grows, e.g. `workspace/indicators/charts/ema_SBIN_D.py`.
 
-Rendered output goes to `indicators/output/` under the same stem, keeping the
+Rendered output goes to `workspace/indicators/output/` under the same stem, keeping the
 script and its artifact associated without cluttering the source folder:
 
 ```
-indicators/charts/ema_SBIN_D.py  ->  indicators/output/ema_SBIN_D.html
+workspace/indicators/charts/ema_SBIN_D.py  ->  workspace/indicators/output/ema_SBIN_D.html
 ```
 
 **If the user names a different folder, use it** and keep the same layout
-beneath it. Note that only `indicators/` is gitignored (except its readme), so
+beneath it. Note that only `workspace/` is gitignored (except its readme), so
 writing elsewhere inside the repo produces tracked files — mention that before
 doing it.
 
 Run from the repo root:
 
 ```bash
-uv run --group analysis python indicators/charts/ema_SBIN_D.py
+uv run --group analysis python workspace/indicators/charts/ema_SBIN_D.py
 ```

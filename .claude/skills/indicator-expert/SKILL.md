@@ -16,7 +16,7 @@ user-invocable: false
 - Dashboards: Plotly Dash with `dash-bootstrap-components` (default) OR Streamlit with `st.plotly_chart()` — use Streamlit only when the user explicitly asks for it
 - Custom indicators: vectorized NumPy composed from openalgo.ta primitives (Rust core — no JIT, no warmup)
 - API keys loaded from single root `.env` via `python-dotenv` + `find_dotenv()` — never hardcode keys
-- Scripts go in appropriate directories (charts/, dashboards/, custom_indicators/, scanners/) created on-demand
+- Scripts go under `workspace/indicators/` (charts/, scanners/, custom/, dashboards/, feeds/), created on-demand with `mkdir -p`
 - Never use icons/emojis in code or logger output
 
 ## Critical Rules
