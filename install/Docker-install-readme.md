@@ -497,6 +497,7 @@ sudo rm -rf /var/lib/docker
 | 5paisa XTS | `fivepaisaxts` | Yes |
 | AliceBlue | `aliceblue` | No |
 | Angel One | `angel` | No |
+| Arrow | `arrow` | No |
 | Compositedge | `compositedge` | Yes |
 | Definedge | `definedge` | No |
 | Delta Exchange | `deltaexchange` | No |
