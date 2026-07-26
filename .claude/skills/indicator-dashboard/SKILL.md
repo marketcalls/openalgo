@@ -101,14 +101,14 @@ After creating the app, provide instructions:
 **Dash:**
 ```bash
 cd dashboards/{dashboard_name}
-uv run python app.py
+uv run --group analysis python app.py
 # Open http://127.0.0.1:8050 in browser
 ```
 
 **Streamlit:**
 ```bash
 cd dashboards/{dashboard_name}
-uv run streamlit run app.py
+uv run --group analysis streamlit run app.py
 # Open http://localhost:8501 in browser
 ```
 
@@ -123,7 +123,7 @@ uv run streamlit run app.py
 
 ## Verify before calling it done
 
-- [ ] **It starts clean.** `uv run python app.py` (Dash) or `uv run streamlit run app.py` with no traceback, and the page renders at the printed URL.
+- [ ] **It starts clean.** `uv run --group analysis python app.py` (Dash) or `uv run --group analysis streamlit run app.py` with no traceback, and the page renders at the printed URL.
 - [ ] **Every panel has data.** An empty chart in one panel usually means that symbol/exchange pair returned nothing, not that the layout is broken. Check each panel individually rather than assuming a shared failure.
 - [ ] **Refresh actually refetches.** Note the last bar timestamp, wait for one refresh cycle, confirm it advances. A dashboard that renders once and then shows a frozen snapshot looks identical to a working one.
 - [ ] **The browser console is clean.** Callback errors in Dash surface there, not in the terminal.
