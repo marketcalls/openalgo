@@ -107,10 +107,13 @@ workspace/indicators/
   output/       rendered .html / .png / .csv
 ```
 
-**Do not pre-create these.** Each skill runs `mkdir -p` for the one folder it
-needs, immediately before writing. `workspace/` is gitignored except its
-readme, so the subfolders will not exist on a fresh clone and nothing you
-generate here is ever committed by accident.
+Every folder ships a tracked `readme.md`, so the tree exists after a clone —
+git does not track empty directories, and the readme is what keeps each one
+present. Everything else under `workspace/` is gitignored, so nothing you
+generate is ever committed by accident.
+
+Skills still `mkdir -p` the folder they need before writing, so a deleted
+folder is recreated on demand.
 
 **The location is overridable.** If the user names a different folder, use it
 and keep the same subfolder layout beneath it. Only `workspace/` carries the
