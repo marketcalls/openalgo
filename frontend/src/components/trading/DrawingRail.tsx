@@ -69,7 +69,7 @@ export function DrawingRail({ stats, onPick, onUndo, onRedo, onRemove, onMagnet,
   return (
     // A flush column with a divider, not a floating card: the plot starts to
     // its right, so nothing the chart draws in that corner can sit under it.
-    <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r bg-background/40 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 no-scrollbar overflow-y-auto border-r bg-background/40 py-1">
       {/* Cursor — disarms whatever is active */}
       <button
         type="button"

@@ -361,6 +361,11 @@ export function ChartPane({
     return acc
   }, {})
 
+  // The product the toggle switches to; with two options that is "the other".
+  const nextProduct = sym
+    ? sym.productOptions[(sym.productOptions.indexOf(sym.product) + 1) % sym.productOptions.length]
+    : ''
+
   const chartTypeDef = CHART_TYPES[chartType] ?? CHART_TYPES.candlestick
 
   return (
@@ -372,7 +377,7 @@ export function ChartPane({
       {/* Per-pane control row. One line: the row scrolls rather than wrapping,
           so the view actions stay beside the instrument controls instead of
           dropping to a second row and eating chart height. */}
-      <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto border-b bg-background/60 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5">
         {/* Symbol pill — opens the TradingView-style search modal for this pane */}
         <Button
           variant="outline"
@@ -450,23 +455,19 @@ export function ChartPane({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Product (segmented) */}
-        {sym && !sym.quoteOnly && (
-          <div className="flex shrink-0 overflow-hidden rounded-md border">
-            {sym.productOptions.map((p) => (
-              <button
-                type="button"
-                key={p}
-                onClick={() => changeProduct(p)}
-                className={cn(
-                  'whitespace-nowrap px-2.5 py-1 text-xs font-medium transition-colors',
-                  p === sym.product ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                )}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
+        {/* Product. Always exactly two options (MIS|CNC for equity, MIS|NRML
+            for derivatives), so a segmented control spends double the width to
+            show one you are not using — this toggles and names the other. */}
+        {sym && !sym.quoteOnly && sym.productOptions.length > 0 && (
+          <button
+            type="button"
+            onClick={() => changeProduct(nextProduct)}
+            title={`Product ${sym.product} — click for ${nextProduct}`}
+            aria-label={`Product ${sym.product}, click for ${nextProduct}`}
+            className="h-8 shrink-0 whitespace-nowrap rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+          >
+            {sym.product}
+          </button>
         )}
 
         {/* Quantity */}
