@@ -136,7 +136,15 @@ export interface TerminalCallbacks {
   onIndicatorSettings?(req: IndicatorSettingsRequest): void
   /** A drawing was selected (or deselected), for the style popover. */
   onDrawSelect?(sel: DrawSelection | null): void
+  /**
+   * A text-bearing drawing needs its content. The engine renders `style.text`
+   * but has no DOM to collect it with, so the host prompts.
+   */
+  onDrawTextEdit?(req: { id: string; tool: string; text: string }): void
 }
+
+/** Tools whose content is typed rather than dragged. */
+const TEXT_TOOLS = new Set(['text', 'callout', 'price-label'])
 
 /** Everything needed to generate an indicator settings form. */
 export interface IndicatorSettingsRequest {
@@ -165,6 +173,8 @@ export interface IndicatorField {
 export interface DrawSelection {
   id: string
   tool: string
+  /** Content is typed, so the style bar offers an edit button. */
+  hasText: boolean
   color: string
   lineWidth: number
   lineStyle: string
@@ -221,6 +231,9 @@ export class TradingTerminal {
   private indicatorsLoaded = false
   /** Guards syncIndicators while applyIndicators is mid-flight. */
   private applyingIndicators = false
+  /** History paging: in-flight guard, and whether the broker ran out. */
+  private loadingOlder = false
+  private noMoreHistory = false
   private gridV = true
   private gridH = true
   private ltpLine: PriceLine | null = null
@@ -649,6 +662,9 @@ export class TradingTerminal {
     this.volume = this.chart.addSeries('histogram', {
       paneIndex: 1,
       style: { color: volumeColor(mode, appMode) },
+      // Raw share counts run to nine digits and swallow the axis; 'volume'
+      // formats them as 1.20M / 3.40B.
+      priceFormat: { type: 'volume' },
     })
     this.setPriceData()
 
@@ -769,6 +785,8 @@ export class TradingTerminal {
     // list still held it — so the next rebuild (timeframe, chart type, theme)
     // brought the deleted indicator back.
     this.chart.on('indicatorRemoved', () => this.syncIndicators())
+    // Scrolling back past the loaded range pages in older bars.
+    this.chart.setHistoryLoader(() => void this.loadOlderHistory())
   }
 
   /**
@@ -799,6 +817,67 @@ export class TradingTerminal {
     if (grid && grid.length === 2) {
       this.gridV = grid[0] === '1'
       this.gridH = grid[1] === '1'
+    }
+  }
+
+  /**
+   * Page in the bars before the oldest one loaded, when the user scrolls back
+   * to the left edge. The chart raises this once and waits for
+   * `historyLoadComplete`, so every exit has to report back or paging stops for
+   * the rest of the session.
+   */
+  private async loadOlderHistory(): Promise<void> {
+    if (this.loadingOlder || this.noMoreHistory || !this.rest || !this.sym || !this.chart) {
+      this.chart?.historyLoadComplete()
+      return
+    }
+    const oldest = this.rawBars[0]?.time
+    if (oldest === undefined) {
+      this.chart.historyLoadComplete()
+      return
+    }
+    this.loadingOlder = true
+    try {
+      const to = oldest - 1
+      const older = await this.rest.getBars({
+        symbol: this.sym.symbol,
+        exchange: this.sym.exchange,
+        interval: this.interval,
+        from: to - lookbackDays(this.interval) * 86400,
+        to,
+      })
+      if (this.destroyed || !this.chart) return
+      // Trust nothing about the window the broker actually returned: keep only
+      // what is genuinely older, or a re-sent overlapping page would duplicate
+      // bars and grow rawBars without ever moving the left edge.
+      const fresh = older.filter((b) => b.time < oldest)
+      if (fresh.length === 0) {
+        this.noMoreHistory = true
+        return
+      }
+      // Prepending shifts every logical index by the inserted count, so the
+      // view has to shift with it or the user is thrown back to the right edge
+      // mid-scroll.
+      const before = this.chart.getVisibleLogicalRange()
+      const countBefore = this.shownCount
+      this.rawBars = [...fresh, ...this.rawBars]
+      this.setPriceData()
+      // Measure the shift rather than assuming it is fresh.length: a
+      // movement-driven chart type (Renko, P&F) turns raw bars into a different
+      // number of elements, so the axis grows by its own amount.
+      const inserted = this.shownCount - countBefore
+      if (before && inserted > 0) {
+        this.chart.setVisibleLogicalRange({
+          from: before.from + inserted,
+          to: before.to + inserted,
+        })
+      }
+    } catch (e) {
+      // A failed page must not poison the session; the next scroll retries.
+      console.error('[trading] history paging', e)
+    } finally {
+      this.loadingOlder = false
+      this.chart?.historyLoadComplete()
     }
   }
 
@@ -845,6 +924,14 @@ export class TradingTerminal {
     if (this.drawTool) draw.setTool(this.drawTool)
     this.chart.on('draw:tool', () => this.afterDrawChange())
     this.chart.on('draw:select', () => this.afterDrawChange())
+    // A text tool is useless until it has text, so placing one asks straight
+    // away rather than leaving an empty box on the chart.
+    this.chart.on('draw:add', (p) => {
+      const d = (p as { drawing?: { id: string; tool: string; style?: { text?: string } } }).drawing
+      if (d && TEXT_TOOLS.has(d.tool)) {
+        this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.style?.text ?? '' })
+      }
+    })
     this.chart.on('draw:add', () => this.afterDrawChange())
     this.chart.on('draw:remove', () => this.afterDrawChange())
     this.chart.on('draw:update', () => this.afterDrawChange())
@@ -868,11 +955,34 @@ export class TradingTerminal {
     return {
       id: d.id,
       tool: d.tool,
+      hasText: TEXT_TOOLS.has(d.tool),
       color: d.style.color ?? '#4f8cff',
       lineWidth: d.style.lineWidth ?? 1.5,
       lineStyle: d.style.lineStyle ?? 'solid',
       locked: d.locked === true,
     }
+  }
+
+  /** Whether a drawing's content is typed (so the host can offer an edit). */
+  isTextDrawing(id: string): boolean {
+    const d = this.draw?.get(id)
+    return d !== undefined && TEXT_TOOLS.has(d.tool)
+  }
+
+  /** Ask the host to edit a drawing's text — the style bar's T button. */
+  requestDrawTextEdit(id: string): void {
+    const d = this.draw?.get(id)
+    if (!d || !TEXT_TOOLS.has(d.tool)) return
+    this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.style.text ?? '' })
+  }
+
+  /** Set a drawing's text. Empty text removes it rather than leaving a blank. */
+  setDrawingText(id: string, text: string): void {
+    if (!this.draw) return
+    const trimmed = text.trim()
+    if (trimmed === '') this.draw.remove(id)
+    else this.draw.update(id, { style: { text: trimmed } })
+    this.afterDrawChange()
   }
 
   /** Restyle the selected drawing (colour, width, dash, lock). */
@@ -1302,6 +1412,7 @@ export class TradingTerminal {
     this.lastLtp = null
     this.prevClose = null
     this.liveBucket = null
+    this.noMoreHistory = false
     try {
       this.rawBars = await this.rest.getBars({
         symbol: this.sym.symbol,

@@ -19,6 +19,8 @@ interface Props {
     locked?: boolean
   }): void
   onDelete(): void
+  /** Edit the content of a text-bearing drawing. */
+  onEditText(): void
 }
 
 const SWATCHES = [
@@ -32,7 +34,7 @@ const DASHES: { value: 'solid' | 'dashed' | 'dotted'; label: string }[] = [
   { value: 'dotted', label: '···' },
 ]
 
-export function DrawingStyleBar({ sel, onStyle, onDelete }: Props) {
+export function DrawingStyleBar({ sel, onStyle, onDelete, onEditText }: Props) {
   const [open, setOpen] = useState<'color' | 'width' | 'dash' | null>(null)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -161,6 +163,17 @@ export function DrawingStyleBar({ sel, onStyle, onDelete }: Props) {
           </div>
         )}
       </div>
+
+      {sel.hasText && (
+        <>
+          <div className="mx-0.5 h-5 w-px bg-border" />
+          <button type="button" title="Edit text" aria-label="Edit text" onClick={onEditText} className={btn}>
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" aria-hidden="true">
+              <path d="M5 5.5h14M12 5.5V19" />
+            </svg>
+          </button>
+        </>
+      )}
 
       <div className="mx-0.5 h-5 w-px bg-border" />
 
