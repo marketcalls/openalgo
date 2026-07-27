@@ -1,14 +1,15 @@
 import json
-import time
-import ssl
-import websocket
-import os
 import logging
+import os
+import ssl
+import time
+
 import logzero
+import websocket
 from logzero import logger
 
 
-class IndWebSocket(object):
+class IndWebSocket:
     """
     INDmoney WebSocket Client for Real-time Market Data
     """
@@ -33,8 +34,15 @@ class IndWebSocket(object):
     input_request_dict = {}
     current_retry_attempt = 0
 
-    def __init__(self, access_token, max_retry_attempt=5, retry_strategy=0,
-                 retry_delay=10, retry_multiplier=2, retry_duration=60):
+    def __init__(
+        self,
+        access_token,
+        max_retry_attempt=5,
+        retry_strategy=0,
+        retry_delay=10,
+        retry_multiplier=2,
+        retry_duration=60,
+    ):
         """
         Initialize the IndWebSocket instance
 
@@ -159,7 +167,7 @@ class IndWebSocket(object):
             request_data = {
                 "action": self.SUBSCRIBE_ACTION,
                 "mode": mode,
-                "instruments": instruments
+                "instruments": instruments,
             }
 
             # Log the subscription request for debugging
@@ -184,7 +192,9 @@ class IndWebSocket(object):
                 logger.info(f"[OK] Subscribed to {len(instruments)} instruments in {mode} mode")
                 self.RESUBSCRIBE_FLAG = True
             else:
-                logger.warning("[WARN] WebSocket not connected. Subscription will be applied on connect.")
+                logger.warning(
+                    "[WARN] WebSocket not connected. Subscription will be applied on connect."
+                )
 
         except Exception as e:
             logger.error(f"Error during subscribe: {e}")
@@ -205,7 +215,7 @@ class IndWebSocket(object):
             request_data = {
                 "action": self.UNSUBSCRIBE_ACTION,
                 "mode": mode,
-                "instruments": instruments
+                "instruments": instruments,
             }
 
             # Remove from subscription list
@@ -231,7 +241,7 @@ class IndWebSocket(object):
                     request_data = {
                         "action": self.SUBSCRIBE_ACTION,
                         "mode": mode,
-                        "instruments": instruments
+                        "instruments": instruments,
                     }
                     self.wsapp.send(json.dumps(request_data))
                     logger.info(f"Resubscribed to {len(instruments)} instruments in {mode} mode")
@@ -241,9 +251,7 @@ class IndWebSocket(object):
 
     def connect(self):
         """Establish WebSocket connection to price feed"""
-        headers = {
-            "Authorization": self.access_token
-        }
+        headers = {"Authorization": self.access_token}
 
         try:
             self.wsapp = websocket.WebSocketApp(
@@ -254,14 +262,14 @@ class IndWebSocket(object):
                 on_close=self._on_close,
                 on_message=self._on_message,
                 on_ping=self._on_ping,
-                on_pong=self._on_pong
+                on_pong=self._on_pong,
             )
 
             logger.info("Connecting to INDmoney WebSocket...")
             self.wsapp.run_forever(
                 sslopt={"cert_reqs": ssl.CERT_NONE},
                 ping_interval=self.HEART_BEAT_INTERVAL,
-                ping_payload=self.HEART_BEAT_MESSAGE
+                ping_payload=self.HEART_BEAT_MESSAGE,
             )
 
         except Exception as e:
@@ -289,7 +297,9 @@ class IndWebSocket(object):
             if self.retry_strategy == 0:  # Simple retry
                 time.sleep(self.retry_delay)
             elif self.retry_strategy == 1:  # Exponential backoff
-                delay = self.retry_delay * (self.retry_multiplier ** (self.current_retry_attempt - 1))
+                delay = self.retry_delay * (
+                    self.retry_multiplier ** (self.current_retry_attempt - 1)
+                )
                 time.sleep(delay)
             else:
                 logger.error(f"Invalid retry strategy {self.retry_strategy}")
@@ -300,16 +310,18 @@ class IndWebSocket(object):
                 self.connect()
             except Exception as e:
                 logger.error(f"Error during reconnect: {e}")
-                if hasattr(self, 'on_error'):
+                if hasattr(self, "on_error"):
                     self.on_error("Reconnect Error", str(e) if str(e) else "Unknown error")
         else:
             self.close_connection()
-            if hasattr(self, 'on_error'):
+            if hasattr(self, "on_error"):
                 self.on_error("Max retry attempt reached", "Connection closed")
 
-            if (self.retry_duration is not None and
-                self.last_pong_timestamp is not None and
-                time.time() - self.last_pong_timestamp > self.retry_duration * 60):
+            if (
+                self.retry_duration is not None
+                and self.last_pong_timestamp is not None
+                and time.time() - self.last_pong_timestamp > self.retry_duration * 60
+            ):
                 logger.warning("Connection closed due to inactivity.")
             else:
                 logger.warning("Connection closed due to max retry attempts reached.")

@@ -1,0 +1,20 @@
+meta {
+  name: expiry
+  type: http
+  seq: 26
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/expiry
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbol": "BTC",
+      "exchange": "CRYPTO",
+      "instrumenttype": "options"
+  }
+}

@@ -1,15 +1,17 @@
+import base64
 import json
 import logging
 import ssl
 import time
-import websocket
-import base64
 from typing import Dict, List, Optional
 from urllib.parse import quote
+
 import logzero
+import websocket
 from logzero import logger
 
-class FivePaisaWebSocket(object):
+
+class FivePaisaWebSocket:
     """
     5Paisa WebSocket Client for market data streaming
     Based on 5Paisa API documentation
@@ -17,10 +19,10 @@ class FivePaisaWebSocket(object):
 
     # WebSocket URLs based on redirect server
     WEBSOCKET_URLS = {
-        'A': "wss://aopenfeed.5paisa.com/feeds/api/chat",
-        'B': "wss://bopenfeed.5paisa.com/feeds/api/chat",
-        'C': "wss://openfeed.5paisa.com/feeds/api/chat",
-        'default': "wss://openfeed.5paisa.com/Feeds/api/chat"
+        "A": "wss://aopenfeed.5paisa.com/feeds/api/chat",
+        "B": "wss://bopenfeed.5paisa.com/feeds/api/chat",
+        "C": "wss://openfeed.5paisa.com/feeds/api/chat",
+        "default": "wss://openfeed.5paisa.com/Feeds/api/chat",
     }
 
     HEART_BEAT_INTERVAL = 10  # seconds
@@ -35,17 +37,13 @@ class FivePaisaWebSocket(object):
     UNSUBSCRIBE = "Unsubscribe"
 
     # Exchange codes
-    EXCHANGE_MAP = {
-        'NSE': 'N',
-        'BSE': 'B',
-        'MCX': 'M'
-    }
+    EXCHANGE_MAP = {"NSE": "N", "BSE": "B", "MCX": "M"}
 
     # Exchange Type codes
     EXCHANGE_TYPE_MAP = {
-        'C': 'Cash',      # NSE/BSE Cash
-        'D': 'Derivatives', # F&O
-        'U': 'Currency'   # Currency
+        "C": "Cash",  # NSE/BSE Cash
+        "D": "Derivatives",  # F&O
+        "U": "Currency",  # Currency
     }
 
     wsapp = None
@@ -73,7 +71,9 @@ class FivePaisaWebSocket(object):
         self.websocket_url = self._get_feed_url(self.redirect_server)
 
         if not self._sanity_check():
-            self.logger.error("Invalid initialization parameters. Provide valid values for access_token and client_code.")
+            self.logger.error(
+                "Invalid initialization parameters. Provide valid values for access_token and client_code."
+            )
             raise Exception("Provide valid values for access_token and client_code")
 
     def _sanity_check(self) -> bool:
@@ -97,29 +97,29 @@ class FivePaisaWebSocket(object):
         """
         try:
             # JWT tokens have 3 parts separated by dots
-            parts = token.split('.')
+            parts = token.split(".")
             if len(parts) != 3:
                 self.logger.warning("Invalid JWT token format, using default server")
-                return 'default'
+                return "default"
 
             # Decode the payload (second part)
             # Add padding if needed
             payload = parts[1]
             padding = len(payload) % 4
             if padding:
-                payload += '=' * (4 - padding)
+                payload += "=" * (4 - padding)
 
             decoded = base64.urlsafe_b64decode(payload)
             payload_data = json.loads(decoded)
 
             # Extract RedirectServer
-            redirect_server = payload_data.get('RedirectServer', 'default')
+            redirect_server = payload_data.get("RedirectServer", "default")
             self.logger.debug(f"Decoded RedirectServer: {redirect_server}")
             return redirect_server
 
         except Exception as e:
             self.logger.error(f"Error decoding token: {e}")
-            return 'default'
+            return "default"
 
     def _get_feed_url(self, redirect_server: str) -> str:
         """
@@ -134,7 +134,7 @@ class FivePaisaWebSocket(object):
         --------
         str: WebSocket URL
         """
-        url = self.WEBSOCKET_URLS.get(redirect_server, self.WEBSOCKET_URLS['default'])
+        url = self.WEBSOCKET_URLS.get(redirect_server, self.WEBSOCKET_URLS["default"])
         self.logger.debug(f"Using WebSocket URL: {url}")
         return url
 
@@ -155,13 +155,12 @@ class FivePaisaWebSocket(object):
                 on_open=self._on_open,
                 on_message=self._on_message,
                 on_error=self._on_error,
-                on_close=self._on_close
+                on_close=self._on_close,
             )
 
             # Run the WebSocket connection
             self.wsapp.run_forever(
-                sslopt={"cert_reqs": ssl.CERT_NONE},
-                ping_interval=self.HEART_BEAT_INTERVAL
+                sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=self.HEART_BEAT_INTERVAL
             )
 
         except Exception as e:
@@ -174,7 +173,7 @@ class FivePaisaWebSocket(object):
             self.connected = False
             self.wsapp.close()
 
-    def subscribe(self, method: str, scrip_data: List[Dict]) -> None:
+    def subscribe(self, method: str, scrip_data: list[dict]) -> None:
         """
         Subscribe to market data feed
 
@@ -195,7 +194,7 @@ class FivePaisaWebSocket(object):
                 "Method": method,
                 "Operation": self.SUBSCRIBE,
                 "ClientCode": self.client_code,
-                "MarketFeedData": scrip_data
+                "MarketFeedData": scrip_data,
             }
 
             self.wsapp.send(json.dumps(request))
@@ -205,7 +204,7 @@ class FivePaisaWebSocket(object):
             self.logger.error(f"Error during subscription: {e}")
             raise e
 
-    def unsubscribe(self, method: str, scrip_data: List[Dict]) -> None:
+    def unsubscribe(self, method: str, scrip_data: list[dict]) -> None:
         """
         Unsubscribe from market data feed
 
@@ -226,7 +225,7 @@ class FivePaisaWebSocket(object):
                 "Method": method,
                 "Operation": self.UNSUBSCRIBE,
                 "ClientCode": self.client_code,
-                "MarketFeedData": scrip_data
+                "MarketFeedData": scrip_data,
             }
 
             self.wsapp.send(json.dumps(request))
@@ -269,7 +268,9 @@ class FivePaisaWebSocket(object):
 
     def _on_close(self, wsapp, close_status_code=None, close_msg=None):
         """Callback when WebSocket connection is closed"""
-        self.logger.info(f"5Paisa WebSocket connection closed. Code: {close_status_code}, Message: {close_msg}")
+        self.logger.info(
+            f"5Paisa WebSocket connection closed. Code: {close_status_code}, Message: {close_msg}"
+        )
         self.connected = False
         self.on_close(wsapp)
 
@@ -278,7 +279,7 @@ class FivePaisaWebSocket(object):
         """Override this method to handle connection open event"""
         pass
 
-    def on_data(self, wsapp, data: Dict):
+    def on_data(self, wsapp, data: dict):
         """Override this method to handle market data"""
         pass
 

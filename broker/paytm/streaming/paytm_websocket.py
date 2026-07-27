@@ -1,13 +1,15 @@
-import struct
-import websocket
-import ssl
 import json
-import time
 import logging
+import ssl
+import struct
 import threading
+import time
+
+import websocket
 from logzero import logger
 
-class PaytmWebSocket(object):
+
+class PaytmWebSocket:
     """
     Paytm Money WebSocket client for Live Market Data Streaming
     Based on Paytm Money API documentation
@@ -93,7 +95,7 @@ class PaytmWebSocket(object):
             try:
                 parsed = json.loads(message)
                 logger.debug(f"Received text message: {parsed}")
-                if 'error' in parsed or 'message' in parsed:
+                if "error" in parsed or "message" in parsed:
                     logger.error(f"Server message: {parsed}")
             except json.JSONDecodeError:
                 logger.debug(f"Received text: {message}")
@@ -132,11 +134,11 @@ class PaytmWebSocket(object):
                 self.connect()
             except Exception as e:
                 logger.error(f"Error during reconnect: {e}")
-                if hasattr(self, 'on_error'):
+                if hasattr(self, "on_error"):
                     self.on_error(wsapp, str(e) if str(e) else "Unknown error")
         else:
             self.close_connection()
-            if hasattr(self, 'on_error'):
+            if hasattr(self, "on_error"):
                 self.on_error(wsapp, "Max retry attempts reached")
 
     def _on_close(self, wsapp, close_status_code=None, close_msg=None):
@@ -204,7 +206,7 @@ class PaytmWebSocket(object):
 
             # Update action type to REMOVE
             for pref in preferences:
-                pref['actionType'] = self.REMOVE_ACTION
+                pref["actionType"] = self.REMOVE_ACTION
                 key = f"{pref['exchangeType']}_{pref['scripId']}_{pref['modeType']}"
                 if key in self.subscriptions:
                     del self.subscriptions[key]
@@ -243,13 +245,12 @@ class PaytmWebSocket(object):
                 on_error=self._on_error,
                 on_close=self._on_close,
                 on_ping=self._on_ping,
-                on_pong=self._on_pong
+                on_pong=self._on_pong,
             )
 
             # Run WebSocket in a separate thread to avoid blocking
             self.wsapp.run_forever(
-                sslopt={"cert_reqs": ssl.CERT_NONE},
-                ping_interval=self.HEART_BEAT_INTERVAL
+                sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=self.HEART_BEAT_INTERVAL
             )
 
         except Exception as e:
@@ -282,7 +283,7 @@ class PaytmWebSocket(object):
             logger.error("Binary data too short")
             return {}
 
-        packet_code = struct.unpack('B', binary_data[0:1])[0]
+        packet_code = struct.unpack("B", binary_data[0:1])[0]
 
         logger.debug(f"Parsing packet code: {packet_code}, length: {len(binary_data)}")
 
@@ -310,83 +311,85 @@ class PaytmWebSocket(object):
     def _parse_ltp_packet(self, data):
         """Parse LTP packet (23 bytes)"""
         return {
-            'packet_code': self._unpack(data, 0, 1, 'B'),
-            'last_price': self._unpack(data, 1, 5, 'f'),
-            'last_traded_time': self._unpack(data, 5, 9, 'I'),
-            'security_id': self._unpack(data, 9, 13, 'I'),
-            'tradable': self._unpack(data, 13, 14, 'B'),
-            'mode': self._unpack(data, 14, 15, 'B'),
-            'change_absolute': self._unpack(data, 15, 19, 'f'),
-            'change_percent': self._unpack(data, 19, 23, 'f'),
-            'subscription_mode': 1,
-            'subscription_mode_val': 'LTP'
+            "packet_code": self._unpack(data, 0, 1, "B"),
+            "last_price": self._unpack(data, 1, 5, "f"),
+            "last_traded_time": self._unpack(data, 5, 9, "I"),
+            "security_id": self._unpack(data, 9, 13, "I"),
+            "tradable": self._unpack(data, 13, 14, "B"),
+            "mode": self._unpack(data, 14, 15, "B"),
+            "change_absolute": self._unpack(data, 15, 19, "f"),
+            "change_percent": self._unpack(data, 19, 23, "f"),
+            "subscription_mode": 1,
+            "subscription_mode_val": "LTP",
         }
 
     def _parse_index_ltp_packet(self, data):
         """Parse INDEX LTP packet (23 bytes)"""
         return {
-            'packet_code': self._unpack(data, 0, 1, 'B'),
-            'last_price': self._unpack(data, 1, 5, 'f'),
-            'last_update_time': self._unpack(data, 5, 9, 'I'),
-            'security_id': self._unpack(data, 9, 13, 'I'),
-            'tradable': self._unpack(data, 13, 14, 'B'),
-            'mode': self._unpack(data, 14, 15, 'B'),
-            'change_absolute': self._unpack(data, 15, 19, 'f'),
-            'change_percent': self._unpack(data, 19, 23, 'f'),
-            'subscription_mode': 1,
-            'subscription_mode_val': 'LTP',
-            'is_index': True
+            "packet_code": self._unpack(data, 0, 1, "B"),
+            "last_price": self._unpack(data, 1, 5, "f"),
+            "last_update_time": self._unpack(data, 5, 9, "I"),
+            "security_id": self._unpack(data, 9, 13, "I"),
+            "tradable": self._unpack(data, 13, 14, "B"),
+            "mode": self._unpack(data, 14, 15, "B"),
+            "change_absolute": self._unpack(data, 15, 19, "f"),
+            "change_percent": self._unpack(data, 19, 23, "f"),
+            "subscription_mode": 1,
+            "subscription_mode_val": "LTP",
+            "is_index": True,
         }
 
     def _parse_quote_packet(self, data):
         """Parse QUOTE packet (67 bytes)"""
-        security_id = self._unpack(data, 9, 13, 'I')
-        logger.debug(f"Parsing QUOTE: security_id bytes [9:13] = {data[9:13].hex()}, parsed as uint = {security_id}")
+        security_id = self._unpack(data, 9, 13, "I")
+        logger.debug(
+            f"Parsing QUOTE: security_id bytes [9:13] = {data[9:13].hex()}, parsed as uint = {security_id}"
+        )
 
         parsed = {
-            'packet_code': self._unpack(data, 0, 1, 'B'),
-            'last_price': self._unpack(data, 1, 5, 'f'),
-            'last_traded_time': self._unpack(data, 5, 9, 'I'),
-            'security_id': security_id,
-            'tradable': self._unpack(data, 13, 14, 'B'),
-            'mode': self._unpack(data, 14, 15, 'B'),
-            'last_traded_quantity': self._unpack(data, 15, 19, 'I'),
-            'average_traded_price': self._unpack(data, 19, 23, 'f'),
-            'volume_traded': self._unpack(data, 23, 27, 'I'),
-            'total_buy_quantity': self._unpack(data, 27, 31, 'I'),
-            'total_sell_quantity': self._unpack(data, 31, 35, 'I'),
-            'open': self._unpack(data, 35, 39, 'f'),
-            'close': self._unpack(data, 39, 43, 'f'),
-            'high': self._unpack(data, 43, 47, 'f'),
-            'low': self._unpack(data, 47, 51, 'f'),
-            'change_absolute': self._unpack(data, 55, 59, 'f'),
-            'change_percent': self._unpack(data, 51, 55, 'f'),
-            '52_week_high': self._unpack(data, 59, 63, 'f'),
-            '52_week_low': self._unpack(data, 63, 67, 'f'),
-            'subscription_mode': 2,
-            'subscription_mode_val': 'QUOTE'
+            "packet_code": self._unpack(data, 0, 1, "B"),
+            "last_price": self._unpack(data, 1, 5, "f"),
+            "last_traded_time": self._unpack(data, 5, 9, "I"),
+            "security_id": security_id,
+            "tradable": self._unpack(data, 13, 14, "B"),
+            "mode": self._unpack(data, 14, 15, "B"),
+            "last_traded_quantity": self._unpack(data, 15, 19, "I"),
+            "average_traded_price": self._unpack(data, 19, 23, "f"),
+            "volume_traded": self._unpack(data, 23, 27, "I"),
+            "total_buy_quantity": self._unpack(data, 27, 31, "I"),
+            "total_sell_quantity": self._unpack(data, 31, 35, "I"),
+            "open": self._unpack(data, 35, 39, "f"),
+            "close": self._unpack(data, 39, 43, "f"),
+            "high": self._unpack(data, 43, 47, "f"),
+            "low": self._unpack(data, 47, 51, "f"),
+            "change_absolute": self._unpack(data, 55, 59, "f"),
+            "change_percent": self._unpack(data, 51, 55, "f"),
+            "52_week_high": self._unpack(data, 59, 63, "f"),
+            "52_week_low": self._unpack(data, 63, 67, "f"),
+            "subscription_mode": 2,
+            "subscription_mode_val": "QUOTE",
         }
         return parsed
 
     def _parse_index_quote_packet(self, data):
         """Parse INDEX QUOTE packet (43 bytes)"""
         return {
-            'packet_code': self._unpack(data, 0, 1, 'B'),
-            'last_price': self._unpack(data, 1, 5, 'f'),
-            'security_id': self._unpack(data, 5, 9, 'I'),
-            'tradable': self._unpack(data, 9, 10, 'B'),
-            'mode': self._unpack(data, 10, 11, 'B'),
-            'open': self._unpack(data, 11, 15, 'f'),
-            'close': self._unpack(data, 15, 19, 'f'),
-            'high': self._unpack(data, 19, 23, 'f'),
-            'low': self._unpack(data, 23, 27, 'f'),
-            'change_absolute': self._unpack(data, 27, 31, 'f'),
-            'change_percent': self._unpack(data, 31, 35, 'f'),
-            '52_week_high': self._unpack(data, 35, 39, 'f'),
-            '52_week_low': self._unpack(data, 39, 43, 'f'),
-            'subscription_mode': 2,
-            'subscription_mode_val': 'QUOTE',
-            'is_index': True
+            "packet_code": self._unpack(data, 0, 1, "B"),
+            "last_price": self._unpack(data, 1, 5, "f"),
+            "security_id": self._unpack(data, 5, 9, "I"),
+            "tradable": self._unpack(data, 9, 10, "B"),
+            "mode": self._unpack(data, 10, 11, "B"),
+            "open": self._unpack(data, 11, 15, "f"),
+            "close": self._unpack(data, 15, 19, "f"),
+            "high": self._unpack(data, 19, 23, "f"),
+            "low": self._unpack(data, 23, 27, "f"),
+            "change_absolute": self._unpack(data, 27, 31, "f"),
+            "change_percent": self._unpack(data, 31, 35, "f"),
+            "52_week_high": self._unpack(data, 35, 39, "f"),
+            "52_week_low": self._unpack(data, 39, 43, "f"),
+            "subscription_mode": 2,
+            "subscription_mode_val": "QUOTE",
+            "is_index": True,
         }
 
     def _parse_full_packet(self, data):
@@ -433,76 +436,79 @@ class PaytmWebSocket(object):
 
         for i in range(5):
             offset = depth_start + (i * 20)
-            buy_depth.append({
-                'quantity': self._unpack(data, offset, offset + 4, 'i'),
-                'price': self._unpack(data, offset + 12, offset + 16, 'f'),
-                'orders': self._unpack(data, offset + 8, offset + 10, 'h')
-            })
-            sell_depth.append({
-                'quantity': self._unpack(data, offset + 4, offset + 8, 'i'),
-                'price': self._unpack(data, offset + 16, offset + 20, 'f'),
-                'orders': self._unpack(data, offset + 10, offset + 12, 'h')
-            })
+            buy_depth.append(
+                {
+                    "quantity": self._unpack(data, offset, offset + 4, "i"),
+                    "price": self._unpack(data, offset + 12, offset + 16, "f"),
+                    "orders": self._unpack(data, offset + 8, offset + 10, "h"),
+                }
+            )
+            sell_depth.append(
+                {
+                    "quantity": self._unpack(data, offset + 4, offset + 8, "i"),
+                    "price": self._unpack(data, offset + 16, offset + 20, "f"),
+                    "orders": self._unpack(data, offset + 10, offset + 12, "h"),
+                }
+            )
 
         # Parse QUOTE-like data (offset 101-166)
-        security_id = self._unpack(data, 109, 113, 'I')
-        logger.debug(f"Parsing FULL: security_id bytes [109:113] = {data[109:113].hex()}, parsed as uint = {security_id}")
+        security_id = self._unpack(data, 109, 113, "I")
+        logger.debug(
+            f"Parsing FULL: security_id bytes [109:113] = {data[109:113].hex()}, parsed as uint = {security_id}"
+        )
 
         parsed = {
-            'packet_code': self._unpack(data, 0, 1, 'B'),
-            'last_price': self._unpack(data, 101, 105, 'f'),
-            'last_traded_time': self._unpack(data, 105, 109, 'I'),
-            'security_id': security_id,
-            'tradable': self._unpack(data, 113, 114, 'B'),
-            'mode': self._unpack(data, 114, 115, 'B'),
-            'last_traded_quantity': self._unpack(data, 115, 119, 'I'),
-            'average_traded_price': self._unpack(data, 119, 123, 'f'),
-            'volume_traded': self._unpack(data, 123, 127, 'I'),
-            'total_buy_quantity': self._unpack(data, 127, 131, 'I'),
-            'total_sell_quantity': self._unpack(data, 131, 135, 'I'),
-            'open': self._unpack(data, 135, 139, 'f'),
-            'close': self._unpack(data, 139, 143, 'f'),
-            'high': self._unpack(data, 143, 147, 'f'),
-            'low': self._unpack(data, 147, 151, 'f'),
-            'change_percent': self._unpack(data, 151, 155, 'f'),
-            'change_absolute': self._unpack(data, 155, 159, 'f'),
-            '52_week_high': self._unpack(data, 159, 163, 'f'),
-            '52_week_low': self._unpack(data, 163, 167, 'f'),
-            'subscription_mode': 3,
-            'subscription_mode_val': 'FULL'
+            "packet_code": self._unpack(data, 0, 1, "B"),
+            "last_price": self._unpack(data, 101, 105, "f"),
+            "last_traded_time": self._unpack(data, 105, 109, "I"),
+            "security_id": security_id,
+            "tradable": self._unpack(data, 113, 114, "B"),
+            "mode": self._unpack(data, 114, 115, "B"),
+            "last_traded_quantity": self._unpack(data, 115, 119, "I"),
+            "average_traded_price": self._unpack(data, 119, 123, "f"),
+            "volume_traded": self._unpack(data, 123, 127, "I"),
+            "total_buy_quantity": self._unpack(data, 127, 131, "I"),
+            "total_sell_quantity": self._unpack(data, 131, 135, "I"),
+            "open": self._unpack(data, 135, 139, "f"),
+            "close": self._unpack(data, 139, 143, "f"),
+            "high": self._unpack(data, 143, 147, "f"),
+            "low": self._unpack(data, 147, 151, "f"),
+            "change_percent": self._unpack(data, 151, 155, "f"),
+            "change_absolute": self._unpack(data, 155, 159, "f"),
+            "52_week_high": self._unpack(data, 159, 163, "f"),
+            "52_week_low": self._unpack(data, 163, 167, "f"),
+            "subscription_mode": 3,
+            "subscription_mode_val": "FULL",
         }
 
         # Add depth data
-        parsed['depth'] = {
-            'buy': buy_depth,
-            'sell': sell_depth
-        }
+        parsed["depth"] = {"buy": buy_depth, "sell": sell_depth}
 
         # Add OI data (offset 167-174)
         if len(data) >= 175:
-            parsed['oi'] = self._unpack(data, 167, 171, 'I')
-            parsed['oi_change'] = self._unpack(data, 171, 175, 'I')
+            parsed["oi"] = self._unpack(data, 167, 171, "I")
+            parsed["oi_change"] = self._unpack(data, 171, 175, "I")
 
         return parsed
 
     def _parse_index_full_packet(self, data):
         """Parse INDEX FULL packet (39 bytes)"""
         return {
-            'packet_code': self._unpack(data, 0, 1, 'B'),
-            'last_price': self._unpack(data, 1, 5, 'f'),
-            'security_id': self._unpack(data, 5, 9, 'I'),
-            'tradable': self._unpack(data, 9, 10, 'B'),
-            'mode': self._unpack(data, 10, 11, 'B'),
-            'open': self._unpack(data, 11, 15, 'f'),
-            'close': self._unpack(data, 15, 19, 'f'),
-            'high': self._unpack(data, 19, 23, 'f'),
-            'low': self._unpack(data, 23, 27, 'f'),
-            'change_percent': self._unpack(data, 27, 31, 'f'),
-            'change_absolute': self._unpack(data, 31, 35, 'f'),
-            'last_trade_time': self._unpack(data, 35, 39, 'I'),
-            'subscription_mode': 3,
-            'subscription_mode_val': 'FULL',
-            'is_index': True
+            "packet_code": self._unpack(data, 0, 1, "B"),
+            "last_price": self._unpack(data, 1, 5, "f"),
+            "security_id": self._unpack(data, 5, 9, "I"),
+            "tradable": self._unpack(data, 9, 10, "B"),
+            "mode": self._unpack(data, 10, 11, "B"),
+            "open": self._unpack(data, 11, 15, "f"),
+            "close": self._unpack(data, 15, 19, "f"),
+            "high": self._unpack(data, 19, 23, "f"),
+            "low": self._unpack(data, 23, 27, "f"),
+            "change_percent": self._unpack(data, 27, 31, "f"),
+            "change_absolute": self._unpack(data, 31, 35, "f"),
+            "last_trade_time": self._unpack(data, 35, 39, "I"),
+            "subscription_mode": 3,
+            "subscription_mode_val": "FULL",
+            "is_index": True,
         }
 
     # Callback methods to be overridden

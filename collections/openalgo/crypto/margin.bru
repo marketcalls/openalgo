@@ -1,0 +1,28 @@
+meta {
+  name: margin
+  type: http
+  seq: 25
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/margin
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "positions": [
+          {
+              "symbol": "BTCUSDFUT",
+              "exchange": "CRYPTO",
+              "action": "BUY",
+              "product": "NRML",
+              "pricetype": "MARKET",
+              "quantity": "1",
+              "price": "0"
+          }
+      ]
+  }
+}

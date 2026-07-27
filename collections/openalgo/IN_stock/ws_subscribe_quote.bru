@@ -1,0 +1,40 @@
+meta {
+  name: Subscribe Quote (Mode 2)
+  type: websocket
+  seq: 3
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Subscribe to Quote data - includes OHLC, volume, change
+}
+
+message:json {
+  {
+    "action": "subscribe",
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "mode": 2
+  }
+}
+
+docs {
+  Mode 2 (Quote) returns:
+  - ltp: Last Traded Price
+  - open, high, low, close: OHLC values
+  - volume: Trading volume
+  - change: Price change
+  - change_percent: Percentage change
+  - last_trade_qty: Last traded quantity
+  - avg_trade_price: Average trade price
+  - timestamp: ISO 8601 timestamp
+
+  Alternative array format:
+  {
+    "action": "subscribe",
+    "symbols": [{"symbol": "RELIANCE", "exchange": "NSE"}],
+    "mode": 2
+  }
+
+  Mode can also be string: "mode": "Quote"
+}

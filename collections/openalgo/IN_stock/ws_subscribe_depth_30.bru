@@ -1,0 +1,35 @@
+meta {
+  name: Subscribe Depth 30 Levels (Mode 3)
+  type: websocket
+  seq: 6
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Subscribe to Market Depth with 30 bid/ask levels
+}
+
+message:json {
+  {
+    "action": "subscribe",
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "mode": 3,
+    "depth": 30
+  }
+}
+
+docs {
+  Mode 3 (Depth) with 30 levels returns:
+  - ltp: Last Traded Price
+  - depth.buy: Array of 30 bid levels [{price, quantity, orders}]
+  - depth.sell: Array of 30 ask levels [{price, quantity, orders}]
+
+  Note: Only select brokers support 30 levels. If unsupported, server returns:
+  {
+    "type": "error",
+    "code": "UNSUPPORTED_DEPTH_LEVEL",
+    "message": "...",
+    "supported_levels": [5, 20]
+  }
+}

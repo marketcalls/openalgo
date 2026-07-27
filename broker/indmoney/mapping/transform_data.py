@@ -1,13 +1,15 @@
-#Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Indmoney API Parameters https://api.indstocks.com/
+# Mapping OpenAlgo API Request https://openalgo.in/docs
+# Mapping Indmoney API Parameters https://api.indstocks.com/
 
-from database.token_db import get_br_symbol,get_token
-from utils.logging import get_logger
-from broker.indmoney.api.data import BrokerData
 from flask import session
+
+from broker.indmoney.api.data import BrokerData
 from database.auth_db import get_auth_token, get_feed_token
+from database.token_db import get_br_symbol, get_token
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 def transform_data(data, token):
     """
@@ -15,7 +17,7 @@ def transform_data(data, token):
     For market orders, fetches quotes and adjusts price accordingly:
     - BUY: Uses bid price + 0.1%
     - SELL: Uses ask price - 0.1%
-    
+
     Parameters required by Indmoney API:
     - txn_type (required): BUY/SELL
     - exchange (required): NSE/BSE
@@ -28,33 +30,33 @@ def transform_data(data, token):
     - is_amo: boolean (for after market orders)
     - limit_price: float (required for LIMIT orders)
     """
-    symbol = get_br_symbol(data['symbol'], data['exchange'])
-    
+    symbol = get_br_symbol(data["symbol"], data["exchange"])
+
     # Check if market order and convert to limit order with adjusted price
     order_type = map_order_type(data["pricetype"])
     price = data.get("price", "0")
-    action = data['action'].upper()
-    
+    action = data["action"].upper()
+
     if data["pricetype"] == "MARKET":
         # Get username from Flask session
         username = None
-        if session and hasattr(session, 'get'):
-            username = session.get('username')
-        
+        if session and hasattr(session, "get"):
+            username = session.get("username")
+
         # Get auth token for market data using username
         auth_token = get_auth_token(username if username else "kalaivani")
-        
+
         logger.info(f"Using auth token for user: {username if username else 'kalaivani'}")
-        
+
         # Create BrokerData instance to use get_quotes - only need auth_token
         broker_data = BrokerData(auth_token)
-        
+
         # Fetch quotes for the symbol
-        quote_data = broker_data.get_quotes(data['symbol'], data['exchange'])
+        quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
         logger.info(f"Quote data for market order adjustment: {quote_data}")
-        
+
         # Adjust price based on action (BUY or SELL) using LTP
-        ltp = float(quote_data.get('ltp', 0))
+        ltp = float(quote_data.get("ltp", 0))
         if action == "BUY":
             # Add 0.1% to LTP for BUY orders
             adjusted_price = ltp * 1.001
@@ -69,7 +71,7 @@ def transform_data(data, token):
             logger.info(f"Adjusted SELL price: LTP {ltp} - 0.1% = {price}")
             # Change order type to LIMIT (uppercase required by API)
             order_type = "LIMIT"
-    
+
     # Basic mapping from OpenAlgo to Indmoney
     segment = map_segment(data["exchange"])
     transformed = {
@@ -82,30 +84,30 @@ def transform_data(data, token):
         "security_id": token,  # Security ID from token
         "qty": int(data["quantity"]),  # Order quantity
         "is_amo": data.get("is_amo", False),  # After market order flag
-        "algo_id": "99999"  # Required by API - use 99999 for regular orders
+        "algo_id": "99999",  # Required by API - use 99999 for regular orders
     }
-    
+
     # Log the segment mapping for debugging
     logger.info(f"Exchange: {data['exchange']}, Mapped Segment: {segment}")
     logger.info(f"Order Type: {data.get('pricetype')} -> {transformed['order_type']}")
-    
+
     # Add limit_price for LIMIT orders
     if data.get("pricetype") == "LIMIT" and data.get("price"):
         transformed["limit_price"] = float(data["price"])
     elif transformed["order_type"] == "LIMIT":
         # For LIMIT orders, price is required
         transformed["limit_price"] = float(price if price != "0" else data.get("price", 0))
-    
+
     # Handle validity if specified
     if data.get("validity") == "IOC":
         transformed["validity"] = "IOC"
-    
+
     # For equity orders, ensure we have all required fields
     if transformed["segment"] == "EQUITY":
         # Ensure limit_price is set for LIMIT orders
         if transformed["order_type"] == "LIMIT" and "limit_price" not in transformed:
             transformed["limit_price"] = float(price if price != "0" else data.get("price", 0))
-    
+
     logger.info(f"transformed data: {transformed}")
     return transformed
 
@@ -118,9 +120,9 @@ def transform_modify_order_data(data):
         "segment": map_segment_from_orderid(data.get("orderid", "")),  # Derive from order ID
         "order_id": data["orderid"],
         "qty": int(data["quantity"]),
-        "limit_price": float(data.get("price", 0))
+        "limit_price": float(data.get("price", 0)),
     }
-    
+
     return transformed
 
 
@@ -132,7 +134,7 @@ def map_order_type(pricetype):
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",  # Must be uppercase as per API requirement
         "SL": "LIMIT",  # Stop loss as limit order
-        "SL-M": "MARKET"  # Stop loss market as market order
+        "SL-M": "MARKET",  # Stop loss market as market order
     }
     return order_type_mapping.get(pricetype, "MARKET")
 
@@ -143,12 +145,12 @@ def map_segment(exchange):
     """
     segment_mapping = {
         "NSE": "EQUITY",
-        "BSE": "EQUITY", 
+        "BSE": "EQUITY",
         "NFO": "DERIVATIVE",
         "BFO": "DERIVATIVE",
         "CDS": "DERIVATIVE",
         "BCD": "DERIVATIVE",
-        "MCX": "DERIVATIVE"
+        "MCX": "DERIVATIVE",
     }
     result = segment_mapping.get(exchange, "EQUITY")
     print(f"map_segment: {exchange} -> {result}")
@@ -176,7 +178,7 @@ def map_exchange_type(exchange):
         "BFO": "BSE",
         "CDS": "NSE",
         "BCD": "BSE",
-        "MCX": "MCX"
+        "MCX": "MCX",
     }
     return exchange_mapping.get(exchange, "NSE")
 
@@ -185,11 +187,7 @@ def map_exchange(br_exchange):
     """
     Maps Indmoney exchange back to OpenAlgo exchange.
     """
-    exchange_mapping = {
-        "NSE": "NSE",
-        "BSE": "BSE",
-        "MCX": "MCX"
-    }
+    exchange_mapping = {"NSE": "NSE", "BSE": "BSE", "MCX": "MCX"}
     return exchange_mapping.get(br_exchange, "NSE")
 
 
@@ -209,9 +207,5 @@ def reverse_map_product_type(product):
     """
     Maps Indmoney product type back to OpenAlgo product type.
     """
-    product_mapping = {
-        "CNC": "CNC",
-        "MARGIN": "NRML",
-        "INTRADAY": "MIS"
-    }
+    product_mapping = {"CNC": "CNC", "MARGIN": "NRML", "INTRADAY": "MIS"}
     return product_mapping.get(product, "MIS")

@@ -1,8 +1,10 @@
 import os
+
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 def authenticate_broker(request_token):
     """
@@ -23,16 +25,16 @@ def authenticate_broker(request_token):
             - error_message: Error details if authentication fails, None on success
     """
     try:
-        BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-        BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
+        BROKER_API_KEY = os.getenv("BROKER_API_KEY")
+        BROKER_API_SECRET = os.getenv("BROKER_API_SECRET")
 
-        url = 'https://developer.paytmmoney.com/accounts/v2/gettoken'
+        url = "https://developer.paytmmoney.com/accounts/v2/gettoken"
         data = {
-            'api_key': BROKER_API_KEY,
-            'api_secret_key': BROKER_API_SECRET,
-            'request_token': request_token
+            "api_key": BROKER_API_KEY,
+            "api_secret_key": BROKER_API_SECRET,
+            "request_token": request_token,
         }
-        headers = {'Content-Type': 'application/json'}
+        headers = {"Content-Type": "application/json"}
         client = get_httpx_client()
         response = client.post(url, json=data, headers=headers)
 
@@ -45,17 +47,19 @@ def authenticate_broker(request_token):
             # - public_access_token: For WebSocket streaming (stored as feed_token)
             # - read_access_token: For read-only operations
 
-            if 'access_token' in response_data and 'public_access_token' in response_data:
+            if "access_token" in response_data and "public_access_token" in response_data:
                 logger.debug("Successfully authenticated and received tokens.")
-                access_token = response_data['access_token']
-                public_access_token = response_data['public_access_token']
+                access_token = response_data["access_token"]
+                public_access_token = response_data["public_access_token"]
 
                 # Return access_token and public_access_token as feed_token
                 return access_token, public_access_token, None
-            elif 'access_token' in response_data:
+            elif "access_token" in response_data:
                 # Fallback if public_access_token is not present
-                logger.warning("public_access_token not found in response, using access_token for both")
-                access_token = response_data['access_token']
+                logger.warning(
+                    "public_access_token not found in response, using access_token for both"
+                )
+                access_token = response_data["access_token"]
                 return access_token, access_token, None
             else:
                 error_msg = "Authentication succeeded but no access token was returned."
@@ -66,13 +70,19 @@ def authenticate_broker(request_token):
             # Parsing the error message from the API response
             try:
                 error_detail = response.json()
-                error_messages = error_detail.get('errors', [])
-                detailed_error_message = "; ".join([error['message'] for error in error_messages])
-                error_msg = f"API error: {detailed_error_message}" if detailed_error_message else f"Authentication failed with response: {response.text}"
+                error_messages = error_detail.get("errors", [])
+                detailed_error_message = "; ".join([error["message"] for error in error_messages])
+                error_msg = (
+                    f"API error: {detailed_error_message}"
+                    if detailed_error_message
+                    else f"Authentication failed with response: {response.text}"
+                )
             except Exception:
                 error_msg = f"Authentication failed with status code {response.status_code} and non-JSON response: {response.text}"
 
-            logger.error(f"Authentication failed with status code {response.status_code}. Error: {error_msg}")
+            logger.error(
+                f"Authentication failed with status code {response.status_code}. Error: {error_msg}"
+            )
             return None, None, error_msg
     except Exception:
         logger.exception("An exception occurred during authentication.")

@@ -11,17 +11,18 @@ Usage:
     python upgrade/migrate_telegram_bot.py --downgrade  # Rollback
 """
 
-import sys
-import os
 import argparse
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import create_engine, text, inspect
-from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError, OperationalError
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,18 +32,19 @@ MIGRATION_NAME = "telegram_bot"
 MIGRATION_VERSION = "1.1.0"  # Updated version for schema changes
 MIGRATION_DESCRIPTION = "Create Telegram bot integration tables (polling mode only)"
 
+
 class TelegramBotMigration:
     def __init__(self, db_path=None):
         """Initialize migration with database path"""
         if db_path is None:
             # Auto-detect correct database path
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            if os.path.basename(script_dir) == 'upgrade':
+            if os.path.basename(script_dir) == "upgrade":
                 # Running from upgrade directory
-                db_path = os.path.join(os.path.dirname(script_dir), 'db', 'openalgo.db')
+                db_path = os.path.join(os.path.dirname(script_dir), "db", "openalgo.db")
             else:
                 # Running from root directory
-                db_path = 'db/openalgo.db'
+                db_path = "db/openalgo.db"
         self.db_path = db_path
         self.db_url = f"sqlite:///{db_path}"
         self.engine = None
@@ -73,7 +75,8 @@ class TelegramBotMigration:
         """Create migration history table if it doesn't exist"""
         try:
             with self.engine.connect() as conn:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     CREATE TABLE IF NOT EXISTS migration_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name VARCHAR(100) NOT NULL,
@@ -82,7 +85,8 @@ class TelegramBotMigration:
                         description TEXT,
                         UNIQUE(name)
                     )
-                """))
+                """)
+                )
                 conn.commit()
         except Exception as e:
             logger.error(f"Failed to create migration history table: {e}")
@@ -93,20 +97,16 @@ class TelegramBotMigration:
             with self.engine.connect() as conn:
                 result = conn.execute(
                     text("SELECT * FROM migration_history WHERE name = :name"),
-                    {"name": MIGRATION_NAME}
+                    {"name": MIGRATION_NAME},
                 ).fetchone()
 
                 if result:
-                    return {
-                        'applied': True,
-                        'version': result[2],
-                        'applied_at': result[3]
-                    }
-                return {'applied': False}
+                    return {"applied": True, "version": result[2], "applied_at": result[3]}
+                return {"applied": False}
 
         except OperationalError:
             # Table doesn't exist
-            return {'applied': False}
+            return {"applied": False}
         except Exception as e:
             logger.error(f"Failed to check migration status: {e}")
             return None
@@ -118,7 +118,7 @@ class TelegramBotMigration:
                 # First, delete any existing record
                 conn.execute(
                     text("DELETE FROM migration_history WHERE name = :name"),
-                    {"name": MIGRATION_NAME}
+                    {"name": MIGRATION_NAME},
                 )
 
                 # Insert new record
@@ -130,8 +130,8 @@ class TelegramBotMigration:
                     {
                         "name": MIGRATION_NAME,
                         "version": MIGRATION_VERSION,
-                        "description": MIGRATION_DESCRIPTION
-                    }
+                        "description": MIGRATION_DESCRIPTION,
+                    },
                 )
                 conn.commit()
 
@@ -155,7 +155,7 @@ class TelegramBotMigration:
         """Check if a column exists in a table"""
         try:
             inspector = inspect(self.engine)
-            columns = [col['name'] for col in inspector.get_columns(table_name)]
+            columns = [col["name"] for col in inspector.get_columns(table_name)]
             return column_name in columns
         except Exception:
             return False
@@ -176,11 +176,12 @@ class TelegramBotMigration:
         try:
             with self.engine.connect() as conn:
                 # Handle bot_config table updates for existing installations
-                if self.table_exists('bot_config'):
+                if self.table_exists("bot_config"):
                     logger.info("bot_config table exists, checking for deprecated columns...")
 
                     # Create a temporary table with new schema
-                    conn.execute(text("""
+                    conn.execute(
+                        text("""
                         CREATE TABLE IF NOT EXISTS bot_config_new (
                             id INTEGER PRIMARY KEY DEFAULT 1,
                             token TEXT,
@@ -193,10 +194,12 @@ class TelegramBotMigration:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             CONSTRAINT single_config CHECK (id = 1)
                         )
-                    """))
+                    """)
+                    )
 
                     # Copy data from old table (only columns that exist in new schema)
-                    conn.execute(text("""
+                    conn.execute(
+                        text("""
                         INSERT OR REPLACE INTO bot_config_new
                         (id, token, is_active, bot_username, max_message_length,
                          rate_limit_per_minute, broadcast_enabled, created_at, updated_at)
@@ -211,15 +214,19 @@ class TelegramBotMigration:
                             COALESCE(created_at, CURRENT_TIMESTAMP),
                             COALESCE(updated_at, CURRENT_TIMESTAMP)
                         FROM bot_config
-                    """))
+                    """)
+                    )
 
                     # Drop old table and rename new one
                     conn.execute(text("DROP TABLE bot_config"))
                     conn.execute(text("ALTER TABLE bot_config_new RENAME TO bot_config"))
-                    logger.info("✓ Updated bot_config table schema (removed webhook_url and polling_mode)")
+                    logger.info(
+                        "✓ Updated bot_config table schema (removed webhook_url and polling_mode)"
+                    )
                 else:
                     # Create new bot_config table
-                    conn.execute(text("""
+                    conn.execute(
+                        text("""
                         CREATE TABLE IF NOT EXISTS bot_config (
                             id INTEGER PRIMARY KEY DEFAULT 1,
                             token TEXT,
@@ -232,12 +239,14 @@ class TelegramBotMigration:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             CONSTRAINT single_config CHECK (id = 1)
                         )
-                    """))
+                    """)
+                    )
                     logger.info("✓ Created bot_config table")
 
                 # Create telegram_users table if it doesn't exist
-                if not self.table_exists('telegram_users'):
-                    conn.execute(text("""
+                if not self.table_exists("telegram_users"):
+                    conn.execute(
+                        text("""
                         CREATE TABLE IF NOT EXISTS telegram_users (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             telegram_id INTEGER UNIQUE NOT NULL,
@@ -254,14 +263,16 @@ class TelegramBotMigration:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             last_command_at TIMESTAMP
                         )
-                    """))
+                    """)
+                    )
                     logger.info("✓ Created telegram_users table")
                 else:
                     logger.info("✓ telegram_users table already exists")
 
                 # Create command_logs table if it doesn't exist
-                if not self.table_exists('command_logs'):
-                    conn.execute(text("""
+                if not self.table_exists("command_logs"):
+                    conn.execute(
+                        text("""
                         CREATE TABLE IF NOT EXISTS command_logs (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             telegram_id INTEGER NOT NULL,
@@ -271,14 +282,16 @@ class TelegramBotMigration:
                             executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (telegram_id) REFERENCES telegram_users(telegram_id)
                         )
-                    """))
+                    """)
+                    )
                     logger.info("✓ Created command_logs table")
                 else:
                     logger.info("✓ command_logs table already exists")
 
                 # Create notification_queue table if it doesn't exist
-                if not self.table_exists('notification_queue'):
-                    conn.execute(text("""
+                if not self.table_exists("notification_queue"):
+                    conn.execute(
+                        text("""
                         CREATE TABLE IF NOT EXISTS notification_queue (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             telegram_id INTEGER NOT NULL,
@@ -290,14 +303,16 @@ class TelegramBotMigration:
                             error_message TEXT,
                             FOREIGN KEY (telegram_id) REFERENCES telegram_users(telegram_id)
                         )
-                    """))
+                    """)
+                    )
                     logger.info("✓ Created notification_queue table")
                 else:
                     logger.info("✓ notification_queue table already exists")
 
                 # Create user_preferences table if it doesn't exist
-                if not self.table_exists('user_preferences'):
-                    conn.execute(text("""
+                if not self.table_exists("user_preferences"):
+                    conn.execute(
+                        text("""
                         CREATE TABLE IF NOT EXISTS user_preferences (
                             telegram_id INTEGER PRIMARY KEY,
                             order_notifications BOOLEAN DEFAULT 1,
@@ -311,7 +326,8 @@ class TelegramBotMigration:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (telegram_id) REFERENCES telegram_users(telegram_id)
                         )
-                    """))
+                    """)
+                    )
                     logger.info("✓ Created user_preferences table")
                 else:
                     logger.info("✓ user_preferences table already exists")
@@ -321,7 +337,9 @@ class TelegramBotMigration:
 
             # Record successful migration
             if self.record_migration():
-                logger.info(f"✅ Migration {MIGRATION_NAME} v{MIGRATION_VERSION} completed successfully!")
+                logger.info(
+                    f"✅ Migration {MIGRATION_NAME} v{MIGRATION_VERSION} completed successfully!"
+                )
                 logger.info("\nTelegram bot tables are ready. You can now:")
                 logger.info("1. Configure your bot token in the web interface")
                 logger.info("2. Start the bot from the Telegram dashboard")
@@ -345,11 +363,11 @@ class TelegramBotMigration:
             with self.engine.connect() as conn:
                 # Drop tables in reverse order (due to foreign keys)
                 tables = [
-                    'user_preferences',
-                    'notification_queue',
-                    'command_logs',
-                    'telegram_users',
-                    'bot_config'
+                    "user_preferences",
+                    "notification_queue",
+                    "command_logs",
+                    "telegram_users",
+                    "bot_config",
                 ]
 
                 for table in tables:
@@ -362,11 +380,11 @@ class TelegramBotMigration:
                 # Remove migration history
                 conn.execute(
                     text("DELETE FROM migration_history WHERE name = :name"),
-                    {"name": MIGRATION_NAME}
+                    {"name": MIGRATION_NAME},
                 )
                 conn.commit()
 
-            logger.info(f"✅ Downgrade completed. Telegram bot tables removed.")
+            logger.info("✅ Downgrade completed. Telegram bot tables removed.")
             return True
 
         except Exception as e:
@@ -384,15 +402,20 @@ class TelegramBotMigration:
             logger.error("Could not determine migration status")
             return False
 
-        if status['applied']:
+        if status["applied"]:
             logger.info(f"✓ Migration '{MIGRATION_NAME}' is APPLIED")
             logger.info(f"  Version: {status['version']}")
             logger.info(f"  Applied at: {status['applied_at']}")
 
             # Check table existence
             with self.engine.connect() as conn:
-                tables = ['telegram_users', 'bot_config', 'command_logs',
-                         'notification_queue', 'user_preferences']
+                tables = [
+                    "telegram_users",
+                    "bot_config",
+                    "command_logs",
+                    "notification_queue",
+                    "user_preferences",
+                ]
 
                 logger.info("\n  Table status:")
                 for table in tables:
@@ -401,15 +424,17 @@ class TelegramBotMigration:
                     logger.info(f"    {status_icon} {table}")
 
                 # Check for deprecated columns in bot_config
-                if self.table_exists('bot_config'):
+                if self.table_exists("bot_config"):
                     deprecated = []
-                    if self.column_exists('bot_config', 'webhook_url'):
-                        deprecated.append('webhook_url')
-                    if self.column_exists('bot_config', 'polling_mode'):
-                        deprecated.append('polling_mode')
+                    if self.column_exists("bot_config", "webhook_url"):
+                        deprecated.append("webhook_url")
+                    if self.column_exists("bot_config", "polling_mode"):
+                        deprecated.append("polling_mode")
 
                     if deprecated:
-                        logger.warning(f"\n  ⚠️  Deprecated columns found in bot_config: {', '.join(deprecated)}")
+                        logger.warning(
+                            f"\n  ⚠️  Deprecated columns found in bot_config: {', '.join(deprecated)}"
+                        )
                         logger.warning("  Run migration upgrade to update schema")
         else:
             logger.info(f"✗ Migration '{MIGRATION_NAME}' is NOT APPLIED")
@@ -417,25 +442,16 @@ class TelegramBotMigration:
 
         return True
 
+
 def main():
     parser = argparse.ArgumentParser(
         description=f"Telegram Bot Migration for OpenAlgo - {MIGRATION_DESCRIPTION}"
     )
     parser.add_argument(
-        '--downgrade',
-        action='store_true',
-        help='Rollback migration (remove tables)'
+        "--downgrade", action="store_true", help="Rollback migration (remove tables)"
     )
-    parser.add_argument(
-        '--status',
-        action='store_true',
-        help='Check migration status'
-    )
-    parser.add_argument(
-        '--db',
-        default=None,
-        help='Database path (auto-detects if not specified)'
-    )
+    parser.add_argument("--status", action="store_true", help="Check migration status")
+    parser.add_argument("--db", default=None, help="Database path (auto-detects if not specified)")
 
     args = parser.parse_args()
 
@@ -452,6 +468,7 @@ def main():
 
     # Exit with appropriate code
     sys.exit(0 if success else 1)
+
 
 if __name__ == "__main__":
     main()

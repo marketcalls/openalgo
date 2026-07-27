@@ -1,0 +1,19 @@
+meta {
+  name: search
+  type: http
+  seq: 18
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/search
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "query": "BTC",
+      "exchange": "CRYPTO"
+  }
+}

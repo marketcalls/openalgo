@@ -1,13 +1,14 @@
-import pandas as pd
+import gc
 import logging
 import os
 import time
-import gc
-from openalgo import api
 from datetime import datetime, timedelta
 
+import pandas as pd
+from openalgo import api
+
 # Initialize the API client
-client = api(api_key='your_api_key_here', host='http://127.0.0.1:5000')
+client = api(api_key="your_api_key_here", host="http://127.0.0.1:5000")
 
 # Path to the CSV file
 symbols_file = "symbols.csv"
@@ -23,6 +24,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
 
 # Function to get start date based on user selection
 def get_date_range(option):
@@ -45,6 +47,7 @@ def get_date_range(option):
         return (today - timedelta(days=365 * 10)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
     else:
         raise ValueError("Invalid selection")
+
 
 # Prompt user for fresh download or continuation
 print("Select download mode:")
@@ -73,7 +76,7 @@ print("8) Download Last 10 Years Data")
 try:
     user_choice = int(input("Enter your choice (1-8): "))
     start_date, end_date = get_date_range(user_choice)
-except ValueError as e:
+except ValueError:
     print("Invalid input. Please restart the script and select a valid option.")
     exit()
 
@@ -82,11 +85,11 @@ symbols = pd.read_csv(symbols_file, header=None)[0].tolist()
 
 # Handle checkpoint logic
 if mode_choice == 2 and os.path.exists(checkpoint_file):
-    with open(checkpoint_file, "r") as f:
+    with open(checkpoint_file) as f:
         last_processed = f.read().strip()
     # Skip symbols up to the last processed one
     if last_processed in symbols:
-        symbols = symbols[symbols.index(last_processed) + 1:]
+        symbols = symbols[symbols.index(last_processed) + 1 :]
 elif mode_choice == 1:
     # Remove existing checkpoint for fresh download
     if os.path.exists(checkpoint_file):
@@ -95,7 +98,7 @@ elif mode_choice == 1:
 # Process symbols in batches
 batch_size = 10  # Adjust this value based on your memory availability
 for i in range(0, len(symbols), batch_size):
-    batch = symbols[i:i + batch_size]
+    batch = symbols[i : i + batch_size]
     for symbol in batch:
         logging.info(f"Starting download for {symbol}")
         try:
@@ -113,7 +116,7 @@ for i in range(0, len(symbols), batch_size):
                         exchange="NSE",
                         interval="1m",
                         start_date=start_date,
-                        end_date=end_date
+                        end_date=end_date,
                     )
                     break
                 except Exception as e:
@@ -142,13 +145,13 @@ for i in range(0, len(symbols), batch_size):
             df.reset_index(inplace=True)
 
             # Rename and split the timestamp column
-            df['DATE'] = pd.to_datetime(df['timestamp']).dt.date
-            df['TIME'] = pd.to_datetime(df['timestamp']).dt.time
+            df["DATE"] = pd.to_datetime(df["timestamp"]).dt.date
+            df["TIME"] = pd.to_datetime(df["timestamp"]).dt.time
 
             # Add SYMBOL column and rearrange columns
-            df['SYMBOL'] = symbol
-            df = df[['SYMBOL', 'DATE', 'TIME', 'open', 'high', 'low', 'close', 'volume']]
-            df.columns = ['SYMBOL', 'DATE', 'TIME', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME']
+            df["SYMBOL"] = symbol
+            df = df[["SYMBOL", "DATE", "TIME", "open", "high", "low", "close", "volume"]]
+            df.columns = ["SYMBOL", "DATE", "TIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
 
             # Save to CSV file
             df.to_csv(output_file, index=False)

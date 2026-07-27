@@ -110,9 +110,9 @@ generate_hex() {
 validate_broker() {
     local broker=$1
 
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
 
-    if [[ $valid_brokers == *"$broker"* ]]; then
+    if [[ ",$valid_brokers," == *",$broker,"* ]]; then
         return 0
     else
         return 1
@@ -122,8 +122,20 @@ validate_broker() {
 # Function to check if broker is XTS based
 is_xts_broker() {
     local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
-    if [[ $xts_brokers == *"$broker"* ]]; then
+    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
+    if [[ ",$xts_brokers," == *",$broker,"* ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to check if broker is crypto based (24/7 markets, no auto-logout)
+# Uses space-delimited boundary matching for exact broker ID checks
+is_crypto_broker() {
+    local broker=$1
+    local crypto_brokers=" deltaexchange "
+    if [[ $crypto_brokers == *" $broker "* ]]; then
         return 0
     else
         return 1
@@ -355,7 +367,7 @@ done
 # Get broker name
 while true; do
 
-    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
+    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
 
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
@@ -393,6 +405,14 @@ if is_xts_broker "$BROKER_NAME"; then
         log_message "Error: Market data API credentials are required for XTS-based brokers" "$RED"
         exit 1
     fi
+fi
+
+# Check if the broker is crypto-based and disable auto-logout
+DISABLE_SESSION_EXPIRY="false"
+if is_crypto_broker "$BROKER_NAME"; then
+    log_message "\nThis broker ($BROKER_NAME) operates on 24/7 crypto markets." "$YELLOW"
+    log_message "Auto-logout (session expiry at 3 AM IST) will be disabled." "$GREEN"
+    DISABLE_SESSION_EXPIRY="true"
 fi
 
 # Generate random keys
@@ -456,16 +476,32 @@ case "$OS_TYPE" in
     ubuntu | debian | raspbian)
         # Wait for any running package manager operations to complete
         wait_for_dpkg_lock
-        sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
+        sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common \
+            libopenblas0 libgomp1 libgfortran5
         # Try to install python3-full if available (Ubuntu 23.04+)
         sudo apt-get install -y python3-full 2>/dev/null || log_message "python3-full not available, skipping" "$YELLOW"
         # Try to install snapd, but don't fail if unavailable
         sudo apt-get install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         check_status "Failed to install required packages"
+        # Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
+        # Kaleido 1.x ships no bundled browser; it drives a system Chromium via choreographer.
+        # Debian/Raspbian have 'chromium' in main. Ubuntu 19.10+ renamed it to 'chromium-browser'
+        # which is a transitional package that installs the Chromium snap (works headless).
+        # Non-fatal — if nothing sticks we just warn; the rest of openalgo still installs fine.
+        log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
+        if sudo apt-get install -y chromium fonts-liberation 2>/dev/null; then
+            log_message "Installed chromium (Debian package)" "$GREEN"
+        elif sudo apt-get install -y chromium-browser fonts-liberation 2>/dev/null; then
+            log_message "Installed chromium-browser (Ubuntu transitional/snap)" "$GREEN"
+        else
+            log_message "Chromium install failed - Telegram /chart will not render charts" "$YELLOW"
+            log_message "You can install it manually later: sudo snap install chromium" "$YELLOW"
+        fi
         ;;
     centos | fedora | rhel | amzn)
         if ! command -v dnf >/dev/null 2>&1; then
-            sudo yum install -y python3 python3-pip nginx git epel-release
+            sudo yum install -y python3 python3-pip nginx git epel-release \
+                openblas-devel gcc-gfortran libgomp
             # Install SELinux management tools for RHEL-based systems
             sudo yum install -y policycoreutils-python-utils 2>/dev/null || log_message "SELinux tools already installed" "$YELLOW"
             # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
@@ -473,23 +509,53 @@ case "$OS_TYPE" in
         else
             # Install EPEL repository first for access to additional packages
             sudo dnf install -y epel-release 2>/dev/null || log_message "EPEL repository already installed or not available" "$YELLOW"
-            sudo dnf install -y python3 python3-pip nginx git
+            sudo dnf install -y python3 python3-pip nginx git \
+                openblas-devel gcc-gfortran libgomp
             # Install SELinux management tools for RHEL-based systems
             sudo dnf install -y policycoreutils-python-utils 2>/dev/null || log_message "SELinux tools already installed" "$YELLOW"
             # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
             sudo dnf install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         fi
         check_status "Failed to install required packages"
+        # Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
+        # Available in EPEL for RHEL/CentOS, main repo for Fedora. Amazon Linux 2023 does
+        # not ship Chromium — in that case the install falls through and /chart is disabled
+        # until the operator installs Chrome/Chromium manually. Non-fatal.
+        log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
+        if command -v dnf >/dev/null 2>&1; then
+            if sudo dnf install -y chromium liberation-fonts 2>/dev/null; then
+                log_message "Installed chromium via dnf" "$GREEN"
+            else
+                log_message "Chromium not available via dnf - Telegram /chart will not render charts" "$YELLOW"
+                log_message "For Amazon Linux 2023, install google-chrome-stable manually" "$YELLOW"
+            fi
+        else
+            if sudo yum install -y chromium liberation-fonts 2>/dev/null; then
+                log_message "Installed chromium via yum" "$GREEN"
+            else
+                log_message "Chromium not available via yum - Telegram /chart will not render charts" "$YELLOW"
+                log_message "Make sure EPEL is enabled, or install google-chrome-stable manually" "$YELLOW"
+            fi
+        fi
         # Enable and start snapd if it was successfully installed
         if command -v snap >/dev/null 2>&1; then
             sudo systemctl enable --now snapd.socket
         fi
         ;;
     arch)
-        sudo pacman -Sy --noconfirm --needed python python-pip nginx git
+        sudo pacman -Sy --noconfirm --needed python python-pip nginx git \
+            openblas gcc-fortran
         # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
         sudo pacman -Sy --noconfirm --needed snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
         check_status "Failed to install required packages"
+        # Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
+        # Non-fatal — if install fails we warn and continue.
+        log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
+        if sudo pacman -S --noconfirm --needed chromium ttf-liberation 2>/dev/null; then
+            log_message "Installed chromium via pacman" "$GREEN"
+        else
+            log_message "Chromium install failed - Telegram /chart will not render charts" "$YELLOW"
+        fi
         # Enable and start snapd if it was successfully installed
         if command -v snap >/dev/null 2>&1; then
             sudo systemctl enable --now snapd.socket
@@ -654,7 +720,7 @@ check_status "Failed to install Python dependencies"
 log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'gunicorn=='"; then
     log_message "Installing gunicorn..." "$YELLOW"
-    sudo $UV_CMD pip install --python $VENV_PATH/bin/python gunicorn
+    sudo $UV_CMD pip install --python $VENV_PATH/bin/python "gunicorn>=25.0,<26"
     check_status "Failed to install gunicorn"
 fi
 if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'eventlet=='"; then
@@ -678,9 +744,17 @@ if is_xts_broker "$BROKER_NAME"; then
 fi
 
 sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
+# Explicitly set HOST_SERVER in case the default value didn't match
+sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
 sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
 sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
+
+# Disable session expiry for crypto brokers (24/7 markets)
+if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
+    sudo sed -i "s|DISABLE_SESSION_EXPIRY = 'false'|DISABLE_SESSION_EXPIRY = 'true'|g" $OPENALGO_PATH/.env
+    log_message "Session auto-logout disabled for crypto broker" "$GREEN"
+fi
 
 # Update WebSocket URL for production
 sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
@@ -924,6 +998,11 @@ server {
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
 
+        # Increased buffer sizes for large headers (auth tokens, session cookies)
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
@@ -960,17 +1039,34 @@ After=network.target
 User=$WEB_USER
 Group=$WEB_GROUP
 WorkingDirectory=$OPENALGO_PATH
+# Set HOME so Kaleido/choreographer can write temp files for Telegram /chart.
+# Kaleido 1.x creates temp dirs in Path.home() (not TMPDIR); the default
+# www-data home /var/www/ is typically root-owned and not writable.
+Environment="HOME=$OPENALGO_PATH/tmp"
+# Environment variables for numba/scipy support
+Environment="TMPDIR=$OPENALGO_PATH/tmp"
+Environment="NUMBA_CACHE_DIR=$OPENALGO_PATH/tmp/numba_cache"
+Environment="LLVMLITE_TMPDIR=$OPENALGO_PATH/tmp"
+Environment="MPLCONFIGDIR=$OPENALGO_PATH/tmp/matplotlib"
+# Thread limits for OpenBLAS/NumPy to prevent RLIMIT_NPROC issues
+# See: https://github.com/marketcalls/openalgo/issues/822
+Environment="OPENBLAS_NUM_THREADS=2"
+Environment="OMP_NUM_THREADS=2"
+Environment="MKL_NUM_THREADS=2"
+Environment="NUMEXPR_NUM_THREADS=2"
+Environment="NUMBA_NUM_THREADS=2"
 # Simplified approach to ensure Python environment is properly loaded
 ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \
     --worker-class eventlet \
     -w 1 \
     --bind unix:$SOCKET_FILE \
+    --timeout 300 \
     --log-level info \
     app:app'
 # Restart settings
 Restart=always
 RestartSec=5
-TimeoutSec=60
+TimeoutSec=300
 
 [Install]
 WantedBy=multi-user.target
@@ -986,7 +1082,8 @@ sudo chmod -R 755 $BASE_PATH
 
 # Create and set permissions for required directories
 sudo mkdir -p $OPENALGO_PATH/db
-sudo mkdir -p $OPENALGO_PATH/tmp
+sudo mkdir -p $OPENALGO_PATH/tmp/numba_cache
+sudo mkdir -p $OPENALGO_PATH/tmp/matplotlib
 # Create directories for Python strategy feature
 sudo mkdir -p $OPENALGO_PATH/strategies/scripts
 sudo mkdir -p $OPENALGO_PATH/strategies/examples
@@ -1061,6 +1158,11 @@ log_message "Socket File: $SOCKET_FILE" "$BLUE"
 log_message "Service Name: $SERVICE_NAME" "$BLUE"
 log_message "Nginx Config: $NGINX_CONFIG_FILE" "$BLUE"
 log_message "SSL: Enabled with Let's Encrypt" "$BLUE"
+if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
+    log_message "Auto-Logout: Disabled (24/7 crypto market)" "$BLUE"
+else
+    log_message "Auto-Logout: Enabled (3 AM IST daily)" "$BLUE"
+fi
 log_message "Installation Log: $LOG_FILE" "$BLUE"
 
 log_message "\nNext Steps:" "$YELLOW"

@@ -18,15 +18,16 @@ Works for:
 """
 
 import os
-import sys
 import subprocess
+import sys
 import time
 
 # Set UTF-8 encoding for output to handle Unicode characters on Windows
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Get the upgrade directory path
 UPGRADE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,20 +37,29 @@ PROJECT_ROOT = os.path.dirname(UPGRADE_DIR)
 # Each migration is idempotent - safe to run multiple times
 MIGRATIONS = [
     # Legacy migrations (for users upgrading from older versions)
-    ('add_feed_token.py', 'Feed Token Support'),
-    ('add_user_id.py', 'User ID Column'),
-
+    ("add_feed_token.py", "Feed Token Support"),
+    ("add_user_id.py", "User ID Column"),
     # Core feature migrations
-    ('migrate_telegram_bot.py', 'Telegram Bot Integration'),
-    ('migrate_smtp_simple.py', 'SMTP Configuration'),
-    ('migrate_security_columns.py', 'Security Columns'),
-    ('migrate_sandbox.py', 'Sandbox Mode'),
-    ('migrate_order_mode.py', 'Order Mode & Action Center'),
-    ('migrate_sandbox_pnl.py', 'Sandbox Day-wise PnL Tracking'),
-
+    ("migrate_telegram_bot.py", "Telegram Bot Integration"),
+    ("migrate_smtp_simple.py", "SMTP Configuration"),
+    ("migrate_security_columns.py", "Security Columns"),
+    ("migrate_sandbox.py", "Sandbox Mode"),
+    ("migrate_order_mode.py", "Order Mode & Action Center"),
+    ("migrate_sandbox_pnl.py", "Sandbox Day-wise PnL Tracking"),
     # Performance migrations
-    ('migrate_indexes.py', 'Database Performance Indexes'),
+    ("migrate_indexes.py", "Database Performance Indexes"),
+    # Feature migrations
+    ("migrate_historify.py", "Historify DuckDB Setup"),
+    ("migrate_historify_scheduler.py", "Historify Scheduler Tables"),
+    ("migrate_flow.py", "Flow Workflow Automation"),
+    ("migrate_health_process_details.py", "Health Metrics Process Details"),
+    ("migrate_master_contract_stats.py", "Master Contract Smart Download"),
+    ("migrate_contract_value.py", "Contract Value Column for Crypto"),
+    ("migrate_market_holidays.py", "2026 Market Holiday Calendar Update"),
+    ("migrate_leverage.py", "Leverage Configuration for Crypto"),
+    ("migrate_samco_auth.py", "Samco 2FA Authentication"),
 ]
+
 
 def run_migration(script_name, description):
     """Run a single migration script"""
@@ -60,18 +70,15 @@ def run_migration(script_name, description):
         print(f"  [SKIP] {script_name} - Script not found")
         return True  # Not an error, might be removed in future
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Running: {description}")
     print(f"Script: {script_name}")
-    print('='*60)
+    print("=" * 60)
 
     try:
         # Run the migration script
         result = subprocess.run(
-            [sys.executable, script_path],
-            cwd=PROJECT_ROOT,
-            capture_output=False,
-            text=True
+            [sys.executable, script_path], cwd=PROJECT_ROOT, capture_output=False, text=True
         )
 
         if result.returncode == 0:
@@ -85,14 +92,15 @@ def run_migration(script_name, description):
         print(f"[X] {description} - Error: {e}")
         return False
 
+
 def main():
     """Run all migrations"""
     print()
-    print('#' * 60)
-    print('#' + ' ' * 58 + '#')
-    print('#' + '       OpenAlgo Master Migration Script'.center(58) + '#')
-    print('#' + ' ' * 58 + '#')
-    print('#' * 60)
+    print("#" * 60)
+    print("#" + " " * 58 + "#")
+    print("#" + "       OpenAlgo Master Migration Script".center(58) + "#")
+    print("#" + " " * 58 + "#")
+    print("#" * 60)
     print()
     print("This script will run all migrations in order.")
     print("Already applied migrations will be automatically skipped.")
@@ -112,11 +120,11 @@ def main():
 
     # Summary
     print()
-    print('#' * 60)
-    print('#' + ' ' * 58 + '#')
-    print('#' + '              Migration Summary'.center(58) + '#')
-    print('#' + ' ' * 58 + '#')
-    print('#' * 60)
+    print("#" * 60)
+    print("#" + " " * 58 + "#")
+    print("#" + "              Migration Summary".center(58) + "#")
+    print("#" + " " * 58 + "#")
+    print("#" * 60)
     print()
     print(f"  Total migrations: {len(MIGRATIONS)}")
     print(f"  Successful: {success_count}")
@@ -136,6 +144,7 @@ def main():
         print("[!] Some migrations had issues. Check the output above.")
         print()
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

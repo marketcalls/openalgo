@@ -1,0 +1,27 @@
+meta {
+  name: Unsubscribe LTP (Mode 1)
+  type: websocket
+  seq: 9
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Unsubscribe from LTP data for a symbol
+}
+
+message:json {
+  {
+    "action": "unsubscribe",
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "mode": 1
+  }
+}
+
+docs {
+  Unsubscribe from LTP (Last Traded Price) data for a specific symbol.
+  Use mode 1 to unsubscribe from LTP subscriptions.
+
+  Server responds with:
+  {"type": "unsubscribe", "status": "success", "symbol": "RELIANCE", "exchange": "NSE"}
+}

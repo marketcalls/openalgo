@@ -1,22 +1,153 @@
 import json
-from database.token_db import get_symbol , get_oa_symbol
+from datetime import date
+
+from broker.aliceblue.mapping.transform_data import reverse_map_product_type
+from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+# ─── V2 API response normalization ───────────────────────────────────────────
+# These map AliceBlue V2 API response fields to the old field names that the
+# downstream transform/map functions in this file expect.
+
+
+def normalize_order(order):
+    """Normalize a V2 order-book entry to old field names."""
+    # Map transactionType BUY/SELL → B/S
+    trantype_map = {"BUY": "B", "SELL": "S"}
+    trantype = trantype_map.get(order.get("transactionType", ""), order.get("transactionType", ""))
+
+    # Map orderType MARKET/LIMIT/SL/SLM → MKT/L/SL/SL-M
+    prctype_map = {"MARKET": "MKT", "LIMIT": "L", "SL": "SL", "SLM": "SL-M"}
+    prctype = prctype_map.get(order.get("orderType", ""), order.get("orderType", ""))
+
+    # Map orderStatus to lowercase for downstream compatibility
+    status_raw = order.get("orderStatus", "")
+    status = status_raw.lower() if status_raw else ""
+
+    return {
+        # Core identifiers
+        "Nstordno": order.get("brokerOrderId", ""),
+        "Exchange": order.get("exchange", ""),
+        "Trsym": order.get("formattedInstrumentName", order.get("tradingSymbol", "")),
+        "Tsym": order.get("formattedInstrumentName", order.get("tradingSymbol", "")),
+        # Transaction
+        "Trantype": trantype,
+        "transactionType": order.get("transactionType", ""),
+        # Quantities
+        "Qty": str(order.get("quantity", 0)),
+        "Fillshares": str(order.get("filledQuantity", 0)),
+        "cancelledQuantity": str(order.get("cancelledQuantity", 0)),
+        "pendingQuantity": str(order.get("pendingQuantity", 0)),
+        # Prices
+        "Prc": str(order.get("price", 0)),
+        "Trgprc": str(order.get("slTriggerPrice", 0)),
+        "AvgPrice": str(order.get("averageTradedPrice", 0)),
+        # Order metadata
+        "Prctype": prctype,
+        "orderType": order.get("orderType", ""),
+        "Pcode": reverse_map_product_type(order.get("product", "")),
+        "Status": status,
+        "orderStatus": status_raw,
+        "orderentrytime": order.get("orderTime", ""),
+        "rejectionReason": order.get("rejectionReason", ""),
+        "orderTag": order.get("orderTag", ""),
+        # Complexity & validity
+        "orderComplexity": order.get("orderComplexity", ""),
+        "validity": order.get("validity", ""),
+        # Exchange-level
+        "exchangeOrderId": order.get("exchangeOrderId", ""),
+        "formattedInstrumentName": order.get("formattedInstrumentName", ""),
+        "instrumentId": order.get("instrumentId", ""),
+    }
+
+
+def normalize_trade(trade):
+    """Normalize a V2 trade-book entry to old field names."""
+    trantype_map = {"BUY": "B", "SELL": "S"}
+    trantype = trantype_map.get(trade.get("transactionType", ""), trade.get("transactionType", ""))
+
+    prctype_map = {"MARKET": "MKT", "LIMIT": "L", "SL": "SL", "SLM": "SL-M"}
+    prctype = prctype_map.get(trade.get("orderType", ""), trade.get("orderType", ""))
+
+    return {
+        "Nstordno": trade.get("brokerOrderId", ""),
+        "Exchange": trade.get("exchange", ""),
+        "Tsym": trade.get("formattedInstrumentName", trade.get("tradingSymbol", "")),
+        "Trsym": trade.get("formattedInstrumentName", trade.get("tradingSymbol", "")),
+        "Trantype": trantype,
+        "transactionType": trade.get("transactionType", ""),
+        "Qty": str(trade.get("filledQuantity", 0)),
+        "AvgPrice": str(trade.get("tradedPrice", 0)),
+        "Prc": str(trade.get("tradedPrice", 0)),
+        "Pcode": reverse_map_product_type(trade.get("product", "")),
+        "Prctype": prctype,
+        "Filltime": trade.get("fillTimestamp", trade.get("orderTime", "")),
+        "orderTag": trade.get("orderTag", ""),
+        "exchangeOrderId": trade.get("exchangeOrderId", ""),
+        "exchangeTradeId": trade.get("exchangeTradeId", ""),
+    }
+
+
+def normalize_position(position):
+    """Normalize a V2 position entry to old field names."""
+    return {
+        "Tsym": position.get("tradingSymbol", position.get("formattedInstrumentName", "")),
+        "Exchange": position.get("exchange", ""),
+        "Pcode": reverse_map_product_type(position.get("product", "")),
+        "Netqty": str(position.get("netQuantity", 0)),
+        "Buyavgprc": str(position.get("dayBuyPrice", position.get("netAveragePrice", 0))),
+        "Sellavgprc": str(position.get("daySellPrice", 0)),
+        "Bqty": str(position.get("buyQuantity", position.get("dayBuyQuantity", 0))),
+        "Sqty": str(position.get("sellQuantity", position.get("daySellQuantity", 0))),
+        "LTP": str(position.get("ltp", position.get("previousDayClose", 0))),
+        "MtoM": str(position.get("mtm", position.get("markToMarket", 0))),
+        "unrealisedprofitloss": str(position.get("unrealisedPnl", position.get("unrealisedProfitLoss", 0))),
+        "realisedprofitloss": str(position.get("realizedPnl", position.get("realisedPnl", 0))),
+        "instrumentId": position.get("instrumentId", ""),
+    }
+
+
+def normalize_holding(h):
+    """Normalize a V2 holdings entry to old field names."""
+    nse_symbol = h.get("nseTradingSymbol", "")
+    bse_symbol = h.get("bseTradingSymbol", "")
+    # Use NSE symbol as primary, fallback to BSE
+    primary_symbol = nse_symbol or bse_symbol
+    # Determine exchange based on which symbol is available
+    exchange = "NSE" if nse_symbol else ("BSE" if bse_symbol else "NSE")
+
+    return {
+        "Nsetsym": nse_symbol,
+        "Bsetsym": bse_symbol,
+        "ExchSeg1": exchange,
+        "Exchange": exchange,
+        "Holdqty": str(h.get("dpQuantity", h.get("totalQuantity", 0))),
+        "HUqty": str(h.get("t1Quantity", 0)),
+        "Ltp": str(h.get("ltp", 0)),
+        "Price": str(h.get("averageTradedPrice", h.get("investedPrice", 0))),
+        "Pcode": "CNC",
+        "Symbol": primary_symbol,
+        "instrumentId": h.get("nseInstrumentId", h.get("bseInstrumentId", "")),
+        "isin": h.get("isin", ""),
+        "sellableQty": str(h.get("sellableQty", 0)),
+    }
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
-    
+
     Parameters:
     - order_data: A list of dictionaries, where each dictionary represents an order.
-    
+
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
     if isinstance(order_data, dict):
-        if order_data['stat'] == 'Not_Ok' :
+        if order_data["stat"] == "Not_Ok":
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
@@ -24,22 +155,23 @@ def map_order_data(order_data):
             order_data = {}
     else:
         order_data = order_data
-        
+
     # logger.info(f"{order_data}")
 
     if order_data:
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
-            exchange = order['Exchange']
-            symbol = order['Trsym']
-       
-            
+            exchange = order["Exchange"]
+            symbol = order["Trsym"]
+
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['Trsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                order["Trsym"] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
-                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
-                
+                logger.info(
+                    f"{symbol} and exchange {exchange} not found. Keeping original trading symbol."
+                )
+
     return order_data
 
 
@@ -61,26 +193,26 @@ def calculate_order_statistics(order_data):
     if order_data:
         for order in order_data:
             # Count buy and sell orders
-            if order['Trantype'] == 'B':
+            if order["Trantype"] == "B":
                 total_buy_orders += 1
-            elif order['Trantype'] == 'S':
+            elif order["Trantype"] == "S":
                 total_sell_orders += 1
-            
+
             # Count orders based on their status
-            if order['Status'] == 'complete':
+            if order["Status"] == "complete":
                 total_completed_orders += 1
-            elif order['Status'] == 'open':
+            elif order["Status"] == "open":
                 total_open_orders += 1
-            elif order['Status'] == 'rejected':
+            elif order["Status"] == "rejected":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
     return {
-        'total_buy_orders': total_buy_orders,
-        'total_sell_orders': total_sell_orders,
-        'total_completed_orders': total_completed_orders,
-        'total_open_orders': total_open_orders,
-        'total_rejected_orders': total_rejected_orders
+        "total_buy_orders": total_buy_orders,
+        "total_sell_orders": total_sell_orders,
+        "total_completed_orders": total_completed_orders,
+        "total_open_orders": total_open_orders,
+        "total_rejected_orders": total_rejected_orders,
     }
 
 
@@ -95,31 +227,33 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning(
+                f"Warning: Expected a dict, but found a {type(order)}. Skipping this item."
+            )
             continue
-        
+
         # Check if the necessary keys exist in the order
-        if 'Trantype' not in order or 'Prctype' not in order:
+        if "Trantype" not in order or "Prctype" not in order:
             logger.error("Error: Missing required keys in the order. Skipping this item.")
             continue
-        
-        if order['Trantype'] == 'B':
-            trans_type = 'BUY'
-        elif order['Trantype'] == 'S':
-            trans_type = 'SELL'
-        else:
-            trans_type = 'UNKNOWN'
 
-        if order['Prctype'] == 'MKT':
-            order_type = 'MARKET'
-        elif order['Prctype'] == 'L':
-            order_type = 'LIMIT'
-        elif order['Prctype'] == 'SL':
-            order_type = 'SL'
-        elif order['Prctype'] == 'SL-M':
-            order_type = 'SL-M'
+        if order["Trantype"] == "B":
+            trans_type = "BUY"
+        elif order["Trantype"] == "S":
+            trans_type = "SELL"
         else:
-            order_type = 'UNKNOWN'
+            trans_type = "UNKNOWN"
+
+        if order["Prctype"] == "MKT":
+            order_type = "MARKET"
+        elif order["Prctype"] == "L":
+            order_type = "LIMIT"
+        elif order["Prctype"] == "SL":
+            order_type = "SL"
+        elif order["Prctype"] == "SL-M":
+            order_type = "SL-M"
+        else:
+            order_type = "UNKNOWN"
 
         transformed_order = {
             "symbol": order.get("Trsym", ""),
@@ -132,7 +266,7 @@ def transform_order_data(orders):
             "product": order.get("Pcode", ""),
             "orderid": order.get("Nstordno", ""),
             "order_status": order.get("Status", ""),
-            "timestamp": order.get("orderentrytime", "")
+            "timestamp": order.get("orderentrytime", ""),
         }
 
         transformed_orders.append(transformed_order)
@@ -156,12 +290,14 @@ def map_trade_data(trade_data):
         if isinstance(trade_data, list) and len(trade_data) > 0:
             logger.info(f"First trade in raw response: {trade_data[0]}")
             # Log all available fields in first trade
-            logger.info(f"Available fields in first trade: {list(trade_data[0].keys()) if trade_data[0] else 'No fields'}")
+            logger.info(
+                f"Available fields in first trade: {list(trade_data[0].keys()) if trade_data[0] else 'No fields'}"
+            )
         elif isinstance(trade_data, dict):
             logger.info(f"Raw response is dict: {trade_data}")
 
     if isinstance(trade_data, dict):
-        if trade_data.get('stat') == 'Not_Ok':
+        if trade_data.get("stat") == "Not_Ok":
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
@@ -176,51 +312,81 @@ def map_trade_data(trade_data):
     if trade_data:
         for trade in trade_data:
             # Extract the instrument_token and exchange for the current trade
-            exchange = trade['Exchange']
-            symbol = trade['Tsym']
-            
+            exchange = trade["Exchange"]
+            symbol = trade["Tsym"]
+
             # Check if a symbol was found; if so, update the trading_symbol in the current trade
             if symbol:
-                trade['Tsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                mapped_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                # Keep original symbol if mapping returns None (e.g., NFO symbols)
+                if mapped_symbol is not None:
+                    trade["Tsym"] = mapped_symbol
+                else:
+                    logger.warning(
+                        f"Symbol mapping returned None for {symbol} on {exchange}. Keeping original symbol."
+                    )
             else:
-                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
-                
+                logger.info(
+                    f"{symbol} and exchange {exchange} not found. Keeping original trading symbol."
+                )
+
     return trade_data
+
 
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
-
         # Ensure quantity and average price are converted to the correct types
-        quantity = int(trade.get('Qty', 0))
+        quantity = int(trade.get("Qty", 0))
         # AliceBlue uses 'AvgPrice' field (no space) for average price in tradebook
-        average_price = float(trade.get('AvgPrice', 0.0))
+        average_price = float(trade.get("AvgPrice", 0.0))
 
         # Log if we got the price
         if average_price > 0:
             logger.debug(f"Got average price: {average_price} for qty: {quantity}")
         else:
             logger.warning(f"Zero or missing AvgPrice. Raw value: {trade.get('AvgPrice')}")
-        
+
         # Map transaction type from 'B'/'S' to 'BUY'/'SELL'
-        trantype = trade.get('Trantype', '')
-        if trantype == 'B':
-            action = 'BUY'
-        elif trantype == 'S':
-            action = 'SELL'
+        trantype = trade.get("Trantype", "")
+        if trantype == "B":
+            action = "BUY"
+        elif trantype == "S":
+            action = "SELL"
         else:
             action = trantype
-        
+
+        # Parse Filltime which can be:
+        #   - Full datetime: '04-03-2026 15:21:01' (DD-MM-YYYY HH:MM:SS)
+        #   - Time only: '15:21:01' (HH:MM:SS)
+        filltime_raw = trade.get("Filltime", "")
+        timestamp = ""
+        if filltime_raw:
+            try:
+                from datetime import datetime as _dt
+                # Try full datetime format: DD-MM-YYYY HH:MM:SS
+                parsed = _dt.strptime(filltime_raw, "%d-%m-%Y %H:%M:%S")
+                timestamp = parsed.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                try:
+                    # Try time-only format: HH:MM:SS (prepend today's date)
+                    parsed = _dt.strptime(filltime_raw, "%H:%M:%S")
+                    timestamp = f"{date.today()} {filltime_raw}"
+                except ValueError:
+                    # Fallback: use as-is
+                    logger.warning(f"Could not parse Filltime: {filltime_raw}")
+                    timestamp = filltime_raw
+
         transformed_trade = {
-            "symbol": trade.get('Tsym'),
-            "exchange": trade.get('Exchange', ''),
-            "product": trade.get('Pcode', ''),
+            "symbol": trade.get("Tsym"),
+            "exchange": trade.get("Exchange", ""),
+            "product": trade.get("Pcode", ""),
             "action": action,
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
-            "orderid": trade.get('Nstordno', ''),
-            "timestamp": trade.get('Filltime', '')  # Use Filltime which contains HH:MM:SS format
+            "orderid": trade.get("Nstordno", ""),
+            "timestamp": timestamp,
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -229,15 +395,15 @@ def transform_tradebook_data(tradebook_data):
 def map_position_data(position_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
-    
+
     Parameters:
     - position_data: A list of dictionaries, where each dictionary represents an order.
-    
+
     Returns:
     - The modified position_data with updated 'tradingsymbol' and 'product' fields.
     """
     if isinstance(position_data, dict):
-        if position_data['stat'] == 'Not_Ok' :
+        if position_data["stat"] == "Not_Ok":
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
@@ -245,34 +411,35 @@ def map_position_data(position_data):
             position_data = {}
     else:
         position_data = position_data
-        
+
     # logger.info(f"{order_data}")
 
     if position_data:
         for position in position_data:
             # Extract the instrument_token and exchange for the current order
-            exchange = position['Exchange']
-            symbol = position['Tsym']
-       
-            
+            exchange = position["Exchange"]
+            symbol = position["Tsym"]
+
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                position['Tsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+                position["Tsym"] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
-                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
-                
+                logger.info(
+                    f"{symbol} and exchange {exchange} not found. Keeping original trading symbol."
+                )
+
     return position_data
-    
+
 
 def transform_positions_data(positions_data):
     transformed_data = []
 
     for position in positions_data:
-        netqty = float(position.get('Netqty', 0))
+        netqty = float(position.get("Netqty", 0))
 
         # Get buy and sell average prices
-        buyavgprc = float(position.get('Buyavgprc', 0))
-        sellavgprc = float(position.get('Sellavgprc', 0))
+        buyavgprc = float(position.get("Buyavgprc", 0))
+        sellavgprc = float(position.get("Sellavgprc", 0))
 
         # Determine average price based on net position
         if netqty > 0:
@@ -286,7 +453,7 @@ def transform_positions_data(positions_data):
             average_price = 0
 
         # Get LTP (Last Traded Price) - AliceBlue uses 'LTP' field
-        ltp = float(position.get('LTP', 0))
+        ltp = float(position.get("LTP", 0))
 
         # Calculate P&L correctly
         pnl = 0
@@ -304,7 +471,7 @@ def transform_positions_data(positions_data):
             pnlpercentage = (pnl / (average_price * abs(netqty))) * 100 if average_price != 0 else 0
 
         # Use broker-provided P&L if available and non-zero
-        unrealised_pnl = float(position.get('unrealisedprofitloss', 0))
+        unrealised_pnl = float(position.get("unrealisedprofitloss", 0))
         if unrealised_pnl != 0:
             pnl = unrealised_pnl
             # Recalculate percentage with broker-provided P&L
@@ -312,26 +479,29 @@ def transform_positions_data(positions_data):
                 pnlpercentage = (pnl / (average_price * abs(netqty))) * 100
 
         # Get M2M value or use calculated P&L
-        m2m = float(position.get('MtoM', pnl))
+        m2m = float(position.get("MtoM", pnl))
 
         transformed_position = {
-            "symbol": position.get('Tsym', ''),
-            "exchange": position.get('Exchange', ''),
-            "product": position.get('Pcode', ''),
+            "symbol": position.get("Tsym", ""),
+            "exchange": position.get("Exchange", ""),
+            "product": position.get("Pcode", ""),
             "quantity": int(netqty),  # Return as integer value
             "average_price": round(average_price, 2),  # Round to 2 decimals
             "ltp": ltp,  # Return LTP value
             "pnl": round(pnl, 2),  # Round P&L to 2 decimals
             "pnlpercentage": round(pnlpercentage, 2),  # Add P&L percentage
             "m2m": round(m2m, 2),  # Add M2M value
-            "buyqty": int(position.get('Bqty', 0)),  # Day buy quantity
-            "sellqty": int(position.get('Sqty', 0)),  # Day sell quantity
-            "netvalue": round(average_price * abs(netqty), 2) if average_price > 0 else 0,  # Position value
-            "realised": round(float(position.get('realisedprofitloss', 0)), 2),  # Realised P&L
-            "unrealised": round(unrealised_pnl, 2)  # Unrealised P&L
+            "buyqty": int(position.get("Bqty", 0)),  # Day buy quantity
+            "sellqty": int(position.get("Sqty", 0)),  # Day sell quantity
+            "netvalue": round(average_price * abs(netqty), 2)
+            if average_price > 0
+            else 0,  # Position value
+            "realised": round(float(position.get("realisedprofitloss", 0)), 2),  # Realised P&L
+            "unrealised": round(unrealised_pnl, 2),  # Unrealised P&L
         }
         transformed_data.append(transformed_position)
     return transformed_data
+
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
@@ -348,62 +518,94 @@ def transform_holdings_data(holdings_data):
             continue
 
         try:
-            ltp = float(holdings.get('Ltp', 0))
-            price = float(holdings.get('Price', 0.0))
+            ltp = float(holdings.get("Ltp", 0))
+            price = float(holdings.get("Price", 0.0))
             # HUqty = Holding Unsettled Qty, Holdqty = Holding Qty
             # Use HUqty if Holdqty is 0 or empty
-            holdqty = int(holdings.get('Holdqty', 0) or 0)
-            huqty = int(holdings.get('HUqty', 0) or 0)
+            holdqty = int(holdings.get("Holdqty", 0) or 0)
+            huqty = int(holdings.get("HUqty", 0) or 0)
             quantity = holdqty if holdqty > 0 else huqty
 
             pnl = round((ltp - price) * quantity, 2) if quantity else 0
             pnlpercent = round(((ltp - price) / price * 100), 2) if price else 0
 
+            # Determine exchange from ExchSeg1 (primary exchange segment)
+            exchange = holdings.get("ExchSeg1", holdings.get("Exchange", ""))
+
+            # Select symbol based on exchange - use the appropriate exchange-specific symbol field
+            # Nsetsym = NSE symbol, Bsetsym = BSE symbol, Mcxsxcmsym = MCX symbol,
+            # Csetsym = CSE symbol, Ysxtsym = YSX symbol
+            if exchange and exchange.upper() == "NSE":
+                symbol = holdings.get("Nsetsym", "")
+            elif exchange and exchange.upper() == "BSE":
+                symbol = holdings.get("Bsetsym", "")
+            elif exchange and exchange.upper() == "MCX":
+                symbol = holdings.get("Mcxsxcmsym", "")
+            elif exchange and exchange.upper() == "CSE":
+                symbol = holdings.get("Csetsym", "")
+            elif exchange and exchange.upper() == "YSX":
+                symbol = holdings.get("Ysxtsym", "")
+            else:
+                # Fallback: try each symbol field until we find a non-empty one
+                symbol = (
+                    holdings.get("Nsetsym", "")
+                    or holdings.get("Bsetsym", "")
+                    or holdings.get("Mcxsxcmsym", "")
+                    or holdings.get("Csetsym", "")
+                    or holdings.get("Ysxtsym", "")
+                    or holdings.get("Symbol", "")
+                )
+
+            # Skip holdings with empty symbol
+            if not symbol:
+                logger.warning(f"Skipping holdings with empty symbol: {holdings}")
+                continue
+
             transformed_position = {
-                "symbol": holdings.get('Bsetsym', holdings.get('Symbol', '')),
-                "exchange": holdings.get('ExchSeg1', holdings.get('Exchange', '')),
+                "symbol": symbol,
+                "exchange": exchange,
                 "quantity": quantity,
-                "product": holdings.get('Pcode', 'CNC'),
+                "product": holdings.get("Pcode", "CNC"),
                 "pnl": pnl,  # Rounded to two decimals
-                "pnlpercent": pnlpercent  # Rounded to two decimals
+                "pnlpercent": pnlpercent,  # Rounded to two decimals
             }
             transformed_data.append(transformed_position)
         except (KeyError, TypeError, ValueError) as e:
             logger.error(f"Error transforming holdings item: {e}, Item: {holdings}")
             continue
-            
+
     return transformed_data
 
 
-    
 def map_portfolio_data(portfolio_data):
     """
     Processes and modifies a list of Portfolio dictionaries based on specific conditions.
-    
+
     Parameters:
     - portfolio_data: A list of dictionaries, where each dictionary represents an portfolio information.
-    
+
     Returns:
     - The modified portfolio_data with  'product' fields.
     """
-    
+
     # Check if portfolio_data is a string (might be JSON string)
     if isinstance(portfolio_data, str):
         try:
             import json
+
             portfolio_data = json.loads(portfolio_data)
         except json.JSONDecodeError:
             logger.error(f"Failed to parse portfolio_data as JSON: {portfolio_data}")
             return []
-    
+
     # Check if 'data' is None
     if isinstance(portfolio_data, dict):
-        if portfolio_data.get('stat') == 'Not_Ok':
+        if portfolio_data.get("stat") == "Not_Ok":
             # Handle the case where there is no data
             logger.info("No data available or error in response.")
             return []
-        elif 'HoldingVal' in portfolio_data:
-            portfolio_data = portfolio_data['HoldingVal']
+        elif "HoldingVal" in portfolio_data:
+            portfolio_data = portfolio_data["HoldingVal"]
         # If it's a dict but doesn't have 'HoldingVal', assume it's the holdings data itself
     elif isinstance(portfolio_data, list):
         # If it's already a list, use it as is
@@ -411,58 +613,67 @@ def map_portfolio_data(portfolio_data):
     else:
         logger.error(f"Unexpected portfolio_data type: {type(portfolio_data)}")
         return []
-        
+
     logger.info(f"Processing portfolio data: {portfolio_data}")
 
     if portfolio_data and isinstance(portfolio_data, list):
         for portfolio in portfolio_data:
-            if isinstance(portfolio, dict) and portfolio.get('Pcode') == 'CNC':
-                portfolio['Pcode'] = 'CNC'
+            if isinstance(portfolio, dict) and portfolio.get("Pcode") == "CNC":
+                portfolio["Pcode"] = "CNC"
             else:
-                logger.info("AliceBlue Portfolio - Product Value for Delivery Not Found or Changed.")
-                
+                logger.info(
+                    "AliceBlue Portfolio - Product Value for Delivery Not Found or Changed."
+                )
+
     return portfolio_data if isinstance(portfolio_data, list) else []
+
 
 def calculate_portfolio_statistics(holdings_data):
     # Return empty statistics if holdings_data is empty or not a list
     if not holdings_data or not isinstance(holdings_data, list):
         return {
-            'totalholdingvalue': 0,
-            'totalinvvalue': 0,
-            'totalprofitandloss': 0,
-            'totalpnlpercentage': 0
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalprofitandloss": 0,
+            "totalpnlpercentage": 0,
         }
-    
+
     def get_quantity(item):
         """Get holding quantity - prefer Holdqty if > 0, else HUqty"""
-        holdqty = int(item.get('Holdqty', 0) or 0)
-        huqty = int(item.get('HUqty', 0) or 0)
+        holdqty = int(item.get("Holdqty", 0) or 0)
+        huqty = int(item.get("HUqty", 0) or 0)
         return holdqty if holdqty > 0 else huqty
 
     try:
-        totalholdingvalue = sum(float(item.get('Ltp', 0)) * get_quantity(item) for item in holdings_data)
-        totalinvvalue = sum(float(item.get('Price', 0)) * get_quantity(item) for item in holdings_data)
-        totalprofitandloss = sum((float(item.get('Ltp', 0)) - float(item.get('Price', 0))) * get_quantity(item) for item in holdings_data)
+        totalholdingvalue = sum(
+            float(item.get("Ltp", 0)) * get_quantity(item) for item in holdings_data
+        )
+        totalinvvalue = sum(
+            float(item.get("Price", 0)) * get_quantity(item) for item in holdings_data
+        )
+        totalprofitandloss = sum(
+            (float(item.get("Ltp", 0)) - float(item.get("Price", 0))) * get_quantity(item)
+            for item in holdings_data
+        )
 
         for item in holdings_data:
-            logger.info(f"Holdings item: LTP={item.get('Ltp')}, Price={item.get('Price')}, Holdqty={item.get('Holdqty')}, HUqty={item.get('HUqty')}, Used={get_quantity(item)}")
+            logger.info(
+                f"Holdings item: LTP={item.get('Ltp')}, Price={item.get('Price')}, Holdqty={item.get('Holdqty')}, HUqty={item.get('HUqty')}, Used={get_quantity(item)}"
+            )
         # To avoid division by zero in the case when totalinvvalue is 0
         totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
     except (KeyError, TypeError, ValueError) as e:
         logger.error(f"Error calculating portfolio statistics: {e}")
         return {
-            'totalholdingvalue': 0,
-            'totalinvvalue': 0,
-            'totalprofitandloss': 0,
-            'totalpnlpercentage': 0
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalprofitandloss": 0,
+            "totalpnlpercentage": 0,
         }
 
     return {
-        'totalholdingvalue': totalholdingvalue,
-        'totalinvvalue': totalinvvalue,
-        'totalprofitandloss': totalprofitandloss,
-        'totalpnlpercentage': totalpnlpercentage
+        "totalholdingvalue": totalholdingvalue,
+        "totalinvvalue": totalinvvalue,
+        "totalprofitandloss": totalprofitandloss,
+        "totalpnlpercentage": totalpnlpercentage,
     }
-
-
-

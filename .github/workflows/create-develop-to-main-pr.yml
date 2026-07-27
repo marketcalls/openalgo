@@ -1,0 +1,65 @@
+name: Create or Update Develop to Main PR
+
+on:
+  workflow_run:
+    workflows: ["Sync Upstream to Develop"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: develop-to-main-pr
+  cancel-in-progress: false
+
+jobs:
+  pr:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure branches are up to date
+        run: |
+          set -euo pipefail
+          git fetch origin main develop
+
+      - name: Create or update develop to main PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          AHEAD_BY=$(gh api "repos/$REPO/compare/main...develop" --jq '.ahead_by')
+
+          if [ "$AHEAD_BY" -le 0 ]; then
+            echo "No commits to merge from develop into main."
+            exit 0
+          fi
+
+          OPEN_PR_NUMBER=$(gh pr list \
+            --repo "$REPO" \
+            --state open \
+            --base main \
+            --head develop \
+            --json number \
+            --jq '.[0].number')
+
+          if [ -n "$OPEN_PR_NUMBER" ]; then
+            echo "Open PR #$OPEN_PR_NUMBER already exists for develop -> main."
+            gh pr comment "$OPEN_PR_NUMBER" --repo "$REPO" --body "Automated update: develop now includes new upstream sync commits."
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$REPO" \
+            --base main \
+            --head develop \
+            --title "chore: sync develop into main" \
+            --body "## Automated Sync PR\n\nThis pull request was created automatically after syncing \`upstream/main\` into \`develop\`.\n\n- Source branch: \`develop\`\n- Target branch: \`main\`\n- Trigger: scheduled/manual upstream sync workflow\n\nPlease review and merge when ready."

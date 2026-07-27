@@ -5,6 +5,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 def transform_margin_positions(positions):
     """
     Transform OpenAlgo margin position format to broker format.
@@ -18,7 +19,10 @@ def transform_margin_positions(positions):
     Raises:
         NotImplementedError: Paytm Money does not support position-specific margin calculator API
     """
-    raise NotImplementedError("Paytm Money does not support position-specific margin calculator API")
+    raise NotImplementedError(
+        "Paytm Money does not support position-specific margin calculator API"
+    )
+
 
 def parse_margin_response(response_data):
     """
@@ -33,4 +37,6 @@ def parse_margin_response(response_data):
     Raises:
         NotImplementedError: Paytm Money does not support position-specific margin calculator API
     """
-    raise NotImplementedError("Paytm Money does not support position-specific margin calculator API")
+    raise NotImplementedError(
+        "Paytm Money does not support position-specific margin calculator API"
+    )

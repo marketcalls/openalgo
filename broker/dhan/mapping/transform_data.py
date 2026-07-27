@@ -1,7 +1,8 @@
-#Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Upstox Broking Parameters https://dhanhq.co/docs/v2/orders/
+# Mapping OpenAlgo API Request https://openalgo.in/docs
+# Mapping Upstox Broking Parameters https://dhanhq.co/docs/v2/orders/
 
-def transform_data(data,token):
+
+def transform_data(data, token):
     """
     Transforms the OpenAlgo API request structure to Dhan v2 API structure.
     Based on the exact structure from Dhan documentation.
@@ -15,7 +16,7 @@ def transform_data(data,token):
         "orderType": map_order_type(data["pricetype"]),
         "validity": "DAY",
         "securityId": token,
-        "quantity": int(data["quantity"])
+        "quantity": int(data["quantity"]),
     }
 
     # Add optional fields only if needed
@@ -62,7 +63,6 @@ def transform_data(data,token):
     if data.get("validity") == "IOC":
         transformed["validity"] = "IOC"
 
-
     return transformed
 
 
@@ -73,7 +73,7 @@ def transform_modify_order_data(data):
         "orderType": map_order_type(data["pricetype"]),
         "legName": "ENTRY_LEG",
         "quantity": int(data["quantity"]),
-        "validity": "DAY"
+        "validity": "DAY",
     }
 
     # Set price for non-market orders
@@ -102,10 +102,9 @@ def map_order_type(pricetype):
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
         "SL": "STOP_LOSS",
-        "SL-M": "STOP_LOSS_MARKET"
+        "SL-M": "STOP_LOSS_MARKET",
     }
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
-
 
 
 def map_exchange_type(exchange):
@@ -119,11 +118,9 @@ def map_exchange_type(exchange):
         "NFO": "NSE_FNO",
         "BFO": "BSE_FNO",
         "BCD": "BSE_CURRENCY",
-        "MCX": "MCX_COMM"
-
+        "MCX": "MCX_COMM",
     }
     return exchange_mapping.get(exchange)  # Default to MARKET if not found
-
 
 
 def map_exchange(brexchange):
@@ -137,11 +134,9 @@ def map_exchange(brexchange):
         "NSE_FNO": "NFO",
         "BSE_FNO": "BFO",
         "BSE_CURRENCY": "BCD",
-        "MCX_COMM": "MCX"
-
+        "MCX_COMM": "MCX",
     }
     return exchange_mapping.get(brexchange)  # Default to MARKET if not found
-
 
 
 def map_product_type(product):
@@ -155,15 +150,12 @@ def map_product_type(product):
     }
     return product_type_mapping.get(product, "INTRADAY")  # Default to INTRADAY if not found
 
+
 def reverse_map_product_type(product):
     """
     Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
     """
     # Exchange to OpenAlgo product type mapping for 'D'
-    product_mapping = {
-        "CNC": "CNC",
-        "MARGIN": "NRML",
-        "MIS": "INTRADAY"
-    }
-    
+    product_mapping = {"CNC": "CNC", "MARGIN": "NRML", "MIS": "INTRADAY"}
+
     return product_mapping.get(product)  # Removed default; will return None if not found

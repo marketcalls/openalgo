@@ -31,26 +31,28 @@ Response (Error):
 }
 """
 
-from flask import request, jsonify, make_response
+import os
+
+from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
+
 from limiter import limiter
-from utils.logging import get_logger
 from restx_api.schemas import SyntheticFutureSchema
 from services.synthetic_future_service import calculate_synthetic_future
-import os
+from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
 
 # Create namespace
-api = Namespace('syntheticfuture', description='Calculate Synthetic Future Price')
+api = Namespace("syntheticfuture", description="Calculate Synthetic Future Price")
 
 # Get rate limit from environment
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
-@api.route('/', strict_slashes=False)
+@api.route("/", strict_slashes=False)
 class SyntheticFuture(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
@@ -64,10 +66,10 @@ class SyntheticFuture(Resource):
             data = schema.load(request.json)
 
             # Extract parameters
-            api_key = data.get('apikey')
-            underlying = data.get('underlying')
-            exchange = data.get('exchange')
-            expiry_date = data.get('expiry_date')
+            api_key = data.get("apikey")
+            underlying = data.get("underlying")
+            exchange = data.get("exchange")
+            expiry_date = data.get("expiry_date")
 
             logger.info(
                 f"Synthetic future calculation request: underlying={underlying}, "
@@ -76,25 +78,21 @@ class SyntheticFuture(Resource):
 
             # Call the service function to calculate synthetic future
             success, response_data, status_code = calculate_synthetic_future(
-                underlying=underlying,
-                exchange=exchange,
-                expiry_date=expiry_date,
-                api_key=api_key
+                underlying=underlying, exchange=exchange, expiry_date=expiry_date, api_key=api_key
             )
 
             return make_response(jsonify(response_data), status_code)
 
         except ValidationError as err:
             logger.warning(f"Validation error in synthetic future request: {err.messages}")
-            return make_response(jsonify({
-                'status': 'error',
-                'message': 'Validation error',
-                'errors': err.messages
-            }), 400)
-        except Exception as e:
+            return make_response(
+                jsonify({"status": "error", "message": "Validation error", "errors": err.messages}),
+                400,
+            )
+        except Exception:
             logger.exception("An unexpected error occurred in SyntheticFuture endpoint.")
             error_response = {
-                'status': 'error',
-                'message': 'An unexpected error occurred in the API endpoint'
+                "status": "error",
+                "message": "An unexpected error occurred in the API endpoint",
             }
             return make_response(jsonify(error_response), 500)

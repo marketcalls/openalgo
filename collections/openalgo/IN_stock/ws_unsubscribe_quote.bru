@@ -1,0 +1,27 @@
+meta {
+  name: Unsubscribe Quote (Mode 2)
+  type: websocket
+  seq: 10
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Unsubscribe from Quote data for a symbol
+}
+
+message:json {
+  {
+    "action": "unsubscribe",
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "mode": 2
+  }
+}
+
+docs {
+  Unsubscribe from Quote (full quote) data for a specific symbol.
+  Use mode 2 to unsubscribe from Quote subscriptions.
+
+  Server responds with:
+  {"type": "unsubscribe", "status": "success", "symbol": "RELIANCE", "exchange": "NSE"}
+}

@@ -9,6 +9,8 @@ OpenAlgo Services are Python functions that provide programmatic access to tradi
 1. [Order Management Services](#order-management-services)
    - [PlaceOrder](#placeorder)
    - [PlaceSmartOrder](#placesmartorder)
+   - [OptionsOrder](#optionsorder)
+   - [OptionsMultiOrder](#optionsmultiorder)
    - [BasketOrder](#basketorder)
    - [SplitOrder](#splitorder)
    - [ModifyOrder](#modifyorder)
@@ -20,6 +22,7 @@ OpenAlgo Services are Python functions that provide programmatic access to tradi
    - [OpenPosition](#openposition)
 3. [Market Data Services](#market-data-services)
    - [Quotes](#quotes)
+   - [MultiQuotes](#multiquotes)
    - [Depth](#depth)
    - [History](#history)
    - [Intervals](#intervals)
@@ -27,16 +30,27 @@ OpenAlgo Services are Python functions that provide programmatic access to tradi
    - [Symbol](#symbol)
    - [Search](#search)
    - [Expiry](#expiry)
-5. [Account Services](#account-services)
+   - [Instruments](#instruments)
+5. [Options Services](#options-services)
+   - [OptionSymbol](#optionsymbol)
+   - [OptionChain](#optionchain)
+   - [SyntheticFuture](#syntheticfuture)
+   - [OptionGreeks](#optiongreeks)
+6. [Account Services](#account-services)
    - [Funds](#funds)
+   - [Margin](#margin)
    - [OrderBook](#orderbook)
    - [TradeBook](#tradebook)
    - [PositionBook](#positionbook)
    - [Holdings](#holdings)
-6. [Analyzer Services](#analyzer-services)
+7. [Market Calendar Services](#market-calendar-services)
+   - [Holidays](#holidays)
+   - [Timings](#timings)
+   - [CheckHoliday](#checkholiday)
+8. [Analyzer Services](#analyzer-services)
    - [AnalyzerStatus](#analyzerstatus)
    - [AnalyzerToggle](#analyzertoggle)
-7. [Telegram Service](#telegram-service)
+9. [Telegram Service](#telegram-service)
    - [TelegramAlertService](#telegramalertservice)
 
 ---
@@ -222,6 +236,310 @@ Tuple containing:
 - `success` (bool): Operation success status
 - `response` (dict): Response data
 - `status_code` (int): HTTP status code
+
+---
+
+### OptionsOrder
+
+Place an options order by resolving the symbol from offset (ATM/ITM/OTM) and placing the order.
+
+**Function:** `place_options_order(options_data, api_key=None, auth_token=None, broker=None)`
+
+**Location:** `openalgo/services/place_options_order_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| options_data | dict | Yes | Options order details |
+| api_key | str | Conditional | OpenAlgo API key (for API-based calls) |
+| auth_token | str | Conditional | Direct broker authentication token (for internal calls) |
+| broker | str | Conditional | Broker name (for internal calls) |
+
+**Options Data Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| underlying | str | Yes | Underlying symbol (e.g., NIFTY, BANKNIFTY) |
+| exchange | str | Yes | Exchange (NSE_INDEX, BSE_INDEX, NFO, BFO) |
+| expiry_date | str | Yes | Expiry date in DDMMMYY format (e.g., 28OCT25) |
+| offset | str | Yes | Strike offset (ATM, ITM1-ITM50, OTM1-OTM50) |
+| option_type | str | Yes | CE or PE |
+| action | str | Yes | BUY or SELL |
+| quantity | int | Yes | Order quantity |
+| pricetype | str | Yes | MARKET, LIMIT, SL, SL-M |
+| product | str | Yes | MIS or NRML |
+| strategy | str | No | Strategy identifier |
+| splitsize | int | No | Split large orders (0 = no split) |
+| price | float | No | Limit price (for LIMIT orders) |
+| trigger_price | float | No | Trigger price (for SL orders) |
+
+**Example - ATM Options Order:**
+
+```python
+from services.place_options_order_service import place_options_order
+
+options_data = {
+    "strategy": "python",
+    "underlying": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "expiry_date": "28OCT25",
+    "offset": "ATM",
+    "option_type": "CE",
+    "action": "BUY",
+    "quantity": 75,
+    "pricetype": "MARKET",
+    "product": "NRML",
+    "splitsize": 0
+}
+
+success, response, status_code = place_options_order(
+    options_data=options_data,
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "exchange": "NFO",
+  "offset": "ATM",
+  "option_type": "CE",
+  "orderid": "25102800000006",
+  "status": "success",
+  "symbol": "NIFTY28OCT2525950CE",
+  "underlying": "NIFTY28OCT25FUT",
+  "underlying_ltp": 25966.05
+}
+```
+
+**Example - ITM Options Order:**
+
+```python
+options_data = {
+    "strategy": "python",
+    "underlying": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "expiry_date": "28OCT25",
+    "offset": "ITM4",
+    "option_type": "PE",
+    "action": "BUY",
+    "quantity": 75,
+    "pricetype": "MARKET",
+    "product": "NRML",
+    "splitsize": 0
+}
+
+success, response, status_code = place_options_order(
+    options_data=options_data,
+    api_key='your_api_key_here'
+)
+```
+
+**Response:**
+
+```json
+{
+  "exchange": "NFO",
+  "offset": "ITM4",
+  "option_type": "PE",
+  "orderid": "25102800000007",
+  "status": "success",
+  "symbol": "NIFTY28OCT2526150PE",
+  "underlying": "NIFTY28OCT25FUT",
+  "underlying_ltp": 25966.05
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Response data with orderid, symbol, and underlying details
+- `status_code` (int): HTTP status code
+
+---
+
+### OptionsMultiOrder
+
+Place multiple option legs with common underlying. BUY legs execute first for margin efficiency.
+
+**Function:** `place_options_multiorder(multiorder_data, api_key=None, auth_token=None, broker=None)`
+
+**Location:** `openalgo/services/options_multiorder_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| multiorder_data | dict | Yes | Multi-order details with legs |
+| api_key | str | Conditional | OpenAlgo API key (for API-based calls) |
+| auth_token | str | Conditional | Direct broker authentication token (for internal calls) |
+| broker | str | Conditional | Broker name (for internal calls) |
+
+**MultiOrder Data Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| strategy | str | No | Strategy identifier |
+| underlying | str | Yes | Underlying symbol (e.g., NIFTY) |
+| exchange | str | Yes | Exchange (NSE_INDEX, BSE_INDEX) |
+| expiry_date | str | No | Common expiry date (can be overridden per leg) |
+| legs | array | Yes | Array of leg objects |
+
+**Leg Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| offset | str | Yes | Strike offset (ATM, ITM1-ITM50, OTM1-OTM50) |
+| option_type | str | Yes | CE or PE |
+| action | str | Yes | BUY or SELL |
+| quantity | int | Yes | Order quantity |
+| expiry_date | str | No | Leg-specific expiry (for diagonal spreads) |
+| pricetype | str | No | MARKET (default), LIMIT |
+| product | str | No | MIS, NRML (default) |
+| splitsize | int | No | Split size for this leg |
+
+**Example - Iron Condor (Same Expiry):**
+
+```python
+from services.options_multiorder_service import place_options_multiorder
+
+multiorder_data = {
+    "strategy": "Iron Condor Test",
+    "underlying": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "expiry_date": "25NOV25",
+    "legs": [
+        {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
+        {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
+        {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 75},
+        {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 75}
+    ]
+}
+
+success, response, status_code = place_options_multiorder(
+    multiorder_data=multiorder_data,
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+    "status": "success",
+    "underlying": "NIFTY",
+    "underlying_ltp": 26050.45,
+    "results": [
+        {
+            "action": "BUY",
+            "leg": 1,
+            "mode": "analyze",
+            "offset": "OTM6",
+            "option_type": "CE",
+            "orderid": "25111996859688",
+            "status": "success",
+            "symbol": "NIFTY25NOV2526350CE"
+        },
+        {
+            "action": "BUY",
+            "leg": 2,
+            "mode": "analyze",
+            "offset": "OTM6",
+            "option_type": "PE",
+            "orderid": "25111996042210",
+            "status": "success",
+            "symbol": "NIFTY25NOV2525750PE"
+        },
+        {
+            "action": "SELL",
+            "leg": 3,
+            "mode": "analyze",
+            "offset": "OTM4",
+            "option_type": "CE",
+            "orderid": "25111922189638",
+            "status": "success",
+            "symbol": "NIFTY25NOV2526250CE"
+        },
+        {
+            "action": "SELL",
+            "leg": 4,
+            "mode": "analyze",
+            "offset": "OTM4",
+            "option_type": "PE",
+            "orderid": "25111919252668",
+            "status": "success",
+            "symbol": "NIFTY25NOV2525850PE"
+        }
+    ]
+}
+```
+
+**Example - Diagonal Spread (Different Expiry):**
+
+```python
+multiorder_data = {
+    "strategy": "Diagonal Spread Test",
+    "underlying": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "legs": [
+        {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
+        {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+    ]
+}
+
+success, response, status_code = place_options_multiorder(
+    multiorder_data=multiorder_data,
+    api_key='your_api_key_here'
+)
+```
+
+**Response:**
+
+```json
+{
+    "results": [
+        {
+            "action": "BUY",
+            "leg": 1,
+            "mode": "analyze",
+            "offset": "ITM2",
+            "option_type": "CE",
+            "orderid": "25111933337854",
+            "status": "success",
+            "symbol": "NIFTY30DEC2525950CE"
+        },
+        {
+            "action": "SELL",
+            "leg": 2,
+            "mode": "analyze",
+            "offset": "OTM2",
+            "option_type": "CE",
+            "orderid": "25111957475473",
+            "status": "success",
+            "symbol": "NIFTY25NOV2526150CE"
+        }
+    ],
+    "status": "success",
+    "underlying": "NIFTY",
+    "underlying_ltp": 26052.65
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Response data with results array
+- `status_code` (int): HTTP status code
+
+**Note:** BUY legs are always executed before SELL legs for margin efficiency.
 
 ---
 
@@ -872,6 +1190,119 @@ Tuple containing:
 
 ---
 
+### MultiQuotes
+
+Get real-time quotes for multiple symbols in a single call.
+
+**Function:** `get_multiquotes(symbols, api_key=None, auth_token=None, feed_token=None, broker=None)`
+
+**Location:** `openalgo/services/quotes_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| symbols | list | Yes | List of dicts with 'symbol' and 'exchange' keys |
+| api_key | str | Conditional | OpenAlgo API key |
+| auth_token | str | Conditional | Direct broker authentication token |
+| feed_token | str | Conditional | Direct broker feed token |
+| broker | str | Conditional | Broker name |
+
+**Symbols List Structure:**
+
+```python
+[
+    {"symbol": "RELIANCE", "exchange": "NSE"},
+    {"symbol": "TCS", "exchange": "NSE"},
+    {"symbol": "INFY", "exchange": "NSE"}
+]
+```
+
+**Example:**
+
+```python
+from services.quotes_service import get_multiquotes
+
+symbols = [
+    {"symbol": "RELIANCE", "exchange": "NSE"},
+    {"symbol": "TCS", "exchange": "NSE"},
+    {"symbol": "INFY", "exchange": "NSE"}
+]
+
+success, response, status_code = get_multiquotes(
+    symbols=symbols,
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "results": [
+    {
+      "symbol": "RELIANCE",
+      "exchange": "NSE",
+      "data": {
+        "open": 1542.3,
+        "high": 1571.6,
+        "low": 1540.5,
+        "ltp": 1569.9,
+        "prev_close": 1539.7,
+        "ask": 1569.9,
+        "bid": 0,
+        "oi": 0,
+        "volume": 14054299
+      }
+    },
+    {
+      "symbol": "TCS",
+      "exchange": "NSE",
+      "data": {
+        "open": 3118.8,
+        "high": 3178,
+        "low": 3117,
+        "ltp": 3162.9,
+        "prev_close": 3119.2,
+        "ask": 0,
+        "bid": 3162.9,
+        "oi": 0,
+        "volume": 2508527
+      }
+    },
+    {
+      "symbol": "INFY",
+      "exchange": "NSE",
+      "data": {
+        "open": 1532.1,
+        "high": 1560.3,
+        "low": 1532.1,
+        "ltp": 1557.9,
+        "prev_close": 1530.6,
+        "ask": 0,
+        "bid": 1557.9,
+        "oi": 0,
+        "volume": 7575038
+      }
+    }
+  ]
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Response data with results array
+- `status_code` (int): HTTP status code
+
+**Note:** Invalid symbols are returned with an error field. If broker doesn't support multiquotes, the service falls back to fetching quotes individually.
+
+---
+
 ### Depth
 
 Get market depth for a symbol.
@@ -1255,6 +1686,440 @@ Tuple containing:
 
 ---
 
+### Instruments
+
+Get all instruments/symbols from the database.
+
+**Function:** `get_instruments(exchange=None, api_key=None, format='json')`
+
+**Location:** `openalgo/services/instruments_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| exchange | str | No | Exchange filter (NSE, BSE, NFO, BFO, etc.) |
+| api_key | str | Yes | OpenAlgo API key |
+| format | str | No | Output format ('json' or 'csv', default: 'json') |
+
+**Example:**
+
+```python
+from services.instruments_service import get_instruments
+
+success, response, status_code, headers = get_instruments(
+    exchange="NSE",
+    api_key='your_api_key_here',
+    format='json'
+)
+
+print(response)
+```
+
+**Response (JSON):**
+
+```json
+{
+  "status": "success",
+  "message": "Found 3046 instruments",
+  "data": [
+    {
+      "symbol": "RELIANCE",
+      "brsymbol": "RELIANCE-EQ",
+      "name": "RELIANCE INDUSTRIES LTD",
+      "exchange": "NSE",
+      "brexchange": "NSE",
+      "token": "2885",
+      "expiry": null,
+      "strike": -1.0,
+      "lotsize": 1,
+      "instrumenttype": "EQ",
+      "tick_size": 0.05
+    },
+    {
+      "symbol": "TCS",
+      "brsymbol": "TCS-EQ",
+      "name": "TATA CONSULTANCY SERVICES",
+      "exchange": "NSE",
+      "brexchange": "NSE",
+      "token": "11536",
+      "expiry": null,
+      "strike": -1.0,
+      "lotsize": 1,
+      "instrumenttype": "EQ",
+      "tick_size": 0.05
+    }
+  ]
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict or str): Response data (JSON dict or CSV string)
+- `status_code` (int): HTTP status code
+- `headers` (dict): Response headers (for CSV downloads)
+
+**Note:** When format='csv', the response is a CSV string and headers include Content-Disposition for file download.
+
+---
+
+## Options Services
+
+### OptionSymbol
+
+Get option symbol based on underlying, expiry, strike offset, and option type.
+
+**Function:** `get_option_symbol(underlying, exchange, expiry_date, strike_int, offset, option_type, api_key, underlying_ltp=None)`
+
+**Location:** `openalgo/services/option_symbol_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| underlying | str | Yes | Underlying symbol (e.g., NIFTY, BANKNIFTY) |
+| exchange | str | Yes | Exchange (NSE_INDEX, BSE_INDEX, NFO, BFO) |
+| expiry_date | str | No | Expiry date in DDMMMYY format |
+| strike_int | int | No | Strike interval (optional - uses actual strikes if not provided) |
+| offset | str | Yes | Strike offset (ATM, ITM1-ITM50, OTM1-OTM50) |
+| option_type | str | Yes | CE or PE |
+| api_key | str | Yes | OpenAlgo API key |
+| underlying_ltp | float | No | Pre-fetched LTP to avoid redundant quote requests |
+
+**Example - ATM Option:**
+
+```python
+from services.option_symbol_service import get_option_symbol
+
+success, response, status_code = get_option_symbol(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="30DEC25",
+    strike_int=None,
+    offset="ATM",
+    option_type="CE",
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "symbol": "NIFTY30DEC2525950CE",
+  "exchange": "NFO",
+  "lotsize": 75,
+  "tick_size": 5,
+  "freeze_qty": 1800,
+  "underlying_ltp": 25966.4
+}
+```
+
+**Example - ITM Option:**
+
+```python
+success, response, status_code = get_option_symbol(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="30DEC25",
+    strike_int=None,
+    offset="ITM3",
+    option_type="PE",
+    api_key='your_api_key_here'
+)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "symbol": "NIFTY30DEC2526100PE",
+  "exchange": "NFO",
+  "lotsize": 75,
+  "tick_size": 5,
+  "freeze_qty": 1800,
+  "underlying_ltp": 25966.4
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Symbol details with lotsize, tick_size, freeze_qty
+- `status_code` (int): HTTP status code
+
+**Note:** If `strike_int` is not provided, the service uses actual strikes from the database for more accurate symbol resolution.
+
+---
+
+### OptionChain
+
+Get option chain data for a given underlying and expiry.
+
+**Function:** `get_option_chain(underlying, exchange, expiry_date, strike_count, api_key)`
+
+**Location:** `openalgo/services/option_chain_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| underlying | str | Yes | Underlying symbol (e.g., NIFTY, BANKNIFTY) |
+| exchange | str | Yes | Exchange (NSE_INDEX, BSE_INDEX) |
+| expiry_date | str | Yes | Expiry date in DDMMMYY format |
+| strike_count | int | Yes | Number of strikes above and below ATM |
+| api_key | str | Yes | OpenAlgo API key |
+
+**Example:**
+
+```python
+from services.option_chain_service import get_option_chain
+
+success, response, status_code = get_option_chain(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="30DEC25",
+    strike_count=10,
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+    "status": "success",
+    "underlying": "NIFTY",
+    "underlying_ltp": 26215.55,
+    "expiry_date": "30DEC25",
+    "atm_strike": 26200.0,
+    "chain": [
+        {
+            "strike": 26100.0,
+            "ce": {
+                "symbol": "NIFTY30DEC2526100CE",
+                "label": "ITM2",
+                "ltp": 490,
+                "bid": 490,
+                "ask": 491,
+                "open": 540,
+                "high": 571,
+                "low": 444.75,
+                "prev_close": 496.8,
+                "volume": 1195800,
+                "oi": 0,
+                "lotsize": 75,
+                "tick_size": 0.05
+            },
+            "pe": {
+                "symbol": "NIFTY30DEC2526100PE",
+                "label": "OTM2",
+                "ltp": 193,
+                "bid": 191.2,
+                "ask": 193,
+                "open": 204.1,
+                "high": 229.95,
+                "low": 175.6,
+                "prev_close": 215.95,
+                "volume": 1832700,
+                "oi": 0,
+                "lotsize": 75,
+                "tick_size": 0.05
+            }
+        },
+        {
+            "strike": 26200.0,
+            "ce": {
+                "symbol": "NIFTY30DEC2526200CE",
+                "label": "ATM",
+                "ltp": 427,
+                "bid": 425.05,
+                "ask": 427,
+                "open": 449.95,
+                "high": 503.5,
+                "low": 384,
+                "prev_close": 433.2,
+                "volume": 2994000,
+                "oi": 0,
+                "lotsize": 75,
+                "tick_size": 0.05
+            },
+            "pe": {
+                "symbol": "NIFTY30DEC2526200PE",
+                "label": "ATM",
+                "ltp": 227.4,
+                "bid": 227.35,
+                "ask": 228.5,
+                "open": 251.9,
+                "high": 269.15,
+                "low": 205.95,
+                "prev_close": 251.9,
+                "volume": 3745350,
+                "oi": 0,
+                "lotsize": 75,
+                "tick_size": 0.05
+            }
+        }
+    ]
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Option chain data with ATM strike and chain array
+- `status_code` (int): HTTP status code
+
+**Note:** Each strike has CE and PE objects with their own labels (ATM, ITM1, OTM1, etc.). Strikes below ATM have CE as ITM and PE as OTM, and vice versa for strikes above ATM.
+
+---
+
+### SyntheticFuture
+
+Calculate synthetic futures price using ATM options.
+
+**Function:** `calculate_synthetic_future(underlying, exchange, expiry_date, api_key)`
+
+**Location:** `openalgo/services/synthetic_future_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| underlying | str | Yes | Underlying symbol (e.g., NIFTY, BANKNIFTY) |
+| exchange | str | Yes | Exchange (NSE_INDEX, BSE_INDEX) |
+| expiry_date | str | Yes | Expiry date in DDMMMYY format |
+| api_key | str | Yes | OpenAlgo API key |
+
+**Formula:**
+```
+Synthetic Future Price = Strike Price + Call Premium - Put Premium
+```
+
+**Example:**
+
+```python
+from services.synthetic_future_service import calculate_synthetic_future
+
+success, response, status_code = calculate_synthetic_future(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="25NOV25",
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "underlying": "NIFTY",
+  "underlying_ltp": 25910.05,
+  "expiry": "25NOV25",
+  "atm_strike": 25900.0,
+  "synthetic_future_price": 25980.05
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Synthetic future price and ATM strike details
+- `status_code` (int): HTTP status code
+
+**Note:** The basis (Synthetic Future Price - Spot Price) indicates the cost of carry.
+
+---
+
+### OptionGreeks
+
+Calculate Option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility.
+
+**Function:** `get_option_greeks(option_symbol, exchange, interest_rate=None, forward_price=None, underlying_symbol=None, underlying_exchange=None, expiry_time=None, api_key=None)`
+
+**Location:** `openalgo/services/option_greeks_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| option_symbol | str | Yes | Option symbol (e.g., NIFTY25NOV2526000CE) |
+| exchange | str | Yes | Exchange (NFO, BFO, CDS, MCX) |
+| interest_rate | float | No | Risk-free interest rate (annualized %) |
+| forward_price | float | No | Custom forward/synthetic futures price |
+| underlying_symbol | str | No | Underlying symbol for spot price |
+| underlying_exchange | str | No | Underlying exchange |
+| expiry_time | str | No | Custom expiry time in "HH:MM" format |
+| api_key | str | Yes | OpenAlgo API key |
+
+**Example:**
+
+```python
+from services.option_greeks_service import get_option_greeks
+
+success, response, status_code = get_option_greeks(
+    option_symbol="NIFTY25NOV2526000CE",
+    exchange="NFO",
+    interest_rate=0.00,
+    underlying_symbol="NIFTY",
+    underlying_exchange="NSE_INDEX",
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "symbol": "NIFTY25NOV2526000CE",
+  "exchange": "NFO",
+  "underlying": "NIFTY",
+  "strike": 26000.0,
+  "option_type": "CE",
+  "expiry_date": "25-Nov-2025",
+  "days_to_expiry": 28.5071,
+  "spot_price": 25966.05,
+  "option_price": 435,
+  "interest_rate": 0.0,
+  "implied_volatility": 15.6,
+  "greeks": {
+    "delta": 0.4967,
+    "gamma": 0.000352,
+    "theta": -7.919,
+    "vega": 28.9489,
+    "rho": 9.733994
+  }
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Greeks data with IV and all Greek values
+- `status_code` (int): HTTP status code
+
+**Note:** Uses Black-76 model (appropriate for options on futures/forwards). For deep ITM options with no time value, theoretical Greeks are returned (delta = +/-1, other Greeks = 0).
+
+---
+
 ## Account Services
 
 ### Funds
@@ -1306,6 +2171,116 @@ Tuple containing:
 - `success` (bool): Operation success status
 - `response` (dict): Funds data
 - `status_code` (int): HTTP status code
+
+---
+
+### Margin
+
+Calculate margin requirement for a basket of positions.
+
+**Function:** `calculate_margin(margin_data, api_key=None, auth_token=None, broker=None)`
+
+**Location:** `openalgo/services/margin_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| margin_data | dict | Yes | Margin calculation data with positions array |
+| api_key | str | Conditional | OpenAlgo API key (for API-based calls) |
+| auth_token | str | Conditional | Direct broker authentication token (for internal calls) |
+| broker | str | Conditional | Broker name (for internal calls) |
+
+**Margin Data Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| apikey | str | Yes | OpenAlgo API key |
+| positions | array | Yes | Array of position objects (max 50) |
+
+**Position Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| exchange | str | Yes | Exchange (NSE, NFO, BFO, etc.) |
+| symbol | str | Yes | Trading symbol |
+| action | str | Yes | BUY or SELL |
+| quantity | int | Yes | Position quantity |
+| product | str | Yes | MIS, CNC, NRML |
+| pricetype | str | Yes | MARKET, LIMIT, SL, SL-M |
+| price | float | No | Order price (default: 0) |
+
+**Example:**
+
+```python
+from services.margin_service import calculate_margin
+
+margin_data = {
+    "apikey": "your_api_key_here",
+    "positions": [
+        {
+            "exchange": "NFO",
+            "symbol": "NIFTY25DEC2526000CE",
+            "action": "BUY",
+            "quantity": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "price": 0
+        },
+        {
+            "exchange": "NFO",
+            "symbol": "NIFTY25DEC2526000PE",
+            "action": "SELL",
+            "quantity": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "price": 0
+        }
+    ]
+}
+
+success, response, status_code = calculate_margin(
+    margin_data=margin_data,
+    api_key='your_api_key_here'
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "data": {
+    "total_margin": 125000.50,
+    "span_margin": 100000.00,
+    "exposure_margin": 25000.50,
+    "margin_benefit": 15000.00,
+    "positions": [
+      {
+        "exchange": "NFO",
+        "symbol": "NIFTY25DEC2526000CE",
+        "margin_required": 75000.25
+      },
+      {
+        "exchange": "NFO",
+        "symbol": "NIFTY25DEC2526000PE",
+        "margin_required": 65000.25
+      }
+    ]
+  }
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Margin calculation results
+- `status_code` (int): HTTP status code
+
+**Note:** Maximum 50 positions allowed per request. Margin calculation support depends on broker implementation.
 
 ---
 
@@ -1551,6 +2526,191 @@ print(response)
 Tuple containing:
 - `success` (bool): Operation success status
 - `response` (dict): Holdings data
+- `status_code` (int): HTTP status code
+
+---
+
+## Market Calendar Services
+
+### Holidays
+
+Get market holidays for a specific year or current year.
+
+**Function:** `get_holidays(year=None)`
+
+**Location:** `openalgo/services/market_calendar_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| year | int | No | Year to get holidays for (default: current year) |
+
+**Example:**
+
+```python
+from services.market_calendar_service import get_holidays
+
+success, response, status_code = get_holidays(year=2025)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "year": 2025,
+  "timezone": "Asia/Kolkata",
+  "data": [
+    {
+      "date": "2025-02-26",
+      "description": "Maha Shivaratri",
+      "holiday_type": "TRADING_HOLIDAY",
+      "closed_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
+      "open_exchanges": [
+        {"exchange": "MCX", "start_time": 1740549000000, "end_time": 1740602700000}
+      ]
+    },
+    {
+      "date": "2025-03-14",
+      "description": "Holi",
+      "holiday_type": "TRADING_HOLIDAY",
+      "closed_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
+      "open_exchanges": [
+        {"exchange": "MCX", "start_time": 1741964400000, "end_time": 1742018100000}
+      ]
+    },
+    {
+      "date": "2025-08-15",
+      "description": "Independence Day",
+      "holiday_type": "TRADING_HOLIDAY",
+      "closed_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX"],
+      "open_exchanges": []
+    }
+  ]
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Holiday data with year and timezone
+- `status_code` (int): HTTP status code
+
+**Note:**
+- Year must be between 2020 and 2050
+- `holiday_type` can be: `TRADING_HOLIDAY`, `SETTLEMENT_HOLIDAY`, or `SPECIAL_SESSION`
+- `closed_exchanges` lists exchanges that are fully closed
+- `open_exchanges` lists exchanges with special trading sessions (e.g., MCX evening session, Muhurat trading)
+- Times in `open_exchanges` are epoch milliseconds
+
+---
+
+### Timings
+
+Get market timings for a specific date.
+
+**Function:** `get_timings(date_str)`
+
+**Location:** `openalgo/services/market_calendar_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| date_str | str | Yes | Date in YYYY-MM-DD format |
+
+**Example:**
+
+```python
+from services.market_calendar_service import get_timings
+
+success, response, status_code = get_timings(date_str="2025-01-15")
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "data": [
+    {"exchange": "NSE", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "BSE", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "NFO", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "BFO", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "CDS", "start_time": 1736925600000, "end_time": 1736954400000},
+    {"exchange": "BCD", "start_time": 1736925600000, "end_time": 1736954400000},
+    {"exchange": "MCX", "start_time": 1736925600000, "end_time": 1736979300000}
+  ]
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Market timing data
+- `status_code` (int): HTTP status code
+
+**Note:**
+- Date must be between 2020-01-01 and 2050-12-31
+- Times are returned as epoch milliseconds
+- Returns empty array for weekends and full holidays
+- For special sessions (e.g., Muhurat trading), returns only the special session timings
+
+---
+
+### CheckHoliday
+
+Check if a specific date is a market holiday.
+
+**Function:** `check_holiday(date_str, exchange=None)`
+
+**Location:** `openalgo/services/market_calendar_service.py`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| date_str | str | Yes | Date in YYYY-MM-DD format |
+| exchange | str | No | Optional exchange code to check (NSE, BSE, NFO, etc.) |
+
+**Example:**
+
+```python
+from services.market_calendar_service import check_holiday
+
+success, response, status_code = check_holiday(
+    date_str="2025-01-26",
+    exchange="NSE"
+)
+
+print(response)
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "data": {
+    "date": "2025-01-26",
+    "exchange": "NSE",
+    "is_holiday": true
+  }
+}
+```
+
+**Returns:**
+
+Tuple containing:
+- `success` (bool): Operation success status
+- `response` (dict): Holiday check result
 - `status_code` (int): HTTP status code
 
 ---

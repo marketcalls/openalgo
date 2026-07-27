@@ -1,0 +1,27 @@
+meta {
+  name: Unsubscribe Depth (Mode 3)
+  type: websocket
+  seq: 11
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Unsubscribe from Market Depth data for a symbol
+}
+
+message:json {
+  {
+    "action": "unsubscribe",
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "mode": 3
+  }
+}
+
+docs {
+  Unsubscribe from Market Depth data for a specific symbol.
+  Use mode 3 to unsubscribe from Depth subscriptions.
+
+  Server responds with:
+  {"type": "unsubscribe", "status": "success", "symbol": "RELIANCE", "exchange": "NSE"}
+}
