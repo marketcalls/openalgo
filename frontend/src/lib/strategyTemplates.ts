@@ -510,8 +510,7 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
     id: 'call_butterfly',
     name: 'Call Butterfly',
     direction: 'NON_DIRECTIONAL',
-    description:
-      'Long call butterfly centred at ATM. Max profit if spot pins at the body strike.',
+    description: 'Long call butterfly centred at ATM. Max profit if spot pins at the body strike.',
     legs: [
       { side: 'BUY', optionType: 'CE', strikeOffset: -2, lots: 1 },
       { side: 'SELL', optionType: 'CE', strikeOffset: 0, lots: 2 },
@@ -523,8 +522,7 @@ export const STRATEGY_TEMPLATES: StrategyTemplate[] = [
     id: 'put_butterfly',
     name: 'Put Butterfly',
     direction: 'NON_DIRECTIONAL',
-    description:
-      'Long put butterfly centred at ATM. Put-side mirror of the call butterfly.',
+    description: 'Long put butterfly centred at ATM. Put-side mirror of the call butterfly.',
     legs: [
       { side: 'BUY', optionType: 'PE', strikeOffset: 2, lots: 1 },
       { side: 'SELL', optionType: 'PE', strikeOffset: 0, lots: 2 },

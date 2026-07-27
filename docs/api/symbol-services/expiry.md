@@ -21,6 +21,19 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/expiry
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/expiry \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbol": "NIFTY",
+  "exchange": "NFO",
+  "instrumenttype": "options"
+}'
+```
+
 ## Sample API Response
 
 ```json

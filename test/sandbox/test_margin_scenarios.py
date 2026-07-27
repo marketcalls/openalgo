@@ -39,7 +39,7 @@ def reset_user_data(user_id="rajandran"):
         funds.total_pnl = Decimal("0.00")
 
     db_session.commit()
-    print("✓ Data reset complete")
+    print("Data reset complete")
 
 
 def get_margin_status(user_id="rajandran"):
@@ -91,7 +91,7 @@ def test_scenario_1():
         }
     )
     if success:
-        print(f"  ✓ Order placed: {response.get('orderid')}")
+        print(f"Order placed: {response.get('orderid')}")
 
     # Execute the order
     ee.check_and_execute_pending_orders()
@@ -116,7 +116,7 @@ def test_scenario_1():
         }
     )
     if success:
-        print(f"  ✓ Order placed: {response.get('orderid')}")
+        print(f"Order placed: {response.get('orderid')}")
 
     # Execute the order
     ee.check_and_execute_pending_orders()
@@ -141,7 +141,7 @@ def test_scenario_1():
         }
     )
     if success:
-        print(f"  ✓ Order placed: {response.get('orderid')}")
+        print(f"Order placed: {response.get('orderid')}")
 
     # Execute the order
     ee.check_and_execute_pending_orders()
@@ -150,7 +150,7 @@ def test_scenario_1():
     print_margin_status("After SELL 50 (position closed)", status)
     assert status["used"] == 0, f"Expected margin ₹0, got ₹{status['used']}"
 
-    print("\n✅ SCENARIO 1 PASSED")
+    print("\n SCENARIO 1 PASSED")
 
 
 def test_scenario_2():
@@ -240,7 +240,7 @@ def test_scenario_2():
     print_margin_status("After SELL 100 (closed again)", status)
     assert status["used"] == 0, f"Expected margin ₹0, got ₹{status['used']}"
 
-    print("\n✅ SCENARIO 2 PASSED")
+    print("\n SCENARIO 2 PASSED")
 
 
 def test_scenario_3():
@@ -297,7 +297,7 @@ def test_scenario_3():
         f"Expected margin ~₹{expected_margin}, got ₹{status['used']}"
     )
 
-    print("\n✅ SCENARIO 3 PASSED")
+    print("\n SCENARIO 3 PASSED")
 
 
 def test_scenario_4():
@@ -354,14 +354,14 @@ def test_scenario_4():
         f"Expected margin ~₹{expected_margin}, got ₹{status['used']}"
     )
 
-    print("\n✅ SCENARIO 4 PASSED")
+    print("\n SCENARIO 4 PASSED")
 
 
 if __name__ == "__main__":
     # Initialize database
     init_db()
 
-    print("\n🧪 TESTING MARGIN SCENARIOS")
+    print("\n TESTING MARGIN SCENARIOS")
     print("=" * 60)
 
     try:
@@ -371,14 +371,14 @@ if __name__ == "__main__":
         test_scenario_4()
 
         print("\n" + "=" * 60)
-        print("🎉 ALL TESTS PASSED!")
+        print("ALL TESTS PASSED!")
         print("=" * 60)
 
     except AssertionError as e:
-        print(f"\n❌ TEST FAILED: {e}")
+        print(f"\n TEST FAILED: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"\n💥 ERROR: {e}")
+        print(f"\n ERROR: {e}")
         import traceback
 
         traceback.print_exc()

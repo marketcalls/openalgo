@@ -155,10 +155,10 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
     positions_data = _get_cached_positions(auth)
 
-    logger.info(
+    logger.debug(
         f"Looking for position: symboltoken={token}, exchange={exchange}, producttype={producttype}"
     )
-    logger.info(f"Positions data: {positions_data}")
+    logger.debug(f"Positions data: {positions_data}")
 
     net_qty = "0"
 
@@ -171,7 +171,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
                 and position.get("producttype") == producttype
             ):
                 net_qty = position.get("netqty", "0")
-                logger.info(f"Found matching position: netqty={net_qty}")
+                logger.debug(f"Found matching position: netqty={net_qty}")
                 break
 
     return net_qty
@@ -203,7 +203,7 @@ def place_order_api(data, auth):
     }
 
     payload = json.dumps(transformed_data)
-    logger.info(f"Place order payload: {payload}")
+    logger.debug(f"Place order payload: {payload}")
 
     client = get_httpx_client()
 
@@ -226,7 +226,7 @@ def place_order_api(data, auth):
 
     # mStock Type B API returns a list with single dict element
     if isinstance(response_data, list) and len(response_data) > 0:
-        logger.info("API returned list, extracting first element")
+        logger.debug("API returned list, extracting first element")
         response_dict = response_data[0]
 
         # Extract orderid from the dict
@@ -275,8 +275,8 @@ def place_smartorder_api(data, auth):
             get_open_position(symbol, exchange, map_product_type(product), auth_token)
         )
 
-        logger.info(f"position_size: {position_size}")
-        logger.info(f"Open Position: {current_position}")
+        logger.debug(f"position_size: {position_size}")
+        logger.debug(f"Open Position: {current_position}")
 
         action = None
         quantity = 0
@@ -352,12 +352,12 @@ def close_all_positions(current_api_key, auth):
 
     # Check if the positions data is null or empty
     if positions_response.get("data") is None or not positions_response.get("data"):
-        logger.info("No open positions to close")
+        logger.debug("No open positions to close")
         return {"message": "No Open Positions Found"}, 200
 
     # Check status explicitly (mStock Type B returns "true" string or True boolean)
     if positions_response.get("status") in [True, "true"]:
-        logger.info(f"Closing {len(positions_response['data'])} positions")
+        logger.debug(f"Closing {len(positions_response['data'])} positions")
 
         # Loop through each position to close
         for position in positions_response["data"]:
@@ -398,7 +398,7 @@ def close_all_positions(current_api_key, auth):
                 )
                 continue
 
-            logger.info(
+            logger.debug(
                 f"Closing position for symbol: {symbol}, quantity: {quantity}, action: {action}"
             )
 
@@ -415,12 +415,12 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
 
-            logger.info(f"Square off payload: {place_order_payload}")
+            logger.debug(f"Square off payload: {place_order_payload}")
 
             # Place the order to close the position
             try:
                 res, response, orderid = place_order_api(place_order_payload, auth)
-                logger.info(f"Position closed - OrderID: {orderid}, Response: {response}")
+                logger.debug(f"Position closed - OrderID: {orderid}, Response: {response}")
             except Exception as e:
                 logger.error(f"Error closing position for {symbol}: {e}")
                 continue
@@ -454,8 +454,8 @@ def cancel_order(orderid, auth):
     # Prepare payload for Type B (variety and orderid in body)
     payload_data = {"variety": "NORMAL", "orderid": orderid}
 
-    logger.info(f"Cancelling order {orderid}")
-    logger.info(f"Cancel order payload: {json.dumps(payload_data)}")
+    logger.debug(f"Cancelling order {orderid}")
+    logger.debug(f"Cancel order payload: {json.dumps(payload_data)}")
 
     # DELETE request with orderid in both URL path and body
     # Using json parameter instead of content/data for httpx compatibility
@@ -469,8 +469,8 @@ def cancel_order(orderid, auth):
     # Add status attribute for compatibility
     response.status = response.status_code
 
-    logger.info(f"Cancel order response status code: {response.status_code}")
-    logger.info(f"Cancel order response: {response.text}")
+    logger.debug(f"Cancel order response status code: {response.status_code}")
+    logger.debug(f"Cancel order response: {response.text}")
 
     try:
         data = json.loads(response.text)
@@ -480,12 +480,12 @@ def cancel_order(orderid, auth):
 
     # Handle list response (like place order)
     if isinstance(data, list) and len(data) > 0:
-        logger.info("API returned list, extracting first element")
+        logger.debug("API returned list, extracting first element")
         data = data[0]
 
     # Check if the request was successful
     if data.get("status") in [True, "true"] or data.get("message") == "SUCCESS":
-        logger.info(f"Order {orderid} cancelled successfully")
+        logger.debug(f"Order {orderid} cancelled successfully")
         return {"status": "success", "orderid": orderid}, 200
     else:
         error_message = data.get("message", "Failed to cancel order")
@@ -542,8 +542,8 @@ def modify_order(data, auth):
 
     orderid = data["orderid"]
 
-    logger.info(f"Modifying order {orderid} for symbol {data['symbol']}")
-    logger.info(f"Modify order payload: {json.dumps(transformed_data)}")
+    logger.debug(f"Modifying order {orderid} for symbol {data['symbol']}")
+    logger.debug(f"Modify order payload: {json.dumps(transformed_data)}")
 
     # PUT request with orderid in URL path
     # Using json parameter for httpx compatibility
@@ -557,8 +557,8 @@ def modify_order(data, auth):
     # Add status attribute for compatibility
     response.status = response.status_code
 
-    logger.info(f"Modify order response status code: {response.status_code}")
-    logger.info(f"Modify order response: {response.text}")
+    logger.debug(f"Modify order response status code: {response.status_code}")
+    logger.debug(f"Modify order response: {response.text}")
 
     try:
         response_data = json.loads(response.text)
@@ -568,7 +568,7 @@ def modify_order(data, auth):
 
     # Handle list response (like place order/cancel order)
     if isinstance(response_data, list) and len(response_data) > 0:
-        logger.info("API returned list, extracting first element")
+        logger.debug("API returned list, extracting first element")
         response_data = response_data[0]
 
     # Check if the request was successful
@@ -580,7 +580,7 @@ def modify_order(data, auth):
         else:
             modified_orderid = orderid
 
-        logger.info(f"Order {orderid} modified successfully to {modified_orderid}")
+        logger.debug(f"Order {orderid} modified successfully to {modified_orderid}")
         return {"status": "success", "orderid": modified_orderid}, 200
     else:
         error_message = response_data.get("message", "Failed to modify order")
@@ -604,7 +604,7 @@ def cancel_all_orders_api(data, auth):
     api_key = os.getenv("BROKER_API_SECRET")
 
     # First, get the list of pending orders to return their IDs
-    logger.info("Fetching order book to identify pending orders")
+    logger.debug("Fetching order book to identify pending orders")
     order_book_response = get_order_book(auth_token)
 
     pending_order_ids = []
@@ -619,13 +619,13 @@ def cancel_all_orders_api(data, auth):
         pending_order_ids = [
             order.get("orderid") for order in pending_orders if order.get("orderid")
         ]
-        logger.info(f"Found {len(pending_order_ids)} pending orders to cancel: {pending_order_ids}")
+        logger.debug(f"Found {len(pending_order_ids)} pending orders to cancel: {pending_order_ids}")
     else:
         logger.warning("Failed to fetch order book or no data available")
 
     # If no pending orders, return early
     if not pending_order_ids:
-        logger.info("No pending orders to cancel")
+        logger.debug("No pending orders to cancel")
         return [], []
 
     # Now call the cancelall endpoint
@@ -638,7 +638,7 @@ def cancel_all_orders_api(data, auth):
         "Content-Type": "application/json",
     }
 
-    logger.info("Calling mStock Type B cancelall endpoint")
+    logger.debug("Calling mStock Type B cancelall endpoint")
 
     # POST request to cancel all orders at once
     response = client.post(
@@ -648,8 +648,8 @@ def cancel_all_orders_api(data, auth):
     # Add status attribute for compatibility
     response.status = response.status_code
 
-    logger.info(f"Cancel all response status code: {response.status_code}")
-    logger.info(f"Cancel all response: {response.text}")
+    logger.debug(f"Cancel all response status code: {response.status_code}")
+    logger.debug(f"Cancel all response: {response.text}")
 
     try:
         response_data = json.loads(response.text)
@@ -659,7 +659,7 @@ def cancel_all_orders_api(data, auth):
 
     # Handle list response (like place order)
     if isinstance(response_data, list) and len(response_data) > 0:
-        logger.info("API returned list, extracting first element")
+        logger.debug("API returned list, extracting first element")
         response_data = response_data[0]
 
     # Check if the request was successful
@@ -667,7 +667,7 @@ def cancel_all_orders_api(data, auth):
         response_data.get("status") in [True, "true", "success"]
         or response_data.get("message") == "SUCCESS"
     ):
-        logger.info(f"Cancel all orders successful - cancelled {len(pending_order_ids)} orders")
+        logger.debug(f"Cancel all orders successful - cancelled {len(pending_order_ids)} orders")
         return pending_order_ids, []
     else:
         error_message = response_data.get("message", "Failed to cancel all orders")

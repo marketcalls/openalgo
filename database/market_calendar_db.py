@@ -2,7 +2,7 @@
 """
 Market Calendar Database Module
 Handles holidays and market timings for Indian exchanges:
-NSE, BSE, NFO, BFO, MCX, BCD, CDS
+NSE, BSE, NFO, BFO, MCX, BCD, CDS, NCO
 
 Supports:
 - Trading holidays (full day closed)
@@ -48,7 +48,7 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 # Supported exchanges
-SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "BCD", "CDS", "CRYPTO"]
+SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "BCD", "CDS", "NCO", "CRYPTO"]
 
 # Holiday types
 HOLIDAY_TYPES = ["TRADING_HOLIDAY", "SETTLEMENT_HOLIDAY", "SPECIAL_SESSION"]
@@ -62,6 +62,7 @@ DEFAULT_MARKET_TIMINGS = {
     "CDS": {"start_offset": 32400000, "end_offset": 61200000},  # 09:00 - 17:00
     "BCD": {"start_offset": 32400000, "end_offset": 61200000},  # 09:00 - 17:00
     "MCX": {"start_offset": 32400000, "end_offset": 86100000},  # 09:00 - 23:55
+    "NCO": {"start_offset": 32400000, "end_offset": 86100000},  # 09:00 - 23:55 (NSE Commodities mirrors MCX)
     "CRYPTO": {"start_offset": 0, "end_offset": 86399000},  # 00:00 - 23:59:59 (24/7)
 }
 

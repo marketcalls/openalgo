@@ -1,6 +1,22 @@
+import os
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# SEBI algo framework: every API order must carry an exchange-issued Algo ID.
+# These are the exchange "generic" ids for unregistered retail algos.
+# Set DEFINEDGE_ALGO_ID in .env to use a registered algo id instead.
+GENERIC_ALGO_ID_NSE = "99999"
+GENERIC_ALGO_ID_BSE = "9999999999999999"
+
+
+def get_algo_id(exchange):
+    """Return the algo id for an order: env override or exchange-specific generic id."""
+    override = os.getenv("DEFINEDGE_ALGO_ID")
+    if override:
+        return override
+    return GENERIC_ALGO_ID_BSE if exchange in ("BSE", "BFO", "BCD") else GENERIC_ALGO_ID_NSE
 
 
 def transform_data(data, token_id):
@@ -11,15 +27,19 @@ def transform_data(data, token_id):
         # Get broker symbol format
         symbol = get_br_symbol(data["symbol"], data["exchange"])
 
+        price_type = map_price_type(data["pricetype"])
+
         # Map OpenAlgo fields to DefinedGe fields based on API docs
         transformed_data = {
             "tradingsymbol": symbol,
             "exchange": map_exchange(data["exchange"]),
             "quantity": data["quantity"],
-            "price": data.get("price", "0"),
-            "price_type": map_price_type(data["pricetype"]),
+            # API requires price 0 for market orders
+            "price": "0" if price_type in ("MARKET", "SL-MARKET") else data.get("price", "0"),
+            "price_type": price_type,
             "product_type": map_product_type(data["product"]),
             "order_type": data["action"].upper(),
+            "algo_id": get_algo_id(data["exchange"]),
         }
 
         # Add optional fields based on order type
@@ -164,13 +184,14 @@ def reverse_map_exchange(exchange):
 
 
 def map_product_type(product):
-    """Map OpenAlgo product type to DefinedGe product type"""
+    """Map OpenAlgo product type to DefinedGe product type.
+
+    API supports CNC (equity only), INTRADAY (both), NORMAL (derivatives only).
+    """
     product_mapping = {
         "MIS": "INTRADAY",
-        "CNC": "NORMAL",
+        "CNC": "CNC",
         "NRML": "NORMAL",
-        "CO": "COVER_ORDER",
-        "BO": "BRACKET_ORDER",
     }
     return product_mapping.get(product, "NORMAL")
 
@@ -179,21 +200,22 @@ def reverse_map_product_type(product):
     """Map DefinedGe product type to OpenAlgo product type"""
     reverse_mapping = {
         "INTRADAY": "MIS",
-        "NORMAL": "CNC",  # For NSE/BSE cash segment
-        "COVER_ORDER": "CO",
-        "BRACKET_ORDER": "BO",
+        "CNC": "CNC",
+        "NORMAL": "NRML",  # NORMAL is derivatives-only per API docs
     }
-    # Default based on exchange - NORMAL maps to CNC for cash, NRML for F&O
     return reverse_mapping.get(product, "CNC")
 
 
 def map_price_type(pricetype):
-    """Map OpenAlgo price type to DefinedGe price type"""
+    """Map OpenAlgo price type to DefinedGe price type.
+
+    API supports LIMIT / MARKET / SL-LIMIT / SL-MARKET.
+    """
     price_mapping = {
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
-        "SL": "STOP_LOSS",
-        "SL-M": "STOP_LOSS_MARKET",
+        "SL": "SL-LIMIT",
+        "SL-M": "SL-MARKET",
     }
     return price_mapping.get(pricetype, "LIMIT")
 
@@ -219,18 +241,24 @@ def reverse_map_price_type(pricetype):
     reverse_mapping = {
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
-        "STOP_LOSS": "SL",
-        "STOP_LOSS_MARKET": "SL-M",
+        "SL-LIMIT": "SL",
+        "SL-MARKET": "SL-M",
     }
     return reverse_mapping.get(pricetype, "LIMIT")
 
 
 def map_order_status(status):
-    """Map DefinedGe order status to OpenAlgo status"""
+    """Map DefinedGe order status to OpenAlgo status.
+
+    API order_status values: CANCELED / COMPLETE / NEW / OPEN / REJECTED / REPLACED
+    """
     status_mapping = {
         "COMPLETE": "COMPLETE",
         "OPEN": "OPEN",
+        "NEW": "OPEN",
+        "REPLACED": "OPEN",
         "PENDING": "PENDING",
+        "CANCELED": "CANCELLED",
         "CANCELLED": "CANCELLED",
         "REJECTED": "REJECTED",
         "PARTIALLY_FILLED": "OPEN",

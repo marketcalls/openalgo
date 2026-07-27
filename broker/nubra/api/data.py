@@ -649,7 +649,7 @@ class BrokerData:
                 )
 
             # Determine instrument type based on exchange
-            # Nubra only supports: NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX
+            # Nubra supports: NSE, BSE, NFO, BFO, MCX, NSE_INDEX, BSE_INDEX
             # For NFO/BFO, Nubra expects exchange=NSE/BSE with type=FUT/OPT
             if exchange == "NSE_INDEX":
                 instrument_type = "INDEX"
@@ -671,11 +671,18 @@ class BrokerData:
                 else:
                     instrument_type = "FUT"
                 api_exchange = "BSE"  # Nubra expects BSE for F&O
+            elif exchange == "MCX":
+                # MCX commodities are all derivatives (FUT/OPT); exchange stays MCX
+                if "CE" in symbol or "PE" in symbol:
+                    instrument_type = "OPT"
+                else:
+                    instrument_type = "FUT"
+                api_exchange = "MCX"
             elif exchange in ["NSE", "BSE"]:
                 instrument_type = "STOCK"
                 api_exchange = exchange
             else:
-                raise Exception(f"Exchange '{exchange}' is not supported by Nubra. Supported exchanges: NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX")
+                raise Exception(f"Exchange '{exchange}' is not supported by Nubra. Supported exchanges: NSE, BSE, NFO, BFO, MCX, NSE_INDEX, BSE_INDEX")
 
             # Convert dates to datetime objects
             from_date = pd.to_datetime(start_date)

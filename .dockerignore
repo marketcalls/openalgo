@@ -1,6 +1,11 @@
 # Ignore stateful content (these will be generated again)
 db/
 log/
+tmp/
+
+# Personal workspace and audit reports -- never belong in a shipped image.
+# The Dockerfile does `COPY . .`, so anything not listed here is baked in.
+workspace/
 
 # Byte-compiled / cache files
 __pycache__/
@@ -16,7 +21,11 @@ venv/
 
 # Environment and secrets
 .env
+.env.*
+*.env
+env.backup
 !.sample.env
+!**/.sample.env
 secrets.*
 *.key
 *.pem

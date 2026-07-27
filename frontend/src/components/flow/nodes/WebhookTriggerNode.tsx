@@ -3,9 +3,9 @@
  * Triggers workflow from external HTTP requests
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Webhook } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 
 interface WebhookTriggerNodeProps {
@@ -19,12 +19,7 @@ interface WebhookTriggerNodeProps {
 
 export const WebhookTriggerNode = memo(({ data, selected }: WebhookTriggerNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node node-trigger min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
+    <div className={cn('workflow-node node-trigger min-w-[120px]', selected && 'selected')}>
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded bg-node-trigger/20">
@@ -32,9 +27,7 @@ export const WebhookTriggerNode = memo(({ data, selected }: WebhookTriggerNodePr
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Webhook</div>
-            <div className="text-[9px] text-muted-foreground">
-              External Trigger
-            </div>
+            <div className="text-[9px] text-muted-foreground">External Trigger</div>
           </div>
         </div>
         {data.symbol && (
@@ -51,11 +44,7 @@ export const WebhookTriggerNode = memo(({ data, selected }: WebhookTriggerNodePr
           </div>
         )}
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

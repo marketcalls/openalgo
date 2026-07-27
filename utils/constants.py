@@ -12,8 +12,11 @@ EXCHANGE_BFO = "BFO"  # BSE Futures & Options
 EXCHANGE_BCD = "BCD"  # BSE Currency
 EXCHANGE_MCX = "MCX"  # MCX Commodity
 EXCHANGE_NCDEX = "NCDEX"  # NCDEX Commodity
+EXCHANGE_NCO = "NCO"  # NSE Commodities (futures + options)
 EXCHANGE_NSE_INDEX = "NSE_INDEX"  # NSE Index
 EXCHANGE_BSE_INDEX = "BSE_INDEX"  # BSE Index
+EXCHANGE_MCX_INDEX = "MCX_INDEX"  # MCX Index (declared by Angel + Zerodha plugins)
+EXCHANGE_GLOBAL_INDEX = "GLOBAL_INDEX"  # Global indices (US30, JAPAN225, HANGSENG, GIFTNIFTY, etc.)
 EXCHANGE_CRYPTO = "CRYPTO"  # Crypto Exchanges (broker-agnostic; brexchange carries broker name)
 
 # Set of all crypto-family exchanges.
@@ -43,6 +46,7 @@ FNO_EXCHANGES: set[str] = {
     EXCHANGE_CDS,
     EXCHANGE_BCD,
     EXCHANGE_NCDEX,
+    EXCHANGE_NCO,
 } | CRYPTO_EXCHANGES
 
 VALID_EXCHANGES = [
@@ -54,8 +58,11 @@ VALID_EXCHANGES = [
     EXCHANGE_BCD,
     EXCHANGE_MCX,
     EXCHANGE_NCDEX,
+    EXCHANGE_NCO,
     EXCHANGE_NSE_INDEX,
     EXCHANGE_BSE_INDEX,
+    EXCHANGE_MCX_INDEX,
+    EXCHANGE_GLOBAL_INDEX,
     EXCHANGE_CRYPTO,
 ]
 
@@ -90,8 +97,11 @@ EXCHANGE_BADGE_COLORS = {
     EXCHANGE_BCD: "badge-error",
     EXCHANGE_MCX: "badge-primary",
     EXCHANGE_NCDEX: "badge-success",
+    EXCHANGE_NCO: "badge-success",
     EXCHANGE_NSE_INDEX: "badge-accent",
     EXCHANGE_BSE_INDEX: "badge-neutral",
+    EXCHANGE_MCX_INDEX: "badge-primary",
+    EXCHANGE_GLOBAL_INDEX: "badge-info",
     EXCHANGE_CRYPTO: "badge-primary",
 }
 

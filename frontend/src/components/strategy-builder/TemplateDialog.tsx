@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { strikeMoneyness } from '@/lib/strategyMath'
 import type { StrategyTemplate, TemplateLeg } from '@/lib/strategyTemplates'
 import { cn } from '@/lib/utils'
 import type { OptionStrike } from '@/types/option-chain'
@@ -72,6 +73,7 @@ export function TemplateDialog({
   const [strikeOverrides, setStrikeOverrides] = useState<Record<number, number>>({})
 
   // Reset overrides when template changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: template?.id is an intentional reset trigger — the body only calls setters, but it MUST re-fire when the selected template changes to clear stale overrides
   useEffect(() => {
     setStrikeOverrides({})
     setLots(1)
@@ -124,6 +126,12 @@ export function TemplateDialog({
         <div className="space-y-3">
           {resolved.map((leg, idx) => {
             const multiExpiry = leg.resolvedExpiry !== expiry
+            const moneyness = strikeMoneyness(
+              leg.resolvedStrike,
+              atmStrike,
+              strikeStep,
+              leg.optionType
+            )
             return (
               <div key={idx} className="flex items-center gap-2 rounded-md border p-2 text-xs">
                 <span
@@ -156,6 +164,26 @@ export function TemplateDialog({
                   </SelectContent>
                 </Select>
                 <span className="text-xs font-semibold">{leg.optionType}</span>
+                {moneyness && (
+                  <span
+                    className={cn(
+                      'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+                      moneyness.kind === 'ATM' &&
+                        'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+                      moneyness.kind === 'ITM' && 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+                      moneyness.kind === 'OTM' && 'bg-muted text-muted-foreground'
+                    )}
+                    title={
+                      moneyness.kind === 'ATM'
+                        ? 'At the Money'
+                        : moneyness.kind === 'ITM'
+                          ? `In the Money · ${Math.abs(moneyness.steps)} ${Math.abs(moneyness.steps) === 1 ? 'strike' : 'strikes'} from ATM`
+                          : `Out of the Money · ${Math.abs(moneyness.steps)} ${Math.abs(moneyness.steps) === 1 ? 'strike' : 'strikes'} from ATM`
+                    }
+                  >
+                    {moneyness.label}
+                  </span>
+                )}
                 {multiExpiry && (
                   <span
                     className={cn(
@@ -194,6 +222,7 @@ export function TemplateDialog({
               <label className="text-[11px] font-medium text-muted-foreground">Lot Qty</label>
               <div className="flex h-9 items-center overflow-hidden rounded-md border">
                 <button
+                  type="button"
                   onClick={() => setLots(Math.max(1, lots - 1))}
                   className="h-full px-2 text-muted-foreground hover:bg-muted"
                 >
@@ -207,6 +236,7 @@ export function TemplateDialog({
                   className="w-full border-x bg-transparent text-center text-xs outline-none"
                 />
                 <button
+                  type="button"
                   onClick={() => setLots(lots + 1)}
                   className="h-full px-2 text-muted-foreground hover:bg-muted"
                 >

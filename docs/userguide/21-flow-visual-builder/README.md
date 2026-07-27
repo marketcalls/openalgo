@@ -241,7 +241,7 @@ Flow webhooks need to be accessible from the internet for external triggers (Tra
 
 **Recommended**: Deploy OpenAlgo on an Ubuntu server with your domain using `install.sh`:
 ```
-https://yourdomain.com/api/v1/flow/{flow-id}/webhook
+https://yourdomain.com/flow/webhook/<token>
 ```
 
 **Alternative**: Use tunneling services **for webhooks only**:
@@ -257,8 +257,10 @@ See [Installation Guide](../04-installation/README.md) for detailed setup.
 ### Webhook URL Format
 
 ```
-https://your-openalgo-url/api/v1/flow/{flow-id}/webhook
+https://your-openalgo-url/flow/webhook/<token>
 ```
+
+Flows that use a symbol path parameter also accept `https://your-openalgo-url/flow/webhook/<token>/<symbol>`.
 
 ### TradingView Alert Message
 
@@ -314,13 +316,13 @@ OpenAlgo provides pre-built templates:
 │  Execution #12345                                   2025-01-21 10:30:15     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  ✅ Webhook Input         Duration: 2ms                                     │
+│ Webhook Input         Duration: 2ms                                     │
 │     Input: {"symbol": "SBIN", "action": "BUY"}                             │
 │                                                                              │
-│  ✅ Place Order           Duration: 150ms                                   │
+│ Place Order           Duration: 150ms                                   │
 │     Output: {"status": "success", "orderid": "12345"}                       │
 │                                                                              │
-│  ✅ Telegram Notify       Duration: 300ms                                   │
+│ Telegram Notify       Duration: 300ms                                   │
 │     Output: {"status": "sent"}                                              │
 │                                                                              │
 │  Total Duration: 452ms                                                      │

@@ -18,6 +18,7 @@ describe('Navigation Config', () => {
       expect(labels).toContain('Orderbook')
       expect(labels).toContain('Positions')
       expect(labels).toContain('Strategy')
+      expect(labels).toContain('Trading')
     })
 
     it('all items have required properties', () => {
@@ -54,7 +55,7 @@ describe('Navigation Config', () => {
 
     it('contains remaining nav items', () => {
       const sheetLabels = mobileSheetItems.map((item) => item.label)
-      expect(sheetLabels).toContain('Action Center')
+      expect(sheetLabels).toContain('Trading')
       expect(sheetLabels).toContain('Platforms')
       expect(sheetLabels).toContain('Logs')
     })
@@ -66,6 +67,10 @@ describe('Navigation Config', () => {
       expect(labels).toContain('Profile')
       expect(labels).toContain('API Key')
       expect(labels).toContain('Holdings')
+      // Action Center moved from the main navbar into the profile dropdown,
+      // positioned right after API Key.
+      expect(labels).toContain('Action Center')
+      expect(labels.indexOf('Action Center')).toBe(labels.indexOf('API Key') + 1)
     })
   })
 

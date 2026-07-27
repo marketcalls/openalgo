@@ -1,7 +1,7 @@
 # services/pending_order_execution_service.py
 
 import json
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from database.action_center_db import get_pending_order_by_id, update_broker_status
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
@@ -9,6 +9,32 @@ from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+
+def _flatten_execution_results(results: Any) -> list[dict[str, Any]]:
+    """Return leaf order results from batch and split-order responses."""
+    flattened = []
+    if not isinstance(results, list):
+        return flattened
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        split_results = result.get("split_results")
+        if isinstance(split_results, list):
+            flattened.extend(_flatten_execution_results(split_results))
+        else:
+            flattened.append(result)
+
+    return flattened
+
+
+def _summarize_order_ids(order_ids: list[str]) -> str:
+    """Fit one or more broker order IDs into the Action Center DB column."""
+    combined = ",".join(order_ids)
+    if len(combined) <= 255:
+        return combined
+    return f"{order_ids[0]} (+{len(order_ids) - 1} more)"[:255]
 
 
 def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any], int]:
@@ -110,9 +136,7 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
             elif api_type == "splitorder":
                 from services.split_order_service import split_order
 
-                logger.info(
-                    f"Calling split_order with api_key={api_key[:8]}..., auth_token={'present' if auth_token else 'None'}, broker={broker}"
-                )
+                logger.info(f"Calling split_order for broker={broker}")
                 success, response_data, status_code = split_order(
                     split_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
                 )
@@ -123,14 +147,34 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
             elif api_type == "optionsorder":
                 from services.place_options_order_service import place_options_order
 
-                logger.info(
-                    f"Calling place_options_order with api_key={api_key[:8]}..., auth_token={'present' if auth_token else 'None'}, broker={broker}"
-                )
+                logger.info(f"Calling place_options_order for broker={broker}")
                 success, response_data, status_code = place_options_order(
                     options_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
                 )
                 logger.info(
                     f"Options order result: success={success}, status={status_code}, response={response_data}"
+                )
+
+            elif api_type == "optionsmultiorder":
+                from services.options_multiorder_service import place_options_multiorder
+
+                logger.info(f"Calling place_options_multiorder for broker={broker}")
+                success, response_data, status_code = place_options_multiorder(
+                    multiorder_data=order_data,
+                    api_key=api_key,
+                    auth_token=auth_token,
+                    broker=broker,
+                )
+
+            elif api_type == "placegttorder":
+                from services.place_gtt_order_service import place_gtt_order
+
+                logger.info(f"Calling place_gtt_order for broker={broker}")
+                success, response_data, status_code = place_gtt_order(
+                    order_data=order_data,
+                    api_key=api_key,
+                    auth_token=auth_token,
+                    broker=broker,
                 )
 
             else:
@@ -139,7 +183,60 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                 return False, {"status": "error", "message": f"Unknown order type: {api_type}"}, 400
 
             # Update pending order with broker response
-            if success and "orderid" in response_data:
+            if not success:
+                update_broker_status(pending_order_id, None, "rejected")
+                logger.warning(f"Order rejected by broker: pending_order_id={pending_order_id}")
+
+            elif api_type == "placegttorder":
+                trigger_id = response_data.get("trigger_id")
+                if not trigger_id:
+                    update_broker_status(pending_order_id, None, "rejected")
+                    response_data = {
+                        **response_data,
+                        "status": "error",
+                        "message": "GTT placement succeeded without a trigger ID",
+                    }
+                    return False, response_data, 502
+
+                trigger_id = str(trigger_id)
+                update_broker_status(pending_order_id, trigger_id, "open")
+                response_data["broker_order_id"] = trigger_id
+                logger.info(
+                    f"GTT executed: pending_order_id={pending_order_id}, trigger_id={trigger_id}"
+                )
+
+            elif isinstance(response_data.get("results"), list):
+                leaf_results = _flatten_execution_results(response_data["results"])
+                order_ids = [
+                    str(result["orderid"])
+                    for result in leaf_results
+                    if result.get("status") == "success" and result.get("orderid")
+                ]
+
+                if not order_ids:
+                    update_broker_status(pending_order_id, None, "rejected")
+                    response_data = {
+                        **response_data,
+                        "status": "error",
+                        "message": "No child orders were submitted successfully",
+                    }
+                    return False, response_data, 502
+
+                has_failures = any(
+                    result.get("status") != "success" or not result.get("orderid")
+                    for result in leaf_results
+                )
+                broker_order_id = _summarize_order_ids(order_ids)
+                broker_status = "partial" if has_failures else "open"
+                update_broker_status(pending_order_id, broker_order_id, broker_status)
+                response_data["broker_order_id"] = broker_order_id
+                response_data["broker_order_ids"] = order_ids
+                logger.info(
+                    f"Batch order executed: pending_order_id={pending_order_id}, "
+                    f"submitted={len(order_ids)}, status={broker_status}"
+                )
+
+            elif "orderid" in response_data:
                 broker_order_id = response_data["orderid"]
 
                 # Get actual order status from broker
@@ -173,11 +270,6 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                     logger.info(
                         f"Order executed successfully: pending_order_id={pending_order_id}, broker_order_id={broker_order_id}"
                     )
-
-            elif not success:
-                # Broker rejected the order
-                update_broker_status(pending_order_id, None, "rejected")
-                logger.warning(f"Order rejected by broker: pending_order_id={pending_order_id}")
 
             return success, response_data, status_code
 

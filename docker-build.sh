@@ -24,15 +24,15 @@ print_header() {
 }
 
 print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN} $1${NC}"
 }
 
 print_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "${RED} $1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
+    echo -e "${YELLOW} $1${NC}"
 }
 
 print_info() {
@@ -175,7 +175,7 @@ start_container() {
             -v openalgo_log:/app/log \
             -v openalgo_strategies:/app/strategies \
             -v openalgo_keys:/app/keys \
-            -v "$(pwd)/.env:/app/.env:ro" \
+            -v "$(pwd)/.env:/app/.env" \
             --tmpfs /app/tmp:size=1g,mode=1777 \
             --restart unless-stopped \
             ${IMAGE_NAME}:${IMAGE_TAG}
@@ -217,17 +217,17 @@ health_check() {
 
 # Test Python dependencies
 test_python_deps() {
-    print_header "Testing Python Dependencies (numba/llvmlite/scipy)"
+    print_header "Testing Python Dependencies (numba/llvmlite)"
 
     print_info "Testing basic imports..."
 
     # Test 1: Basic imports
-    if docker-compose exec -T openalgo python -c "import numba; import llvmlite; import scipy; print('SUCCESS')" 2>/dev/null | grep -q "SUCCESS"; then
-        print_success "numba, llvmlite, scipy imports successful"
+    if docker-compose exec -T openalgo python -c "import numba; import llvmlite; print('SUCCESS')" 2>/dev/null | grep -q "SUCCESS"; then
+        print_success "numba, llvmlite imports successful"
     else
         print_error "Failed to import dependencies"
         print_info "Running detailed test..."
-        docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('SUCCESS')"
+        docker-compose exec openalgo python -c "import numba; import llvmlite; print('SUCCESS')"
         return 1
     fi
 
@@ -250,20 +250,7 @@ print('SUCCESS' if len(result) == 3 else 'FAILED')
         return 1
     fi
 
-    # Test 3: SciPy operations
-    print_info "Testing scipy operations..."
-    if docker-compose exec -T openalgo python -c "
-from scipy import stats
-result = stats.norm.cdf(0)
-print('SUCCESS' if abs(result - 0.5) < 0.001 else 'FAILED')
-" 2>/dev/null | grep -q "SUCCESS"; then
-        print_success "SciPy operations work"
-    else
-        print_error "SciPy operations failed"
-        return 1
-    fi
-
-    # Test 4: Cache directory permissions
+    # Test 3: Cache directory permissions
     print_info "Testing cache directory..."
     if docker-compose exec -T openalgo bash -c "
 [ -d /app/tmp/numba_cache ] && [ -w /app/tmp/numba_cache ] && echo 'SUCCESS'
@@ -278,7 +265,7 @@ print('SUCCESS' if abs(result - 0.5) < 0.001 else 'FAILED')
 show_access_info() {
     print_header "Deployment Complete!"
 
-    echo -e "${GREEN}✓ OpenAlgo is now running${NC}\n"
+    echo -e "${GREEN} OpenAlgo is now running${NC}\n"
 
     echo -e "${BLUE}Access URLs:${NC}"
     echo -e "  Web UI:       ${GREEN}http://127.0.0.1:5000${NC}"

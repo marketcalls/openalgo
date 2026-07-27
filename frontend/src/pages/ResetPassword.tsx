@@ -11,7 +11,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -19,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { showToast } from '@/utils/toast'
 
 type Step = 'email' | 'method' | 'totp' | 'email_sent' | 'password'
 
@@ -379,6 +379,7 @@ export default function ResetPassword() {
                   <Input
                     id="totp"
                     type="text"
+                    inputMode="numeric"
                     value={totpCode}
                     onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="000000"

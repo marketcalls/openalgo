@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import type * as PlotlyTypes from 'plotly.js'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { useThemeStore } from '@/stores/themeStore'
-import { oiTrackerApi, type OIDataResponse } from '@/api/oi-tracker'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type OIDataResponse, oiTrackerApi } from '@/api/oi-tracker'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Command,
@@ -21,10 +21,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import Plot from '@/lib/Plot2D'
+import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
-import Plot from 'react-plotly.js'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
@@ -55,9 +55,13 @@ export default function OITracker() {
   const isDark = mode === 'dark' || isAnalyzer
 
   const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
-  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
+  const [underlyings, setUnderlyings] = useState<string[]>(
+    defaultUnderlyings[defaultFnoExchange] || []
+  )
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(
+    defaultUnderlyings[defaultFnoExchange]?.[0] || ''
+  )
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [oiData, setOiData] = useState<OIDataResponse | null>(null)
@@ -96,8 +100,10 @@ export default function OITracker() {
       }
     }
     fetchUnderlyings()
-    return () => { cancelled = true }
-  }, [selectedExchange])
+    return () => {
+      cancelled = true
+    }
+  }, [selectedExchange, defaultUnderlyings[selectedExchange]])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -125,9 +131,10 @@ export default function OITracker() {
       }
     }
     fetchExpiries()
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+    return () => {
+      cancelled = true
+    }
+  }, [selectedUnderlying, selectedExchange])
 
   // Fetch OI data - uses requestIdRef to discard stale responses
   const fetchOIData = useCallback(async () => {
@@ -155,13 +162,13 @@ export default function OITracker() {
     }
   }, [selectedUnderlying, selectedExpiry, selectedExchange])
 
+  // Only trigger on expiry change - not on fetchOIData identity change,
+  // which would cause a stale request with mixed params during exchange switch.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: must fire only when selectedExpiry changes; adding fetchOIData would refire on underlying/exchange changes mid-switch and issue a stale request with mixed params
   useEffect(() => {
     if (selectedExpiry) {
       fetchOIData()
     }
-    // Only trigger on expiry change - not on fetchOIData identity change,
-    // which would cause a stale request with mixed params during exchange switch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExpiry])
 
   // Theme colors for Plotly
@@ -178,17 +185,9 @@ export default function OITracker() {
       ceBar: '#ef4444',
       peBar: '#22c55e',
       atmLine: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',
-      hoverBg: isDark
-        ? isAnalyzer
-          ? '#2d2545'
-          : '#1e293b'
-        : '#ffffff',
+      hoverBg: isDark ? (isAnalyzer ? '#2d2545' : '#1e293b') : '#ffffff',
       hoverFont: isDark ? '#e0e0e0' : '#333333',
-      hoverBorder: isDark
-        ? isAnalyzer
-          ? '#7c3aed'
-          : '#475569'
-        : '#e2e8f0',
+      hoverBorder: isDark ? (isAnalyzer ? '#7c3aed' : '#475569') : '#e2e8f0',
     }),
     [isDark, isAnalyzer]
   )
@@ -355,7 +354,12 @@ export default function OITracker() {
           {/* Underlying selector */}
           <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
             <PopoverTrigger asChild>
-              <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-[160px] justify-between">
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={underlyingOpen}
+                className="w-[160px] justify-between"
+              >
                 {selectedUnderlying || 'Underlying'}
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
@@ -375,7 +379,9 @@ export default function OITracker() {
                           setUnderlyingOpen(false)
                         }}
                       >
-                        <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                        <Check
+                          className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`}
+                        />
                         {u}
                       </CommandItem>
                     ))}
@@ -459,7 +465,9 @@ export default function OITracker() {
             />
           ) : (
             <div className="flex items-center justify-center h-[500px] text-muted-foreground">
-              {selectedExpiry ? 'No OI data available' : 'Select an underlying and expiry to view OI data'}
+              {selectedExpiry
+                ? 'No OI data available'
+                : 'Select an underlying and expiry to view OI data'}
             </div>
           )}
         </CardContent>

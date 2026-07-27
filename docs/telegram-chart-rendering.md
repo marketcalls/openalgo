@@ -61,7 +61,7 @@ headless Chromium over the Chrome DevTools Protocol. When you call
 If Chromium isn't on the system, the subprocess spawn fails and
 `fig.to_image()` raises — the generator catches it, logs
 `Error generating intraday chart: ...`, and the bot replies with
-`❌ Failed to generate charts for <symbol>`.
+` Failed to generate charts for <symbol>`.
 
 ### Confirming Chromium is present
 
@@ -409,7 +409,7 @@ without applying the same `_render_plotly_png` pattern.
 
 ## 6. Operator troubleshooting checklist
 
-When `/chart RELIANCE` returns `❌ Failed to generate charts for RELIANCE`:
+When `/chart RELIANCE` returns ` Failed to generate charts for RELIANCE`:
 
 1. **Container/host logs first.**
    ```bash

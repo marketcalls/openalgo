@@ -36,6 +36,34 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/margin \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "positions": [
+    {
+      "symbol": "NIFTY25NOV2525000CE",
+      "exchange": "NFO",
+      "action": "BUY",
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "quantity": "65"
+    },
+    {
+      "symbol": "NIFTY25NOV2525500CE",
+      "exchange": "NFO",
+      "action": "SELL",
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "quantity": "65"
+    }
+  ]
+}'
+```
+
 ## Sample API Response
 
 ```json

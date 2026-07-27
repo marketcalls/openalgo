@@ -66,7 +66,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication tokens from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
 
             if not auth_token:
                 self.logger.error(f"No authentication token found for user {user_id}")
@@ -99,6 +99,18 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(
                     f"Connecting to Pocketful WebSocket (attempt {self.reconnect_attempts + 1})"
                 )
+
+                # Re-read a fresh auth token from the database before (re)building the
+                # connection URL. Indian broker tokens roll over daily at ~3 AM IST, so a
+                # reconnect after rollover must not reuse the construction-time token.
+                fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+                if fresh_token:
+                    self.access_token = fresh_token
+                else:
+                    self.logger.warning(
+                        "Could not fetch fresh auth token from database; "
+                        "reusing existing token for reconnection"
+                    )
 
                 # Build WebSocket URL
                 ws_url = f"{self.BASE_URL}/ws/v1/feeds?login_id={self.user_id}&access_token={self.access_token}"
@@ -375,7 +387,7 @@ class PocketfulWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 else:
                     # If no mode in JSON, try binary parsing
                     mode = struct.unpack(">b", message[0:1])[0]
-            except:
+            except Exception:
                 # If JSON parsing fails, assume binary
                 mode = struct.unpack(">b", message[0:1])[0]
 

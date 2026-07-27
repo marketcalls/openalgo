@@ -2,6 +2,8 @@
 
 import json
 
+from broker.definedge.api.baseurl import get_url
+from broker.definedge.api.rate_limiter import rate_limited_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -28,22 +30,23 @@ def get_margin_data(auth_token):
 
         headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
 
-        url = "https://integrate.definedgesecurities.com/dart/v1/limits"
+        url = get_url("/limits")
 
-        logger.info("=== FETCHING FUNDS/LIMITS FROM DEFINEDGE ===")
-        response = client.get(url, headers=headers)
+        logger.debug("Fetching funds/limits from Definedge")
+        response = rate_limited_request(client, "GET", url, headers=headers)
 
         # Log raw response for debugging
-        logger.info(f"Definedge Limits API Response Status: {response.status_code}")
-        logger.info(f"Definedge Limits API Raw Response: {response.text}")
+        logger.debug(f"Definedge Limits API Response Status: {response.status_code}")
+        logger.debug(f"Definedge Limits API Raw Response: {response.text}")
 
         response.raise_for_status()  # Raise exception for error status codes
 
         response_data = response.json()
-        logger.info(f"Funds Details: {json.dumps(response_data, indent=2)}")
+        logger.debug(f"Funds Details: {json.dumps(response_data, indent=2)}")
 
-        # Check if the response is successful - Definedge returns SUCCESS status
-        if response_data.get("status") == "SUCCESS" or "cash" in response_data:
+        # Check if the response is successful. Docs say status SUCCESS but the
+        # live API returns status "200"; the cash-field check covers any drift.
+        if response_data.get("status") in ("SUCCESS", "200") or "cash" in response_data:
             # Format values to 2 decimal places
             def format_value(value):
                 try:
@@ -84,13 +87,13 @@ def get_margin_data(auth_token):
             realized_pnl = float(response_data.get("currentRealizedPNL", 0))
 
             # Log raw values for debugging
-            logger.info(
+            logger.debug(
                 f"Raw currentRealizedPNL from Definedge: {response_data.get('currentRealizedPNL', 'Not found')}"
             )
 
             # Check if there's brokerage that might affect the P&L
             brokerage = float(response_data.get("brokerage", 0))
-            logger.info(f"Brokerage: {brokerage}")
+            logger.debug(f"Brokerage: {brokerage}")
 
             if realized_pnl == 0:
                 # Try summing up segment-specific realized values if main field is 0
@@ -101,8 +104,8 @@ def get_margin_data(auth_token):
                     response_data.get("currentRealizedPNLDerivativeIntraday", 0)
                 )
 
-                logger.info(f"Equity Intraday PNL: {equity_intraday_pnl}")
-                logger.info(f"Derivative Intraday PNL: {derivative_intraday_pnl}")
+                logger.debug(f"Equity Intraday PNL: {equity_intraday_pnl}")
+                logger.debug(f"Derivative Intraday PNL: {derivative_intraday_pnl}")
 
                 realized_pnl = (
                     derivative_intraday_pnl
@@ -118,10 +121,9 @@ def get_margin_data(auth_token):
             # with actual profitable trades to determine the correct sign convention.
             # For now, we'll use the value as-is from the API.
 
-            logger.info(f"Final realized PNL being set: {realized_pnl}")
-            logger.warning(
-                "Note: Definedge may return P&L as absolute value in limits API. Verify sign convention with actual trades."
-            )
+            # NOTE: Definedge may return P&L as absolute value in the limits API;
+            # sign convention should be verified with actual profitable trades
+            logger.debug(f"Final realized PNL being set: {realized_pnl}")
 
             processed_margin_data["m2mrealized"] = format_value(realized_pnl)
 
@@ -130,7 +132,7 @@ def get_margin_data(auth_token):
                 response_data.get("marginUsed", 0)
             )
 
-            logger.info(f"Processed margin data: {processed_margin_data}")
+            logger.debug(f"Processed margin data: {processed_margin_data}")
             return processed_margin_data
         else:
             # Log error if status is not SUCCESS

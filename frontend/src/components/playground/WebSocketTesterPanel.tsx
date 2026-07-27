@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useWebSocketTester } from '@/hooks/useWebSocketTester'
+import { showToast } from '@/utils/toast'
 import { ConnectionPanel } from './ConnectionPanel'
 import { MessageComposer } from './MessageComposer'
 import { MessageLog } from './MessageLog'
-import { showToast } from '@/utils/toast'
 
 interface WebSocketTesterPanelProps {
   apiKey?: string

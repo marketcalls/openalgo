@@ -41,6 +41,7 @@ from database.historify_db import bulk_delete_market_data as db_bulk_delete_mark
 from database.token_db_enhanced import get_symbol_info
 from services.history_service import get_history
 from services.intervals_service import get_intervals
+from utils.constants import FNO_EXCHANGES as _CENTRAL_FNO_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -1035,8 +1036,9 @@ def upload_parquet_data(
 # FNO Discovery Operations
 # =============================================================================
 
-# FNO Exchanges for derivatives
-FNO_EXCHANGES = ["NFO", "BFO", "MCX", "CDS"]
+# FNO Exchanges for derivatives — sourced from utils.constants so adding a new
+# F&O exchange (e.g. NCO) is a single-place change.
+FNO_EXCHANGES = sorted(_CENTRAL_FNO_EXCHANGES)
 
 
 def get_fno_underlyings(exchange: str = None) -> tuple[bool, dict[str, Any], int]:
@@ -1673,6 +1675,17 @@ def _process_download_job(job_id: str, api_key: str):
             delay = random.uniform(delay_min, delay_max)
             logger.debug(f"Waiting {delay:.1f}s before next download...")
             time.sleep(delay)
+
+            # Batch cooldown: every 10 symbols processed in this run, add a
+            # 5-10s pause so broker long-window rate limiters (req/min) reset.
+            items_done_this_run = processed_count - already_completed - already_failed
+            if items_done_this_run > 0 and items_done_this_run % 10 == 0:
+                batch_delay = random.uniform(5, 10)
+                logger.info(
+                    f"Job {job_id}: batch cooldown after {items_done_this_run} symbols, "
+                    f"sleeping {batch_delay:.1f}s"
+                )
+                time.sleep(batch_delay)
 
         # Job completed
         final_status = "completed" if failed == 0 else "completed_with_errors"

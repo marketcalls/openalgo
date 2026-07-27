@@ -282,10 +282,10 @@ def send_test_message():
         # If no linked user found, try to send to the first available user (for admin testing)
         if not telegram_user and all_users:
             telegram_user = all_users[0]  # Use first available user for testing
-            message = f"🔔 Test Message from OpenAlgo (Admin: {username})\n\nYour Telegram integration is working correctly!"
+            message = f"Test Message from OpenAlgo (Admin: {username})\n\nYour Telegram integration is working correctly!"
         elif telegram_user:
             message = (
-                "🔔 Test Message from OpenAlgo\n\nYour Telegram integration is working correctly!"
+                "Test Message from OpenAlgo\n\nYour Telegram integration is working correctly!"
             )
         else:
             return jsonify(

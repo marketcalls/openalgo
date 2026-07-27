@@ -166,7 +166,7 @@ async def receive_and_print_data(websocket, duration=30):
         try:
             await websocket.send(json.dumps({"type": "unsubscribe_all"}))
             print("\nUnsubscribed from all symbols")
-        except:
+        except Exception:
             pass
 
 

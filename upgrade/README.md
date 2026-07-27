@@ -14,6 +14,61 @@ Each migration automatically skips if already applied, so it's safe to run anyti
 
 ---
 
+## Recovery and Diagnostics
+
+These two are not migrations and are not run by `migrate_all.py`. Reach for them
+when an install is misbehaving.
+
+### Cannot log in, or something looks wrong with the database
+
+```bash
+uv run python upgrade/init_db.py
+```
+
+Safe to run anytime, changes nothing that already exists. Creates any missing
+tables in the foreground (app.py does this on a background thread, where
+failures are easy to miss), then reports:
+
+- which database file the install is actually using, and whether a relative
+  `DATABASE_URL` plus an unexpected working directory has produced a second,
+  empty database somewhere
+- whether the tables exist and whether an account has been created
+- **whether stored credentials still decrypt with the current `API_KEY_PEPPER`
+  and `FERNET_SALT`** — a mismatch here is the usual cause of "Invalid
+  credentials" on a password you know is correct, and it is invisible from the
+  login page
+
+Stop OpenAlgo first. Historify is DuckDB and allows one writer, so that single
+step reports a lock failure while the app is up.
+
+### Locked out with no SMTP and no authenticator app
+
+```bash
+uv run python upgrade/reset_admin_password.py
+```
+
+Sets a new password from the command line, hashed with the pepper currently in
+`.env`. The in-app reset at `/auth/reset-password` needs either configured SMTP
+or an enrolled TOTP device; a fresh install has neither, which leaves no way
+back in. Stop OpenAlgo before running it — a live process caches the user row
+for 30 seconds and keeps accepting the old password until that expires.
+
+Use `--list` to see accounts, `--username` to pick one.
+
+If the script reports that stored secrets no longer decrypt, your
+`API_KEY_PEPPER` changed after the account was created. The reset gets you
+logged in, but broker tokens, the stored API key and TOTP secrets are encrypted
+under the old pepper and cannot be recovered — log in to the broker again and
+regenerate the API key at `/apikey`. If you still have a backup of the original
+`.env`, restoring its `API_KEY_PEPPER` and `FERNET_SALT` lines recovers
+everything instead, including the old password.
+
+> Keep a backup of `.env` before every upgrade (`cp .env .env.backup`). Upgrading
+> with `git pull` never touches it, but copying `.sample.env` over it discards
+> `API_KEY_PEPPER` and `FERNET_SALT`, and neither can be recovered.
+
+---
+
 ## Running Individual Migrations
 
 All migration scripts support the `uv run` command (recommended) or standard Python execution:

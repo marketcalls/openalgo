@@ -54,8 +54,16 @@ def map_order_data(order_data):
                 ):
                     order["productType"] = "NRML"
             else:
+                # Symbol resolution failed (e.g. stale/partial master contract).
+                # Never leave a null tradingSymbol — fall back to the raw broker
+                # symbol or securityId so the row stays usable instead of
+                # crashing the positions UI with null.toUpperCase(). See #1463.
+                order["tradingSymbol"] = (
+                    order.get("tradingSymbol") or str(order.get("securityId") or "")
+                )
                 logger.warning(
-                    f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol."
+                    f"Symbol not found for token {instrument_token} and exchange {exchange}. "
+                    f"Falling back to raw symbol '{order['tradingSymbol']}'."
                 )
 
     return order_data
@@ -190,7 +198,10 @@ def transform_positions_data(positions_data):
             if api_key_obj:
                 api_key = decrypt_token(api_key_obj.api_key_encrypted)
                 symbols_payload = [
-                    {"symbol": pos.get("tradingSymbol", ""), "exchange": pos.get("exchangeSegment", "")}
+                    {
+                        "symbol": pos.get("tradingSymbol") or "",
+                        "exchange": pos.get("exchangeSegment") or "",
+                    }
                     for pos in positions_data
                     if pos.get("tradingSymbol") and pos.get("exchangeSegment")
                 ]
@@ -208,14 +219,17 @@ def transform_positions_data(positions_data):
     for position in positions_data:
         realized_pnl = float(position.get("realizedProfit", 0))
         unrealized_pnl = float(position.get("unrealizedProfit", 0))
-        symbol = position.get("tradingSymbol", "")
-        exchange = position.get("exchangeSegment", "")
+        # Coerce nulls: dict.get(k, "") returns None (not "") when the key is
+        # present with a null value, so a null symbol/exchange/product would
+        # otherwise reach the frontend and crash null.toUpperCase(). See #1463.
+        symbol = position.get("tradingSymbol") or ""
+        exchange = position.get("exchangeSegment") or ""
         ltp = ltp_map.get(f"{exchange}:{symbol}", 0.0)
 
         transformed_position = {
             "symbol": symbol,
             "exchange": exchange,
-            "product": position.get("productType", ""),
+            "product": position.get("productType") or "",
             "quantity": position.get("netQty", 0),
             "average_price": position.get("costPrice", 0.0),
             "ltp": round(ltp, 2),
@@ -225,59 +239,144 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 
-def transform_holdings_data(holdings_data):
-    transformed_data = []
-    for holdings in holdings_data:
-        transformed_position = {
-            "symbol": holdings.get("tradingSymbol", ""),
-            "exchange": holdings.get("exchange", ""),
-            "quantity": holdings.get("totalQty", 0),
-            "product": "CNC",
-            "pnl": 0.0,
-            "pnlpercent": 0.0,
-        }
-        transformed_data.append(transformed_position)
-    return transformed_data
-
-
 def map_portfolio_data(portfolio_data):
-    """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions.
+    """Validate the Dhan /holdings response and enrich each row with LTP +
+    real exchange so the downstream stats and transform stages can render
+    a meaningful row on first paint.
 
-    Parameters:
-    - portfolio_data: A list of dictionaries, where each dictionary represents an portfolio information.
+    Dhan returns ``exchange="ALL"`` for every holding (demat is exchange-
+    agnostic) and the /holdings endpoint does NOT include LTP. We resolve
+    the actual listing exchange via the SymToken cache (probing NSE then
+    BSE using the broker-returned ``securityId``) and batch-fetch LTPs
+    via the multiquote service — same pattern transform_positions_data
+    uses for the same reason.
 
-    Returns:
-    - The modified portfolio_data with  'product' fields.
+    Enrichment writes three private fields into each holding dict that
+    calculate_portfolio_statistics and transform_holdings_data both
+    consume:
+
+    - ``_oa_symbol``: OpenAlgo symbol resolved from securityId+exchange
+    - ``_exchange``: real exchange ("NSE" or "BSE"), never "ALL"
+    - ``_ltp``: last-traded price (0.0 if multiquote failed/missing — the
+      frontend's useLivePrice hook fills it in via WebSocket within seconds)
     """
-    # Check if 'portfolio_data' is empty
-    if (
-        portfolio_data is None
-        or isinstance(portfolio_data, dict)
+    if portfolio_data is None or (
+        isinstance(portfolio_data, dict)
         and (
             portfolio_data.get("errorCode") == "DHOLDING_ERROR"
             or portfolio_data.get("internalErrorCode") == "DH-1111"
             or portfolio_data.get("internalErrorMessage") == "No holdings available"
         )
     ):
-        # Handle the case where there is no data or specific error message about no holdings
         logger.info("No data or no holdings available.")
-        portfolio_data = {}  # This resets portfolio_data to an empty dictionary if conditions are met
+        return {}
+    if not isinstance(portfolio_data, list):
+        return {}
+
+    # Resolve exchange per holding via SymToken cache. securityId is the
+    # Dhan broker token and is exchange-scoped, so a single hit uniquely
+    # identifies the listing. Probe NSE first (most equity), then BSE.
+    for h in portfolio_data:
+        security_id = str(h.get("securityId", "") or "")
+        trading_sym = h.get("tradingSymbol", "")
+        resolved_exchange = None
+        resolved_symbol = trading_sym
+        if security_id:
+            for candidate in ("NSE", "BSE"):
+                sym = get_symbol(security_id, candidate)
+                if sym:
+                    resolved_exchange = candidate
+                    resolved_symbol = sym
+                    break
+        h["_oa_symbol"] = resolved_symbol
+        h["_exchange"] = resolved_exchange or "NSE"
+        h["_ltp"] = 0.0
+
+    # Batch-fetch LTPs via multiquote.
+    try:
+        from database.auth_db import ApiKeys, decrypt_token
+        from services.quotes_service import get_multiquotes
+
+        api_key_obj = ApiKeys.query.first()
+        if api_key_obj:
+            api_key = decrypt_token(api_key_obj.api_key_encrypted)
+            symbols_payload = [
+                {"symbol": h["_oa_symbol"], "exchange": h["_exchange"]}
+                for h in portfolio_data
+                if h.get("_oa_symbol") and h.get("_exchange")
+            ]
+            if symbols_payload:
+                success, response, _ = get_multiquotes(
+                    symbols=symbols_payload, api_key=api_key
+                )
+                if success and isinstance(response, dict) and "results" in response:
+                    ltp_map = {}
+                    for result in response["results"]:
+                        if isinstance(result, dict) and result.get("data"):
+                            key = f"{result.get('exchange')}:{result.get('symbol')}"
+                            ltp_map[key] = float(result["data"].get("ltp", 0) or 0)
+                    for h in portfolio_data:
+                        key = f"{h['_exchange']}:{h['_oa_symbol']}"
+                        if key in ltp_map:
+                            h["_ltp"] = ltp_map[key]
+    except Exception as e:
+        logger.warning(f"Failed to fetch LTP via multiquotes for holdings: {e}")
 
     return portfolio_data
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = sum(item["avgCostPrice"] * item["totalQty"] for item in holdings_data)
-    totalinvvalue = sum(item["avgCostPrice"] * item["totalQty"] for item in holdings_data)
-    totalprofitandloss = 0
-
-    # To avoid division by zero in the case when total_investment_value is 0
+    if not holdings_data:
+        return {
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalprofitandloss": 0,
+            "totalpnlpercentage": 0,
+        }
+    totalinvvalue = sum(
+        float(item.get("avgCostPrice", 0) or 0) * int(item.get("totalQty", 0) or 0)
+        for item in holdings_data
+    )
+    # Prefer the enriched _ltp when present; fall back to avg cost so the
+    # value is at least equal to investment (i.e. zero P&L) instead of zero
+    # holding value before the frontend's useLivePrice fills in live LTP.
+    totalholdingvalue = sum(
+        (float(item.get("_ltp", 0) or 0) or float(item.get("avgCostPrice", 0) or 0))
+        * int(item.get("totalQty", 0) or 0)
+        for item in holdings_data
+    )
+    totalprofitandloss = totalholdingvalue - totalinvvalue
     totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
-
     return {
         "totalholdingvalue": totalholdingvalue,
         "totalinvvalue": totalinvvalue,
         "totalprofitandloss": totalprofitandloss,
         "totalpnlpercentage": totalpnlpercentage,
     }
+
+
+def transform_holdings_data(holdings_data):
+    transformed_data = []
+    if not holdings_data:
+        return transformed_data
+    for h in holdings_data:
+        qty = int(h.get("totalQty", 0) or 0)
+        avg = float(h.get("avgCostPrice", 0) or 0)
+        ltp = float(h.get("_ltp", 0) or 0)
+        if ltp > 0 and avg > 0:
+            pnl = round((ltp - avg) * qty, 2)
+            pnlpercent = round((ltp - avg) / avg * 100, 2)
+        else:
+            pnl = 0.0
+            pnlpercent = 0.0
+        transformed_data.append({
+            "symbol": h.get("_oa_symbol") or h.get("tradingSymbol", ""),
+            "exchange": h.get("_exchange") or "NSE",
+            "quantity": qty,
+            "product": "CNC",
+            "average_price": round(avg, 2),
+            "ltp": round(ltp, 2),
+            "pnl": pnl,
+            "pnlpercent": pnlpercent,
+        })
+    return transformed_data

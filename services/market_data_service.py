@@ -209,18 +209,24 @@ class ConnectionHealthMonitor:
 
     def record_data_received(self):
         """Record that data was received"""
+        # Snapshot callback under the lock, invoke outside to avoid self-deadlock
+        # if a callback ever calls back into this monitor (see issue #1274).
+        callback = None
         with self.lock:
             self.last_data_timestamp = time.time()
             if self.connection_status == ConnectionStatus.STALE:
                 self.connection_status = ConnectionStatus.AUTHENTICATED
-                if self.on_connection_restored:
-                    try:
-                        self.on_connection_restored()
-                    except Exception as e:
-                        logger.exception(f"Error in connection restored callback: {e}")
+                callback = self.on_connection_restored
+
+        if callback:
+            try:
+                callback()
+            except Exception as e:
+                logger.exception(f"Error in connection restored callback: {e}")
 
     def set_connected(self, connected: bool, authenticated: bool = False):
         """Update connection status"""
+        callback = None
         with self.lock:
             if connected:
                 if authenticated:
@@ -232,11 +238,13 @@ class ConnectionHealthMonitor:
                 self.connection_status = ConnectionStatus.DISCONNECTED
                 if prev_status in (ConnectionStatus.CONNECTED, ConnectionStatus.AUTHENTICATED):
                     self.reconnect_count += 1
-                    if self.on_connection_lost:
-                        try:
-                            self.on_connection_lost()
-                        except Exception as e:
-                            logger.exception(f"Error in connection lost callback: {e}")
+                    callback = self.on_connection_lost
+
+        if callback:
+            try:
+                callback()
+            except Exception as e:
+                logger.exception(f"Error in connection lost callback: {e}")
 
     def get_health(self) -> dict[str, Any]:
         """Get current health status"""
@@ -273,17 +281,23 @@ class ConnectionHealthMonitor:
             try:
                 time.sleep(self.HEALTH_CHECK_INTERVAL)
 
+                callback = None
+                stale_data_age = None
                 with self.lock:
                     if self.connection_status == ConnectionStatus.AUTHENTICATED:
                         data_age = time.time() - self.last_data_timestamp
                         if self.last_data_timestamp > 0 and data_age > self.MAX_DATA_GAP_SECONDS:
                             self.connection_status = ConnectionStatus.STALE
-                            logger.warning(f"Connection marked stale - no data for {data_age:.1f}s")
-                            if self.on_data_stale:
-                                try:
-                                    self.on_data_stale()
-                                except Exception as e:
-                                    logger.exception(f"Error in data stale callback: {e}")
+                            stale_data_age = data_age
+                            callback = self.on_data_stale
+
+                if stale_data_age is not None:
+                    logger.warning(f"Connection marked stale - no data for {stale_data_age:.1f}s")
+                if callback:
+                    try:
+                        callback()
+                    except Exception as e:
+                        logger.exception(f"Error in data stale callback: {e}")
             except Exception as e:
                 logger.exception(f"Error in health check loop: {e}")
 
@@ -458,6 +472,18 @@ class MarketDataService:
                         "ltp": market_data.get("ltp", 0),
                         "timestamp": market_data.get("timestamp", timestamp),
                     }
+                    # Depth packets carry valid LTP — mirror it into cache_entry["ltp"]
+                    # so get_ltp()/get_ltp_value() consumers see fresh prices when a
+                    # symbol is pooled in depth mode (issue #1453). Skip zero/None to
+                    # preserve a previously-valid LTP when the depth-only validator
+                    # path admits a packet without ltp.
+                    depth_ltp = market_data.get("ltp")
+                    if isinstance(depth_ltp, (int, float)) and depth_ltp > 0:
+                        cache_entry["ltp"] = {
+                            "value": depth_ltp,
+                            "timestamp": market_data.get("timestamp", timestamp),
+                            "volume": market_data.get("volume", 0),
+                        }
 
                 cache_entry["last_update"] = timestamp
                 self.metrics["total_updates"] += 1
@@ -884,6 +910,23 @@ class MarketDataService:
                 self.validator.clear_price_history()
                 logger.info("Cleared entire market data cache")
 
+    @staticmethod
+    def _mode_to_event_types(mode: int) -> list[str]:
+        """Event-type buckets a packet should fan out to.
+
+        Quote (mode=2) and Depth (mode=3) packets carry valid LTP, so they also
+        deliver "ltp" updates — otherwise CRITICAL trade-management subscribers
+        (which always register as "ltp") stop receiving ticks the moment a
+        pooled subscription is upgraded to Quote/Depth mode (issue #1453).
+        """
+        if mode == 1:
+            return ["ltp"]
+        if mode == 2:
+            return ["quote", "ltp"]
+        if mode == 3:
+            return ["depth", "ltp"]
+        return ["all"]
+
     def _broadcast_update_priority(self, symbol_key: str, mode: int, data: dict[str, Any]) -> None:
         """
         Broadcast updates to priority subscribers (critical first)
@@ -893,8 +936,7 @@ class MarketDataService:
             mode: Update mode (1=LTP, 2=Quote, 3=Depth)
             data: Full data to broadcast
         """
-        mode_to_event = {1: "ltp", 2: "quote", 3: "depth"}
-        event_type = mode_to_event.get(mode, "all")
+        event_types = self._mode_to_event_types(mode)
 
         # Process subscribers by priority (CRITICAL first)
         for priority in sorted(self.priority_subscribers.keys()):
@@ -905,7 +947,7 @@ class MarketDataService:
                 try:
                     # Check event type filter
                     sub_event_type = subscriber.get("event_type", "all")
-                    if sub_event_type != "all" and sub_event_type != event_type:
+                    if sub_event_type != "all" and sub_event_type not in event_types:
                         continue
 
                     # Check symbol filter
@@ -929,15 +971,16 @@ class MarketDataService:
             mode: Update mode (1=LTP, 2=Quote, 3=Depth)
             data: Full data to broadcast
         """
-        mode_to_event = {1: "ltp", 2: "quote", 3: "depth"}
-        event_type = mode_to_event.get(mode, "all")
+        event_types = self._mode_to_event_types(mode)
 
-        # Broadcast to specific event subscribers
+        # Collect subscribers from every applicable event-type bucket plus "all".
+        # Each subscriber_id lives in exactly one bucket, so no dedup needed.
         with self.data_lock:
-            subscribers = list(self.subscribers[event_type].values())
-            all_subscribers = list(self.subscribers["all"].values())
+            target_subscribers = []
+            for et in list(event_types) + ["all"]:
+                target_subscribers.extend(self.subscribers.get(et, {}).values())
 
-        for subscriber in subscribers + all_subscribers:
+        for subscriber in target_subscribers:
             try:
                 # Check filter
                 if subscriber["filter"] and symbol_key not in subscriber["filter"]:

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import type * as PlotlyTypes from 'plotly.js'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { useThemeStore } from '@/stores/themeStore'
-import { gexApi, type GEXDataResponse } from '@/api/gex'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type GEXDataResponse, gexApi } from '@/api/gex'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Command,
@@ -21,10 +21,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import Plot from '@/lib/Plot2D'
+import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
-import Plot from 'react-plotly.js'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
 
@@ -53,9 +53,13 @@ export default function GEXDashboard() {
   const isDark = mode === 'dark' || isAnalyzer
 
   const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
-  const [underlyings, setUnderlyings] = useState<string[]>(defaultUnderlyings[defaultFnoExchange] || [])
+  const [underlyings, setUnderlyings] = useState<string[]>(
+    defaultUnderlyings[defaultFnoExchange] || []
+  )
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
-  const [selectedUnderlying, setSelectedUnderlying] = useState(defaultUnderlyings[defaultFnoExchange]?.[0] || '')
+  const [selectedUnderlying, setSelectedUnderlying] = useState(
+    defaultUnderlyings[defaultFnoExchange]?.[0] || ''
+  )
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [gexData, setGexData] = useState<GEXDataResponse | null>(null)
@@ -99,7 +103,7 @@ export default function GEXDashboard() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange])
+  }, [selectedExchange, defaultUnderlyings])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
@@ -130,8 +134,7 @@ export default function GEXDashboard() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedUnderlying])
+  }, [selectedUnderlying, selectedExchange])
 
   // Fetch GEX data
   const fetchGEXData = useCallback(async () => {
@@ -159,11 +162,11 @@ export default function GEXDashboard() {
     }
   }, [selectedUnderlying, selectedExpiry, selectedExchange])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: must fire only on selectedExpiry change; including fetchGEXData would re-run with mixed exchange/underlying params during an exchange switch and fire a stale GEX request
   useEffect(() => {
     if (selectedExpiry) {
       fetchGEXData()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedExpiry])
 
   // Auto-refresh
@@ -195,17 +198,9 @@ export default function GEXDashboard() {
       positiveGex: '#3b82f6',
       negativeGex: '#f97316',
       atmLine: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',
-      hoverBg: isDark
-        ? isAnalyzer
-          ? '#2d2545'
-          : '#1e293b'
-        : '#ffffff',
+      hoverBg: isDark ? (isAnalyzer ? '#2d2545' : '#1e293b') : '#ffffff',
       hoverFont: isDark ? '#e0e0e0' : '#333333',
-      hoverBorder: isDark
-        ? isAnalyzer
-          ? '#7c3aed'
-          : '#475569'
-        : '#e2e8f0',
+      hoverBorder: isDark ? (isAnalyzer ? '#7c3aed' : '#475569') : '#e2e8f0',
     }),
     [isDark, isAnalyzer]
   )
@@ -510,7 +505,12 @@ export default function GEXDashboard() {
           {/* Underlying selector */}
           <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
             <PopoverTrigger asChild>
-              <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-[160px] justify-between">
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={underlyingOpen}
+                className="w-[160px] justify-between"
+              >
                 {selectedUnderlying || 'Underlying'}
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
@@ -530,7 +530,9 @@ export default function GEXDashboard() {
                           setUnderlyingOpen(false)
                         }}
                       >
-                        <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                        <Check
+                          className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`}
+                        />
                         {u}
                       </CommandItem>
                     ))}
@@ -732,10 +734,18 @@ export default function GEXDashboard() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-background z-10">
                   <tr className="border-b border-border">
-                    <th className="text-left py-2 px-3 font-medium text-muted-foreground">Strike</th>
-                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">Call GEX</th>
-                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">Put GEX</th>
-                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">Net GEX</th>
+                    <th className="text-left py-2 px-3 font-medium text-muted-foreground">
+                      Strike
+                    </th>
+                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">
+                      Call GEX
+                    </th>
+                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">
+                      Put GEX
+                    </th>
+                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">
+                      Net GEX
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -748,9 +758,7 @@ export default function GEXDashboard() {
                       >
                         <td className="py-1.5 px-3">
                           {item.strike}
-                          {isATM && (
-                            <span className="ml-2 text-xs text-yellow-500">ATM</span>
-                          )}
+                          {isATM && <span className="ml-2 text-xs text-yellow-500">ATM</span>}
                         </td>
                         <td className="py-1.5 px-3 text-right text-red-500">
                           {item.ce_gex.toFixed(2)}

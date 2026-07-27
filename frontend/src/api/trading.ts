@@ -1,5 +1,6 @@
 import type {
   ApiResponse,
+  GttOrder,
   Holding,
   MarginData,
   Order,
@@ -59,6 +60,32 @@ export interface MultiQuotesApiResponse {
   status: 'success' | 'error'
   results?: MultiQuotesResult[]
   message?: string
+}
+
+export interface BasketOrderItem {
+  symbol: string
+  exchange: string
+  action: 'BUY' | 'SELL'
+  quantity: number
+  pricetype: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  product: 'CNC' | 'NRML' | 'MIS'
+  price?: number
+  trigger_price?: number
+  disclosed_quantity?: number
+}
+
+export interface BasketOrderResult {
+  symbol: string
+  status: 'success' | 'error'
+  orderid?: string
+  message?: string
+}
+
+export interface BasketOrderResponse {
+  status: 'success' | 'error'
+  message?: string
+  results?: BasketOrderResult[]
+  mode?: 'live' | 'analyze'
 }
 
 export const tradingApi = {
@@ -176,6 +203,23 @@ export const tradingApi = {
   },
 
   /**
+   * Place a basket of orders in one call. Each item is independent — the
+   * backend returns a per-order `results[]` so partial success is possible.
+   */
+  placeBasketOrder: async (
+    apiKey: string,
+    strategy: string,
+    orders: BasketOrderItem[]
+  ): Promise<BasketOrderResponse> => {
+    const response = await apiClient.post<BasketOrderResponse>('/basketorder', {
+      apikey: apiKey,
+      strategy,
+      orders,
+    })
+    return response.data
+  },
+
+  /**
    * Modify order (uses session auth with CSRF)
    */
   modifyOrder: async (
@@ -186,8 +230,8 @@ export const tradingApi = {
       action: string
       product: string
       pricetype: string
-      price: number
       quantity: number
+      price?: number
       trigger_price?: number
       disclosed_quantity?: number
     }
@@ -239,6 +283,57 @@ export const tradingApi = {
    */
   cancelAllOrders: async (): Promise<ApiResponse<void>> => {
     const response = await webClient.post<ApiResponse<void>>('/cancel_all_orders', {})
+    return response.data
+  },
+
+  /**
+   * Get the GTT (Good Till Triggered) order book — active triggers + recent history.
+   */
+  getGttOrderbook: async (apiKey: string): Promise<ApiResponse<GttOrder[]>> => {
+    const response = await apiClient.post<ApiResponse<GttOrder[]>>('/gttorderbook', {
+      apikey: apiKey,
+    })
+    return response.data
+  },
+
+  /**
+   * Cancel an active GTT trigger (uses session auth with CSRF).
+   */
+  cancelGttOrder: async (triggerId: string): Promise<ApiResponse<{ trigger_id: string }>> => {
+    const response = await webClient.post<ApiResponse<{ trigger_id: string }>>(
+      '/cancel_gtt_order',
+      { trigger_id: triggerId }
+    )
+    return response.data
+  },
+
+  /**
+   * Modify an active GTT trigger (uses session auth with CSRF).
+   * Flat replacement body — same shape as PlaceGTTOrder plus trigger_id.
+   * last_price is fetched server-side from the broker's quotes endpoint.
+   */
+  modifyGttOrder: async (
+    triggerId: string,
+    payload: {
+      symbol: string
+      exchange: string
+      trigger_type: 'SINGLE' | 'OCO'
+      action: 'BUY' | 'SELL' | string
+      product: string
+      quantity: number
+      pricetype: string
+      price: number
+      triggerprice_sl: number
+      triggerprice_tg: number
+      stoploss?: number | null
+      target?: number | null
+      strategy?: string
+    }
+  ): Promise<ApiResponse<{ trigger_id: string }>> => {
+    const response = await webClient.post<ApiResponse<{ trigger_id: string }>>(
+      '/modify_gtt_order',
+      { trigger_id: triggerId, ...payload }
+    )
     return response.data
   },
 }

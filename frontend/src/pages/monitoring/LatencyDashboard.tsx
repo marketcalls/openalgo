@@ -1,7 +1,6 @@
 import { ArrowLeft, CheckCircle, Download, Gauge, RefreshCw, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { showToast } from '@/utils/toast'
 
 interface LatencyLog {
   id: number
@@ -73,6 +73,7 @@ export default function LatencyDashboard() {
   const [selectedOrder, setSelectedOrder] = useState<LatencyLog | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only initial fetch + fixed 30s auto-refresh interval; fetchData is recreated each render and adding it would tear down/recreate the interval on every render
   useEffect(() => {
     fetchData()
     // Auto-refresh every 30 seconds
@@ -90,7 +91,7 @@ export default function LatencyDashboard() {
 
       setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : [])
       setStats(statsResponse.data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load latency data', 'monitoring')
     } finally {
       setIsLoading(false)

@@ -17,7 +17,7 @@ services:
       - openalgo_strategies:/app/strategies  # Python strategies (named volume)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)
       - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     # (optional) extra env-vars that are NOT in .env
     environment:

@@ -18,6 +18,7 @@ Implements:
 import json
 import ssl
 import struct
+import sys
 import threading
 import time
 from collections import deque
@@ -26,6 +27,15 @@ from datetime import datetime
 from typing import Any
 
 import websocket
+
+from database.auth_db import get_auth_token
+
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 
 class ZerodhaWebSocket:
@@ -49,7 +59,13 @@ class ZerodhaWebSocket:
 
     # Subscription batching (Zerodha supports up to 3000 instruments per connection)
     MAX_TOKENS_PER_SUBSCRIBE = 200
-    SUBSCRIPTION_DELAY = 2.0
+    # Delay between successive batches inside _process_pending_subscriptions.
+    # Was 2.0s — empirically Kite Connect tolerates much faster pacing, and
+    # the 2s floor was the dominant component of "first tick takes ~4s on
+    # subscribe" complaints. 0.5s keeps headroom for very large bursts but
+    # is invisible to single-symbol UI clicks (those skip the delay entirely
+    # via the `if self.pending_subscriptions` guard around the wait).
+    SUBSCRIPTION_DELAY = 0.5
     MAX_INSTRUMENTS_PER_CONNECTION = 3000
 
     # Reconnection settings
@@ -60,18 +76,26 @@ class ZerodhaWebSocket:
     DATA_TIMEOUT = 90
 
     def __init__(
-        self, api_key: str, access_token: str, on_ticks: Callable[[list[dict]], None] = None
+        self,
+        api_key: str,
+        access_token: str,
+        on_ticks: Callable[[list[dict]], None] = None,
+        user_id: str | None = None,
     ):
         """Initialize the Zerodha WebSocket client"""
         self.api_key = api_key
         self.access_token = access_token
         self.on_ticks = on_ticks
+        # user_id is used on reconnect to re-read a fresh access token from the
+        # database. Indian broker tokens roll over daily at ~3 AM IST, so a
+        # reconnect after rollover must NOT reuse the construction-time token.
+        self.user_id = user_id
         self.ws: websocket.WebSocketApp | None = None
         self.connected = False
         self.running = False
         self._ws_thread: threading.Thread | None = None
         self.logger = get_logger(__name__)
-        self.lock = threading.Lock()
+        self.lock = _real_threading.Lock()
 
         # Subscription management
         self.subscribed_tokens: set[int] = set()
@@ -110,8 +134,21 @@ class ZerodhaWebSocket:
         self.error_count = 0
 
         # Connection state
-        self._connection_ready = threading.Event()
-        self._stop_event = threading.Event()
+        self._connection_ready = _real_threading.Event()
+        self._stop_event = _real_threading.Event()
+
+        # Auth/token failure handling. When a 403 is detected (expired token,
+        # invalid api_key, 3am IST roll-over, etc.) we do NOT die on the first
+        # failure (that left the feed dead until a process restart — #1419).
+        # Instead the reconnect loop re-reads a FRESH token from the DB
+        # (bypassing the auth cache, which can be stale in a separate WS-proxy
+        # process under Docker) and retries a bounded number of times. We still
+        # give up if a genuinely fresh token keeps failing, so we never hammer a
+        # known-bad token for ~30-50 minutes against a possibly rate-limited IP.
+        self._fatal_error: bool = False
+        self._fatal_error_message: str = ""
+        self._auth_refresh_retries: int = 0
+        self._max_auth_refresh_retries: int = 3
 
         self.logger.info("Enhanced Zerodha WebSocket client initialized (sync)")
 
@@ -132,7 +169,13 @@ class ZerodhaWebSocket:
             self._stop_event.clear()
             self._connection_ready.clear()
 
-            self._ws_thread = threading.Thread(
+            # Reset fatal-error state so a re-start() (e.g. after token refresh)
+            # is not blocked by a previous auth failure.
+            self._fatal_error = False
+            self._fatal_error_message = ""
+            self._auth_refresh_retries = 0
+
+            self._ws_thread = _real_threading.Thread(
                 target=self._run_websocket, daemon=True, name="ZerodhaWS"
             )
             self._ws_thread.start()
@@ -143,6 +186,54 @@ class ZerodhaWebSocket:
         except Exception as e:
             self.logger.error(f"Error starting WebSocket client: {e}")
             self.running = False
+            return False
+
+    def _refresh_access_token(self) -> bool:
+        """Re-read a fresh access token from the database and rebuild ws_url.
+
+        Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
+        re-read the current token from the database (bypassing the auth cache,
+        which can hold a stale token after rollover) and rebuild the URL that
+        bakes the token in. If no fresh token is available, keep the existing
+        one rather than crashing.
+
+        Returns:
+            True if the access token changed (worth retrying the connection),
+            False otherwise (no user_id, no/empty token, or the DB still holds
+            the same token — retrying would just fail again).
+        """
+        if not self.user_id:
+            return False
+        try:
+            auth_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not auth_token:
+                self.logger.warning(
+                    "No fresh auth token found on reconnect — keeping existing token"
+                )
+                return False
+            # Same parsing as the adapter's initialize(): auth token format is
+            # api_key:access_token; use the access_token part when present.
+            if ":" in auth_token:
+                parts = auth_token.split(":")
+                access_token = parts[1] if len(parts) >= 2 else auth_token
+            else:
+                access_token = auth_token
+            if not access_token:
+                self.logger.warning(
+                    "Parsed empty access token on reconnect — keeping existing token"
+                )
+                return False
+            with self.lock:
+                changed = access_token != self.access_token
+                self.access_token = access_token
+                self.ws_url = (
+                    f"wss://ws.kite.trade?api_key={self.api_key}"
+                    f"&access_token={self.access_token}"
+                )
+            self.logger.info("Refreshed Zerodha access token from database for reconnect")
+            return changed
+        except Exception as e:
+            self.logger.error(f"Error refreshing access token on reconnect: {e}")
             return False
 
     def _run_websocket(self):
@@ -171,6 +262,41 @@ class ZerodhaWebSocket:
             if not self.running or self._stop_event.is_set():
                 break
 
+            # Auth/token failure: instead of dying on the first 403 (which left
+            # the feed dead until a process restart — #1419), re-read a FRESH
+            # token from the DB (bypassing the auth cache, which can be stale in
+            # a separate WS-proxy process under Docker) and retry a bounded
+            # number of times. Give up only if a genuinely fresh token still
+            # fails, or if the DB token has not changed (nothing to gain by
+            # retrying the same dead token) — so we never hammer a known-bad
+            # token across ~30-50 minutes of backoff.
+            if self._fatal_error:
+                if self._auth_refresh_retries >= self._max_auth_refresh_retries:
+                    self.logger.error(
+                        f"Stopping WebSocket — auth/token failure persisted after "
+                        f"{self._max_auth_refresh_retries} token refreshes. "
+                        f"Detail: {self._fatal_error_message}"
+                    )
+                    self.running = False
+                    break
+                self._auth_refresh_retries += 1
+                if not self._refresh_access_token():
+                    self.logger.error(
+                        "Stopping WebSocket — auth/token failure and DB token "
+                        f"unchanged; needs re-login. Detail: {self._fatal_error_message}"
+                    )
+                    self.running = False
+                    break
+                self.logger.info(
+                    f"Auth/token failure — refreshed token from DB, retrying "
+                    f"(attempt {self._auth_refresh_retries}/{self._max_auth_refresh_retries})"
+                )
+                self._fatal_error = False
+                self._fatal_error_message = ""
+                if self._stop_event.wait(self.reconnect_delay):
+                    break
+                continue
+
             self.reconnect_attempts += 1
             if self.reconnect_attempts >= self.max_reconnect_attempts:
                 self.logger.error("Max reconnect attempts reached")
@@ -178,7 +304,17 @@ class ZerodhaWebSocket:
 
             delay = min(self.reconnect_delay * (1.5 ** self.reconnect_attempts), self.max_reconnect_delay)
             self.logger.info(f"Reconnecting in {delay:.0f}s (attempt {self.reconnect_attempts})...")
-            time.sleep(delay)
+            # Interruptible sleep: stop() sets _stop_event so graceful
+            # shutdown does not have to wait out the full backoff.
+            if self._stop_event.wait(delay):
+                break
+
+            # Re-read a fresh access token from the database before the loop
+            # rebuilds the WebSocketApp with self.ws_url. Without this, a
+            # reconnect after the ~3 AM IST daily token rollover would reuse the
+            # dead construction-time token and the feed would stay dead until a
+            # process restart.
+            self._refresh_access_token()
 
         self.logger.info("WebSocket thread exited")
 
@@ -235,7 +371,7 @@ class ZerodhaWebSocket:
 
         # Process subscriptions in a separate thread
         if not self._subscription_thread or not self._subscription_thread.is_alive():
-            self._subscription_thread = threading.Thread(
+            self._subscription_thread = _real_threading.Thread(
                 target=self._process_pending_subscriptions, daemon=True
             )
             self._subscription_thread.start()
@@ -252,7 +388,9 @@ class ZerodhaWebSocket:
                     with self.lock:
                         self.pending_subscriptions.clear()
                     break
-                time.sleep(min(2 * consecutive_failures, 10))
+                # Interruptible: stop() unblocks immediately.
+                if self._stop_event.wait(min(2 * consecutive_failures, 10)):
+                    break
                 continue
 
             consecutive_failures = 0
@@ -277,9 +415,16 @@ class ZerodhaWebSocket:
                     with self.lock:
                         for token in batch_tokens:
                             self.pending_subscriptions.append((token, batch_mode))
-                    time.sleep(5)
+                    # Interruptible: stop() unblocks immediately.
+                    if self._stop_event.wait(5):
+                        break
                 else:
-                    time.sleep(self.SUBSCRIPTION_DELAY)
+                    # Only throttle between batches when more work is queued,
+                    # so a single-symbol subscribe (the common UI case) is
+                    # not penalized with a wait it doesn't need.
+                    if self.pending_subscriptions:
+                        if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
+                            break
 
     def _subscribe_batch(self, tokens: list[int], mode: str) -> bool:
         """Subscribe to a batch of tokens"""
@@ -287,12 +432,14 @@ class ZerodhaWebSocket:
             if not self.connected or not self.ws:
                 return False
 
-            # Subscribe
+            # Subscribe.  Kite Connect tolerates `subscribe` and `mode`
+            # back-to-back over the same socket (TCP ordering preserved) —
+            # the 1s pacing that used to live between these messages was
+            # defensive over-engineering and was the dominant component of
+            # the ~4s "first tick" delay for fresh subscribes.
             sub_msg = json.dumps({"a": "subscribe", "v": tokens})
             self.ws.send(sub_msg)
             self.logger.debug(f"Subscribed to batch of {len(tokens)} tokens")
-
-            time.sleep(1.0)
 
             # Set mode
             mode_msg = json.dumps({"a": "mode", "v": [mode, tokens]})
@@ -304,7 +451,10 @@ class ZerodhaWebSocket:
                     self.subscribed_tokens.add(token)
 
             self.logger.debug(f"Set mode {mode} for {len(tokens)} tokens")
-            time.sleep(1.0)
+            # Tiny jitter so the broker has a moment to process before the
+            # outer loop pulls another batch. Empirically not strictly
+            # required, but cheap insurance.
+            time.sleep(0.05)
             return True
 
         except Exception as e:
@@ -346,6 +496,7 @@ class ZerodhaWebSocket:
         """Called when WebSocket connection is opened"""
         self.connected = True
         self.reconnect_attempts = 0
+        self._auth_refresh_retries = 0
         self.reconnect_delay = 2
         self.last_message_time = time.time()
         self._connection_ready.set()
@@ -402,11 +553,54 @@ class ZerodhaWebSocket:
             self.logger.error(f"Error processing message: {e}")
             self.error_count += 1
 
+    # Conservative auth-failure indicators. Kept tight to avoid false
+    # positives on transient network errors (we DO want to retry those).
+    # Matched case-insensitively against the str() of the error / close msg.
+    _AUTH_FAILURE_INDICATORS = (
+        "403",
+        "forbidden",
+        "401",
+        "unauthorized",
+        "tokenexception",
+        "invalid api_key",
+        "invalid access_token",
+        "invalid `api_key`",
+        "invalid `access_token`",
+        "api_key or access_token",
+    )
+
+    def _is_fatal_auth_error(self, payload) -> bool:
+        """Return True iff the error/close payload looks like an auth failure."""
+        if payload is None:
+            return False
+        text = str(payload).lower()
+        return any(token in text for token in self._AUTH_FAILURE_INDICATORS)
+
+    def _mark_fatal_error(self, message: str) -> None:
+        """Flag the connection as an auth/token failure.
+
+        We do NOT stop the client here. The reconnect loop responds by re-reading
+        a fresh token from the DB (bypassing the cache) and retrying a bounded
+        number of times — that self-heal after a daily token rollover or a
+        post-login token refresh is exactly what stopping here would prevent
+        (#1419). The loop still gives up if a genuinely fresh token keeps failing.
+        """
+        if self._fatal_error:
+            return  # already flagged — keep first message for clarity
+        self._fatal_error = True
+        self._fatal_error_message = message
+        self.logger.error(
+            f"Auth/token failure detected — will refresh token from DB and retry. "
+            f"Detail: {message}"
+        )
+
     def _on_ws_error(self, ws, error):
         """Called on WebSocket error"""
         self.logger.error(f"WebSocket error: {error}")
         self.connected = False
         self.error_count += 1
+        if self._is_fatal_auth_error(error):
+            self._mark_fatal_error(str(error))
         if self.on_error:
             try:
                 self.on_error(error)
@@ -417,6 +611,11 @@ class ZerodhaWebSocket:
         """Called when WebSocket is closed"""
         self.logger.info(f"WebSocket closed (code={close_status_code}, msg={close_msg})")
         self.connected = False
+        # Mid-session token expiry can surface as a close (not an error).
+        # Only check the close payload — the status code alone (e.g. 1006)
+        # is too generic to treat as fatal.
+        if not self._fatal_error and self._is_fatal_auth_error(close_msg):
+            self._mark_fatal_error(f"close_msg={close_msg!r}")
         if self.on_disconnect:
             try:
                 self.on_disconnect()
@@ -427,14 +626,16 @@ class ZerodhaWebSocket:
     def _start_health_check(self):
         if self._health_check_thread and self._health_check_thread.is_alive():
             return
-        self._health_check_thread = threading.Thread(
+        self._health_check_thread = _real_threading.Thread(
             target=self._health_check_loop, daemon=True
         )
         self._health_check_thread.start()
 
     def _health_check_loop(self):
         while self.running and self.connected:
-            time.sleep(self.KEEPALIVE_INTERVAL)
+            # Interruptible health-check tick — stop() returns True early.
+            if self._stop_event.wait(self.KEEPALIVE_INTERVAL):
+                break
             if not self.running or not self.connected:
                 break
             if self.last_message_time:

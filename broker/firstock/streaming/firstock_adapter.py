@@ -60,7 +60,7 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if not auth_data:
             # Fetch authentication tokens from database
             # IMPORTANT: For Firstock, this must be the 'susertoken' from login API response
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
 
             # Auth token must come from database (after Firstock login)
 
@@ -126,12 +126,16 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
 
         # Create FirstockWebSocket instance
-        # Use Firstock-specific user ID if available
+        # Use Firstock-specific user ID if available.
+        # Pass a token_provider so the client can re-read a fresh susertoken
+        # from the DB before each reconnect (Firstock tokens roll over daily
+        # at ~3 AM IST; reusing the construction-time token reconnects dead).
         self.ws_client = FirstockWebSocket(
             user_id=self.firstock_user_id,
             auth_token=self.auth_token,
             max_retry_attempt=5,
             retry_delay=5,
+            token_provider=self._fetch_fresh_auth_token,
         )
 
         # Set callbacks
@@ -142,6 +146,28 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client.on_message = self._on_message
 
         self.running = True
+
+    def _fetch_fresh_auth_token(self) -> str | None:
+        """Re-read a fresh auth token (susertoken) from the database.
+
+        Used by the WebSocket client to refresh the token before each
+        reconnect so a daily token rollover does not leave the feed dead.
+        Returns None if no user_id or token is available, in which case the
+        client keeps its existing token.
+        """
+        if not self.user_id:
+            return None
+        try:
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not fresh_token:
+                self.logger.warning(
+                    "Could not fetch fresh auth token on reconnect; using existing token"
+                )
+                return None
+            return fresh_token
+        except Exception as e:
+            self.logger.error(f"Error fetching fresh auth token on reconnect: {e}")
+            return None
 
     def connect(self) -> None:
         """Establish connection to Firstock WebSocket"""
@@ -469,7 +495,9 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, ws, data) -> None:
         """Callback for data messages from the WebSocket"""
         try:
-            self.logger.info(f"Received data from Firstock WebSocket: {data}")
+            # Per-tick — keep at debug; the live feed would otherwise dump
+            # every tick's full payload at info, drowning the log.
+            self.logger.debug(f"Received data from Firstock WebSocket: {data}")
 
             # Handle market data
             if isinstance(data, dict) and "c_symbol" in data:
@@ -678,7 +706,11 @@ class FirstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     }
                 )
 
-                self.logger.info(
+                # Per-tick publish — keep at debug to avoid per-message
+                # spam. The ZMQ publish itself is the real event; for
+                # debugging payloads, raise log level via the logging
+                # config rather than leaving this at info permanently.
+                self.logger.debug(
                     f"Publishing {mode_str} data for {symbol}.{exchange}: {market_data}"
                 )
 

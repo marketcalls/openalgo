@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
 import { Briefcase, FlaskConical } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import type { Watchlist } from '@/api/strategy-portfolio'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -11,7 +12,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import type { Watchlist } from '@/api/strategy-portfolio'
 
 export interface SaveStrategyDialogProps {
   open: boolean
@@ -89,8 +89,7 @@ export function SaveStrategyDialog({
         <DialogHeader>
           <DialogTitle>{isUpdate ? 'Update Strategy' : 'Save Strategy'}</DialogTitle>
           <DialogDescription>
-            Store this strategy in one of your two watchlists so you can revisit or replay it
-            later.
+            Store this strategy in one of your two watchlists so you can revisit or replay it later.
           </DialogDescription>
         </DialogHeader>
 

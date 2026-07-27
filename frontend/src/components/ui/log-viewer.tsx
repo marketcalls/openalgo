@@ -1,11 +1,11 @@
-import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { StreamLanguage } from '@codemirror/language'
-import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { createTheme } from '@uiw/codemirror-themes'
+import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useThemeStore } from '@/stores/themeStore'
-import { useMemo, useRef, useEffect, useCallback } from 'react'
 
 interface LogViewerProps {
   value: string

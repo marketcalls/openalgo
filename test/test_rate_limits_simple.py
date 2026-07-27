@@ -92,9 +92,9 @@ def test_rate_limit_configuration():
     for var, expected in expected_vars.items():
         actual = env_values.get(var) or os.getenv(var)
         if actual == expected:
-            print(f"✓ {var}: {actual}")
+            print(f"{var}: {actual}")
         else:
-            print(f"✗ {var}: Expected '{expected}', got '{actual}'")
+            print(f"{var}: Expected '{expected}', got '{actual}'")
             all_correct = False
 
     return all_correct
@@ -119,7 +119,7 @@ def test_rate_limiter_logic():
 
     print(f"  Allowed {success_count} requests out of 12")
     test1_passed = success_count == 10
-    print(f"  {'✓ PASSED' if test1_passed else '✗ FAILED'}")
+    print(f"  {'PASSED' if test1_passed else 'FAILED'}")
 
     # Test 2: Smart order endpoint (2 per second)
     print("\nTest 2: Smart order endpoint (2 per second)")
@@ -132,17 +132,17 @@ def test_rate_limiter_logic():
 
     print(f"  Allowed {success_count} requests out of 5")
     test2_passed = success_count == 2
-    print(f"  {'✓ PASSED' if test2_passed else '✗ FAILED'}")
+    print(f"  {'PASSED' if test2_passed else 'FAILED'}")
 
     # Test 3: Rate limit reset
     print("\nTest 3: Rate limit reset after time window")
     time.sleep(1.1)  # Wait for rate limit to reset
 
     if limiter.is_allowed("/placeorder"):
-        print("  ✓ PASSED - Request allowed after rate limit reset")
+        print("PASSED - Request allowed after rate limit reset")
         test3_passed = True
     else:
-        print("  ✗ FAILED - Request not allowed after rate limit reset")
+        print("FAILED - Request not allowed after rate limit reset")
         test3_passed = False
 
     # Test 4: Different clients have separate limits
@@ -162,7 +162,7 @@ def test_rate_limiter_logic():
     test4_passed = client1_count == 5 and client2_allowed
     print(f"  Client 1: {client1_count}/5 requests")
     print(f"  Client 2: {'Allowed' if client2_allowed else 'Blocked'}")
-    print(f"  {'✓ PASSED' if test4_passed else '✗ FAILED'}")
+    print(f"  {'PASSED' if test4_passed else 'FAILED'}")
 
     return all([test1_passed, test2_passed, test3_passed, test4_passed])
 
@@ -204,19 +204,19 @@ def test_file_modifications():
                 # Check for multiple strings
                 all_found = all(item in content for item in expected_content)
                 if all_found:
-                    print(f"✓ {file_path}: Contains all required rate limit variables")
+                    print(f"{file_path}: Contains all required rate limit variables")
                 else:
-                    print(f"✗ {file_path}: Missing some rate limit variables")
+                    print(f"{file_path}: Missing some rate limit variables")
                     all_correct = False
             else:
                 # Check for single string
                 if expected_content in content:
-                    print(f"✓ {file_path}: Uses {expected_content}")
+                    print(f"{file_path}: Uses {expected_content}")
                 else:
-                    print(f"✗ {file_path}: Does not use {expected_content}")
+                    print(f"{file_path}: Does not use {expected_content}")
                     all_correct = False
         else:
-            print(f"✗ {file_path}: File not found")
+            print(f"{file_path}: File not found")
             all_correct = False
 
     return all_correct
@@ -237,17 +237,17 @@ def main():
     # Summary
     print("\n" + "=" * 70)
     print("Test Summary:")
-    print(f"  Configuration Test: {'✓ PASSED' if config_passed else '✗ FAILED'}")
-    print(f"  Rate Limiter Logic: {'✓ PASSED' if logic_passed else '✗ FAILED'}")
-    print(f"  File Modifications: {'✓ PASSED' if files_passed else '✗ FAILED'}")
+    print(f"  Configuration Test: {'PASSED' if config_passed else 'FAILED'}")
+    print(f"  Rate Limiter Logic: {'PASSED' if logic_passed else 'FAILED'}")
+    print(f"  File Modifications: {'PASSED' if files_passed else 'FAILED'}")
 
     all_passed = all([config_passed, logic_passed, files_passed])
 
     print("\nOverall Result:")
     if all_passed:
-        print("✅ All tests PASSED!")
+        print("All tests PASSED!")
     else:
-        print("❌ Some tests FAILED!")
+        print("Some tests FAILED!")
 
     print("=" * 70)
 

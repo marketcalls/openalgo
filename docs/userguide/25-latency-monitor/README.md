@@ -212,7 +212,7 @@ Example:
 ### Alert Example
 
 ```
-⚠️ LATENCY ALERT
+LATENCY ALERT
 
 High latency detected!
 
@@ -282,11 +282,11 @@ place_basket_order(orders)  # 200ms total
 │                                                                              │
 │  Broker        Avg      P99      Orders    Status                          │
 │  ──────────    ───────  ───────  ──────    ──────                          │
-│  Zerodha       65ms     180ms    500       ✅ Excellent                    │
-│  Angel One     75ms     200ms    450       ✅ Good                         │
-│  Dhan          70ms     190ms    480       ✅ Good                         │
-│  Upstox        80ms     220ms    420       ✅ Good                         │
-│  Fyers         85ms     250ms    380       ⚠️ Fair                        │
+│  Zerodha       65ms     180ms    500 Excellent                    │
+│  Angel One     75ms     200ms    450 Good                         │
+│  Dhan          70ms     190ms    480 Good                         │
+│  Upstox        80ms     220ms    420 Good                         │
+│  Fyers         85ms     250ms    380 Fair                        │
 │                                                                              │
 │  Note: Latency varies by time of day and market conditions                 │
 │                                                                              │
