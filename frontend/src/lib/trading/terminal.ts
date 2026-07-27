@@ -219,6 +219,8 @@ export class TradingTerminal {
   private drawEnabled = false
   private activeIndicators: { indicatorId: string; settings: Record<string, unknown> }[] = []
   private indicatorsLoaded = false
+  /** Guards syncIndicators while applyIndicators is mid-flight. */
+  private applyingIndicators = false
   private gridV = true
   private gridH = true
   private ltpLine: PriceLine | null = null
@@ -762,6 +764,11 @@ export class TradingTerminal {
     this.chart.on('indicatorSettings', (p) => {
       void this.emitIndicatorSettings((p as { instanceId: string }).instanceId)
     })
+    // The on-chart legend's x removes an indicator without going through this
+    // class. Without this the toolbar list went stale, and worse, the tracked
+    // list still held it — so the next rebuild (timeframe, chart type, theme)
+    // brought the deleted indicator back.
+    this.chart.on('indicatorRemoved', () => this.syncIndicators())
   }
 
   /**
@@ -957,14 +964,21 @@ export class TradingTerminal {
   private async applyIndicators(): Promise<void> {
     await this.loadIndicators()
     if (this.destroyed || !this.chart) return
-    for (const rec of this.activeIndicators) {
-      try {
-        this.chart.addIndicator(rec.indicatorId, rec.settings)
-      } catch {
-        /* an id that is no longer registered — skip rather than break the chart */
+    // Re-adding walks the tracked list, so a sync mid-loop would read a
+    // half-applied chart and truncate it.
+    this.applyingIndicators = true
+    try {
+      for (const rec of this.activeIndicators) {
+        try {
+          this.chart.addIndicator(rec.indicatorId, rec.settings)
+        } catch {
+          /* an id that is no longer registered — skip rather than break the chart */
+        }
       }
+    } finally {
+      this.applyingIndicators = false
     }
-    this.cb.onIndicatorsChange?.(this.listIndicators())
+    this.syncIndicators()
   }
 
   /** Gather a settings form for one live indicator and hand it to the host. */
@@ -1016,9 +1030,7 @@ export class TradingTerminal {
     const inst = this.chart?.indicators().find((i) => i.id === instanceId)
     if (!inst) return
     inst.setSettings(patch)
-    const rec = this.activeIndicators.find((r) => r.indicatorId === inst.indicatorId)
-    if (rec) rec.settings = { ...rec.settings, ...patch }
-    this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+    this.syncIndicators()
   }
 
   /** Open the settings form for an indicator from the host's own UI. */
@@ -1026,14 +1038,29 @@ export class TradingTerminal {
     void this.emitIndicatorSettings(instanceId)
   }
 
+  /**
+   * Re-read the tracked list from the chart, which is the only thing that knows
+   * the truth — indicators can also be removed from their own on-chart legend.
+   * Reading the whole list rather than patching it also keeps duplicates right:
+   * two SMAs differ only by instance id, so "remove the one with this
+   * indicatorId" would drop an arbitrary one of them.
+   */
+  private syncIndicators(): void {
+    if (!this.chart || this.applyingIndicators) return
+    this.activeIndicators = this.chart.indicators().map((i) => ({
+      indicatorId: i.indicatorId,
+      settings: { ...i.settings() },
+    }))
+    this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+    this.cb.onIndicatorsChange?.(this.listIndicators())
+  }
+
   async addIndicatorById(indicatorId: string): Promise<void> {
     await this.loadIndicators()
     if (!this.chart) return
     try {
       this.chart.addIndicator(indicatorId, {})
-      this.activeIndicators.push({ indicatorId, settings: {} })
-      this.lsSet('indicators', JSON.stringify(this.activeIndicators))
-      this.cb.onIndicatorsChange?.(this.listIndicators())
+      this.syncIndicators()
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
     }
@@ -1041,14 +1068,8 @@ export class TradingTerminal {
 
   removeIndicatorById(instanceId: string): void {
     if (!this.chart) return
-    const inst = this.chart.indicators().find((i) => i.id === instanceId)
     this.chart.removeIndicator(instanceId)
-    if (inst) {
-      const at = this.activeIndicators.findIndex((r) => r.indicatorId === inst.indicatorId)
-      if (at >= 0) this.activeIndicators.splice(at, 1)
-    }
-    this.lsSet('indicators', JSON.stringify(this.activeIndicators))
-    this.cb.onIndicatorsChange?.(this.listIndicators())
+    this.syncIndicators()
   }
 
   listIndicators(): { id: string; name: string }[] {
