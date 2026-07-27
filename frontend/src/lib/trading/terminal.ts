@@ -703,12 +703,12 @@ export class TradingTerminal {
         // The symbol on its own, not the app icon: that asset is a full-bleed
         // plate with the mark filling under half of it and the wordmark
         // beneath, so scaling it up scaled the padding too. This one's square
-        // viewBox is tight to the symbol, so height alone gives 36x36, and
-        // 3.5 of plate padding puts it in a 43x43 square.
+        // viewBox is tight to the symbol, so height alone gives 32x32, and
+        // 3 of plate padding puts it in a 38x38 square.
         src: '/images/openalgo-glyph.svg',
         position: 'bottom-left',
-        height: 36,
-        padding: 3.5,
+        height: 32,
+        padding: 3,
         margin: 10,
         opacity: 0.85,
         // Mark alone at rest; the wording unrolls to its right on hover, so it
