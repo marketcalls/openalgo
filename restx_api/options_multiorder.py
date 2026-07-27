@@ -102,26 +102,28 @@ Response (Success - With Split Leg):
 Note: BUY legs execute first for margin efficiency, then SELL legs.
 """
 
-from flask import request, jsonify, make_response
+import os
+
+from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
+
 from limiter import limiter
-from utils.logging import get_logger
 from restx_api.schemas import OptionsMultiOrderSchema
 from services.options_multiorder_service import place_options_multiorder
-import os
+from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
 
 # Create namespace
-api = Namespace('optionsmultiorder', description='Options Multi-Order API')
+api = Namespace("optionsmultiorder", description="Options Multi-Order API")
 
 # Get rate limit from environment
 ORDER_RATE_LIMIT = os.getenv("ORDER_RATE_LIMIT", "10 per second")
 
 
-@api.route('/', strict_slashes=False)
+@api.route("/", strict_slashes=False)
 class OptionsMultiOrder(Resource):
     @limiter.limit(ORDER_RATE_LIMIT)
     def post(self):
@@ -135,7 +137,7 @@ class OptionsMultiOrder(Resource):
             data = schema.load(request.json)
 
             # Extract API key
-            api_key = data.get('apikey')
+            api_key = data.get("apikey")
 
             logger.info(
                 f"Options multi-order API request: underlying={data.get('underlying')}, "
@@ -144,23 +146,21 @@ class OptionsMultiOrder(Resource):
 
             # Call the service function
             success, response_data, status_code = place_options_multiorder(
-                multiorder_data=data,
-                api_key=api_key
+                multiorder_data=data, api_key=api_key
             )
 
             return make_response(jsonify(response_data), status_code)
 
         except ValidationError as err:
             logger.warning(f"Validation error in options multi-order request: {err.messages}")
-            return make_response(jsonify({
-                'status': 'error',
-                'message': 'Validation error',
-                'errors': err.messages
-            }), 400)
-        except Exception as e:
+            return make_response(
+                jsonify({"status": "error", "message": "Validation error", "errors": err.messages}),
+                400,
+            )
+        except Exception:
             logger.exception("An unexpected error occurred in OptionsMultiOrder endpoint.")
             error_response = {
-                'status': 'error',
-                'message': 'An unexpected error occurred in the API endpoint'
+                "status": "error",
+                "message": "An unexpected error occurred in the API endpoint",
             }
             return make_response(jsonify(error_response), 500)

@@ -1,11 +1,12 @@
-import os
 import json
+import os
 import time
-import pandas as pd
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine, MetaData
-from openalgo import api
+
+import pandas as pd
 from dotenv import load_dotenv
+from openalgo import api
+from sqlalchemy import MetaData, create_engine
 
 # Load environment variables
 load_dotenv()
@@ -23,24 +24,26 @@ DB_FOLDER = os.path.join("..", "db")
 os.makedirs(DB_FOLDER, exist_ok=True)
 
 DB_PATH = os.path.join(DB_FOLDER, DB_NAME)
-CHECKPOINT_FILE = os.path.join(DB_FOLDER, 'checkpoints.json')
+CHECKPOINT_FILE = os.path.join(DB_FOLDER, "checkpoints.json")
 
 # Setup
 client = api(api_key=API_KEY, host=HOST)
-engine = create_engine(f'sqlite:///{DB_PATH}')
+engine = create_engine(f"sqlite:///{DB_PATH}")
 metadata = MetaData()
 metadata.reflect(bind=engine)
 
 # Load checkpoints
 if os.path.exists(CHECKPOINT_FILE):
-    with open(CHECKPOINT_FILE, 'r') as f:
+    with open(CHECKPOINT_FILE) as f:
         checkpoints = json.load(f)
 else:
     checkpoints = {}
 
+
 def save_checkpoints():
-    with open(CHECKPOINT_FILE, 'w') as f:
+    with open(CHECKPOINT_FILE, "w") as f:
         json.dump(checkpoints, f, indent=2)
+
 
 def get_symbols():
     if not os.path.exists("symbols.csv"):
@@ -48,20 +51,16 @@ def get_symbols():
     df = pd.read_csv("symbols.csv", header=None)
     return df[0].dropna().astype(str).str.strip().tolist()
 
+
 def fetch_and_store(symbol):
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
     start_date = checkpoints.get(
-        symbol,
-        (datetime.now() - pd.Timedelta(days=INITIAL_DAYS)).strftime('%Y-%m-%d')
+        symbol, (datetime.now() - pd.Timedelta(days=INITIAL_DAYS)).strftime("%Y-%m-%d")
     )
     end_date = today
 
     response = client.history(
-        symbol=symbol,
-        exchange="NSE",
-        interval=INTERVAL,
-        start_date=start_date,
-        end_date=end_date
+        symbol=symbol, exchange="NSE", interval=INTERVAL, start_date=start_date, end_date=end_date
     )
 
     if not isinstance(response, pd.DataFrame) or response.empty:
@@ -70,7 +69,7 @@ def fetch_and_store(symbol):
 
     df = response
     df.index = pd.to_datetime(df.index)
-    df = df[df.index.strftime('%Y-%m-%d') >= start_date]
+    df = df[df.index.strftime("%Y-%m-%d") >= start_date]
 
     if df.empty:
         print(f"[{symbol}] No new rows after filtering.")
@@ -78,17 +77,18 @@ def fetch_and_store(symbol):
 
     # Convert timestamps from UTC to IST (subtract 5:30 hours)
     ist_timestamps = df.index - timedelta(hours=5, minutes=30)
-    
-    df['SYMBOL'] = symbol
-    df['DATE'] = ist_timestamps.strftime('%Y-%m-%d %H:%M:%S')
-    df = df[['SYMBOL', 'DATE', 'open', 'high', 'low', 'close', 'volume']]
-    df.columns = ['SYMBOL', 'DATE', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME']
 
-    df.to_sql('stock_data', con=engine, if_exists='append', index=False)
+    df["SYMBOL"] = symbol
+    df["DATE"] = ist_timestamps.strftime("%Y-%m-%d %H:%M:%S")
+    df = df[["SYMBOL", "DATE", "open", "high", "low", "close", "volume"]]
+    df.columns = ["SYMBOL", "DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
 
-    last_dt = df.index.max().strftime('%Y-%m-%d')
+    df.to_sql("stock_data", con=engine, if_exists="append", index=False)
+
+    last_dt = df.index.max().strftime("%Y-%m-%d")
     checkpoints[symbol] = last_dt
     print(f"[{symbol}] Inserted {len(df)} records. Updated checkpoint: {last_dt}")
+
 
 # Main loop with throttling
 while True:

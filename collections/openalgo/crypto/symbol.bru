@@ -1,0 +1,19 @@
+meta {
+  name: symbol
+  type: http
+  seq: 19
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/symbol
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbol": "BTCUSDFUT",
+      "exchange": "CRYPTO"
+  }
+}

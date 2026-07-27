@@ -20,7 +20,7 @@ OPENALGO_TO_KOTAK_EXCHANGE = {
     "MCX": "mcx_fo",
     "mcx": "mcx_fo",
     "NSE_INDEX": "nse_cm",
-    "BSE_INDEX": "bse_cm"
+    "BSE_INDEX": "bse_cm",
 }
 
 KOTAK_TO_OPENALGO_EXCHANGE = {v: k for k, v in OPENALGO_TO_KOTAK_EXCHANGE.items()}
@@ -41,7 +41,7 @@ OPENALGO_TO_KOTAK_PRODUCT = {
     "CO": "CO",
     "BO": "Bracket Order",
     "Bracket Order": "Bracket Order",
-    "bo": "Bracket Order"
+    "bo": "Bracket Order",
 }
 
 KOTAK_TO_OPENALGO_PRODUCT = {v: k for k, v in OPENALGO_TO_KOTAK_PRODUCT.items()}
@@ -68,10 +68,11 @@ OPENALGO_TO_KOTAK_ORDER_TYPE = {
     "Two Leg": "2L",
     "3L": "3L",
     "3l": "3L",
-    "Three leg": "3L"
+    "Three leg": "3L",
 }
 
 KOTAK_TO_OPENALGO_ORDER_TYPE = {v: k for k, v in OPENALGO_TO_KOTAK_ORDER_TYPE.items()}
+
 
 def get_kotak_exchange(openalgo_exchange: str) -> str:
     """
@@ -79,11 +80,13 @@ def get_kotak_exchange(openalgo_exchange: str) -> str:
     """
     return OPENALGO_TO_KOTAK_EXCHANGE.get(openalgo_exchange, openalgo_exchange)
 
+
 def get_openalgo_exchange(kotak_exchange: str) -> str:
     """
     Convert Kotak exchange code to OpenAlgo exchange code.
     """
     return KOTAK_TO_OPENALGO_EXCHANGE.get(kotak_exchange, kotak_exchange)
+
 
 def get_kotak_product(openalgo_product: str) -> str:
     """
@@ -91,17 +94,20 @@ def get_kotak_product(openalgo_product: str) -> str:
     """
     return OPENALGO_TO_KOTAK_PRODUCT.get(openalgo_product, openalgo_product)
 
+
 def get_openalgo_product(kotak_product: str) -> str:
     """
     Convert Kotak product type to OpenAlgo product type.
     """
     return KOTAK_TO_OPENALGO_PRODUCT.get(kotak_product, kotak_product)
 
+
 def get_kotak_order_type(openalgo_order_type: str) -> str:
     """
     Convert OpenAlgo order type to Kotak order type.
     """
     return OPENALGO_TO_KOTAK_ORDER_TYPE.get(openalgo_order_type, openalgo_order_type)
+
 
 def get_openalgo_order_type(kotak_order_type: str) -> str:
     """

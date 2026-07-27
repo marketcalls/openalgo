@@ -1,0 +1,11 @@
+{
+    "Plugin Name": "nubra",
+    "Plugin URI": "https://openalgo.in",
+    "Description": "Nubra OpenAlgo Plugin",
+    "Version": "1.0",
+    "Author": "Roch Ronaldo M",
+    "Author URI": "https://openalgo.in",
+    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "NSE_INDEX", "BSE_INDEX"],
+    "broker_type": "IN_stock",
+    "leverage_config": false
+}

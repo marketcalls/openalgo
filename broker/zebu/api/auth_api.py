@@ -1,64 +1,66 @@
-import httpx
 import hashlib
 import json
 import os
+
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
-def sha256_hash(text):
-    """Generate SHA256 hash."""
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+logger = get_logger(__name__)
 
-def authenticate_broker(userid, password, totp_code):
+
+def authenticate_broker(code):
     """
-    Authenticate with Zebu and return the auth token using httpx with connection pooling.
+    Authenticate with Zebu using OAuth 2.0 flow.
+    Exchanges the authorization code for an access token.
     """
-    # Get the Zebu API key and other credentials from environment variables
-    api_secretkey = os.getenv('BROKER_API_SECRET')
-    vendor_code = os.getenv('BROKER_API_KEY')
-    imei = '1234567890abcdef' # Default IMEI if not provided
+    # BROKER_API_KEY format: userid:::client_id (e.g., Z56004:::Z56004_U)
+    full_api_key = os.getenv("BROKER_API_KEY")
+    client_id = full_api_key.split(":::")[1]  # OAuth client_id
+    secret_key = os.getenv("BROKER_API_SECRET")
 
     try:
         # Get the shared httpx client
         client = get_httpx_client()
 
-        # Zebu API login URL
-        url = "https://go.mynt.in/NorenWClientTP/QuickAuth"
+        # Zebu OAuth token exchange endpoint
+        url = "https://go.mynt.in/NorenWClientAPI/GenAcsTok"
 
-        # Prepare login payload
+        # Compute checksum: SHA256(client_id + secret_key + code)
+        checksum_input = f"{client_id}{secret_key}{code}"
+        checksum = hashlib.sha256(checksum_input.encode()).hexdigest()
+
+        # Prepare token exchange payload
         payload = {
-            "uid": userid,  # User ID
-            "pwd": sha256_hash(password),  # SHA256 hashed password
-            "factor2": totp_code,  # PAN or TOTP or DOB (second factor)
-            "apkversion": "1.0.8",  # API version (as per Zebu's requirement)
-            "appkey": sha256_hash(f"{userid}|{api_secretkey}"),  # SHA256 of uid and API key
-            "imei": imei,  # IMEI or MAC address
-            "vc": vendor_code,  # Vendor code
-            "source": "API"  # Source of login request
+            "code": code,
+            "checksum": checksum,
         }
 
-        # Convert payload to string with 'jData=' prefix
+        # Convert payload to jData format
         payload_str = "jData=" + json.dumps(payload)
 
-        # Set headers for the API request
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
+        # Set headers as per Zebu OAuth docs
+        headers = {"Content-Type": "text/plain"}
 
-        # Send the POST request to Zebu's API using httpx client
+        logger.debug(f"Zebu OAuth token exchange request to {url}")
+
+        # Send the POST request
         response = client.post(url, content=payload_str, headers=headers)
-
-        # Add status attribute for compatibility with the existing codebase
-        response.status = response.status_code
 
         # Handle the response
         if response.status_code == 200:
             data = response.json()
-            if data['stat'] == "Ok":
-                return data['susertoken'], None  # Return the token on success
+            if data.get("stat") == "Ok" and "access_token" in data:
+                logger.info("Zebu OAuth authentication successful")
+                return data["access_token"], None
             else:
-                return None, data.get('emsg', 'Authentication failed. Please try again.')
+                error_msg = data.get("emsg", "Authentication failed. Please try again.")
+                logger.error(f"Zebu OAuth auth error: {error_msg}")
+                return None, error_msg
         else:
-            return None, f"Error: {response.status_code}, {response.text}"
+            error_msg = f"Error: {response.status_code}, {response.text}"
+            logger.error(f"Zebu OAuth HTTP error: {error_msg}")
+            return None, error_msg
 
     except Exception as e:
+        logger.error(f"Zebu OAuth exception: {e}")
         return None, str(e)

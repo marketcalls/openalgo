@@ -1,0 +1,27 @@
+meta {
+  name: SplitOrder
+  type: http
+  seq: 8
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/splitorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Crypto Strategy",
+      "exchange": "CRYPTO",
+      "symbol": "BTCUSDFUT",
+      "action": "BUY",
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "quantity": "5",
+      "splitsize": "2",
+      "price": "0",
+      "trigger_price": "0"
+  }
+}

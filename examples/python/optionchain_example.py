@@ -3,17 +3,14 @@ from openalgo import api
 # Initialize client
 client = api(
     api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
-    host="http://127.0.0.1:5000"
+    host="http://127.0.0.1:5000",
 )
 
 # -------------------------------------------------------
 # Get available expiry dates for NIFTY
 # -------------------------------------------------------
 expiry_result = client.expiry(
-    symbol="NIFTY",
-    exchange="NFO",
-    instrumenttype="options",
-    strike_count= 10
+    symbol="NIFTY", exchange="NFO", instrumenttype="options", strike_count=10
 )
 
 if expiry_result["status"] == "success":
@@ -27,10 +24,7 @@ else:
 # Get option chain (5 strikes around ATM)
 # -------------------------------------------------------
 chain = client.optionchain(
-    underlying="NIFTY",
-    exchange="NSE_INDEX",
-    expiry_date="30DEC25",
-    strike_count=5
+    underlying="NIFTY", exchange="NSE_INDEX", expiry_date="30DEC25", strike_count=5
 )
 
 print("\nNIFTY Option Chain (5 strikes around ATM):")

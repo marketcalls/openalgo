@@ -7,9 +7,10 @@ via API when in semi-auto mode, but clients can via UI.
 Run with: python test/test_analyzer_toggle_restriction.py
 """
 
-import requests
 import json
 from datetime import datetime
+
+import requests
 
 # Configuration
 BASE_URL = "http://127.0.0.1:5000"
@@ -37,7 +38,7 @@ def test_analyzer_toggle_restriction():
     url = f"{BASE_URL}/api/v1/analyzer/toggle"
     payload = {
         "apikey": API_KEY,
-        "mode": True  # Try to enable analyzer mode
+        "mode": True,  # Try to enable analyzer mode
     }
 
     log(f"URL: {url}")

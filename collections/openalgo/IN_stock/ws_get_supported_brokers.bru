@@ -1,0 +1,32 @@
+meta {
+  name: Get Supported Brokers
+  type: websocket
+  seq: 12
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: List all brokers supported by the WebSocket server
+}
+
+message:json {
+  {
+    "action": "get_supported_brokers"
+  }
+}
+
+docs {
+  Get list of all supported brokers for WebSocket market data.
+  Can be called before or after authentication.
+
+  Server responds with:
+  {
+    "type": "supported_brokers",
+    "status": "success",
+    "brokers": [
+      {"name": "angel", "display_name": "Angel One", "depth_levels": [5, 20]},
+      {"name": "zerodha", "display_name": "Zerodha", "depth_levels": [5, 20]},
+      ...
+    ]
+  }
+}

@@ -58,26 +58,29 @@ Strike Labels (different for CE and PE):
     - Strike ABOVE ATM: CE is OTM, PE is ITM
 """
 
+import os
+
 from flask import request
 from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
+
 from limiter import limiter
-from utils.logging import get_logger
-from .data_schemas import OptionChainSchema
 from services.option_chain_service import get_option_chain
-import os
+from utils.logging import get_logger
+
+from .data_schemas import OptionChainSchema
 
 # Initialize logger
 logger = get_logger(__name__)
 
 # Create namespace
-api = Namespace('optionchain', description='Get Option Chain with Real-time Quotes')
+api = Namespace("optionchain", description="Get Option Chain with Real-time Quotes")
 
 # Get rate limit from environment
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
-@api.route('/', strict_slashes=False)
+@api.route("/", strict_slashes=False)
 class OptionChain(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
@@ -88,11 +91,11 @@ class OptionChain(Resource):
             data = schema.load(request.json)
 
             # Extract parameters
-            api_key = data['apikey']
-            underlying = data['underlying']
-            exchange = data['exchange']
-            expiry_date = data['expiry_date']
-            strike_count = data.get('strike_count')  # None means return entire chain
+            api_key = data["apikey"]
+            underlying = data["underlying"]
+            exchange = data["exchange"]
+            expiry_date = data["expiry_date"]
+            strike_count = data.get("strike_count")  # None means return entire chain
 
             logger.info(
                 f"Option chain request: underlying={underlying}, exchange={exchange}, "
@@ -105,21 +108,14 @@ class OptionChain(Resource):
                 exchange=exchange,
                 expiry_date=expiry_date,
                 strike_count=strike_count,
-                api_key=api_key
+                api_key=api_key,
             )
 
             return response, status_code
 
         except ValidationError as err:
             logger.warning(f"Validation error in option chain request: {err.messages}")
-            return {
-                'status': 'error',
-                'message': 'Validation error',
-                'errors': err.messages
-            }, 400
+            return {"status": "error", "message": "Validation error", "errors": err.messages}, 400
         except Exception as e:
             logger.exception(f"Unexpected error in option chain endpoint: {e}")
-            return {
-                'status': 'error',
-                'message': 'An unexpected error occurred'
-            }, 500
+            return {"status": "error", "message": "An unexpected error occurred"}, 500

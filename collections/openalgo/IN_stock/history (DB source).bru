@@ -1,0 +1,58 @@
+meta {
+  name: history (DB source)
+  type: http
+  seq: 11
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/history
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00",
+      "symbol": "SBIN",
+      "exchange": "NSE",
+      "interval": "D",
+      "start_date": "2025-01-01",
+      "end_date": "2025-12-31",
+      "source": "db"
+  }
+}
+
+docs {
+  # History API - DB Source
+
+  Fetch historical data from local DuckDB/Historify database instead of broker API.
+
+  ## Parameters
+
+  | Parameter | Type | Required | Description |
+  |-----------|------|----------|-------------|
+  | apikey | string | Yes | OpenAlgo API key |
+  | symbol | string | Yes | Trading symbol (e.g., SBIN, RELIANCE) |
+  | exchange | string | Yes | Exchange (NSE, BSE, NFO, etc.) |
+  | interval | string | Yes | Timeframe (1m, 5m, 15m, 30m, 1h, D, W, M, Q, Y) |
+  | start_date | string | Yes | Start date (YYYY-MM-DD) |
+  | end_date | string | Yes | End date (YYYY-MM-DD) |
+  | source | string | No | Data source: "api" (default) or "db" |
+
+  ## Source Options
+
+  - **api** (default): Fetch from broker API (requires active broker session)
+  - **db**: Fetch from local DuckDB/Historify database (faster, no rate limits)
+
+  ## Advantages of source="db"
+
+  - Faster response (local query vs network call)
+  - No broker API rate limits
+  - Works offline/when broker is down
+  - Supports custom timeframes (25m, 45m, 2h, etc.)
+  - Supports higher timeframes (W, M, Q, Y) computed from daily data
+
+  ## Note
+
+  Data must be downloaded first using Historify before querying with source="db".
+}

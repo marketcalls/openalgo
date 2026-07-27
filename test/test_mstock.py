@@ -1,10 +1,12 @@
 import os
 import unittest
-from openalgo import api as OAClient
+
 from dotenv import load_dotenv
+from openalgo import api as OAClient
 
 # Load environment variables from .env file
 load_dotenv()
+
 
 class TestMstockBroker(unittest.TestCase):
     def setUp(self):
@@ -12,8 +14,7 @@ class TestMstockBroker(unittest.TestCase):
         # The test assumes that the OpenAlgo server is running and
         # the user is already logged into the mstock broker.
         self.api_key = os.getenv(
-            "OPENALGO_API_KEY",
-            "3bb8d260915ff680a7258108c0483b9eb7675ced31309a36f5846366943ee9fa"
+            "OPENALGO_API_KEY", "3bb8d260915ff680a7258108c0483b9eb7675ced31309a36f5846366943ee9fa"
         )
         self.client = OAClient(api_key=self.api_key, host="http://127.0.0.1:5000")
 
@@ -27,7 +28,7 @@ class TestMstockBroker(unittest.TestCase):
             price_type="MARKET",
             product="MIS",
             action="BUY",
-            quantity=1
+            quantity=1,
         )
         self.assertEqual(order_response.get("status"), "success")
         self.assertIn("orderid", order_response)
@@ -47,5 +48,6 @@ class TestMstockBroker(unittest.TestCase):
         funds_response = self.client.funds()
         self.assertEqual(funds_response.get("status"), "success")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

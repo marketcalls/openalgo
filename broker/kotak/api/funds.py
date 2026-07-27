@@ -1,8 +1,10 @@
 # api/funds.py
-import httpx
 import json
-from utils.logging import get_logger
+
+import httpx
+
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -17,7 +19,9 @@ def get_margin_data(auth_token):
         # Parse auth token components
         access_token_parts = auth_token.split(":::")
         if len(access_token_parts) != 4:
-            logger.error(f"Invalid auth token format. Expected 4 parts, got {len(access_token_parts)}")
+            logger.error(
+                f"Invalid auth token format. Expected 4 parts, got {len(access_token_parts)}"
+            )
             return {}
 
         trading_token = access_token_parts[0]
@@ -35,14 +39,16 @@ def get_margin_data(auth_token):
         client = get_httpx_client()
 
         # Prepare payload as per Kotak API docs: jData with seg, exch, prod
-        payload = 'jData=%7B%22seg%22%3A%22ALL%22%2C%22exch%22%3A%22ALL%22%2C%22prod%22%3A%22ALL%22%7D'
+        payload = (
+            "jData=%7B%22seg%22%3A%22ALL%22%2C%22exch%22%3A%22ALL%22%2C%22prod%22%3A%22ALL%22%7D"
+        )
 
         headers = {
-            'accept': 'application/json',
-            'Sid': trading_sid,
-            'Auth': trading_token,
-            'neo-fin-key': 'neotradeapi',
-            'Content-Type': 'application/x-www-form-urlencoded'
+            "accept": "application/json",
+            "Sid": trading_sid,
+            "Auth": trading_token,
+            "neo-fin-key": "neotradeapi",
+            "Content-Type": "application/x-www-form-urlencoded",
         }
 
         # Construct full URL
@@ -50,11 +56,7 @@ def get_margin_data(auth_token):
 
         logger.debug(f"Making POST request to {url}")
 
-        response = client.post(
-            url,
-            headers=headers,
-            content=payload
-        )
+        response = client.post(url, headers=headers, content=payload)
 
         logger.debug(f"Kotak Limits API Response Status: {response.status_code}")
         logger.debug(f"Kotak Limits API Response: {response.text}")
@@ -62,19 +64,25 @@ def get_margin_data(auth_token):
         margin_data = json.loads(response.text)
 
         # Check for API errors
-        if margin_data.get('stat') != 'Ok':
-            error_msg = margin_data.get('emsg', 'Unknown error')
+        if margin_data.get("stat") != "Ok":
+            error_msg = margin_data.get("emsg", "Unknown error")
             logger.error(f"Kotak Limits API error: {error_msg}")
             return {}
 
         # Process and return the margin data
         # Note: Based on the API docs, the response fields are at root level
+        # Available Balance = CollateralValue + RmsPayInAmt - RmsPayOutAmt + Collateral
+        collateral_value = float(margin_data.get("CollateralValue", 0))
+        pay_in = float(margin_data.get("RmsPayInAmt", 0))
+        pay_out = float(margin_data.get("RmsPayOutAmt", 0))
+        collateral = float(margin_data.get("Collateral", 0))
+
         processed_margin_data = {
-            "availablecash": f"{float(margin_data.get('CollateralValue', 0)) + float(margin_data.get('RmsPayInAmt', 0)) - float(margin_data.get('RmsPayOutAmt', 0)):.2f}",
-            "collateral": f"{float(margin_data.get('Collateral', 0)):.2f}",
+            "availablecash": f"{collateral_value + pay_in - pay_out + collateral:.2f}",
+            "collateral": f"{collateral:.2f}",
             "m2munrealized": f"{float(margin_data.get('UnrealizedMtomPrsnt', 0)):.2f}",
             "m2mrealized": f"{float(margin_data.get('RealizedMtomPrsnt', 0)):.2f}",
-            "utiliseddebits": f"{float(margin_data.get('MarginUsed', 0)):.2f}"
+            "utiliseddebits": f"{float(margin_data.get('MarginUsed', 0)):.2f}",
         }
 
         logger.info(f"Successfully fetched margin data: {processed_margin_data}")

@@ -1,0 +1,31 @@
+meta {
+  name: multiquotes
+  type: http
+  seq: 11
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/multiquotes
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbols": [
+        {
+          "symbol": "BTCUSDFUT",
+          "exchange": "CRYPTO"
+        },
+        {
+          "symbol": "ETHUSDFUT",
+          "exchange": "CRYPTO"
+        },
+        {
+          "symbol": "SOLUSDFUT",
+          "exchange": "CRYPTO"
+        }
+      ]
+  }
+}

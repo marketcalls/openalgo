@@ -1,7 +1,8 @@
-#Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Motilal Oswal Parameters - See Motilal_Oswal.md documentation
+# Mapping OpenAlgo API Request https://openalgo.in/docs
+# Mapping Motilal Oswal Parameters - See Motilal_Oswal.md documentation
 
 from database.token_db import get_br_symbol
+
 
 def map_exchange(exchange):
     """
@@ -39,11 +40,11 @@ def reverse_map_exchange(exchange):
     return reverse_exchange_mapping.get(exchange, exchange)
 
 
-def transform_data(data,token):
+def transform_data(data, token):
     """
     Transforms the OpenAlgo API request structure to Motilal Oswal expected structure.
     """
-    symbol = get_br_symbol(data["symbol"],data["exchange"])
+    symbol = get_br_symbol(data["symbol"], data["exchange"])
     openalgo_exchange = data["exchange"]
     motilal_exchange = map_exchange(openalgo_exchange)
 
@@ -51,10 +52,14 @@ def transform_data(data,token):
     transformed = {
         "apikey": data["apikey"],
         "symboltoken": token,
-        "buyorsell": data["action"].upper(),  # Motilal uses 'buyorsell' instead of 'transactiontype'
+        "buyorsell": data[
+            "action"
+        ].upper(),  # Motilal uses 'buyorsell' instead of 'transactiontype'
         "exchange": motilal_exchange,
         "ordertype": map_order_type(data["pricetype"]),
-        "producttype": map_product_type(data["product"], openalgo_exchange),  # Pass OpenAlgo exchange for context
+        "producttype": map_product_type(
+            data["product"], openalgo_exchange
+        ),  # Pass OpenAlgo exchange for context
         "orderduration": "DAY",  # Motilal uses 'orderduration' instead of 'duration'
         "price": data.get("price", "0"),
         "triggerprice": data.get("trigger_price", "0"),
@@ -64,7 +69,7 @@ def transform_data(data,token):
         "algoid": "",  # Algo Id or Blank for Non-Algo Orders
         "goodtilldate": "",  # DD-MMM-YYYY format if GTD
         "tag": "",  # Echo back to identify order (max 10 characters)
-        "participantcode": ""  # Participant Code if applicable
+        "participantcode": "",  # Participant Code if applicable
     }
 
     return transformed
@@ -94,9 +99,8 @@ def transform_modify_order_data(data, token, lastmodifiedtime, qtytradedtoday):
         "newdisclosedquantity": int(data.get("disclosed_quantity", "0")),
         "newgoodtilldate": "",
         "lastmodifiedtime": lastmodifiedtime,  # Fetched from order book
-        "qtytradedtoday": qtytradedtoday  # Fetched from order book
+        "qtytradedtoday": qtytradedtoday,  # Fetched from order book
     }
-
 
 
 def map_order_type(pricetype):
@@ -108,9 +112,10 @@ def map_order_type(pricetype):
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
         "SL": "STOPLOSS",
-        "SL-M": "STOPLOSS"
+        "SL-M": "STOPLOSS",
     }
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
+
 
 def map_product_type(product, exchange=None):
     """
@@ -137,15 +142,15 @@ def map_product_type(product, exchange=None):
     """
     # Determine if this is a cash segment or derivative segment
     # Using OpenAlgo exchange names
-    is_cash_segment = exchange in ['NSE', 'BSE']
-    is_fo_segment = exchange in ['NFO', 'MCX', 'CDS', 'BFO', 'NSEFO', 'NSECD', 'BSEFO']
+    is_cash_segment = exchange in ["NSE", "BSE"]
+    is_fo_segment = exchange in ["NFO", "MCX", "CDS", "BFO", "NSEFO", "NSECD", "BSEFO"]
 
     if is_cash_segment:
         # For cash segment: CNC = DELIVERY, MIS = VALUEPLUS (margin intraday)
         cash_mapping = {
-            "CNC": "DELIVERY",       # Delivery for holdings
-            "MIS": "VALUEPLUS",      # Margin intraday for MIS
-            "NRML": "VALUEPLUS",     # Fallback to margin
+            "CNC": "DELIVERY",  # Delivery for holdings
+            "MIS": "VALUEPLUS",  # Margin intraday for MIS
+            "NRML": "VALUEPLUS",  # Fallback to margin
         }
         return cash_mapping.get(product, "VALUEPLUS")
 
@@ -191,24 +196,20 @@ def reverse_map_product_type(product, exchange=None):
     # Default reverse mapping without exchange context
     if exchange is None:
         reverse_product_type_mapping = {
-            "DELIVERY": "CNC",      # Delivery product
-            "VALUEPLUS": "MIS",     # Margin intraday
-            "NORMAL": "MIS",        # F&O intraday
+            "DELIVERY": "CNC",  # Delivery product
+            "VALUEPLUS": "MIS",  # Margin intraday
+            "NORMAL": "MIS",  # F&O intraday
             "BTST": "MIS",
-            "MTF": "NRML"
+            "MTF": "NRML",
         }
         return reverse_product_type_mapping.get(product, "MIS")
 
     # With exchange context, provide accurate mapping
-    is_cash_segment = exchange in ['NSE', 'BSE']
+    is_cash_segment = exchange in ["NSE", "BSE"]
 
     if is_cash_segment:
         # For cash segment: VALUEPLUS = MIS, DELIVERY = CNC
-        cash_reverse_mapping = {
-            "DELIVERY": "CNC",
-            "VALUEPLUS": "MIS",
-            "BTST": "MIS"
-        }
+        cash_reverse_mapping = {"DELIVERY": "CNC", "VALUEPLUS": "MIS", "BTST": "MIS"}
         return cash_reverse_mapping.get(product, "MIS")
     else:
         # For F&O segment: NORMAL is used
@@ -216,5 +217,4 @@ def reverse_map_product_type(product, exchange=None):
             "NORMAL": "MIS",
             "VALUEPLUS": "NRML",
         }
-        return reverse_fo_mapping.get(product, "MIS")  
-
+        return reverse_fo_mapping.get(product, "MIS")

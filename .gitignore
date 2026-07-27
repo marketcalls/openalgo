@@ -14,6 +14,8 @@ instance/
 Thumbs.db
 .vscode/
 .idea/
+.claude/settings.json
+.claude/settings.local.json
 .python-version
 config.ini
 .venvv
@@ -21,10 +23,19 @@ config.ini
 
 #DB Files, CSV Files and Log/Tmp Files
 
+# Temporary/debug files
+tmp/
+
+# Numba/LLVMLITE cache directories (auto-created on Linux)
+.numba_cache/
+.llvm_tmp/
+
 *.egg-info/
 *.db
+*.duckdb
 *.sqlite
 *.log
+*.jsonl
 *.tmp
 checkpoint.txt
 checkpoints.json
@@ -48,14 +59,31 @@ ENV/
 env.bak/ 
 venv.bak/ 
 
-# Node modules
-/node_modules/
+# Node modules (all directories)
+node_modules/
+**/node_modules/
 
 # Build output
-/dist/
-/build/
-/.next/
-/out/
+dist/
+build/
+.next/
+out/
+
+# Frontend specific
+# frontend/dist/ is built by CI/CD pipeline
+frontend/dist/
+frontend/.cache/
+*.local
 
 # Tailwind CSS output
 # **/output.css
+
+# npm cache
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+#frontend/dist
+
+# Windows NUL file
+nul

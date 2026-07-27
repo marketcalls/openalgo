@@ -9,13 +9,14 @@ Monthly: current_month, next_month, far_month
 Reference: AlgoMirror Strategy Executor implementation
 """
 
-from openalgo import api
 from datetime import datetime
+
+from openalgo import api
 
 # Initialize client with explicit parameters
 client = api(
     api_key="7371cc58b9d30204e5fee1d143dc8cd926bcad90c24218201ad81735384d2752",  # Replace with your API key
-    host="http://127.0.0.1:5000"  # Replace with your API host
+    host="http://127.0.0.1:5000",  # Replace with your API host
 )
 
 # Expiry request parameters
@@ -77,7 +78,7 @@ def get_expiry_dates(symbol: str, exchange: str, instrumenttype: str, expirytype
             "current_week": None,
             "next_week": None,
             "current_month": None,
-            "next_month": None
+            "next_month": None,
         }
 
         # Current week = nearest expiry (index 0)
@@ -101,11 +102,7 @@ def get_expiry_dates(symbol: str, exchange: str, instrumenttype: str, expirytype
                 result["next_month"] = exp_str  # Keep updating to get the last one
 
     else:  # monthly
-        result = {
-            "current_month": None,
-            "next_month": None,
-            "far_month": None
-        }
+        result = {"current_month": None, "next_month": None, "far_month": None}
 
         # Current month = last expiry of current calendar month
         for exp_str in sorted_expiries:
@@ -131,7 +128,9 @@ def get_expiry_dates(symbol: str, exchange: str, instrumenttype: str, expirytype
 # Example usage
 if __name__ == "__main__":
     # Get expiries
-    expiries = get_expiry_dates(symbol=symbol, exchange=exchange, instrumenttype=instrumenttype, expirytype=expirytype)
+    expiries = get_expiry_dates(
+        symbol=symbol, exchange=exchange, instrumenttype=instrumenttype, expirytype=expirytype
+    )
 
     print(f"{symbol} Expiry Dates ({expirytype}):")
     if expirytype == "weekly":

@@ -29,26 +29,29 @@ Response:
 }
 """
 
+import os
+
 from flask import request
 from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
+
 from limiter import limiter
-from utils.logging import get_logger
-from .data_schemas import OptionSymbolSchema
 from services.option_symbol_service import get_option_symbol
-import os
+from utils.logging import get_logger
+
+from .data_schemas import OptionSymbolSchema
 
 # Initialize logger
 logger = get_logger(__name__)
 
 # Create namespace
-api = Namespace('optionsymbol', description='Get Option Symbol based on Underlying and Offset')
+api = Namespace("optionsymbol", description="Get Option Symbol based on Underlying and Offset")
 
 # Get rate limit from environment
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
 
-@api.route('/', strict_slashes=False)
+@api.route("/", strict_slashes=False)
 class OptionSymbol(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
@@ -59,13 +62,15 @@ class OptionSymbol(Resource):
             data = schema.load(request.json)
 
             # Extract parameters
-            api_key = data['apikey']
-            underlying = data['underlying']
-            exchange = data['exchange']
-            expiry_date = data.get('expiry_date')  # Optional
-            strike_int = data.get('strike_int')  # Optional - if not provided, actual strikes from database will be used
-            offset = data['offset']
-            option_type = data['option_type']
+            api_key = data["apikey"]
+            underlying = data["underlying"]
+            exchange = data["exchange"]
+            expiry_date = data.get("expiry_date")  # Optional
+            strike_int = data.get(
+                "strike_int"
+            )  # Optional - if not provided, actual strikes from database will be used
+            offset = data["offset"]
+            option_type = data["option_type"]
 
             logger.info(
                 f"Option symbol request: underlying={underlying}, exchange={exchange}, "
@@ -80,21 +85,14 @@ class OptionSymbol(Resource):
                 strike_int=strike_int,
                 offset=offset,
                 option_type=option_type,
-                api_key=api_key
+                api_key=api_key,
             )
 
             return response, status_code
 
         except ValidationError as err:
             logger.warning(f"Validation error in option symbol request: {err.messages}")
-            return {
-                'status': 'error',
-                'message': 'Validation error',
-                'errors': err.messages
-            }, 400
+            return {"status": "error", "message": "Validation error", "errors": err.messages}, 400
         except Exception as e:
             logger.exception(f"Unexpected error in option symbol endpoint: {e}")
-            return {
-                'status': 'error',
-                'message': 'An unexpected error occurred'
-            }, 500
+            return {"status": "error", "message": "An unexpected error occurred"}, 500

@@ -8,61 +8,62 @@ All existing code will continue to work without any changes.
 
 # Import all functions from the enhanced module
 # This makes the enhanced cache transparent to existing code
-from database.token_db_enhanced import (
-    get_token,
-    get_symbol,
-    get_oa_symbol,
-    get_br_symbol,
-    get_brexchange,
-    get_symbol_info,
-    get_symbol_count,
-    # Additional functions for backward compatibility
-    get_token_dbquery,
-    get_symbol_dbquery,
-    get_oa_symbol_dbquery,
-    get_br_symbol_dbquery,
-    get_brexchange_dbquery,
-    get_symbol_info_dbquery,
-    # Data types
-    SymbolData,
-    # New bulk operations (optional - won't break existing code)
-    get_tokens_bulk,
-    get_symbols_bulk,
-    search_symbols,
-    # Cache management (optional - won't break existing code)
-    load_cache_for_broker,
-    clear_cache,
-    get_cache_stats
-)
-
 # For complete backward compatibility, also expose the old cache variable
 # (though it's not used anymore, some code might reference it)
 from cachetools import TTLCache
+
+from database.token_db_enhanced import (
+    # Data types
+    SymbolData,
+    clear_cache,
+    get_br_symbol,
+    get_br_symbol_dbquery,
+    get_brexchange,
+    get_brexchange_dbquery,
+    get_cache_stats,
+    get_oa_symbol,
+    get_oa_symbol_dbquery,
+    get_symbol,
+    get_symbol_count,
+    get_symbol_dbquery,
+    get_symbol_info,
+    get_symbol_info_dbquery,
+    get_symbols_bulk,
+    get_token,
+    # Additional functions for backward compatibility
+    get_token_dbquery,
+    # New bulk operations (optional - won't break existing code)
+    get_tokens_bulk,
+    # Cache management (optional - won't break existing code)
+    load_cache_for_broker,
+    search_symbols,
+)
+
 token_cache = TTLCache(maxsize=1024, ttl=3600)  # Dummy cache for compatibility
 
 # Re-export everything so imports work identically
 __all__ = [
-    'get_token',
-    'get_symbol',
-    'get_oa_symbol',
-    'get_br_symbol',
-    'get_brexchange',
-    'get_symbol_info',
-    'get_symbol_count',
-    'get_token_dbquery',
-    'get_symbol_dbquery',
-    'get_oa_symbol_dbquery',
-    'get_br_symbol_dbquery',
-    'get_brexchange_dbquery',
-    'get_symbol_info_dbquery',
-    'token_cache',  # For backward compatibility
+    "get_token",
+    "get_symbol",
+    "get_oa_symbol",
+    "get_br_symbol",
+    "get_brexchange",
+    "get_symbol_info",
+    "get_symbol_count",
+    "get_token_dbquery",
+    "get_symbol_dbquery",
+    "get_oa_symbol_dbquery",
+    "get_br_symbol_dbquery",
+    "get_brexchange_dbquery",
+    "get_symbol_info_dbquery",
+    "token_cache",  # For backward compatibility
     # Data types
-    'SymbolData',
+    "SymbolData",
     # New functions (won't affect existing code)
-    'get_tokens_bulk',
-    'get_symbols_bulk',
-    'search_symbols',
-    'load_cache_for_broker',
-    'clear_cache',
-    'get_cache_stats'
+    "get_tokens_bulk",
+    "get_symbols_bulk",
+    "search_symbols",
+    "load_cache_for_broker",
+    "clear_cache",
+    "get_cache_stats",
 ]

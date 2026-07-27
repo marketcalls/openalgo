@@ -1,0 +1,24 @@
+meta {
+  name: Unsubscribe All
+  type: websocket
+  seq: 12
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Unsubscribe from all symbols at once
+}
+
+message:json {
+  {
+    "action": "unsubscribe_all"
+  }
+}
+
+docs {
+  Unsubscribe from all market data subscriptions at once.
+  Useful when closing the application or switching contexts.
+
+  Server responds with:
+  {"type": "unsubscribe", "status": "success", "message": "Unsubscribed from all symbols"}
+}

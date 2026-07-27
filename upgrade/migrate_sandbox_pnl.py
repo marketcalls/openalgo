@@ -19,19 +19,20 @@ Migration: 004
 Created: 2025-12-23
 """
 
-import sys
-import os
 import argparse
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import create_engine, text, inspect
-from sqlalchemy.exc import OperationalError, IntegrityError
-from utils.logging import get_logger
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError, OperationalError
+
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -41,15 +42,15 @@ MIGRATION_VERSION = "004"
 
 # Load environment
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(parent_dir, '.env'))
+load_dotenv(os.path.join(parent_dir, ".env"))
 
 
 def get_sandbox_db_engine():
     """Get sandbox database engine"""
-    sandbox_db_url = os.getenv('SANDBOX_DATABASE_URL', 'sqlite:///db/sandbox.db')
+    sandbox_db_url = os.getenv("SANDBOX_DATABASE_URL", "sqlite:///db/sandbox.db")
 
-    if sandbox_db_url.startswith('sqlite:///'):
-        db_path = sandbox_db_url.replace('sqlite:///', '')
+    if sandbox_db_url.startswith("sqlite:///"):
+        db_path = sandbox_db_url.replace("sqlite:///", "")
 
         if not os.path.isabs(db_path):
             db_path = os.path.join(parent_dir, db_path)
@@ -65,18 +66,20 @@ def update_reset_day_default(conn):
     """Update reset_day from Sunday to Never for existing databases"""
     try:
         # Check if sandbox_config table exists
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='sandbox_config'"
-        ))
+        result = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='sandbox_config'")
+        )
         if not result.fetchone():
             logger.info("sandbox_config table does not exist, skipping reset_day update")
             return
 
         # Update reset_day from Sunday to Never
-        result = conn.execute(text(
-            "UPDATE sandbox_config SET config_value = 'Never' "
-            "WHERE config_key = 'reset_day' AND config_value = 'Sunday'"
-        ))
+        result = conn.execute(
+            text(
+                "UPDATE sandbox_config SET config_value = 'Never' "
+                "WHERE config_key = 'reset_day' AND config_value = 'Sunday'"
+            )
+        )
         conn.commit()
 
         if result.rowcount > 0:
@@ -97,11 +100,13 @@ def add_today_realized_pnl_columns(conn):
     result = conn.execute(text("PRAGMA table_info(sandbox_positions)"))
     columns = [row[1] for row in result]
 
-    if 'today_realized_pnl' not in columns:
-        conn.execute(text("""
+    if "today_realized_pnl" not in columns:
+        conn.execute(
+            text("""
             ALTER TABLE sandbox_positions
             ADD COLUMN today_realized_pnl DECIMAL(10,2) DEFAULT 0.00
-        """))
+        """)
+        )
         logger.info("Added today_realized_pnl column to sandbox_positions")
     else:
         logger.info("today_realized_pnl column already exists in sandbox_positions")
@@ -110,11 +115,13 @@ def add_today_realized_pnl_columns(conn):
     result = conn.execute(text("PRAGMA table_info(sandbox_funds)"))
     columns = [row[1] for row in result]
 
-    if 'today_realized_pnl' not in columns:
-        conn.execute(text("""
+    if "today_realized_pnl" not in columns:
+        conn.execute(
+            text("""
             ALTER TABLE sandbox_funds
             ADD COLUMN today_realized_pnl DECIMAL(15,2) DEFAULT 0.00
-        """))
+        """)
+        )
         logger.info("Added today_realized_pnl column to sandbox_funds")
     else:
         logger.info("today_realized_pnl column already exists in sandbox_funds")
@@ -142,6 +149,7 @@ def upgrade():
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -163,9 +171,9 @@ def status():
             funds_columns = [row[1] for row in result]
 
             missing = []
-            if 'today_realized_pnl' not in positions_columns:
+            if "today_realized_pnl" not in positions_columns:
                 missing.append("sandbox_positions.today_realized_pnl")
-            if 'today_realized_pnl' not in funds_columns:
+            if "today_realized_pnl" not in funds_columns:
                 missing.append("sandbox_funds.today_realized_pnl")
 
             if missing:
@@ -183,13 +191,12 @@ def status():
         return False
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=f'Migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description=f"Migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('--status', action='store_true',
-                        help='Check migration status')
+    parser.add_argument("--status", action="store_true", help="Check migration status")
 
     args = parser.parse_args()
 
