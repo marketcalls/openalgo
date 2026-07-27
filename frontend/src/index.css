@@ -756,6 +756,40 @@
    CUSTOM SCROLLBAR STYLES
    ============================================================================= */
 
+/* Every scrollbar follows the theme. The browser default renders a light
+   track/thumb that reads as a bright seam on a dark chart pane, and it is not
+   worth remembering to opt in per element. `.scrollbar-thin` below still exists
+   for places that want the narrower variant. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.55);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Thin scrollbar utility class */
 .scrollbar-thin {
   scrollbar-width: thin;
