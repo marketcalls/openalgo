@@ -1,6 +1,6 @@
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { Clock, Calendar, CalendarDays, Timer } from 'lucide-react'
+import { Calendar, CalendarDays, Clock, Timer } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { StartNodeData } from '@/types/flow'
 
@@ -35,12 +35,7 @@ export const StartNode = memo(({ data, selected }: StartNodeProps) => {
   }
 
   return (
-    <div
-      className={cn(
-        'workflow-node node-start min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
+    <div className={cn('workflow-node node-start min-w-[120px]', selected && 'selected')}>
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="node-icon flex h-5 w-5 items-center justify-center rounded">
@@ -66,21 +61,20 @@ export const StartNode = memo(({ data, selected }: StartNodeProps) => {
               <span className="mono-data font-medium">{data.time || '09:15'}</span>
             </div>
           )}
-          {(data.scheduleType === 'daily' || data.scheduleType === 'weekly') && data.days && data.days.length > 0 && data.days.length < 7 && (
-            <div className="mt-0.5 flex items-center justify-between">
-              <span className="text-muted-foreground">Days:</span>
-              <span className="mono-data text-[9px]">
-                {data.days.map((d) => ['M', 'T', 'W', 'T', 'F', 'S', 'S'][d]).join('')}
-              </span>
-            </div>
-          )}
+          {(data.scheduleType === 'daily' || data.scheduleType === 'weekly') &&
+            data.days &&
+            data.days.length > 0 &&
+            data.days.length < 7 && (
+              <div className="mt-0.5 flex items-center justify-between">
+                <span className="text-muted-foreground">Days:</span>
+                <span className="mono-data text-[9px]">
+                  {data.days.map((d) => ['M', 'T', 'W', 'T', 'F', 'S', 'S'][d]).join('')}
+                </span>
+              </div>
+            )}
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

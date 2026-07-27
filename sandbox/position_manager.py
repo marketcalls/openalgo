@@ -14,6 +14,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from datetime import time as dt_time
 from decimal import Decimal
 
 import pytz
@@ -167,6 +168,107 @@ def get_contract_expiry(symbol, exchange):
     return get_expiry_from_database(symbol, exchange)
 
 
+# Exchange close times (IST) used for expiry-day settlement. Distinct from the
+# MIS square-off times in sandbox config (15:15 etc.), which are deliberately
+# BEFORE close -- an expiring contract trades right up to the closing bell.
+EXCHANGE_CLOSE_TIMES = {
+    "NFO": dt_time(15, 30),
+    "BFO": dt_time(15, 30),
+    "CDS": dt_time(17, 0),
+    "BCD": dt_time(17, 0),
+    "MCX": dt_time(23, 30),
+    "NCDEX": dt_time(17, 0),
+}
+DEFAULT_CLOSE_TIME = dt_time(15, 30)
+
+
+def _notify_position_feed_closed(user_id, symbol, exchange):
+    """Tell the WS engine a settled position no longer needs its MTM feed.
+
+    Best-effort by design (event-driven MTM is an enhancement): failure to
+    release a subscription costs a few stray ticks, never correctness.
+    """
+    try:
+        from sandbox.websocket_execution_engine import get_websocket_execution_engine
+
+        engine = get_websocket_execution_engine()
+        if engine is not None:
+            engine.notify_position_closed(user_id, symbol, exchange)
+    except Exception:
+        logger.debug("Position feed release failed (non-fatal)", exc_info=True)
+
+
+def is_contract_expired_now(expiry_date, exchange, now=None):
+    """Return True when an F&O contract should be treated as expired right now.
+
+    Timing is governed by the ``expiry_settlement_timing`` sandbox config:
+
+      - ``expiry_day_close`` (default): expired from the exchange's closing
+        time on expiry day onward -- matching when the real exchange stops
+        trading the contract. During live market hours ON expiry day the
+        position stays open and marked-to-market.
+      - ``next_day``: legacy behaviour -- expired only from the day after.
+
+    Any date strictly past expiry is expired under both modes, which is what
+    makes the app-was-down-for-days catch-up work unchanged.
+
+    Args:
+        expiry_date: datetime.date of contract expiry (None returns False)
+        exchange: Exchange code, used to pick the closing time
+        now: Optional aware datetime for testing; defaults to IST now
+    """
+    if expiry_date is None:
+        return False
+
+    ist = pytz.timezone("Asia/Kolkata")
+    now = now or datetime.now(ist)
+    today = now.date()
+
+    if today > expiry_date:
+        return True
+    if today < expiry_date:
+        return False
+
+    # Expiry day itself: settle from exchange close, if so configured.
+    if get_config("expiry_settlement_timing", "expiry_day_close") != "expiry_day_close":
+        return False
+    close_time = EXCHANGE_CLOSE_TIMES.get(exchange, DEFAULT_CLOSE_TIME)
+    return now.time() >= close_time
+
+
+def get_expiry_settlement_price(position):
+    """Settlement price for an expired position, per sandbox config.
+
+    Options (``option_expiry_settlement`` config):
+      - ``ltp`` (default): last stored LTP. Near expiry an option's LTP
+        converges to intrinsic value, so this lands close to the real
+        exchange settlement -- an ITM option keeps its value instead of
+        being zeroed. Falls back to 0 when no LTP was ever stored.
+      - ``zero``: legacy behaviour -- every option expires worthless.
+
+    Futures: last stored LTP, falling back to average price (unchanged).
+    """
+    from decimal import Decimal
+
+    symbol = position.symbol
+    is_option = symbol.endswith("CE") or symbol.endswith("PE")
+    ltp = Decimal(str(position.ltp)) if position.ltp else Decimal("0")
+
+    if is_option:
+        if get_config("option_expiry_settlement", "ltp") == "ltp" and ltp > 0:
+            logger.info(f"Option {symbol} expired - settling at last LTP: {ltp}")
+            return ltp
+        logger.info(f"Option {symbol} expired - settling at 0 (worthless)")
+        return Decimal("0")
+
+    if ltp > 0:
+        logger.info(f"Future {symbol} expired - settling at last LTP: {ltp}")
+        return ltp
+    avg = Decimal(str(position.average_price))
+    logger.info(f"Future {symbol} expired - settling at avg price: {avg}")
+    return avg
+
+
 class PositionManager:
     """Manages positions and MTM calculations"""
 
@@ -220,8 +322,8 @@ class PositionManager:
                 valid_positions.append(position)
                 continue
 
-            # Check if contract has expired
-            is_expired = today > expiry_date
+            # Check if contract has expired (timing per expiry_settlement_timing config)
+            is_expired = is_contract_expired_now(expiry_date, position.exchange)
 
             # For already closed positions (qty=0), just keep them
             # These are today's closed trades - show them regardless of expiry
@@ -273,23 +375,10 @@ class PositionManager:
         avg_price = Decimal(str(position.average_price))
         margin_blocked = Decimal(str(position.margin_blocked or 0))
 
-        # Determine settlement price based on instrument type.
-        # CRYPTO canonical suffixes: CE/PE = option, FUT = dated future, no suffix = perpetual.
-        is_option = symbol.endswith("CE") or symbol.endswith("PE")
-
-        if is_option:
-            # Options expire worthless (at 0)
-            # This is conservative - user loses full premium for longs
-            settlement_price = Decimal("0")
-            logger.info(f"Option {symbol} expired - settling at 0 (worthless)")
-        else:
-            # Futures: use last LTP if available, otherwise average price
-            if position.ltp and Decimal(str(position.ltp)) > 0:
-                settlement_price = Decimal(str(position.ltp))
-                logger.info(f"Future {symbol} expired - settling at last LTP: {settlement_price}")
-            else:
-                settlement_price = avg_price
-                logger.info(f"Future {symbol} expired - settling at avg price: {settlement_price}")
+        # Settlement price per sandbox config (option_expiry_settlement):
+        # options at last LTP (default, converges to intrinsic near expiry)
+        # or zero (legacy); futures at last LTP with avg-price fallback.
+        settlement_price = get_expiry_settlement_price(position)
 
         # Calculate realized P&L for this closure
         if quantity > 0:
@@ -343,6 +432,10 @@ class PositionManager:
             db_session.commit()
 
         logger.info(f"Expired position {symbol} settled successfully for user {position.user_id}")
+
+        # Release the position's MTM feed subscription (event-driven MTM);
+        # the contract is dead, no further ticks are wanted.
+        _notify_position_feed_closed(position.user_id, symbol, position.exchange)
 
     def get_open_positions(self, update_mtm=True):
         """
@@ -1082,12 +1175,20 @@ class PositionManager:
                     ).first()
 
                     if holdings:
-                        # Update existing holdings
-                        holdings.quantity += position.quantity
+                        # Update existing holdings. Compute the weighted average
+                        # BEFORE mutating quantity -- the previous version
+                        # incremented quantity first, which double-counted the
+                        # new shares in the denominator and applied the old
+                        # average to the inflated total, skewing the cost basis
+                        # low on every repeat settlement of the same symbol
+                        # (100@100 + 100@110 gave 103.33 instead of 105).
+                        old_quantity = holdings.quantity
+                        new_quantity = old_quantity + position.quantity
                         holdings.average_price = (
-                            holdings.average_price * holdings.quantity
+                            holdings.average_price * old_quantity
                             + position.average_price * position.quantity
-                        ) / (holdings.quantity + position.quantity)
+                        ) / new_quantity
+                        holdings.quantity = new_quantity
                     else:
                         # Create new holdings
                         holdings = SandboxHoldings(
@@ -1220,8 +1321,6 @@ def cleanup_expired_contracts():
     from sandbox.fund_manager import FundManager
 
     try:
-        today = date.today()
-
         # Find all open positions in F&O exchanges
         fo_exchanges = ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "CRYPTO"]
 
@@ -1238,11 +1337,11 @@ def cleanup_expired_contracts():
 
         logger.debug(f"Checking {len(all_fo_positions)} F&O positions for expired contracts")
 
-        # Check each position for expiry
+        # Check each position for expiry (timing per expiry_settlement_timing config)
         for position in all_fo_positions:
             expiry_date = get_contract_expiry(position.symbol, position.exchange)
 
-            if expiry_date and today > expiry_date:
+            if expiry_date and is_contract_expired_now(expiry_date, position.exchange):
                 expired_positions.append(position)
                 logger.debug(
                     f"Found expired contract: {position.symbol} "
@@ -1274,22 +1373,9 @@ def cleanup_expired_contracts():
                         avg_price = Decimal(str(position.average_price))
                         margin_blocked = Decimal(str(position.margin_blocked or 0))
 
-                        # Determine settlement price based on instrument type.
-                        # CRYPTO canonical suffixes: CE/PE = option, FUT/other = future/perpetual.
-                        is_option = symbol.endswith("CE") or symbol.endswith("PE")
-
-                        if is_option:
-                            # Options expire worthless (at 0)
-                            # This is conservative - user loses full premium for longs
-                            settlement_price = Decimal("0")
-                            logger.info(f"Option {symbol} expired - settling at 0 (worthless)")
-                        else:
-                            # Futures: use last LTP if available, otherwise average price
-                            if position.ltp and Decimal(str(position.ltp)) > 0:
-                                settlement_price = Decimal(str(position.ltp))
-                            else:
-                                settlement_price = avg_price
-                            logger.info(f"Future {symbol} expired - settling at {settlement_price}")
+                        # Settlement price per sandbox config -- same helper as
+                        # the on-view settlement path, so both paths agree.
+                        settlement_price = get_expiry_settlement_price(position)
 
                         # Calculate realized P&L
                         if quantity > 0:
@@ -1323,10 +1409,17 @@ def cleanup_expired_contracts():
                         db_session.commit()
 
                         # Set updated_at to expiry date AFTER commit to bypass onupdate trigger
-                        # This hides expired contracts from current session
+                        # This hides expired contracts from current session.
+                        # Recompute THIS position's expiry -- the loop variable
+                        # from the scan above holds the LAST scanned position's
+                        # expiry, which mis-dated the hide for multi-expiry
+                        # cleanups.
                         from sqlalchemy import text
 
-                        hide_date = datetime.combine(expiry_date, datetime.min.time())
+                        pos_expiry = get_contract_expiry(position.symbol, position.exchange)
+                        hide_date = datetime.combine(
+                            pos_expiry or datetime.now().date(), datetime.min.time()
+                        )
                         db_session.execute(
                             text(
                                 "UPDATE sandbox_positions SET updated_at = :hide_date WHERE id = :pos_id"
@@ -1336,6 +1429,7 @@ def cleanup_expired_contracts():
                         db_session.commit()
 
                         logger.info(f"Expired contract {symbol} cleaned up for user {user_id}")
+                        _notify_position_feed_closed(user_id, symbol, position.exchange)
 
                     except Exception as e:
                         db_session.rollback()

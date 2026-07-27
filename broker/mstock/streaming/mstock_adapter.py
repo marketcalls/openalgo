@@ -49,7 +49,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = broker_name
 
         if not auth_data:
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             if not auth_token:
                 self.logger.error(f"No authentication token found for user {user_id}")
                 raise ValueError(f"No authentication token found for user {user_id}")
@@ -61,9 +61,30 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.auth_token = auth_token
         self.data_client = BrokerData(auth_token=auth_token)
-        self.ws_client = MstockWebSocket(auth_token=auth_token)
+        # Pass a token_provider so the client re-reads a fresh access token from
+        # the database before each reconnect; Indian broker tokens roll over
+        # daily (~3 AM IST) and the construction-time token is dead after rollover.
+        self.ws_client = MstockWebSocket(
+            auth_token=auth_token, token_provider=self._get_fresh_auth_token
+        )
         self.running = True
         self.logger.info(f"mstock adapter initialized for user {user_id}")
+
+    def _get_fresh_auth_token(self) -> str | None:
+        """
+        Re-read a fresh access token from the database for the current user.
+
+        Used as the token_provider for MstockWebSocket so reconnects after the
+        daily token rollover (~3 AM IST) pick up a live token. Returns None on
+        failure so the client keeps its existing token.
+        """
+        if not self.user_id:
+            return None
+        try:
+            return get_auth_token(self.user_id, bypass_cache=True)
+        except Exception as e:
+            self.logger.warning(f"Failed to re-read fresh mstock auth token: {e}")
+            return None
 
     def connect(self) -> None:
         """Establish persistent connection to mstock WebSocket"""

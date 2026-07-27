@@ -20,6 +20,18 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/search
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "query": "NIFTY 26000 DEC CE",
+  "exchange": "NFO"
+}'
+```
+
 ## Sample API Response
 
 ```json

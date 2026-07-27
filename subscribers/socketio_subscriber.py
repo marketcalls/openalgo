@@ -221,6 +221,52 @@ def on_analyzer_error(event):
         _emit_analyzer_update(event)
 
 
+def on_sandbox_order_filled(event):
+    """Emit analyzer_update so OrderBook / TradeBook / Positions auto-refresh
+    when a pending sandbox order fills via live LTP."""
+    _emit_analyzer_update(event)
+
+
+def on_sandbox_auto_squareoff(event):
+    """Emit analyzer_update after the sandbox auto-square-off cycle so
+    OrderBook (cancelled MIS orders) and Positions (closed MIS) refresh."""
+    _emit_analyzer_update(event)
+
+
+def on_sandbox_t1_settlement(event):
+    """Emit analyzer_update after T+1 settlement so Positions and Holdings
+    pages refresh."""
+    _emit_analyzer_update(event)
+
+
+def on_order_update(event):
+    """Emit order_update for asynchronous order status changes (broker
+    postback/order-WS fills+rejections, or sandbox engine-internal
+    transitions). Global emit — matches every other socketio event in this
+    file (single-user-per-deployment, no rooms needed)."""
+    socketio.emit(
+        "order_update",
+        {
+            "mode": event.mode,
+            "broker": event.broker,
+            "orderid": event.orderid,
+            "symbol": event.symbol,
+            "exchange": event.exchange,
+            "action": event.action,
+            "quantity": event.quantity,
+            "price": event.price,
+            "trigger_price": event.trigger_price,
+            "pricetype": event.pricetype,
+            "product": event.product,
+            "order_status": event.order_status,
+            "filled_quantity": event.filled_quantity,
+            "pending_quantity": event.pending_quantity,
+            "average_price": event.average_price,
+            "rejection_reason": event.rejection_reason,
+        },
+    )
+
+
 def _emit_analyzer_update(event):
     """Helper to emit the analyzer_update socketio event."""
     socketio.emit(

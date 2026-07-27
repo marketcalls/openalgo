@@ -287,11 +287,9 @@ The React frontend:
 - Uses LightWeight Charts for interactive P&L visualization
 - Shows separate drawdown chart below main chart
 
-### Legacy Jinja Template
+### Legacy Compatibility Route
 
-**Location:** `templates/pnltracker.html`
-
-Available at `/pnltracker/legacy` for backwards compatibility.
+`/pnltracker/legacy` is still registered, but the referenced `templates/pnltracker.html` file is absent from the current tree. Treat this route as unavailable until the route is removed or a template is restored. The supported UI is the React `/pnltracker` page.
 
 ## Edge Cases Handled
 
@@ -342,4 +340,3 @@ max_drawdown = portfolio_pnl["Drawdown"].min()
 | `services/positionbook_service.py` | Fetches current positions |
 | `services/history_service.py` | Fetches historical price data |
 | `frontend/src/pages/PnLTracker.tsx` | React UI component |
-| `templates/pnltracker.html` | Legacy Jinja template |

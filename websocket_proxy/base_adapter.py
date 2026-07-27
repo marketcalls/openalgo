@@ -154,11 +154,10 @@ class BaseBrokerWebSocketAdapter(ABC):
                 # Initialize own ZeroMQ context and socket
                 self._initialize_shared_context()
 
-                # Create socket and bind to port
+                # Create PUB socket and connect it to the proxy's SUB on the bus.
                 self.socket = self._create_socket()
-                self.zmq_port = self._bind_to_available_port()
-                os.environ["ZMQ_PORT"] = str(self.zmq_port)
-                self.logger.info(f"BaseBrokerWebSocketAdapter initialized on port {self.zmq_port}")
+                self.zmq_port = self._connect_to_zmq_bus()
+                self.logger.info(f"BaseBrokerWebSocketAdapter publishing to ZMQ port {self.zmq_port}")
 
             # Initialize instance variables
             self.subscriptions = {}
@@ -189,54 +188,38 @@ class BaseBrokerWebSocketAdapter(ABC):
             socket.setsockopt(zmq.SNDHWM, 1000)  # High water mark
             return socket
 
-    def _bind_to_available_port(self):
+    def _connect_to_zmq_bus(self):
         """
-        Find an available port and bind the socket to it.
-        If binding fails, closes the socket to prevent FD leak.
+        Connect this PUB socket to the proxy's SUB on the ZMQ bus.
+
+        Fan-in topology: the websocket_proxy SUB is the SOLE binder; publishers
+        CONNECT to it (see websocket_proxy/server.py and connection_manager.py).
+        Connecting — instead of the previous bind + port-scan — removes the
+        cross-process bind race that stranded this publisher on a fallback port
+        (5556...) while the SUB listened on the configured one: the cause of
+        "subscribe succeeds but no ticks are delivered" once the proxy moved
+        out-of-process. The port is fixed by config and never drifts.
+
+        Returns:
+            The ZMQ port this publisher is connected to.
         """
-        # Internal message bus — bind only to the configured ZMQ_HOST (loopback by default).
-        # Publishing on `tcp://*` would expose raw tick data to anyone who can reach the port.
-        bind_host = os.getenv("ZMQ_HOST", "127.0.0.1")
-        with self._port_lock:
-            # Try default port from environment first
-            default_port = int(os.getenv("ZMQ_PORT", "5555"))
-
-            if default_port not in self._bound_ports and is_port_available(default_port):
-                try:
-                    self.socket.bind(f"tcp://{bind_host}:{default_port}")
-                    self._bound_ports.add(default_port)
-                    self.logger.info(f"Bound to default port {default_port} on {bind_host}")
-                    return default_port
-                except zmq.ZMQError as e:
-                    self.logger.warning(f"Failed to bind to default port {default_port}: {e}")
-
-            # Find random available port
-            for attempt in range(5):
-                port = find_free_zmq_port(start_port=5556 + random.randint(0, 1000))
-
-                if not port:
-                    self.logger.warning(f"Failed to find free port on attempt {attempt + 1}")
-                    continue
-
-                try:
-                    self.socket.bind(f"tcp://{bind_host}:{port}")
-                    self._bound_ports.add(port)
-                    self.logger.info(f"Successfully bound to port {port} on {bind_host}")
-                    return port
-                except zmq.ZMQError as e:
-                    self.logger.warning(f"Failed to bind to port {port}: {e}")
-                    continue
-
-            # All binding attempts failed - clean up socket to prevent FD leak
+        zmq_host = os.getenv("ZMQ_HOST", "127.0.0.1")
+        zmq_port = int(os.getenv("ZMQ_PORT", "5555"))
+        endpoint = f"tcp://{zmq_host}:{zmq_port}"
+        try:
+            self.socket.connect(endpoint)
+        except zmq.ZMQError as e:
+            # Connecting should not fail (ZMQ queues until the SUB binds), but if
+            # it does, close the socket so we don't leak the file descriptor.
             try:
-                if hasattr(self, "socket") and self.socket:
+                if self.socket:
                     self.socket.close(linger=0)
                     self.socket = None
-                    self.logger.warning("Closed socket after failed binding attempts")
-            except Exception as cleanup_err:
-                self.logger.warning(f"Error closing socket after bind failure: {cleanup_err}")
-
-            raise RuntimeError("Could not bind to any available ZMQ port after multiple attempts")
+            except Exception:
+                pass
+            raise RuntimeError(f"Could not connect publisher to ZMQ bus at {endpoint}: {e}") from e
+        self.logger.info(f"Connected PUB to ZMQ bus at {endpoint}")
+        return zmq_port
 
     @abstractmethod
     def initialize(self, broker_name, user_id, auth_data=None):

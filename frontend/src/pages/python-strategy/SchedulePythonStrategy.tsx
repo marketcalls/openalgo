@@ -1,7 +1,6 @@
 import { ArrowLeft, Calendar, Clock } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { PythonStrategy } from '@/types/python-strategy'
 import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS, STRATEGY_EXCHANGES } from '@/types/python-strategy'
+import { showToast } from '@/utils/toast'
 
 export default function SchedulePythonStrategy() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -36,7 +36,7 @@ export default function SchedulePythonStrategy() {
         if (data.schedule_start_time) setStartTime(data.schedule_start_time)
         if (data.schedule_stop_time) setStopTime(data.schedule_stop_time)
         if (data.schedule_days?.length) setSelectedDays(data.schedule_days)
-      } catch (error) {
+      } catch (_error) {
         showToast.error('Failed to load strategy', 'pythonStrategy')
         navigate('/python')
       } finally {
@@ -44,13 +44,10 @@ export default function SchedulePythonStrategy() {
       }
     }
     fetchStrategy()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategyId])
+  }, [strategyId, navigate])
 
   const handleDayToggle = (day: string) => {
-    setSelectedDays((prev) =>
-      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
-    )
+    setSelectedDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -85,7 +82,7 @@ export default function SchedulePythonStrategy() {
       } else {
         showToast.error(response.message || 'Failed to save schedule', 'pythonStrategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to save schedule', 'pythonStrategy')
     } finally {
       setSaving(false)
@@ -222,13 +219,21 @@ export default function SchedulePythonStrategy() {
                     }`}
                     onClick={() => handleDayToggle(day.value)}
                   >
-                    <div className={`h-4 w-4 rounded border flex items-center justify-center ${
-                      selectedDays.includes(day.value)
-                        ? 'bg-primary-foreground border-primary-foreground'
-                        : 'border-current'
-                    }`}>
+                    <div
+                      className={`h-4 w-4 rounded border flex items-center justify-center ${
+                        selectedDays.includes(day.value)
+                          ? 'bg-primary-foreground border-primary-foreground'
+                          : 'border-current'
+                      }`}
+                    >
                       {selectedDays.includes(day.value) && (
-                        <svg className="h-3 w-3 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                        <svg
+                          className="h-3 w-3 text-primary"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                        >
                           <polyline points="20 6 9 17 4 12" />
                         </svg>
                       )}

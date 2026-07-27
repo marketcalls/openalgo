@@ -5,11 +5,12 @@ from io import StringIO
 
 import pandas as pd
 import requests
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.auth_db import get_auth_token
+from database.engine_factory import create_db_engine
 from extensions import socketio
 from utils.logging import get_logger
 
@@ -19,7 +20,7 @@ logger = get_logger(__name__)
 # DATABASE SETUP
 # -------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -677,6 +678,24 @@ def process_mstock_json(json_data):
         + df.loc[mask_pe, "strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + "PE"
     )
+
+    # -------------------------------------------------------------------
+    # Normalize instrumenttype to OpenAlgo standard (match Angel format)
+    # Options: OPTIDX/OPTSTK/OPTFUT/OPTCUR/OPTIRC -> CE or PE
+    # Futures: FUTIDX/FUTSTK/FUTCOM/FUTCUR/FUTIRC/FUTIRT -> FUT
+    # -------------------------------------------------------------------
+    option_types = ["OPTIDX", "OPTSTK", "OPTFUT", "OPTCUR", "OPTIRC"]
+    df.loc[
+        (df["instrumenttype"].isin(option_types)) & (df["symbol"].str.endswith("CE", na=False)),
+        "instrumenttype",
+    ] = "CE"
+    df.loc[
+        (df["instrumenttype"].isin(option_types)) & (df["symbol"].str.endswith("PE", na=False)),
+        "instrumenttype",
+    ] = "PE"
+
+    future_types = ["FUTIDX", "FUTSTK", "FUTCOM", "FUTCUR", "FUTIRC", "FUTIRT"]
+    df.loc[df["instrumenttype"].isin(future_types), "instrumenttype"] = "FUT"
 
     # Return the processed DataFrame
     # Note: Index symbol formatting is handled in fetch_and_process_mstock_indices()

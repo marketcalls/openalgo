@@ -23,9 +23,10 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload="", feed_token=None, params=None):
     AUTH_TOKEN = auth
-    if feed_token:
-        FEED_TOKEN = feed_token
-    logger.info(f"Feed Token: {FEED_TOKEN}")
+    # Assign unconditionally: the old `if feed_token:` guard left FEED_TOKEN
+    # undefined on the auth-token path, so any caller omitting feed_token hit
+    # an UnboundLocalError before the request was ever made.
+    FEED_TOKEN = feed_token
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -115,6 +116,48 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error refreshing feed token: {e}")
             return False
+
+    def _market_data_request(
+        self, endpoint, method="GET", payload="", params=None, _retried=False
+    ):
+        """Call the XTS market-data API, refreshing the feed token once on expiry.
+
+        XTS serves market data from a session separate from the interactive one,
+        so the feed token expires on its own schedule -- independently of the
+        auth token the rest of the plugin uses. When it lapses the API answers
+        HTTP 200 with `{"type": "error", "description": "Invalid Token"}`, which
+        every caller must recognise and recover from rather than surface.
+
+        Centralised here so quotes, multiquotes and history all recover
+        identically; previously only the single-quote path retried, which is why
+        /positions (multiquotes) failed for users whose session had aged out --
+        most visibly MCX, which trades until 23:30 IST, long after the token
+        issued for the equity session has expired. See issue #1669.
+        """
+        response = get_api_response(
+            endpoint,
+            self.auth_token,
+            method=method,
+            payload=payload,
+            feed_token=self.feed_token,
+            params=params,
+        )
+
+        if _retried or (response and response.get("type") == "success"):
+            return response
+
+        error_msg = response.get("description", "") if response else ""
+        if "Invalid Token" not in error_msg:
+            return response
+
+        logger.info("Feed token expired; refreshing and retrying once")
+        if not self._refresh_feed_token():
+            logger.error("Failed to refresh feed token")
+            return response
+
+        return self._market_data_request(
+            endpoint, method=method, payload=payload, params=params, _retried=True
+        )
 
     def _get_instrument_token(self, symbol: str, exchange: str) -> tuple:
         """
@@ -436,12 +479,8 @@ class BrokerData:
             # Make API call for market data (xtsMessageCode 1502)
             payload = {"instruments": instruments, "xtsMessageCode": 1502, "publishFormat": "JSON"}
 
-            response = get_api_response(
-                "/instruments/quotes",
-                self.auth_token,
-                method="POST",
-                payload=payload,
-                feed_token=self.feed_token,
+            response = self._market_data_request(
+                "/instruments/quotes", method="POST", payload=payload
             )
 
             if not response or response.get("type") != "success":
@@ -590,12 +629,8 @@ class BrokerData:
 
                 logger.info(f"API Parameters: {json.dumps(params, indent=2)}")
 
-                response = get_api_response(
-                    "/instruments/ohlc",
-                    self.auth_token,
-                    method="GET",
-                    feed_token=self.feed_token,
-                    params=params,
+                response = self._market_data_request(
+                    "/instruments/ohlc", method="GET", params=params
                 )
 
                 if not response or response.get("type") != "success":
@@ -665,12 +700,8 @@ class BrokerData:
                         "publishFormat": "JSON",
                     }
 
-                    response = get_api_response(
-                        "/instruments/quotes",
-                        self.auth_token,
-                        method="POST",
-                        payload=payload,
-                        feed_token=self.feed_token,
+                    response = self._market_data_request(
+                        "/instruments/quotes", method="POST", payload=payload
                     )
 
                     if not response or response.get("type") != "success":

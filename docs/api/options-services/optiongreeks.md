@@ -23,6 +23,21 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbol": "NIFTY25NOV2526000CE",
+  "exchange": "NFO",
+  "interest_rate": 0.00,
+  "underlying_symbol": "NIFTY",
+  "underlying_exchange": "NSE_INDEX"
+}'
+```
+
 ## Sample API Response
 
 ```json
@@ -55,8 +70,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
 | symbol | Option symbol | Mandatory | - |
-| exchange | Exchange: NFO, BFO, CDS, MCX | Mandatory | - |
-| interest_rate | Risk-free interest rate (annualized %) | Optional | 0 |
+| exchange | Exchange: NFO, BFO, CDS, MCX, CRYPTO | Mandatory | - |
+| interest_rate | Risk-free interest rate (annualized %) | Optional | Exchange default |
 | underlying_symbol | Underlying symbol for spot price | Optional | Derived from option |
 | underlying_exchange | Underlying exchange | Optional | NSE_INDEX |
 | forward_price | Custom forward/synthetic futures price | Optional | - |
@@ -102,11 +117,11 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ## Notes
 
-- Uses **Black-76 model** (appropriate for options on futures/forwards)
+- Uses the **Black-76 model**. For F&O contracts the service attempts to resolve a per-expiry synthetic future as the forward and falls back to the underlying quote when a synthetic forward cannot be computed.
 - **Implied Volatility** is calculated using Newton-Raphson method
 - For **deep ITM** options with no time value, returns theoretical Greeks (delta = ±1)
 - **days_to_expiry** includes fractional days for accuracy
-- The **underlying_symbol** parameter allows using spot price instead of futures
+- `forward_price` bypasses automatic forward resolution. `underlying_symbol` and `underlying_exchange` override automatic underlying lookup.
 
 ## Use Cases
 

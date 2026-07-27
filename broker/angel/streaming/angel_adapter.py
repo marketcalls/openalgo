@@ -48,6 +48,23 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._reconnect_timer = None
         self._reconnecting = False
 
+        # Subscribe coalescing (issue #1352) — mirrors zerodha_adapter's
+        # subscription_queue + batch_timer pattern. Per-symbol subscribe()
+        # calls append to the queue and arm a 500ms timer; the timer drains
+        # the queue, groups by (mode, exchangeType), and emits one
+        # ws_client.subscribe() call per group. 1000 rapid subscribes
+        # collapse into a handful of broker-side messages.
+        self.subscription_queue: list[dict] = []
+        self.batch_timer: threading.Timer | None = None
+        self.batch_delay = 0.5  # seconds — matches zerodha/dhan/flattrade fleet pattern
+
+        # O(1) reverse index for the hot tick path: (token, exchange_type) -> sub.
+        # _on_data fires once per tick; without this it linear-scanned all
+        # subscriptions under the lock for every tick (O(N) per tick, painful
+        # once the /tools ladder streams 100+ symbols). Kept in lock-step with
+        # self.subscriptions wherever that dict is mutated.
+        self._token_index: dict[tuple, dict] = {}
+
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
     ) -> None:
@@ -68,7 +85,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication tokens from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             feed_token = get_feed_token(user_id)
 
             if not auth_token or not feed_token:
@@ -227,7 +244,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Recreate the WebSocket client with current credentials"""
         try:
             # Get tokens from database
-            auth_token = get_auth_token(self.user_id)
+            auth_token = get_auth_token(self.user_id, bypass_cache=True)
             feed_token = get_feed_token(self.user_id)
 
             if not auth_token or not feed_token:
@@ -275,6 +292,13 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer = None
                 self.logger.debug("Cancelled pending reconnection timer")
 
+            # Cancel any pending subscribe-batch flush so the timer thread
+            # cannot fire after the WebSocket has been closed.
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+
         try:
             if hasattr(self, "ws_client") and self.ws_client:
                 try:
@@ -295,6 +319,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Clear subscription tracking
             with self.lock:
                 self.subscriptions.clear()
+                self._token_index.clear()
                 self.connected = False
                 self.reconnect_attempts = 0
 
@@ -374,8 +399,9 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             correlation_id = f"{correlation_id}_{depth_level}"
 
         # Store subscription for reconnection
+        exch_type = AngelExchangeMapper.get_exchange_type(brexchange)
         with self.lock:
-            self.subscriptions[correlation_id] = {
+            sub_entry = {
                 "symbol": symbol,
                 "exchange": exchange,
                 "brexchange": brexchange,
@@ -386,13 +412,33 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "token_list": token_list,
                 "is_fallback": is_fallback,
             }
+            self.subscriptions[correlation_id] = sub_entry
+            # Maintain the O(1) tick-path index. (token, exch_type) uniquely
+            # identifies an instrument; symbol/exchange are identical across the
+            # modes of the same token, so one entry per key is sufficient for
+            # _on_data to resolve symbol/exchange.
+            self._token_index[(str(token), exch_type)] = sub_entry
 
-        # Subscribe if connected
+        # Queue for batched subscribe (issue #1352). The actual
+        # ws_client.subscribe() call is emitted by _process_batch_subscriptions
+        # after a brief coalescing window so bursty per-symbol startups
+        # collapse into one broker-side message per (mode, exchangeType).
         if self.connected and self.ws_client:
             try:
-                self.ws_client.subscribe(correlation_id, mode, token_list)
+                with self.lock:
+                    self.subscription_queue.append(
+                        {
+                            "token": token,
+                            "mode": mode,
+                            "exchange_type": AngelExchangeMapper.get_exchange_type(brexchange),
+                            "symbol": symbol,
+                            "exchange": exchange,
+                        }
+                    )
+                    if len(self.subscription_queue) == 1:
+                        self._start_batch_timer()
             except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                self.logger.error(f"Error queuing subscription for {symbol}.{exchange}: {e}")
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
         # Return success with capability info
@@ -437,11 +483,29 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
+        exch_type = AngelExchangeMapper.get_exchange_type(brexchange)
 
         # Remove from subscriptions
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
+            # Keep the tick-path index consistent: only drop the (token,
+            # exch_type) entry once NO remaining subscription (any mode) holds
+            # it, otherwise repoint it at a surviving sub.
+            key = (str(token), exch_type)
+            remaining = next(
+                (
+                    s
+                    for s in self.subscriptions.values()
+                    if str(s.get("token")) == str(token)
+                    and AngelExchangeMapper.get_exchange_type(s.get("brexchange")) == exch_type
+                ),
+                None,
+            )
+            if remaining is not None:
+                self._token_index[key] = remaining
+            else:
+                self._token_index.pop(key, None)
 
         # Unsubscribe if connected
         if self.connected and self.ws_client:
@@ -455,21 +519,107 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
         )
 
+    def _start_batch_timer(self) -> None:
+        """Arm the coalescing timer that drains subscription_queue.
+
+        Called from within the lock when a fresh subscription enters
+        an empty queue. Subsequent enqueues during the window join the
+        same flush.
+        """
+        if self.batch_timer:
+            self.batch_timer.cancel()
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Drain the queue and emit one ws_client.subscribe() per
+        (mode, exchangeType) group. Collapses N per-symbol subscribes
+        into ceil(modes × exchange_types) broker-side messages.
+        """
+        with self.lock:
+            if not self.subscription_queue:
+                self.batch_timer = None
+                return
+            pending = list(self.subscription_queue)
+            self.subscription_queue.clear()
+            self.batch_timer = None
+
+        if not self.connected or not self.ws_client:
+            self.logger.warning(
+                f"Dropping batch of {len(pending)} subscriptions — not connected"
+            )
+            return
+
+        # Group by mode (broker requires separate subscribe per mode), then by
+        # exchangeType (the SmartConnect token_list shape allows multiple
+        # exchange-type groups per call but tokens within a group share an
+        # exchange).
+        by_mode: dict[int, dict[int, list]] = {}
+        for sub in pending:
+            mode = sub["mode"]
+            exch_type = sub["exchange_type"]
+            by_mode.setdefault(mode, {}).setdefault(exch_type, []).append(sub["token"])
+
+        for mode, exch_groups in by_mode.items():
+            token_list = [
+                {"exchangeType": exch_type, "tokens": tokens}
+                for exch_type, tokens in exch_groups.items()
+            ]
+            total_tokens = sum(len(tokens) for tokens in exch_groups.values())
+            # Synthetic batch correlation_id — broker just echoes it back; we
+            # keep per-symbol correlation_ids in self.subscriptions for the
+            # resubscribe-on-open path elsewhere.
+            correlation_id = f"batch_{int(time.time() * 1000)}_{mode}"
+            try:
+                self.ws_client.subscribe(correlation_id, mode, token_list)
+                self.logger.info(
+                    f"Batch subscribed {total_tokens} tokens in mode {mode} "
+                    f"across {len(exch_groups)} exchange-type group(s)"
+                )
+            except Exception as e:
+                self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
+
     def _on_open(self, wsapp) -> None:
         """Callback when connection is established"""
         self.logger.info("Connected to Angel WebSocket")
         self.connected = True
 
-        # Resubscribe to existing subscriptions if reconnecting
+        # Resubscribe to existing subscriptions if reconnecting.
+        # Group by (mode, exchangeType) so a 1000-symbol resubscribe storm
+        # also collapses into a small number of broker messages instead of
+        # 1000 sequential ones.
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    self.ws_client.subscribe(correlation_id, sub["mode"], sub["token_list"])
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+            if not self.subscriptions:
+                return
+            by_mode: dict[int, dict[int, list]] = {}
+            for sub in self.subscriptions.values():
+                mode = sub["mode"]
+                # token_list[0] always has exchangeType + tokens=[token] today
+                first = sub["token_list"][0] if sub.get("token_list") else None
+                if not first:
+                    continue
+                exch_type = first.get("exchangeType")
+                token = sub.get("token")
+                if exch_type is None or token is None:
+                    continue
+                by_mode.setdefault(mode, {}).setdefault(exch_type, []).append(token)
+
+        for mode, exch_groups in by_mode.items():
+            token_list = [
+                {"exchangeType": exch_type, "tokens": tokens}
+                for exch_type, tokens in exch_groups.items()
+            ]
+            total_tokens = sum(len(tokens) for tokens in exch_groups.values())
+            correlation_id = f"resub_{int(time.time() * 1000)}_{mode}"
+            try:
+                self.ws_client.subscribe(correlation_id, mode, token_list)
+                self.logger.info(
+                    f"Resubscribed {total_tokens} tokens in mode {mode} "
+                    f"across {len(exch_groups)} exchange-type group(s)"
+                )
+            except Exception as e:
+                self.logger.error(f"Error during batched resubscribe in mode {mode}: {e}")
 
     def _on_error(self, error_type, error_msg=None) -> None:
         """
@@ -510,13 +660,19 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_data(self, wsapp, message) -> None:
         """Callback for market data from the WebSocket"""
+        # This runs once per tick on the hot path. Avoid building debug strings
+        # unless DEBUG is actually enabled — an f-string is evaluated eagerly
+        # before logger.debug() can drop it, so an unguarded f-string repr of
+        # every tick is pure wasted CPU at high tick rates.
+        debug_on = self.logger.isEnabledFor(logging.DEBUG)
         try:
-            # Debug log the raw message data to see what we're actually receiving
-            self.logger.debug(f"RAW ANGEL DATA: Type: {type(message)}, Data: {message}")
+            if debug_on:
+                self.logger.debug(f"RAW ANGEL DATA: Type: {type(message)}, Data: {message}")
 
             # Check if we're getting binary data as per Angel's documentation
             if isinstance(message, bytes) or isinstance(message, bytearray):
-                self.logger.debug(f"Received binary data of length: {len(message)}")
+                if debug_on:
+                    self.logger.debug(f"Received binary data of length: {len(message)}")
                 # We need to parse the binary data according to Angel's format
                 # For now, we'll log what we have and exit early
                 return
@@ -530,21 +686,25 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             token = message.get("token")
             exchange_type = message.get("exchange_type")
 
-            self.logger.debug(
-                f"Processing message with token: {token}, exchange_type: {exchange_type}"
-            )
+            if debug_on:
+                self.logger.debug(
+                    f"Processing message with token: {token}, exchange_type: {exchange_type}"
+                )
 
-            # Find the subscription that matches this token
-            subscription = None
+            # O(1) reverse lookup of the subscription for this tick. Falls back
+            # to a linear scan only if the index somehow misses (defensive).
+            key = (str(token), exchange_type)
             with self.lock:
-                for sub in self.subscriptions.values():
-                    if (
-                        sub["token"] == token
-                        and AngelExchangeMapper.get_exchange_type(sub["brexchange"])
-                        == exchange_type
-                    ):
-                        subscription = sub
-                        break
+                subscription = self._token_index.get(key)
+                if subscription is None:
+                    for sub in self.subscriptions.values():
+                        if (
+                            str(sub["token"]) == str(token)
+                            and AngelExchangeMapper.get_exchange_type(sub["brexchange"])
+                            == exchange_type
+                        ):
+                            subscription = sub
+                            break
 
             if not subscription:
                 self.logger.warning(f"Received data for unsubscribed token: {token}")
@@ -575,8 +735,9 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "timestamp": int(time.time() * 1000),  # Current timestamp in ms
                 }
             )
-            # Log the market data we're sendingAdd commentMore actions
-            self.logger.debug(f"Publishing market data: {market_data}")
+            # Log the market data we're sending (guarded — hot path)
+            if debug_on:
+                self.logger.debug(f"Publishing market data: {market_data}")
 
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
@@ -801,6 +962,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnecting = False
                 self.reconnect_attempts = 0
                 self.subscriptions.clear()
+                self._token_index.clear()
 
             # Clean up ZMQ resources
             self.cleanup_zmq()

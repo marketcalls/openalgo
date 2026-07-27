@@ -3,9 +3,9 @@
  * Check available funds before action
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Wallet } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { FundCheckNodeData } from '@/types/flow'
 
@@ -16,12 +16,7 @@ interface FundCheckNodeProps {
 
 export const FundCheckNode = memo(({ data, selected }: FundCheckNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node node-condition min-w-[110px]',
-        selected && 'selected'
-      )}
-    >
+    <div className={cn('workflow-node node-condition min-w-[110px]', selected && 'selected')}>
       <Handle
         type="target"
         position={Position.Top}
@@ -34,9 +29,7 @@ export const FundCheckNode = memo(({ data, selected }: FundCheckNodeProps) => {
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Fund</div>
-            <div className="text-[9px] text-muted-foreground">
-              Check
-            </div>
+            <div className="text-[9px] text-muted-foreground">Check</div>
           </div>
         </div>
         <div className="space-y-1">

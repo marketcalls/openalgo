@@ -1,11 +1,11 @@
-import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
-import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { createTheme } from '@uiw/codemirror-themes'
-import { useThemeStore } from '@/stores/themeStore'
+import CodeMirror from '@uiw/react-codemirror'
 import { useMemo } from 'react'
+import { useThemeStore } from '@/stores/themeStore'
 
 interface JsonEditorProps {
   value: string
@@ -120,11 +120,7 @@ export function JsonEditor({
   const isDark = mode === 'dark' || appMode === 'analyzer'
 
   const extensions = useMemo(() => {
-    const exts = [
-      json(),
-      createJsonTheme(isDark),
-      createBaseTheme(isDark),
-    ]
+    const exts = [json(), createJsonTheme(isDark), createBaseTheme(isDark)]
     if (lineWrapping) {
       exts.push(EditorView.lineWrapping)
     }

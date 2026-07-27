@@ -82,9 +82,9 @@ STRATEGY_RATE_LIMIT=200 per minute
 | Category | Rate Limit | Endpoints | Purpose |
 |----------|------------|-----------|---------|
 | **Login** | 5/min, 25/hr | `/auth/login`, `/auth/reset-password` | Prevent brute force |
-| **API** | 50/sec | `/api/v1/quotes`, `/api/v1/positions`, etc. | General data access |
+| **API** | 50/sec | `/api/v1/quotes`, `/api/v1/positionbook`, etc. | General data access |
 | **Order** | 10/sec | `/api/v1/placeorder`, `/api/v1/modifyorder`, `/api/v1/cancelorder` | Trading rate control |
-| **Smart Order** | 2/sec | `/api/v1/placesmartorder` | Prevent automated abuse |
+| **Smart Order** | 10/sec | `/api/v1/placesmartorder` | Automated order rate control |
 | **Webhook** | 100/min | `/chartink/webhook`, `/strategy/webhook` | External integrations |
 | **Strategy** | 200/min | Strategy-related operations | Strategy execution |
 
@@ -252,7 +252,7 @@ def place_order_with_retry(order_data, max_retries=3):
 | `/api/v1/placesmartorder` | SMART_ORDER_RATE_LIMIT | 10/sec |
 | `/api/v1/quotes` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/multiquotes` | API_RATE_LIMIT | 50/sec |
-| `/api/v1/positions` | API_RATE_LIMIT | 50/sec |
+| `/api/v1/positionbook` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/orderbook` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/tradebook` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/holdings` | API_RATE_LIMIT | 50/sec |
@@ -261,7 +261,7 @@ def place_order_with_retry(order_data, max_retries=3):
 | `/api/v1/depth` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/ping` | API_RATE_LIMIT | 50/sec |
 | `/api/v1/intervals` | API_RATE_LIMIT | 50/sec |
-| `/api/v1/options/multiorder` | ORDER_RATE_LIMIT | 10/sec |
+| `/api/v1/optionsmultiorder` | ORDER_RATE_LIMIT | 10/sec |
 
 ### Authentication Endpoints
 

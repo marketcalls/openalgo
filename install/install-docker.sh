@@ -42,7 +42,7 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
     [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
@@ -113,10 +113,10 @@ done
 # Get broker name
 while true; do
     log "\nValid brokers:" "$BLUE"
-    echo "fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, deltaexchange,"
-    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, ibulls, iifl, iiflcapital,"
+    echo "fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange,"
+    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, hdfcsky, ibulls, iifl, iiflcapital,"
     echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
-    echo "rmoney, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha,"
+    echo "rmoney, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha,"
     echo ""
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
@@ -160,6 +160,19 @@ fi
 read -p "Enter your email for SSL certificate notifications: " ADMIN_EMAIL
 if [ -z "$ADMIN_EMAIL" ]; then
     ADMIN_EMAIL="admin@${DOMAIN#*.}"
+fi
+
+# Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
+# Same-domain mode — /mcp and /oauth/* are served from the same nginx
+# vhost as the dashboard, so the existing reverse-proxy config covers it.
+# Local stdio MCP (Claude Desktop / Cursor / Windsurf) works regardless.
+log "\nRemote MCP lets hosted AI clients (Claude.ai, ChatGPT) connect to OpenAlgo over HTTPS." "$BLUE"
+log "Skip this if you only use the local MCP server with Claude Desktop / Cursor." "$YELLOW"
+read -p "Enable Remote MCP? (y/N): " enable_mcp_input
+ENABLE_REMOTE_MCP="false"
+if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
+    ENABLE_REMOTE_MCP="true"
+    log "Remote MCP will be enabled at https://$DOMAIN/mcp" "$GREEN"
 fi
 
 # Generate security keys
@@ -258,8 +271,38 @@ $SUDO sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" .env
 $SUDO sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" .env
 $SUDO sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" .env
 $SUDO sed -i "s|<broker>|$BROKER_NAME|g" .env
-$SUDO sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" .env
-$SUDO sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" .env
+$SUDO sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" .env
+$SUDO sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" .env
+
+# Capture build-time git info for the diagnostics page (issue #1388).
+# .git/ is dockerignored, so the running container has no .git/HEAD to read —
+# we surface the values via env instead. Both lines are appended only when not
+# already present so re-runs of this script don't accumulate duplicates.
+GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+if ! grep -qE "^OPENALGO_GIT_BRANCH\s*=" .env 2>/dev/null; then
+    echo "OPENALGO_GIT_BRANCH = '${GIT_BRANCH}'" | $SUDO tee -a .env > /dev/null
+fi
+if ! grep -qE "^OPENALGO_GIT_COMMIT\s*=" .env 2>/dev/null; then
+    echo "OPENALGO_GIT_COMMIT = '${GIT_COMMIT}'" | $SUDO tee -a .env > /dev/null
+fi
+
+# Container is published only on 127.0.0.1:5000 with nginx in front; trust the
+# proxy's X-Forwarded-For / X-Real-IP so IP-based features see the real client.
+$SUDO sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" .env
+
+# .env is bind-mounted read+write into the container at /app/.env so the
+# auto-rotation in utils/env_check.py can replace publicly-known APP_KEY /
+# API_KEY_PEPPER values on first run (see issue #1039 follow-up). The
+# container runs as `appuser` (UID 1000 from the Dockerfile), so chown the
+# file to UID 1000 and tighten to 0600 — only appuser can read or write it
+# from inside the container, and the file is no longer world-readable on
+# the host. Earlier versions used mode 644 because the mount was :ro and
+# 600 + root ownership made it unreadable to UID 1000 (issue #960). With
+# the mount switched to read-write and the file owned by UID 1000, 600 is
+# both safe and necessary.
+$SUDO chown 1000:1000 .env
+$SUDO chmod 600 .env
 
 # Update XTS market data credentials if applicable
 if is_xts_broker "$BROKER_NAME"; then
@@ -293,6 +336,17 @@ fi
 # See: https://github.com/marketcalls/openalgo/issues/938
 $SUDO sed -i '/^CSP_CONNECT_SRC/d' .env
 echo "CSP_CONNECT_SRC = \"'self' wss: ws: https://cdn.socket.io https://$DOMAIN wss://$DOMAIN\"" | $SUDO tee -a .env > /dev/null
+
+# Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
+# /oauth/* are served from the same nginx vhost as the dashboard, no
+# extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
+# allowlist) inherit their defaults from .sample.env — flip them later
+# in .env if you want stricter behavior on a shared deployment.
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    $SUDO sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" .env
+    $SUDO sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" .env
+    log "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+fi
 
 check_status "Environment configuration failed"
 
@@ -351,7 +405,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     environment:
       - FLASK_ENV=production
@@ -778,6 +832,11 @@ log "Domain: https://$DOMAIN" "$BLUE"
 log "Broker: $BROKER_NAME" "$BLUE"
 log "Installation Path: $INSTALL_PATH" "$BLUE"
 log "Container: openalgo-web" "$BLUE"
+if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+    log "Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
+else
+    log "Remote MCP: Disabled" "$BLUE"
+fi
 
 log "\nNext Steps:" "$YELLOW"
 log "1. Visit https://$DOMAIN to access OpenAlgo" "$GREEN"

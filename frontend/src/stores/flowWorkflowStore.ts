@@ -1,9 +1,9 @@
 // stores/flowWorkflowStore.ts
 // Zustand store for Flow workflow editor state
 
+import type { Edge, Node, OnConnect, OnEdgesChange, OnNodesChange } from '@xyflow/react'
+import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react'
 import { create } from 'zustand'
-import type { Node, Edge, OnNodesChange, OnEdgesChange, OnConnect } from '@xyflow/react'
-import { applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react'
 
 interface WorkflowState {
   // Workflow data
@@ -120,9 +120,7 @@ export const useFlowWorkflowStore = create<WorkflowState>((set, get) => ({
   deleteNode: (nodeId) =>
     set((state) => ({
       nodes: state.nodes.filter((node) => node.id !== nodeId),
-      edges: state.edges.filter(
-        (edge) => edge.source !== nodeId && edge.target !== nodeId
-      ),
+      edges: state.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
       selectedNodeId: state.selectedNodeId === nodeId ? null : state.selectedNodeId,
       isModified: true,
     })),

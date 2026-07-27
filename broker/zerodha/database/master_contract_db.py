@@ -1,20 +1,21 @@
 #database/master_contract_db.py
 
-import os
-import pandas as pd
-import numpy as np
 import gzip
-import shutil
-import json
 import io
-from utils.httpx_client import get_httpx_client
+import json
+import os
+import shutil
 
-
-from sqlalchemy import create_engine, Column, Integer, String, Float , Sequence, Index
-from sqlalchemy.orm import scoped_session, sessionmaker
+import numpy as np
+import pandas as pd
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
+
 from database.auth_db import get_auth_token
+from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +25,7 @@ logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -36,7 +37,7 @@ class SymToken(Base):
     brsymbol = Column(String, nullable=False, index=True)  # Single column index
     name = Column(String)
     exchange = Column(String, index=True)  # Include this column in a composite index
-    brexchange = Column(String, index=True)  
+    brexchange = Column(String, index=True)
     token = Column(String, index=True)  # Indexed for performance
     expiry = Column(String)
     strike = Column(Float)
@@ -94,41 +95,41 @@ def download_csv_zerodha_data(output_path):
     try:
         login_username = os.getenv('LOGIN_USERNAME')
         AUTH_TOKEN = get_auth_token(login_username)
-        
+
         # Get the shared httpx client with connection pooling
         client = get_httpx_client()
-        
+
         headers = {
             'X-Kite-Version': '3',
             'Authorization': f'token {AUTH_TOKEN}'
         }
-        
+
         # Make the GET request using the shared client
         response = client.get(
             'https://api.kite.trade/instruments',
             headers=headers  # Increased timeout for potentially large file
         )
         response.raise_for_status()  # Raises an exception for 4XX/5XX responses
-        
+
         # Process the response directly as CSV
         csv_string = response.text
         df = pd.read_csv(io.StringIO(csv_string))
-        
+
         # Save to output path if needed
         if output_path:
             df.to_csv(output_path, index=False)
-            
+
         return df
-        
+
     except Exception as e:
         error_message = str(e)
         try:
             if hasattr(e, 'response') and e.response is not None:
                 error_detail = e.response.json()
                 error_message = error_detail.get('message', str(e))
-        except:
+        except Exception:
             pass
-            
+
         logger.error(f"Error downloading Zerodha instruments: {error_message}")
         raise
 
@@ -136,7 +137,7 @@ def download_csv_zerodha_data(output_path):
 def reformat_symbol(row):
     symbol = row['symbol']
     instrument_type = row['instrumenttype']
-    
+
     if instrument_type == 'FUT':
         # For FUT, remove the spaces and append 'FUT' at the end
         parts = symbol.split(' ')
@@ -162,6 +163,8 @@ def process_zerodha_csv(path):
     df = pd.read_csv(path)
 
     # Map exchange names
+    # Any Zerodha exchange code missing here would silently become NaN/NULL.
+    # Keep this list in sync with utils/constants.VALID_EXCHANGES.
     exchange_map = {
         "NSE": "NSE",
         "NFO": "NFO",
@@ -171,10 +174,17 @@ def process_zerodha_csv(path):
         "BSE": "BSE",
         "BFO": "BFO",
         "BCD": "BCD",
-        "MCX": "MCX"
-
+        "MCX": "MCX",
+        "NCO": "NCO",            # NSE Commodities (futures + options + underlyings)
+        "GLOBAL": "GLOBAL_INDEX",  # Zerodha global indices feed (US30, JAPAN225, HANGSENG, ...)
+        "NSEIX": "GLOBAL_INDEX",  # NSE IFSC (single GIFT NIFTY row) folded into GLOBAL_INDEX
     }
-    
+
+    # Capture the raw Kite-side exchange code (NSE/BSE/NFO/.../GLOBAL/NSEIX)
+    # BEFORE we remap to OpenAlgo names, so brexchange retains the broker's
+    # exchange code. This matters for /quote calls which use NSE/BSE for
+    # indices and GLOBAL/NSEIX for the foreign-index feeds.
+    df['_kite_exchange'] = df['exchange']
     df['exchange'] = df['exchange'].map(exchange_map)
 
     # Update exchange names based on the instrument type
@@ -190,9 +200,9 @@ def process_zerodha_csv(path):
     df['token'] = df['instrument_token'].astype(str) + '::::' + df['exchange_token'].astype(str)
 
     # Select and rename columns
-    df = df[['token', 'tradingsymbol', 'name', 'expiry', 
-             'strike', 'lot_size', 'instrument_type', 'exchange', 
-             'tick_size']].rename(columns={
+    df = df[['token', 'tradingsymbol', 'name', 'expiry',
+             'strike', 'lot_size', 'instrument_type', 'exchange',
+             'tick_size', '_kite_exchange']].rename(columns={
         'tradingsymbol': 'symbol',
         'name': 'name',
         'expiry': 'expiry',
@@ -205,15 +215,16 @@ def process_zerodha_csv(path):
 
     df['brsymbol'] = df['symbol']
     df['symbol'] = df.apply(reformat_symbol, axis=1)
-    df['brexchange'] = df['exchange']
+    df['brexchange'] = df['_kite_exchange']
+    df = df.drop(columns=['_kite_exchange'])
 
     # Fill NaN values in the 'expiry' column with an empty string
     df['expiry'] = df['expiry'].fillna('')
-    
-    # Futures Symbol Update 
+
+    # Futures Symbol Update
     df.loc[(df['instrumenttype'] == 'FUT'), 'symbol'] = df['name'] + df['expiry'].str.replace('-', '', regex=False) + 'FUT'
-    
-    # Options Symbol Update 
+
+    # Options Symbol Update
 
     def format_strike(strike):
         # Convert to float, then to int only if it's a whole number (e.g., 190 -> "190")
@@ -333,8 +344,16 @@ def process_zerodha_csv(path):
         'TELCOM': 'BSETELECOM',
     })
 
+    # GLOBAL_INDEX symbol normalisation (currently the lone NSE-IFSC GIFT NIFTY
+    # row, which Zerodha ships with a literal space in the tradingsymbol).
+    # Strip the space so users can call it as a single-token symbol.
+    global_idx_mask = df['exchange'] == 'GLOBAL_INDEX'
+    df.loc[global_idx_mask, 'symbol'] = df.loc[global_idx_mask, 'symbol'].replace({
+        'GIFT NIFTY': 'GIFTNIFTY',
+    })
+
     return df
-    
+
 
 def delete_zerodha_temp_data(output_path):
     try:
@@ -351,7 +370,7 @@ def delete_zerodha_temp_data(output_path):
 
 def master_contract_download():
     logger.info("Downloading Master Contract")
-    
+
 
     output_path = 'tmp/zerodha.csv'
     try:
@@ -359,15 +378,15 @@ def master_contract_download():
         token_df = process_zerodha_csv(output_path)
         delete_zerodha_temp_data(output_path)
         #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
-        
+
         #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
 
         delete_symtoken_table()  # Consider the implications of this action
         copy_from_dataframe(token_df)
-                
+
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
-    
+
     except Exception as e:
         logger.info(f"{str(e)}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})

@@ -1,23 +1,93 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Angel Broking Parameters https://smartapi.angelbroking.com/docs/Orders
 
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_symbol_info
+from utils.logging import get_logger
+from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+
+logger = get_logger(__name__)
 
 
-def transform_data(data, token):
+def transform_data(data, token, auth_token=None):
     """
     Transforms the new API request structure to the current expected structure.
+
+    5Paisa does not accept plain market orders (Price=0 is rejected by RMS).
+    For MARKET orders we apply Market Price Protection (MPP): fetch the LTP,
+    add/subtract a slab-based buffer (rounded to tick size), and send a LIMIT
+    order at that protected price. This mirrors the Flattrade implementation.
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
+    action = data["action"].upper()
+
+    # Default price comes straight from the request (LIMIT / SL orders).
+    price = float(data.get("price", "0"))
+
+    # Apply Market Price Protection for MARKET orders
+    if data.get("pricetype") == "MARKET":
+        logger.info(
+            f"MPP: MARKET order detected for Symbol={data['symbol']}, "
+            f"Exchange={data['exchange']}, Action={action}"
+        )
+        try:
+            if auth_token:
+                # Lazy import to avoid a circular import at module load time
+                from broker.fivepaisa.api.data import BrokerData
+
+                broker_data = BrokerData(auth_token)
+                quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
+                ltp = float((quote_data or {}).get("ltp", 0))
+
+                # 5Paisa quotes don't carry tick size; pull it from the symbol DB.
+                tick_size = None
+                sym_info = get_symbol_info(data["symbol"], data["exchange"])
+                if sym_info is not None:
+                    tick_size = getattr(sym_info, "tick_size", None)
+
+                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                logger.info(
+                    f"MPP Quote: Symbol={data['symbol']}, LTP={ltp}, "
+                    f"InstrumentType={instrument_type}, TickSize={tick_size}"
+                )
+
+                if ltp > 0:
+                    protected_price = calculate_protected_price(
+                        price=ltp,
+                        action=action,
+                        symbol=data["symbol"],
+                        instrument_type=instrument_type,
+                        tick_size=tick_size,
+                    )
+                    price = protected_price
+                    logger.info(
+                        f"MPP Conversion Complete: Symbol={data['symbol']}, "
+                        f"OrderType=MARKET->LIMIT, FinalPrice={protected_price}"
+                    )
+                else:
+                    logger.warning(
+                        f"MPP Warning: LTP is 0 or invalid for Symbol={data['symbol']}, "
+                        f"Exchange={data['exchange']}. Sending price={price} as-is."
+                    )
+            else:
+                logger.warning(
+                    f"MPP Warning: No auth token available for Symbol={data['symbol']}. "
+                    f"Cannot fetch quote for MPP adjustment."
+                )
+        except Exception as e:
+            logger.error(
+                f"MPP Error: Failed to apply MPP for Symbol={data['symbol']}, "
+                f"Exchange={data['exchange']}, Error={e}. Sending price={price} as-is."
+            )
+
     # Basic mapping
     transformed = {
-        "OrderType": map_action(data["action"].upper()),
+        "OrderType": map_action(action),
         "Exchange": map_exchange(data["exchange"]),
         "ExchangeType": map_exchange_type(data["exchange"]),
         "ScripCode": token,
         # "ScriData": symbol,
         # "iOrderValidity": "0",
-        "Price": float(data.get("price", "0")),
+        "Price": price,
         "Qty": int(data["quantity"]),
         "StopLossPrice": float(data.get("trigger_price", "0")),
         "DisQty": int(data.get("disclosed_quantity", "0")),

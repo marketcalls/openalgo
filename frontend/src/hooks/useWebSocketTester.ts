@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WebSocketMessage, LatencySample } from '@/types/websocket'
+import type { LatencySample, WebSocketMessage } from '@/types/websocket'
 
 // Fetch CSRF token for authenticated requests
 async function fetchCSRFToken(): Promise<string> {

@@ -3,8 +3,8 @@
  * Provides shared styling and structure for all workflow nodes
  */
 
-import { memo, type ReactNode } from 'react'
 import { Handle, Position } from '@xyflow/react'
+import { memo, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 export type NodeCategory = 'trigger' | 'action' | 'condition' | 'data' | 'utility'
@@ -96,22 +96,13 @@ export const BaseNode = memo(function BaseNode({
       <div className="p-2">
         {/* Header */}
         <div className="mb-1.5 flex items-center gap-1.5">
-          <div
-            className={cn(
-              'flex h-5 w-5 items-center justify-center rounded',
-              styles.iconBg
-            )}
-          >
+          <div className={cn('flex h-5 w-5 items-center justify-center rounded', styles.iconBg)}>
             {icon}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-xs font-medium leading-tight">
-              {title}
-            </div>
+            <div className="truncate text-xs font-medium leading-tight">{title}</div>
             {subtitle && (
-              <div className="truncate text-[9px] text-muted-foreground">
-                {subtitle}
-              </div>
+              <div className="truncate text-[9px] text-muted-foreground">{subtitle}</div>
             )}
           </div>
         </div>
@@ -162,14 +153,7 @@ export function NodeDataRow({ label, value, mono = true }: NodeDataRowProps) {
   return (
     <div className="flex items-center justify-between rounded bg-muted/50 px-1.5 py-1">
       <span className="text-[10px] text-muted-foreground">{label}</span>
-      <span
-        className={cn(
-          'text-[10px] font-medium',
-          mono && 'font-mono'
-        )}
-      >
-        {value ?? '-'}
-      </span>
+      <span className={cn('text-[10px] font-medium', mono && 'font-mono')}>{value ?? '-'}</span>
     </div>
   )
 }

@@ -1,4 +1,13 @@
 import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  createChart,
+  HistogramSeries,
+  type IChartApi,
+  type ISeriesApi,
+} from 'lightweight-charts'
+import {
   ArrowLeft,
   BarChart3,
   BookOpen,
@@ -17,8 +26,8 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { authApi } from '@/api/auth'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -30,6 +39,13 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -39,27 +55,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
-import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
-import {
-  CandlestickSeries,
-  ColorType,
-  CrosshairMode,
-  createChart,
-  HistogramSeries,
-  type IChartApi,
-  type ISeriesApi,
-} from 'lightweight-charts'
+import { showToast } from '@/utils/toast'
 
 interface CatalogItem {
   symbol: string
@@ -85,6 +85,8 @@ export default function HistorifyCharts() {
   const navigate = useNavigate()
   const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
   const isDarkMode = mode === 'dark' || appMode === 'analyzer'
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { symbol: urlSymbol } = useParams()
@@ -127,7 +129,9 @@ export default function HistorifyCharts() {
   // Custom interval state
   const [isCustomInterval, setIsCustomInterval] = useState(false)
   const [customIntervalValue, setCustomIntervalValue] = useState('25')
-  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h' | 'W' | 'M' | 'Q' | 'Y'>('m')
+  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h' | 'W' | 'M' | 'Q' | 'Y'>(
+    'm'
+  )
 
   // Date range
   const [startDate, setStartDate] = useState(() => {
@@ -149,9 +153,21 @@ export default function HistorifyCharts() {
 
   // Standard chart timeframes (not broker-specific)
   const CHART_TIMEFRAMES = [
-    '1m', '2m', '3m', '5m', '10m', '15m', '30m',
-    '1h', '2h', '4h',
-    'D', 'W', 'M', 'Q', 'Y'
+    '1m',
+    '2m',
+    '3m',
+    '5m',
+    '10m',
+    '15m',
+    '30m',
+    '1h',
+    '2h',
+    '4h',
+    'D',
+    'W',
+    'M',
+    'Q',
+    'Y',
   ]
 
   // Effective interval (either selected standard interval or custom)
@@ -170,7 +186,23 @@ export default function HistorifyCharts() {
 
   // Check if current interval is intraday (for chart display)
   const isIntradayInterval = useMemo(() => {
-    const intradayPatterns = ['1s', '5s', '10s', '15s', '30s', '1m', '2m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h']
+    const intradayPatterns = [
+      '1s',
+      '5s',
+      '10s',
+      '15s',
+      '30s',
+      '1m',
+      '2m',
+      '3m',
+      '5m',
+      '10m',
+      '15m',
+      '30m',
+      '1h',
+      '2h',
+      '4h',
+    ]
     if (intradayPatterns.includes(effectiveInterval)) return true
     // Custom intervals with 'm' or 'h' are intraday
     if (isCustomInterval && ['m', 'h'].includes(customIntervalUnit)) return true
@@ -184,7 +216,11 @@ export default function HistorifyCharts() {
     catalog.forEach((item) => {
       const key = `${item.symbol}:${item.exchange}`
       if (!symbolMap.has(key)) {
-        symbolMap.set(key, { symbol: item.symbol, exchange: item.exchange, intervals: [item.interval] })
+        symbolMap.set(key, {
+          symbol: item.symbol,
+          exchange: item.exchange,
+          intervals: [item.interval],
+        })
       } else {
         symbolMap.get(key)!.intervals.push(item.interval)
       }
@@ -202,6 +238,7 @@ export default function HistorifyCharts() {
   }, [uniqueSymbols, symbolSearch])
 
   // Load catalog on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time catalog fetch on mount; loadCatalog is a non-memoized fetch helper and must not re-run on every render
   useEffect(() => {
     loadCatalog()
   }, [])
@@ -214,6 +251,7 @@ export default function HistorifyCharts() {
   }, [selectedSymbol, selectedExchange, selectedInterval, setSearchParams])
 
   // Load chart data when selection changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: this network fetch must fire only when the instrument/interval selection changes, not on every startDate/endDate/catalog change pulled in via loadChartData/updateDataInfo
   useEffect(() => {
     if (selectedSymbol && selectedExchange && effectiveInterval) {
       loadChartData()
@@ -244,8 +282,8 @@ export default function HistorifyCharts() {
 
       // Check if this is a daily-aggregated interval (W, MO, Q, Y)
       // These intervals return timestamps that already represent IST dates
-      const isDailyAggregated = isCustomInterval &&
-        ['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)
+      const isDailyAggregated =
+        isCustomInterval && ['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)
 
       // Helper to format time/date in IST based on interval
       const formatTimeIST = (time: number) => {
@@ -312,7 +350,20 @@ export default function HistorifyCharts() {
               // For daily and above: TradingView-style tick marks
               // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
               const day = istDate.getUTCDate()
-              const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+              const monthNames = [
+                'Jan',
+                'Feb',
+                'Mar',
+                'Apr',
+                'May',
+                'Jun',
+                'Jul',
+                'Aug',
+                'Sep',
+                'Oct',
+                'Nov',
+                'Dec',
+              ]
               const month = istDate.getUTCMonth()
               const year = istDate.getUTCFullYear()
 
@@ -424,7 +475,7 @@ export default function HistorifyCharts() {
         chartRef.current = null
       }
     }
-  }, [isDarkMode, chartData, isFullscreen, isIntradayInterval, isCustomInterval, customIntervalUnit])
+  }, [isDarkMode, chartData, isIntradayInterval, isCustomInterval, customIntervalUnit])
 
   const loadCatalog = async () => {
     try {
@@ -433,8 +484,7 @@ export default function HistorifyCharts() {
       if (data.status === 'success') {
         setCatalog(data.data || [])
       }
-    } catch (error) {
-    }
+    } catch (_error) {}
   }
 
   const loadChartData = useCallback(async () => {
@@ -456,12 +506,15 @@ export default function HistorifyCharts() {
       if (data.status === 'success') {
         setChartData(data.data || [])
         if (data.count === 0) {
-          showToast.info('No data available for this range. Make sure 1m data is downloaded for custom intervals.', 'historify')
+          showToast.info(
+            'No data available for this range. Make sure 1m data is downloaded for custom intervals.',
+            'historify'
+          )
         }
       } else {
         showToast.error(data.message || 'Failed to load chart data', 'historify')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load chart data', 'historify')
     } finally {
       setIsLoading(false)
@@ -513,7 +566,13 @@ export default function HistorifyCharts() {
     >
       {/* Header */}
       <div className="h-14 border-b border-border flex items-center px-4 bg-card/50">
-        <Button variant="ghost" size="icon" className="mr-2" asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="mr-2"
+          asChild
+          aria-label="Go back to Historify"
+        >
           <Link to="/historify">
             <ArrowLeft className="h-5 w-5" />
           </Link>
@@ -607,7 +666,10 @@ export default function HistorifyCharts() {
                 className="h-9 w-14 text-center"
                 placeholder="1"
               />
-              <Select value={customIntervalUnit} onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h' | 'W' | 'M' | 'Q' | 'Y')}>
+              <Select
+                value={customIntervalUnit}
+                onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h' | 'W' | 'M' | 'Q' | 'Y')}
+              >
                 <SelectTrigger className="w-20 h-9">
                   <SelectValue />
                 </SelectTrigger>
@@ -641,7 +703,13 @@ export default function HistorifyCharts() {
             />
           </div>
 
-          <Button variant="outline" size="icon" onClick={loadChartData} disabled={isLoading}>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={loadChartData}
+            disabled={isLoading}
+            aria-label="Refresh chart"
+          >
             <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
           </Button>
         </div>
@@ -666,7 +734,11 @@ export default function HistorifyCharts() {
             )}
             onClick={handleModeToggle}
           >
-            {appMode === 'live' ? <Zap className="h-3 w-3 mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
+            {appMode === 'live' ? (
+              <Zap className="h-3 w-3 mr-1" />
+            ) : (
+              <BarChart3 className="h-3 w-3 mr-1" />
+            )}
             {appMode === 'live' ? 'Live' : 'Analyze'}
           </Badge>
 
@@ -678,6 +750,7 @@ export default function HistorifyCharts() {
             onClick={handleModeToggle}
             disabled={isTogglingMode}
             title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+            aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
           >
             {isTogglingMode ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -696,11 +769,17 @@ export default function HistorifyCharts() {
             onClick={toggleMode}
             disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
             {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
-          <Button variant="ghost" size="icon" onClick={toggleFullscreen}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          >
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </Button>
           <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>
@@ -717,6 +796,7 @@ export default function HistorifyCharts() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                aria-label="Open user menu"
               >
                 <span className="text-sm font-medium">
                   {user?.username?.[0]?.toUpperCase() || 'O'}

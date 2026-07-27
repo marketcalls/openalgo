@@ -323,6 +323,56 @@ def cleanup_all_pools():
     _POOLED_ADAPTERS.clear()
 
 
+def cleanup_pools_for_user(user_id: str, broker_name: str | None = None) -> int:
+    """Tear down cached connection pools tied to ``user_id``.
+
+    Called by ``database.auth_db.upsert_auth`` whenever fresh broker
+    credentials are persisted (login, re-login, token refresh). Without this
+    targeted invalidation, the next websocket connect re-uses the cached
+    pool from before the auth refresh — which still holds the stale token
+    that initialised it — and the user sees ``Adapter initialization
+    failed: No authentication token found`` until they restart the whole
+    process. See marketcalls/openalgo#1394 for the user-visible symptom.
+
+    Args:
+        user_id: OpenAlgo username whose pools should be discarded.
+        broker_name: Optional. When set, only that broker's pool is
+            discarded; otherwise every pool keyed by this user is purged.
+
+    Returns:
+        Count of pools removed.
+    """
+    if not user_id:
+        return 0
+
+    targets: list[str] = []
+    suffix = f"_{user_id}"
+    for pool_key in list(_POOLED_ADAPTERS.keys()):
+        if not pool_key.endswith(suffix):
+            continue
+        if broker_name is not None and not pool_key.startswith(f"{broker_name}_"):
+            continue
+        targets.append(pool_key)
+
+    for pool_key in targets:
+        pool = _POOLED_ADAPTERS.pop(pool_key, None)
+        if pool is None:
+            continue
+        try:
+            pool.disconnect()
+        except Exception as e:
+            # Best-effort: even if disconnect raises, the pool is already
+            # detached from the registry so the next connect rebuilds.
+            logger.warning(f"Error disconnecting pool {pool_key} during invalidation: {e}")
+
+    if targets:
+        logger.info(
+            f"Invalidated {len(targets)} cached pool(s) for user={user_id}"
+            + (f" broker={broker_name}" if broker_name else "")
+        )
+    return len(targets)
+
+
 def get_resource_health() -> dict:
     """
     Get comprehensive health statistics for all WebSocket proxy resources.

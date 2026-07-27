@@ -4,6 +4,9 @@ from urllib.parse import quote_plus
 
 from broker.iiflcapital.baseurl import BASE_URL, LOGIN_URL
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _generate_checksum(client_id: str, auth_code: str, app_secret: str) -> str:
@@ -71,4 +74,7 @@ def authenticate_broker(auth_code: str, client_id: str):
         return None, message
 
     except Exception as exc:
-        return None, f"Error during authentication: {exc}"
+        # Log the full exception for diagnostics; return a generic message
+        # so internal paths/host details don't leak to the API client.
+        logger.exception("IIFL Capital authentication failed")
+        return None, f"Authentication error: {type(exc).__name__}"

@@ -1,20 +1,21 @@
 import {
+  ArrowDown,
+  ArrowUp,
   CheckCircle2,
+  ClipboardList,
   Clock,
   Download,
+  FilterX,
   Loader2,
   Pencil,
   RefreshCw,
   Settings2,
   X,
   XCircle,
-  ArrowUp,
-  ArrowDown,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
-import { showToast } from '@/utils/toast'
 import { type QuotesData, tradingApi } from '@/api/trading'
+import GttTab from '@/components/trading/GttTab'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,6 +39,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -48,22 +50,30 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 // Note: AlertDialog still used for Cancel All Orders
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
+import { showToast } from '@/utils/toast'
 
 // Sort configuration types
-type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status';
+type SortKey = 'timestamp' | 'symbol' | 'action' | 'order_status' | 'price'
 interface SortConfig {
-  key: SortKey;
-  direction: 'asc' | 'desc';
+  key: SortKey
+  direction: 'asc' | 'desc'
 }
 
 // Fixed: Defined outside component to prevent effect dependency churn and repeated socket re-subscriptions
-const ORDER_BOOK_EVENTS: OrderEventType[] = ['order_event', 'analyzer_update', 'cancel_order_event', 'modify_order_event'];
+const ORDER_BOOK_EVENTS: OrderEventType[] = [
+  'order_event',
+  'analyzer_update',
+  'cancel_order_event',
+  'modify_order_event',
+]
 
 /**
  * Helper to convert various broker timestamp formats into a sortable number.
@@ -98,7 +108,7 @@ function formatTime(timestamp: string): string {
 
   const timeValue = parseTimestamp(timestamp)
   if (timeValue === 0) {
-     // Last resort: extract HH:MM:SS if embedded in the string
+    // Last resort: extract HH:MM:SS if embedded in the string
     const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
     return timeMatch ? timeMatch[1] : timestamp
   }
@@ -154,9 +164,10 @@ export default function OrderBook() {
   // Filter and Sort orders
   const sortedAndFilteredOrders = useMemo(() => {
     // 1. Filter Logic
-    const filtered = statusFilter.length === 0 
-      ? orders 
-      : orders.filter((order) => statusFilter.includes(order.order_status))
+    const filtered =
+      statusFilter.length === 0
+        ? orders
+        : orders.filter((order) => statusFilter.includes(order.order_status))
 
     // 2. Sort Logic
     return [...filtered].sort((a, b) => {
@@ -169,9 +180,22 @@ export default function OrderBook() {
         return sortConfig.direction === 'asc' ? aTime - bTime : bTime - aTime
       }
 
+      // Numeric comparison for Price (broker payloads may carry it as string)
+      if (sortConfig.key === 'price') {
+        const aPrice = Number(aValue) || 0
+        const bPrice = Number(bValue) || 0
+        return sortConfig.direction === 'asc' ? aPrice - bPrice : bPrice - aPrice
+      }
+
       // Standard string comparison for Symbol, Action, and Status
       if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
+
+      // Symbol sort groups orders by instrument; order each group by price
+      // so the book reads as a ladder per instrument (issue #1339 part 2).
+      if (sortConfig.key === 'symbol') {
+        return (Number(a.price) || 0) - (Number(b.price) || 0)
+      }
       return 0
     })
   }, [orders, statusFilter, sortConfig])
@@ -309,16 +333,20 @@ export default function OrderBook() {
   const handleModifyOrder = async () => {
     if (!modifyingOrder) return
 
+    const pt = modifyForm.pricetype
+    const sendsPrice = pt === 'LIMIT' || pt === 'SL'
+    const sendsTrigger = pt === 'SL' || pt === 'SL-M'
+
     try {
       const response = await tradingApi.modifyOrder(modifyingOrder.orderid, {
         symbol: modifyingOrder.symbol,
         exchange: modifyingOrder.exchange,
         action: modifyingOrder.action,
         product: modifyingOrder.product,
-        pricetype: modifyForm.pricetype,
-        price: modifyForm.price,
+        pricetype: pt,
         quantity: modifyForm.quantity,
-        trigger_price: modifyForm.trigger_price,
+        ...(sendsPrice && { price: modifyForm.price }),
+        ...(sendsTrigger && { trigger_price: modifyForm.trigger_price }),
       })
       if (response.status === 'success') {
         showToast.success(`Order modified: ${modifyingOrder.orderid}`, 'orders')
@@ -401,321 +429,371 @@ export default function OrderBook() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Order Book</h1>
-          <p className="text-muted-foreground">View and manage your orders</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Settings Button */}
-          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant={hasActiveFilters ? 'default' : 'outline'}
-                size="sm"
-                className="relative"
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Filters
-                {hasActiveFilters && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
-                )}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>Order Filters</DialogTitle>
-                <DialogDescription>Filter orders by status</DialogDescription>
-              </DialogHeader>
+      {/* Page Header */}
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Order Book</h1>
+        <p className="text-muted-foreground">View and manage your orders</p>
+      </div>
 
-              <div className="space-y-6 py-4">
-                {/* Order Status */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Order Status
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip status="complete" label="Complete" />
-                    <FilterChip status="open" label="Open" />
-                    <FilterChip status="rejected" label="Rejected" />
-                    <FilterChip status="cancelled" label="Cancelled" />
+      <Tabs defaultValue="orders" className="space-y-6">
+        <TabsList className="h-10">
+          <TabsTrigger value="orders" className="min-w-[110px] text-sm">
+            Orders
+          </TabsTrigger>
+          <TabsTrigger value="gtt" className="min-w-[110px] text-sm">
+            GTT
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="orders" className="space-y-6">
+          {/* Orders tab toolbar */}
+          <div className="flex items-center justify-end gap-2 flex-wrap">
+            {/* Settings Button */}
+            <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant={hasActiveFilters ? 'default' : 'outline'}
+                  size="sm"
+                  className="relative"
+                >
+                  <Settings2 className="h-4 w-4 mr-2" />
+                  Filters
+                  {hasActiveFilters && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                  )}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Order Filters</DialogTitle>
+                  <DialogDescription>Filter orders by status</DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-6 py-4">
+                  {/* Order Status */}
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Order Status
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <FilterChip status="complete" label="Complete" />
+                      <FilterChip status="open" label="Open" />
+                      <FilterChip status="rejected" label="Rejected" />
+                      <FilterChip status="cancelled" label="Cancelled" />
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <DialogFooter>
-                <Button variant="ghost" onClick={clearFilters}>
-                  Clear All
-                </Button>
-                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchOrders(true)}
-            disabled={isRefreshing}
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={exportToCSV}>
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={openOrders.length === 0}>
-                <X className="h-4 w-4 mr-2" />
-                Cancel All
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Cancel All Orders?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will cancel all {openOrders.length} open orders. This action cannot be
-                  undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Keep Orders</AlertDialogCancel>
-                <AlertDialogAction onClick={handleCancelAllOrders}>Cancel All</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      </div>
-
-      {/* Active Filters Bar */}
-      {hasActiveFilters && (
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm text-muted-foreground">Active Filters:</span>
-          {statusFilter.map((status) => (
-            <Badge
-              key={status}
-              variant="secondary"
-              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
-            >
-              {status}
-            </Badge>
-          ))}
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-red-500 border-red-500/50 hover:bg-red-500/10"
-            onClick={clearFilters}
-          >
-            Clear All
-          </Button>
-        </div>
-      )}
-
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-5">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Buy Orders</CardDescription>
-            <CardTitle className="text-2xl text-green-600">
-              {stats?.total_buy_orders ?? 0}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Sell Orders</CardDescription>
-            <CardTitle className="text-2xl text-red-600">{stats?.total_sell_orders ?? 0}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Completed</CardDescription>
-            <CardTitle className="text-2xl">{stats?.total_completed_orders ?? 0}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Open</CardDescription>
-            <CardTitle className="text-2xl text-blue-600">
-              {stats?.total_open_orders ?? 0}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Rejected</CardDescription>
-            <CardTitle className="text-2xl text-red-600">
-              {stats?.total_rejected_orders ?? 0}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-      </div>
-
-      {/* Orders Table */}
-      <Card>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin" />
-            </div>
-          ) : error ? (
-            <div className="text-center py-12 text-muted-foreground">{error}</div>
-          ) : sortedAndFilteredOrders.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              {hasActiveFilters ? (
-                <div>
-                  <p className="mb-4">No orders match your filters</p>
-                  <Button variant="ghost" size="sm" onClick={clearFilters}>
-                    Clear Filters
+                <DialogFooter>
+                  <Button variant="ghost" onClick={clearFilters}>
+                    Clear All
                   </Button>
-                </div>
-              ) : (
-                'No orders today'
-              )}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead 
-                      className="w-[120px] cursor-pointer hover:bg-muted/50 transition-colors"
-                      onClick={() => requestSort('symbol')}
-                    >
-                      <div className="flex items-center gap-1">
-                        Symbol
-                        {sortConfig.key === 'symbol' && (
-                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
-                      </div>
-                    </TableHead>
-                    <TableHead className="w-[80px]">Exchange</TableHead>
-                    <TableHead 
-                      className="w-[70px] cursor-pointer hover:bg-muted/50 transition-colors"
-                      onClick={() => requestSort('action')}
-                    >
-                      <div className="flex items-center gap-1">
-                        Action
-                        {sortConfig.key === 'action' && (
-                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
-                      </div>
-                    </TableHead>
-                    <TableHead className="w-[70px] text-right">Qty</TableHead>
-                    <TableHead className="w-[100px] text-right">Price</TableHead>
-                    <TableHead className="w-[100px] text-right">Trigger</TableHead>
-                    <TableHead className="w-[80px]">Type</TableHead>
-                    {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
-                    <TableHead className="w-[140px]">Order ID</TableHead>
-                    <TableHead 
-                      className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
-                      onClick={() => requestSort('order_status')}
-                    >
-                      <div className="flex items-center gap-1">
-                        Status
-                        {sortConfig.key === 'order_status' && (
-                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
-                      </div>
-                    </TableHead>
-                    <TableHead 
-                      className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
-                      onClick={() => requestSort('timestamp')}
-                    >
-                      <div className="flex items-center gap-1">
-                        Time
-                        {sortConfig.key === 'timestamp' && (
-                          sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
-                      </div>
-                    </TableHead>
-                    <TableHead className="w-[60px]">Cancel</TableHead>
-                    <TableHead className="w-[60px]">Modify</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedAndFilteredOrders.map((order, index) => {
-                    const status = statusConfig[order.order_status] || statusConfig.open
-                    const StatusIcon = status.icon
-                    const canCancel = order.order_status === 'open'
+                  <Button onClick={() => setSettingsOpen(false)}>Done</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
-                    return (
-                      <TableRow key={`${order.orderid}-${index}`}>
-                        <TableCell className="font-medium">{order.symbol}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{order.exchange}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={order.action === 'BUY' ? 'default' : 'destructive'}
-                            className={order.action === 'BUY' ? 'bg-green-500' : ''}
-                          >
-                            {order.action}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-mono">{order.quantity}</TableCell>
-                        <TableCell className="text-right font-mono">
-                          {formatCurrency(order.price)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {formatCurrency(order.trigger_price)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">{order.pricetype}</Badge>
-                        </TableCell>
-                        {!isCrypto && (
-                          <TableCell>
-                            <Badge variant="outline">{order.product}</Badge>
-                          </TableCell>
-                        )}
-                        <TableCell className="font-mono text-xs">{order.orderid}</TableCell>
-                        <TableCell>
-                          <div className={cn('flex items-center gap-1', status.color)}>
-                            <StatusIcon className="h-4 w-4" />
-                            <span className="text-sm">{status.label}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {formatTime(order.timestamp)}
-                        </TableCell>
-                        <TableCell>
-                          {canCancel && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                              onClick={() => handleCancelOrder(order.orderid)}
-                              aria-label={`Cancel order ${order.orderid}`}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {canCancel && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-blue-500 hover:text-blue-600"
-                              onClick={() => openModifyDialog(order)}
-                              aria-label={`Modify order for ${order.symbol}`}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchOrders(true)}
+              disabled={isRefreshing}
+            >
+              <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
+              Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={exportToCSV}>
+              <Download className="h-4 w-4 mr-2" />
+              Export
+            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" size="sm" disabled={openOrders.length === 0}>
+                  <X className="h-4 w-4 mr-2" />
+                  Cancel All
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Cancel All Orders?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will cancel all {openOrders.length} open orders. This action cannot be
+                    undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Keep Orders</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleCancelAllOrders}>Cancel All</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+
+          {/* Active Filters Bar */}
+          {hasActiveFilters && (
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm text-muted-foreground">Active Filters:</span>
+              {statusFilter.map((status) => (
+                <Badge
+                  key={status}
+                  variant="secondary"
+                  className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+                >
+                  {status}
+                </Badge>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-red-500 border-red-500/50 hover:bg-red-500/10"
+                onClick={clearFilters}
+              >
+                Clear All
+              </Button>
             </div>
           )}
-        </CardContent>
-      </Card>
+
+          {/* Stats Cards */}
+          <div className="grid gap-4 md:grid-cols-5">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Buy Orders</CardDescription>
+                <CardTitle className="text-2xl text-green-600">
+                  {stats?.total_buy_orders ?? 0}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Sell Orders</CardDescription>
+                <CardTitle className="text-2xl text-red-600">
+                  {stats?.total_sell_orders ?? 0}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Completed</CardDescription>
+                <CardTitle className="text-2xl">{stats?.total_completed_orders ?? 0}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Open</CardDescription>
+                <CardTitle className="text-2xl text-blue-600">
+                  {stats?.total_open_orders ?? 0}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>Rejected</CardDescription>
+                <CardTitle className="text-2xl text-red-600">
+                  {stats?.total_rejected_orders ?? 0}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+          </div>
+
+          {/* Orders Table */}
+          <Card>
+            <CardContent className="py-0">
+              {isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                </div>
+              ) : error ? (
+                <div className="text-center py-12 text-muted-foreground">{error}</div>
+              ) : sortedAndFilteredOrders.length === 0 ? (
+                hasActiveFilters ? (
+                  <EmptyState
+                    icon={FilterX}
+                    title="No orders match your filters"
+                    description="Try adjusting or clearing your filters to see results."
+                    action={
+                      <Button variant="ghost" size="sm" onClick={clearFilters}>
+                        Clear Filters
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <EmptyState
+                    icon={ClipboardList}
+                    title="No orders today"
+                    description="Orders you place will display here."
+                  />
+                )
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead
+                          className="w-[120px] cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => requestSort('symbol')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Symbol
+                            {sortConfig.key === 'symbol' &&
+                              (sortConfig.direction === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              ))}
+                          </div>
+                        </TableHead>
+                        <TableHead className="w-[80px]">Exchange</TableHead>
+                        <TableHead
+                          className="w-[70px] cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => requestSort('action')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Action
+                            {sortConfig.key === 'action' &&
+                              (sortConfig.direction === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              ))}
+                          </div>
+                        </TableHead>
+                        <TableHead className="w-[70px] text-right">Qty</TableHead>
+                        <TableHead
+                          className="w-[100px] text-right cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => requestSort('price')}
+                        >
+                          <div className="flex items-center justify-end gap-1">
+                            Price
+                            {sortConfig.key === 'price' &&
+                              (sortConfig.direction === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              ))}
+                          </div>
+                        </TableHead>
+                        <TableHead className="w-[100px] text-right">Trigger</TableHead>
+                        <TableHead className="w-[80px]">Type</TableHead>
+                        {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
+                        <TableHead className="w-[140px]">Order ID</TableHead>
+                        <TableHead
+                          className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => requestSort('order_status')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Status
+                            {sortConfig.key === 'order_status' &&
+                              (sortConfig.direction === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              ))}
+                          </div>
+                        </TableHead>
+                        <TableHead
+                          className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => requestSort('timestamp')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Time
+                            {sortConfig.key === 'timestamp' &&
+                              (sortConfig.direction === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              ))}
+                          </div>
+                        </TableHead>
+                        <TableHead className="w-[60px]">Cancel</TableHead>
+                        <TableHead className="w-[60px]">Modify</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sortedAndFilteredOrders.map((order, index) => {
+                        const status = statusConfig[order.order_status] || statusConfig.open
+                        const StatusIcon = status.icon
+                        const canCancel = order.order_status === 'open'
+
+                        return (
+                          <TableRow key={`${order.orderid}-${index}`}>
+                            <TableCell className="font-medium">{order.symbol}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{order.exchange}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant={order.action === 'BUY' ? 'default' : 'destructive'}
+                                className={order.action === 'BUY' ? 'bg-green-500' : ''}
+                              >
+                                {order.action}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right font-mono">{order.quantity}</TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatCurrency(order.price)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatCurrency(order.trigger_price)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary">{order.pricetype}</Badge>
+                            </TableCell>
+                            {!isCrypto && (
+                              <TableCell>
+                                <Badge variant="outline">{order.product}</Badge>
+                              </TableCell>
+                            )}
+                            <TableCell className="font-mono text-xs">{order.orderid}</TableCell>
+                            <TableCell>
+                              <div className={cn('flex items-center gap-1', status.color)}>
+                                <StatusIcon className="h-4 w-4" />
+                                <span className="text-sm">{status.label}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {formatTime(order.timestamp)}
+                            </TableCell>
+                            <TableCell>
+                              {canCancel && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => handleCancelOrder(order.orderid)}
+                                  aria-label={`Cancel order ${order.orderid}`}
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {canCancel && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-blue-500 hover:text-blue-600"
+                                  onClick={() => openModifyDialog(order)}
+                                  aria-label={`Modify order for ${order.symbol}`}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="gtt" className="space-y-6">
+          <GttTab />
+        </TabsContent>
+      </Tabs>
 
       {/* Modify Order Dialog */}
       <Dialog open={modifyDialogOpen} onOpenChange={setModifyDialogOpen}>
@@ -817,6 +895,27 @@ export default function OrderBook() {
 
           {/* Editable Fields - Based on Order Type */}
           <div className="grid gap-4 py-2">
+            {/* Quantity field - shown for all modifiable order types (LIMIT, SL, SL-M) */}
+            {modifyForm.pricetype !== 'MARKET' && (
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="quantity" className="text-right">
+                  Quantity
+                </Label>
+                <Input
+                  id="quantity"
+                  type="number"
+                  step={isCrypto ? 'any' : '1'}
+                  min="0"
+                  value={modifyForm.quantity}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    const parsed = isCrypto ? parseFloat(raw) : parseInt(raw, 10)
+                    setModifyForm({ ...modifyForm, quantity: Number.isFinite(parsed) ? parsed : 0 })
+                  }}
+                  className="col-span-3"
+                />
+              </div>
+            )}
             {/* Price field - shown for LIMIT and SL orders */}
             {(modifyForm.pricetype === 'LIMIT' || modifyForm.pricetype === 'SL') && (
               <div className="grid grid-cols-4 items-center gap-4">

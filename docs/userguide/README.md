@@ -10,7 +10,8 @@ This guide takes you from zero to automated trading, covering everything from ba
 
 ### Getting Started (Modules 01-05)
 - [01 - What is OpenAlgo](./01-what-is-openalgo/README.md)
-- [02 - Key Concepts](./02-key-concepts/README.md)
+- [02 - Why Build with OpenAlgo](./02-why-build-with-openalgo/README.md)
+- [03 - Key Concepts](./03-key-concepts/README.md)
 - [03 - System Requirements](./03-system-requirements/README.md)
 - [04 - Installation Guide](./04-installation/README.md)
 - [05 - First-Time Setup](./05-first-time-setup/README.md)
@@ -55,6 +56,9 @@ This guide takes you from zero to automated trading, covering everything from ba
 - [29 - Troubleshooting](./29-troubleshooting/README.md)
 - [30 - FAQs](./30-faqs/README.md)
 
+### Analytics Tools (Module 31)
+- [31 - Tools (Options & Strategy Analytics Suite)](./31-tools/README.md)
+
 ## Quick Navigation
 
 | I want to... | Go to |
@@ -68,6 +72,7 @@ This guide takes you from zero to automated trading, covering everything from ba
 | Connect TradingView | [Module 16](./16-tradingview-integration/README.md) |
 | Build visual strategies | [Module 21](./21-flow-visual-builder/README.md) |
 | Get Telegram alerts | [Module 23](./23-telegram-bot/README.md) |
+| Use options analytics tools | [Module 31](./31-tools/README.md) |
 
 ## Additional Resources
 

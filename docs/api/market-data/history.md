@@ -23,6 +23,21 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/history
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/history \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbol": "SBIN",
+  "exchange": "NSE",
+  "interval": "5m",
+  "start_date": "2025-04-01",
+  "end_date": "2025-04-08"
+}'
+```
+
 ## Sample API Response
 
 ```json
@@ -102,7 +117,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/history
 ## Notes
 
 - Historical data availability depends on broker
-- Timestamps are in **IST (Indian Standard Time)**
+- Response timestamps are Unix timestamps. Convert them to the timezone required by the client; do not treat the numeric value itself as an IST-local timestamp.
 - For intraday intervals, data is typically available for the last 30-90 days
 - For daily data, longer history may be available
 - Use [Intervals](./intervals.md) endpoint to check available intervals for your broker

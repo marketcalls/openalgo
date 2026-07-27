@@ -120,7 +120,7 @@ def authenticate_broker(userid, password, totp_code):
                     "message", "Bad request - check required fields"
                 )
                 return None, f"Bad Request: {error_msg}"
-            except:
+            except Exception:
                 return None, "Bad Request: Missing or invalid required fields"
 
         elif response.status_code == 401:

@@ -3,10 +3,11 @@ from datetime import datetime
 
 import httpx
 import pandas as pd
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from database.engine_factory import create_db_engine
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -21,7 +22,7 @@ client = httpx.Client(timeout=30.0)
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -292,6 +293,7 @@ def process_scrip_data(scrip_data, group_info):
                         try:
                             expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
                             expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                            expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
                             openalgo_symbol = f"{base_symbol}{expiry_formatted}FUT"
 
                             record = {
@@ -301,7 +303,7 @@ def process_scrip_data(scrip_data, group_info):
                                 "exchange": exchange,
                                 "brexchange": exchange,
                                 "token": str(item["excToken"]),
-                                "expiry": expiry_date,
+                                "expiry": expiry_db,
                                 "strike": 0,
                                 "lotsize": int(item.get("lot", 1)),
                                 "instrumenttype": "FUT",
@@ -328,6 +330,7 @@ def process_scrip_data(scrip_data, group_info):
                         try:
                             expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
                             expiry_formatted = expiry_dt.strftime("%d%b%y").upper()
+                            expiry_db = expiry_dt.strftime("%d-%b-%y").upper()
                             strike_str = (
                                 str(int(strike_price))
                                 if strike_price.is_integer()
@@ -344,7 +347,7 @@ def process_scrip_data(scrip_data, group_info):
                                 "exchange": exchange,
                                 "brexchange": exchange,
                                 "token": str(item["excToken"]),
-                                "expiry": expiry_date,
+                                "expiry": expiry_db,
                                 "strike": strike_price,
                                 "lotsize": int(item.get("lot", 1)),
                                 "instrumenttype": option_type,

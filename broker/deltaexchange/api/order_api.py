@@ -382,7 +382,7 @@ def _set_leverage(product_id: int, leverage: str, auth: str) -> None:
     payload = json.dumps({"leverage": leverage})
     result = get_api_response(endpoint, auth, method="POST", payload=payload)
     if result.get("success"):
-        logger.info(
+        logger.debug(
             f"[DeltaExchange] Leverage set to {leverage}x for product_id={product_id}"
         )
     else:
@@ -408,7 +408,7 @@ def place_order_api(data, auth):
         can recover the product_id without an additional API call.
     """
     token = get_token(data["symbol"], data["exchange"])
-    logger.info(f"[DeltaExchange] place_order: symbol={data['symbol']} token={token}")
+    logger.debug(f"[DeltaExchange] place_order: symbol={data['symbol']} token={token}")
 
     if not token:
         msg = f"[DeltaExchange] Symbol '{data['symbol']}' not found in master contract DB for exchange '{data['exchange']}'. Run master contract sync first."
@@ -436,7 +436,7 @@ def place_order_api(data, auth):
 
     newdata = transform_data(data, token)
     payload = json.dumps(newdata)
-    logger.info(f"[DeltaExchange] POST /v2/orders payload: {payload}")
+    logger.debug(f"[DeltaExchange] POST /v2/orders payload: {payload}")
 
     result = get_api_response("/v2/orders", auth, method="POST", payload=payload)
     logger.debug(f"[DeltaExchange] place_order response: {result}")
@@ -447,7 +447,7 @@ def place_order_api(data, auth):
         raw_id = order.get("id")
         product_id = order.get("product_id", newdata.get("product_id", ""))
         orderid = f"{product_id}:{raw_id}"
-        logger.info(f"[DeltaExchange] Order placed. composite orderid={orderid}")
+        logger.debug(f"[DeltaExchange] Order placed. composite orderid={orderid}")
         response_dict = {"orderid": orderid, "status": "success"}
     else:
         error = result.get("error", {})
@@ -520,7 +520,7 @@ def place_smartorder_api(data, auth):
         current_position = float(
             get_open_position(symbol, exchange, map_product_type(product), auth)
         )
-        logger.info(
+        logger.debug(
             f"[DeltaExchange] SmartOrder: target={position_size} current={current_position}"
         )
 
@@ -588,7 +588,7 @@ def cancel_order(orderid, auth):
     result = get_api_response("/v2/orders", auth, method="DELETE", payload=json.dumps(body))
 
     if result.get("success"):
-        logger.info(f"[DeltaExchange] Order {orderid} cancelled")
+        logger.debug(f"[DeltaExchange] Order {orderid} cancelled")
         return {"status": "success", "orderid": orderid}, 200
     else:
         error = result.get("error", {})
@@ -612,7 +612,7 @@ def cancel_all_orders_api(data, auth):
     }
     result = get_api_response("/v2/orders/all", auth, method="DELETE", payload=json.dumps(body))
     if result.get("success"):
-        logger.info("[DeltaExchange] All open orders cancelled via /v2/orders/all")
+        logger.debug("[DeltaExchange] All open orders cancelled via /v2/orders/all")
         return ["all"], []
 
     # Fallback: cancel individually
@@ -646,7 +646,7 @@ def modify_order(data, auth):
     orderid = data["orderid"]
     transformed = transform_modify_order_data(data)
     payload = json.dumps(transformed)
-    logger.info(f"[DeltaExchange] PUT /v2/orders payload: {payload}")
+    logger.debug(f"[DeltaExchange] PUT /v2/orders payload: {payload}")
 
     result = get_api_response("/v2/orders", auth, method="PUT", payload=payload)
 
@@ -693,7 +693,7 @@ def close_all_positions(current_api_key, auth):
             symbol = get_oa_symbol(product_symbol, "CRYPTO") or product_symbol
         else:
             symbol = get_symbol(str(product_id), "CRYPTO") or product_symbol
-        logger.info(f"[DeltaExchange] Close: {action} {quantity} {symbol}")
+        logger.debug(f"[DeltaExchange] Close: {action} {quantity} {symbol}")
 
         order_payload = {
             "apikey": current_api_key,

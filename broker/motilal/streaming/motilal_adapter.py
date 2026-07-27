@@ -65,7 +65,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Get tokens from database if not provided
         if not auth_data:
             # Fetch authentication tokens from database
-            auth_token = get_auth_token(user_id)
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             # Get API key from environment variable (BROKER_API_SECRET)
             api_key = os.getenv("BROKER_API_SECRET")
 
@@ -85,16 +85,37 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        # Create MotilalWebSocket instance
+        # Create MotilalWebSocket instance. Pass a token_provider so the client
+        # re-reads a fresh auth token from the database before each reconnect
+        # attempt; Indian broker tokens roll over daily (~3 AM IST) and the
+        # construction-time token is dead after rollover.
         self.ws_client = MotilalWebSocket(
             client_id=user_id,
             auth_token=auth_token,
             api_key=api_key,
             use_uat=False,  # Use production environment
+            token_provider=self._get_fresh_auth_token,
         )
 
         self.running = True
         self.logger.debug(f"Motilal WebSocket adapter initialized for user {user_id}")
+
+    def _get_fresh_auth_token(self) -> str | None:
+        """
+        Re-read a fresh auth token from the database for the current user.
+
+        Used as the token_provider for MotilalWebSocket so reconnects after the
+        daily token rollover (~3 AM IST) pick up a live token instead of the dead
+        construction-time one. Returns None on failure so the client keeps its
+        existing token.
+        """
+        if not self.user_id:
+            return None
+        try:
+            return get_auth_token(self.user_id, bypass_cache=True)
+        except Exception as e:
+            self.logger.warning(f"Failed to re-read fresh Motilal auth token: {e}")
+            return None
 
     def connect(self) -> None:
         """Establish connection to Motilal WebSocket"""

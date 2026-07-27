@@ -17,10 +17,16 @@ const UNDERLYINGS: Record<string, string[]> = {
 }
 
 /** Index exchanges excluded from trading/FNO lists */
-const INDEX_EXCHANGES = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'CDS_INDEX'])
+const INDEX_EXCHANGES = new Set([
+  'NSE_INDEX',
+  'BSE_INDEX',
+  'MCX_INDEX',
+  'CDS_INDEX',
+  'GLOBAL_INDEX',
+])
 
-/** F&O exchange codes (includes MCX/CDS which also have options) */
-const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO'])
+/** F&O exchange codes (includes MCX/CDS/NCO which also have options) */
+const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'NCO', 'CRYPTO'])
 
 /** Fallback exchanges when capabilities haven't loaded yet (backward compatible) */
 const FALLBACK_EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'CRYPTO']
@@ -69,8 +75,7 @@ export function useSupportedExchanges() {
     // Defaults
     const defaultExchange = tradingExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NSE')
     const defaultFnoExchange = fnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
-    const defaultToolsFnoExchange =
-      toolsFnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
+    const defaultToolsFnoExchange = toolsFnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
 
     // Underlyings filtered to only supported FNO exchanges
     const defaultUnderlyings: Record<string, string[]> = {}

@@ -147,8 +147,12 @@ class BrokerData:
             # Paytm expects the symbol to be in the format "exchange:token:opt_type" E.g: NSE:335:EQUITY
             encoded_symbol = urllib.parse.quote(f"{request_exchange}:{token}:{opt_type}")
 
+            # Use mode=FULL so the response carries `oi` and `change_oi`
+            # (per Paytm doc 10-02, QUOTE mode omits them). The OI tracker,
+            # IV smile and similar tooling read these fields. FULL is a
+            # strict superset of QUOTE — we just ignore the depth array.
             response = get_api_response(
-                f"/data/v1/price/live?mode=QUOTE&pref={encoded_symbol}", self.auth_token
+                f"/data/v1/price/live?mode=FULL&pref={encoded_symbol}", self.auth_token
             )
 
             if not response or not response.get("data", []):
@@ -172,6 +176,7 @@ class BrokerData:
                 "open": quote.get("ohlc", {}).get("open", 0),
                 "prev_close": quote.get("ohlc", {}).get("close", 0),
                 "volume": quote.get("volume_traded", 0),
+                "oi": quote.get("oi", 0),
             }
 
         except Exception as e:
@@ -299,8 +304,11 @@ class BrokerData:
             encoded_pref = urllib.parse.quote(",".join(pref_list))
             logger.info(f"Fetching {len(pref_list)} quotes via REST API")
 
+            # mode=FULL so each quote carries `oi` / `change_oi` for the
+            # OI tracker, IV smile, etc. QUOTE mode omits OI per the Paytm
+            # API spec (10-02).
             response = get_api_response(
-                f"/data/v1/price/live?mode=QUOTE&pref={encoded_pref}", self.auth_token
+                f"/data/v1/price/live?mode=FULL&pref={encoded_pref}", self.auth_token
             )
 
             if not response or not response.get("data", []):
@@ -335,7 +343,7 @@ class BrokerData:
                                 "ltp": quote.get("last_price", 0),
                                 "prev_close": quote.get("ohlc", {}).get("close", 0),
                                 "volume": quote.get("volume_traded", 0),
-                                "oi": 0,
+                                "oi": quote.get("oi", 0),
                             },
                         }
                     )
@@ -462,22 +470,20 @@ class BrokerData:
         self, symbol: str, exchange: str, timeframe: str, from_date: str, to_date: str
     ) -> pd.DataFrame:
         """
-        Get historical data for given symbol and timeframe
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-            timeframe: Timeframe (e.g., 1m, 5m, 15m, 60m, D)
-            from_date: Start date in format YYYY-MM-DD
-            to_date: End date in format YYYY-MM-DD
-        Returns:
-            pd.DataFrame: Historical data with OHLCV
+        Historical data is not provided by the Paytm Money API.
+
+        Return an empty OHLCV DataFrame instead of raising, so downstream
+        consumers (history_service, option_greeks_service, straddle chart,
+        IV charts, etc.) can render a "no data" state gracefully rather
+        than surfacing a 500. Mirrors the Kotak Neo handling.
         """
-        raise NotImplementedError("Paytm does not support historical data API")
+        logger.warning("Paytm does not provide historical data API")
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
     def get_intervals(self) -> list:
-        """Get available intervals/timeframes for historical data
-
-        Returns:
-            list: List of available intervals
         """
-        raise NotImplementedError("Paytm does not support historical data API")
+        Paytm does not provide historical data; return an empty list so
+        callers that probe interval support don't see an exception.
+        """
+        logger.warning("Paytm does not provide historical data API intervals")
+        return []

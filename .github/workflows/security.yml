@@ -18,9 +18,35 @@ jobs:
           python-version: "3.12"
       - run: uv sync --dev
 
-      - name: Bandit SARIF report
+      - name: Bandit security scan
         run: |
-          uv run bandit -r . -x .venv,test,frontend,node_modules -f sarif -o bandit.sarif || true
+          # Run bandit twice: once for JSON (stable formatter, always
+          # produces valid output) and once for SARIF (formatter has a
+          # known IndexError crash on certain snippet edge cases — see
+          # bandit/formatters/sarif.py add_region_and_context_region()
+          # in 1.9.x; tracked upstream). Both are tolerated with `|| true`
+          # so neither bandit's findings exit code nor a formatter crash
+          # kills the workflow run.
+          uv run bandit -r . -x .venv,test,frontend,node_modules \
+            -f json -o bandit.json || true
+          uv run bandit -r . -x .venv,test,frontend,node_modules \
+            -f sarif -o bandit.sarif || true
+
+          # If bandit's SARIF formatter crashed mid-write, the file is
+          # missing or truncated and the upload-sarif action then fails
+          # with "Invalid SARIF. JSON syntax error: Unexpected end of
+          # JSON input". Detect that and substitute a minimal valid
+          # empty-results SARIF so Code Scanning ingests something
+          # rather than nothing. Real findings are still captured in
+          # the bandit.json artifact uploaded below.
+          if [ ! -s bandit.sarif ] \
+             || ! python -c 'import json; json.load(open("bandit.sarif"))' 2>/dev/null; then
+            echo "::warning::Bandit SARIF output missing or invalid (formatter bug). Substituting empty SARIF stub. See bandit.json artifact for actual findings."
+            # Single-line JSON: avoids the heredoc-in-YAML indentation pitfall
+            # where the terminator under `run: |` ends up indented and the
+            # shell never sees the matching EOF.
+            printf '%s\n' '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"Bandit","informationUri":"https://bandit.readthedocs.io/","rules":[]}},"results":[]}]}' > bandit.sarif
+          fi
 
       - name: Upload Bandit results
         uses: github/codeql-action/upload-sarif@v4
@@ -32,10 +58,12 @@ jobs:
         run: uv run pip-audit --format=json --output=pip-audit.json || true
 
       - name: Upload audit results
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: security-reports
           path: |
             bandit.sarif
+            bandit.json
             pip-audit.json
           retention-days: 30
