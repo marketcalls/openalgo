@@ -24,6 +24,7 @@ import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 import { DrawingStyleBar } from './DrawingStyleBar'
+import { DrawingTextDialog } from './DrawingTextDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
@@ -175,6 +176,7 @@ export function ChartPane({
   const [gridSub, setGridSub] = useState(false)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  const [textReq, setTextReq] = useState<{ id: string; tool: string; text: string } | null>(null)
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
@@ -211,6 +213,7 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
+      onDrawTextEdit: (r) => aliveRef.current && setTextReq(r),
     }
 
     if (chartRef.current && legendRef.current) {
@@ -341,6 +344,10 @@ export function ChartPane({
     document.addEventListener('fullscreenchange', sync)
     return () => document.removeEventListener('fullscreenchange', sync)
   }, [])
+  // Menu is w-56 (224) and the submenu w-36 (144); opening right needs both
+  // plus the gap, so near the right edge it opens left instead.
+  const gridSubLeft = ctx !== null && ctx.x + 224 + 4 + 144 > window.innerWidth
+
   /** One row of the right-click menu. */
   const ctxRow =
     'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground'
@@ -591,6 +598,12 @@ export function ChartPane({
           sel={drawSel}
           onStyle={(patch) => terminalRef.current?.styleSelectedDrawing(patch)}
           onDelete={() => terminalRef.current?.removeDrawings(false)}
+          onEditText={() => drawSel && terminalRef.current?.requestDrawTextEdit(drawSel.id)}
+        />
+        <DrawingTextDialog
+          req={textReq}
+          onSubmit={(id, text) => terminalRef.current?.setDrawingText(id, text)}
+          onClose={() => setTextReq(null)}
         />
         <IndicatorSettingsDialog
           req={indSettings}
@@ -623,7 +636,7 @@ export function ChartPane({
 
         {ctx && (
           <div
-            className="fixed z-50 w-56 overflow-hidden rounded-md border bg-popover p-1 shadow-lg"
+            className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
             style={{ left: ctx.x, top: ctx.y }}
           >
             {ctx.items.map((it) => (
@@ -674,7 +687,12 @@ export function ChartPane({
                 <ChevronDown className="ml-auto h-3.5 w-3.5 -rotate-90 opacity-60" />
               </button>
               {gridSub && (
-                <div className="absolute left-full top-0 ml-1 w-36 rounded-md border bg-popover p-1 shadow-lg">
+                <div
+                  className={cn(
+                    'absolute top-0 w-36 rounded-md border bg-popover p-1 shadow-lg',
+                    gridSubLeft ? 'right-full mr-1' : 'left-full ml-1'
+                  )}
+                >
                   {(
                     [
                       ['both', 'Grid', grid.vertical && grid.horizontal],
