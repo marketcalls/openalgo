@@ -478,6 +478,8 @@ def transform_holdings_data(holdings_data):
                     # Using npoadqty as per Flattrade documentation
                     "quantity": int(holding.get("holdqty", 0))
                     + max(int(holding.get("npoadqty", 0)), int(holding.get("dpqty", 0))),
+                    "t1_quantity": int(holding.get("btstqty", 0)),
+                    "pledged_quantity": int(holding.get("brkcolqty", 0)),
                     "product": exch_tsym.get("product", "CNC"),
                     # P&L calculation here will be 0 as LTP is not available.
                     # Using upload_price as a placeholder for current price for this calculation.

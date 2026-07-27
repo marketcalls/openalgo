@@ -579,7 +579,10 @@ def transform_holdings_data(holdings_data):
             "symbol": symbol,
             "exchange": exchange,
             "quantity": quantity,
+            "t1_quantity": holding.get("t1quantity", 0),
+            "pledged_quantity": holding.get("collateralquantity", 0),
             "product": producttype,
+            "ltp": holding.get("ltp", 0),
             "pnl": round(pnl, 2),
             "pnlpercent": round(pnl_percent, 2),
         }

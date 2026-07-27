@@ -240,7 +240,10 @@ def transform_holdings_data(holdings_data):
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": holdings.get("quantity", 0),
+            "t1_quantity": holdings.get("t1quantity", 0),
+            "pledged_quantity": holdings.get("collateralquantity", 0),
             "product": holdings.get("product", ""),
+            "ltp": holdings.get("ltp", 0.0),
             "pnl": holdings.get("profitandloss", 0.0),
             "pnlpercent": holdings.get("pnlpercentage", 0.0),
         }

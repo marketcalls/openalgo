@@ -903,8 +903,11 @@ def transform_holdings_data(holdings_data):
             "symbol": symbol,
             "exchange": holdings.get("exchange", "NSE"),  # Default to NSE
             "quantity": float(holdings.get("quantity", holdings.get("totalQty", 0))),
+            "t1_quantity": float(holdings.get("t1_quantity", 0)),
+            "pledged_quantity": float(holdings.get("pledge_quantity", 0)),
             "average_price": float(holdings.get("average_price", holdings.get("avgPrice", 0))),
             "product": holdings.get("product", "CNC"),
+            "ltp": float(holdings.get("last_price", 0)),
             "pnl": float(holdings.get("pnl", 0)),
             "pnlpercent": float(holdings.get("pnlpercent", 0)),
         }
@@ -992,6 +995,7 @@ def calculate_portfolio_statistics(holdings_data):
     for holding in holdings_data:
         # Handle different possible key variations
         quantity = float(holding.get("quantity", holding.get("qty", 0)))
+        quantity += float(holding.get("t1_quantity", 0)) + float(holding.get("pledge_quantity", 0))
         avg_price = float(holding.get("average_price", holding.get("avgPrice", 0)))
 
         # Calculate holding value

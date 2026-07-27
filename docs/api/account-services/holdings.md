@@ -97,7 +97,9 @@ curl -X POST http://127.0.0.1:5000/api/v1/holdings \
 | symbol | string | Stock symbol |
 | exchange | string | Exchange (NSE/BSE) |
 | product | string | Product type (CNC) |
-| quantity | number | Number of shares held |
+| quantity | number | Free (unpledged, settled) shares held |
+| t1_quantity | number | Shares bought but not yet T+1 settled (0 if not applicable/supported by broker) |
+| pledged_quantity | number | Shares pledged as collateral (0 if not applicable/supported by broker) |
 | pnl | number | Profit/Loss in currency |
 | pnlpercent | number | Profit/Loss percentage |
 
@@ -115,8 +117,9 @@ curl -X POST http://127.0.0.1:5000/api/v1/holdings \
 - Holdings are **delivery positions** (CNC product type)
 - Different from [PositionBook](./positionbook.md) which shows intraday positions
 - **pnl** is calculated as: (Current Price - Average Buy Price) × Quantity
-- **totalholdingvalue** is the current market value of entire portfolio
+- **totalholdingvalue** is the current market value of entire portfolio, including free, T1, and pledged quantities
 - Holdings persist across trading days (unlike MIS positions)
+- **t1_quantity** and **pledged_quantity** are only populated for brokers whose API exposes these separately; other brokers report `0` for both.
 
 ## Use Cases
 

@@ -464,7 +464,10 @@ def calculate_portfolio_statistics(holdings_data):
             # Get quantities
             dp_qty = float(holding.get("dp_qty", 0))
             t1_qty = float(holding.get("t1_qty", 0))
-            total_qty = dp_qty + t1_qty
+            pledged_qty = float(holding.get("collateral_qty", 0)) + float(
+                holding.get("broker_collateral_qty", 0)
+            )
+            total_qty = dp_qty + t1_qty + pledged_qty
 
             # Skip if no holdings
             if total_qty == 0:
@@ -518,6 +521,11 @@ def transform_holdings_data(holdings_data):
         dp_qty = float(holding.get("dp_qty", 0))
         t1_qty = float(holding.get("t1_qty", 0))
         total_qty = dp_qty + t1_qty
+        # Pledged quantity is not folded into total_qty above (unlike t1_qty),
+        # so it is exposed as a separate field rather than added here.
+        pledged_qty = float(holding.get("collateral_qty", 0)) + float(
+            holding.get("broker_collateral_qty", 0)
+        )
 
         # Skip if no holdings
         if total_qty == 0:
@@ -545,6 +553,7 @@ def transform_holdings_data(holdings_data):
             "symbol": symbol,
             "exchange": exchange,
             "quantity": int(total_qty),
+            "pledged_quantity": int(pledged_qty),
             "product": "CNC",  # Holdings are always CNC (delivery)
             "pnl": round(pnl, 2),
             "pnlpercent": round(pnl_percent, 2),

@@ -323,6 +323,8 @@ def transform_holdings_data(holdings_data):
                     "exchange": exch_tsym.get("exch", ""),
                     "quantity": int(holding.get("holdqty", 0))
                     + max(int(holding.get("npoadqty", 0)), int(holding.get("dpqty", 0))),
+                    "t1_quantity": int(holding.get("btstqty", 0)),
+                    "pledged_quantity": int(holding.get("brkcolqty", 0)),
                     "product": exch_tsym.get("product", "CNC"),
                     "average_price": float(holding.get("upldprc", 0.0)),
                     "pnl": 0.0,

@@ -402,6 +402,10 @@ def transform_holdings_data(holdings_data):
                 "exchange": exchange,
                 "product": reverse_map_product_type(row.get("product", "DELIVERY")),
                 "quantity": quantity,
+                "t1_quantity": int(_to_float(row.get("t1Quantity", row.get("t1Qty", 0)))),
+                "pledged_quantity": int(
+                    _to_float(row.get("collateralQuantity", row.get("collateralQty", 0)))
+                ),
                 "average_price": round(avg_price, 2),
                 "ltp": round(ltp, 2),
                 "pnl": round(pnl, 2),

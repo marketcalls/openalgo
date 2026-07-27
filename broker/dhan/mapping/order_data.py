@@ -373,6 +373,8 @@ def transform_holdings_data(holdings_data):
             "symbol": h.get("_oa_symbol") or h.get("tradingSymbol", ""),
             "exchange": h.get("_exchange") or "NSE",
             "quantity": qty,
+            "t1_quantity": int(h.get("t1Qty", 0) or 0),
+            "pledged_quantity": int(h.get("collateralQty", 0) or 0),
             "product": "CNC",
             "average_price": round(avg, 2),
             "ltp": round(ltp, 2),
