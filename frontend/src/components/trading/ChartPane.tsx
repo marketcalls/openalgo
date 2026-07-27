@@ -675,11 +675,19 @@ export function ChartPane({
                 {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
               </button>
             )}
-            <div className="relative">
+            <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button
                 type="button"
                 className={ctxRow}
-                onClick={() => setGridSub((v) => !v)}
+                // Opens on hover, the way a nested menu is expected to. The
+                // click also has to stop propagating: the menu closes itself on
+                // any window click, so clicking Grid was tearing down the very
+                // menu the submenu belongs to.
+                onMouseEnter={() => setGridSub(true)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setGridSub((v) => !v)
+                }}
                 aria-expanded={gridSub}
               >
                 <GridIcon className="h-3.5 w-3.5 opacity-70" />
@@ -705,7 +713,10 @@ export function ChartPane({
                       type="button"
                       key={key}
                       className={ctxRow}
-                      onClick={() => run(() => toggleGrid(key))}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        run(() => toggleGrid(key))
+                      }}
                     >
                       <span className="w-3.5 text-xs">{active ? '✓' : ''}</span>
                       {label}
