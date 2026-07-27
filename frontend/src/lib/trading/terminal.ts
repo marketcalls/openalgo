@@ -659,13 +659,18 @@ export class TradingTerminal {
       style,
       priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
     })
+    // Volume rides an OVERLAY price scale inside the price pane rather than a
+    // pane of its own: it autoscales independently but draws no axis, so the
+    // right-hand column stays a clean price ladder instead of stacking a second
+    // numeric scale beside it. The top margin pins the bars to the bottom fifth.
     this.volume = this.chart.addSeries('histogram', {
-      paneIndex: 1,
+      paneIndex: 0,
+      priceScaleId: '',
       style: { color: volumeColor(mode, appMode) },
-      // Raw share counts run to nine digits and swallow the axis; 'volume'
-      // formats them as 1.20M / 3.40B.
+      // Raw share counts run to nine digits; 'volume' renders 1.20M / 3.40B.
       priceFormat: { type: 'volume' },
     })
+    this.volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
     this.setPriceData()
 
     // Default zoom: a FIXED number of recent bars, so the visible price range
@@ -691,7 +696,9 @@ export class TradingTerminal {
           )
         : null
 
-    // TradingView-style mini brand mark, bottom-left (bottom pane).
+    // Mini brand mark, bottom-left. On pane 0 now that volume is an overlay
+    // there rather than a pane of its own — pane 1 only exists once an
+    // indicator asks for one, so anchoring to it would have been conditional.
     this.chart.addPrimitive(
       new LogoWatermark({
         src: '/images/openalgo-mark.svg',
@@ -701,7 +708,7 @@ export class TradingTerminal {
         opacity: 0.85,
         tint: light ? undefined : '#e4e8f4',
       }),
-      1
+      0
     )
 
     // inline SELL · qty · BUY panel, docked top-left below the OHLC legend.
