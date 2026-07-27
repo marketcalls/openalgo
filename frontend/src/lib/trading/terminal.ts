@@ -28,11 +28,24 @@ import {
   type SeriesStyle,
   type SeriesType,
 } from 'openalgo-charts'
+import type { DrawingController } from 'openalgo-charts/draw'
 import { runTransform } from 'openalgo-charts/transform'
 
 type ChartInstance = ReturnType<typeof createChart>
 type BuySellButtonsInstance = InstanceType<typeof BuySellButtons>
 type TradeFeedInstance = InstanceType<typeof OpenAlgoTradeFeed>
+type DrawingControllerInstance = InstanceType<typeof DrawingController>
+type DrawingJson = ReturnType<DrawingControllerInstance['toJSON']>[number]
+
+/** What the toolbar needs to enable/disable its drawing buttons. */
+export interface DrawStats {
+  count: number
+  canUndo: boolean
+  canRedo: boolean
+  hasSelection: boolean
+  magnet: boolean
+  tool: string | null
+}
 
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
 import { buildChartTheme, isLightTheme, volumeColor } from './chartTheme'
@@ -112,6 +125,50 @@ export interface TerminalCallbacks {
   onWsState(state: string): void
   onSymbolLoaded(view: SymbolView): void
   onLtp(ltp: number): void
+  /** Drawing toolbar state changed (tool armed, shape added/removed, undo...). */
+  onDrawChange?(stats: DrawStats): void
+  /** The live indicator list changed. */
+  onIndicatorsChange?(list: { id: string; name: string }[]): void
+  /**
+   * The gear on an indicator's on-chart legend was clicked. The engine is
+   * canvas-only and ships no DOM, so the form is ours to render.
+   */
+  onIndicatorSettings?(req: IndicatorSettingsRequest): void
+  /** A drawing was selected (or deselected), for the style popover. */
+  onDrawSelect?(sel: DrawSelection | null): void
+}
+
+/** Everything needed to generate an indicator settings form. */
+export interface IndicatorSettingsRequest {
+  instanceId: string
+  name: string
+  /** The descriptor's own value inputs — the "Inputs" tab. */
+  inputs: IndicatorField[]
+  /** Generated per-plot colour / width / dash inputs — the "Style" tab. */
+  styleInputs: IndicatorField[]
+  values: Record<string, unknown>
+}
+
+export interface IndicatorField {
+  key: string
+  type: string
+  label: string
+  /** Plot title the style inputs belong to, so a form can group them per plot. */
+  group?: string
+  options?: { label: string; value: unknown }[]
+  min?: number
+  max?: number
+  step?: number
+}
+
+/** The selected drawing's editable style. */
+export interface DrawSelection {
+  id: string
+  tool: string
+  color: string
+  lineWidth: number
+  lineStyle: string
+  locked: boolean
 }
 
 export interface TerminalOptions {
@@ -150,6 +207,20 @@ export class TradingTerminal {
   private chart: ChartInstance | null = null
   private price: SeriesApi | null = null
   private volume: SeriesApi | null = null
+
+  /* Drawing + indicator state. buildChart() throws the chart away on every
+     interval / chart-type / theme change, so both round-trip through plain
+     data here and are re-applied to the new chart. */
+  private draw: DrawingControllerInstance | null = null
+  private drawJson: DrawingJson[] = []
+  private drawTool: string | null = null
+  private drawMagnet = false
+  /** True once a drawing control has been touched — gates the lazy tier fetch. */
+  private drawEnabled = false
+  private activeIndicators: { indicatorId: string; settings: Record<string, unknown> }[] = []
+  private indicatorsLoaded = false
+  private gridV = true
+  private gridH = true
   private ltpLine: PriceLine | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
@@ -191,6 +262,7 @@ export class TradingTerminal {
     this.sk = opts.storageKey || 'oa-trading'
     this.interval = this.lsGet('interval') || '5m'
     this.ctype = this.lsGet('ctype') || 'candlestick'
+    this.restoreChartTools()
     if (!CHART_TYPES[this.ctype]) this.ctype = 'candlestick'
   }
 
@@ -545,12 +617,22 @@ export class TradingTerminal {
 
   /* ── chart build + interaction wiring ─────────────────────────────────── */
   private buildChart() {
+    // Snapshot drawings before the chart they live on goes away.
+    this.detachDrawing()
     if (this.chart) this.chart.destroy()
     this.container.innerHTML = ''
     const { mode, appMode } = this.getTheme()
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme: buildChartTheme(mode, appMode),
+      // The pane's top-left already holds this terminal's own OHLC readout (and
+      // the lot line under it). Start the canvas indicator legends below both,
+      // or they land underneath and their settings / close buttons cannot be
+      // seen or clicked.
+      // The corner already holds this terminal's OHLC readout and, below it,
+      // the SELL/qty/BUY panel (44 + 42*0.72 ~= 75). Indicator legend rows have
+      // to start under both or they land on top of the buttons.
+      legendOffset: { top: 80 },
     })
     const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
     const dp = this.dp()
@@ -609,8 +691,9 @@ export class TradingTerminal {
       this.tradeBtns = new BuySellButtons({
         id: 'trade',
         position: 'top-left',
-        margin: { x: 14, y: 52 },
+        margin: { x: 14, y: 44 },
         qty: this.qtyChip(),
+        scale: 0.72,
       })
       if (lp != null) this.tradeBtns.setMark(lp)
       this.chart.addPrimitive(this.tradeBtns, 0)
@@ -669,6 +752,319 @@ export class TradingTerminal {
     this.position = null
     if (this.trade && this.sym) this.pollBook()
     this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
+
+    // Re-apply everything the rebuild just discarded.
+    this.chart.setGridOptions({ vertLines: this.gridV, horzLines: this.gridH })
+    if (this.drawEnabled) void this.attachDrawing()
+    if (this.activeIndicators.length) void this.applyIndicators()
+    // The gear on an indicator's legend row. openalgo-charts is canvas-only and
+    // ships no DOM, so it emits and the host renders the form.
+    this.chart.on('indicatorSettings', (p) => {
+      void this.emitIndicatorSettings((p as { instanceId: string }).instanceId)
+    })
+  }
+
+  /**
+   * Rehydrate drawings, indicators, magnet and grid from this pane's own
+   * storage slot. Anything malformed is dropped rather than thrown — a stale
+   * entry must never stop the terminal booting.
+   */
+  private restoreChartTools(): void {
+    try {
+      const raw = this.lsGet('draw')
+      const parsed = raw ? (JSON.parse(raw) as DrawingJson[]) : []
+      if (Array.isArray(parsed) && parsed.length) {
+        this.drawJson = parsed
+        this.drawEnabled = true
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const raw = this.lsGet('indicators')
+      const parsed = raw ? (JSON.parse(raw) as typeof this.activeIndicators) : []
+      if (Array.isArray(parsed)) this.activeIndicators = parsed
+    } catch {
+      /* ignore */
+    }
+    this.drawMagnet = this.lsGet('magnet') === '1'
+    const grid = this.lsGet('grid')
+    if (grid && grid.length === 2) {
+      this.gridV = grid[0] === '1'
+      this.gridH = grid[1] === '1'
+    }
+  }
+
+  /* ── drawing tools (additive: the trading controls above are untouched) ── */
+
+  /**
+   * Snapshot the drawings and drop the controller. Called before the chart is
+   * rebuilt and on destroy — the anchors are data, so they survive as JSON and
+   * come back on the next chart.
+   */
+  private detachDrawing(): void {
+    if (!this.draw) return
+    try {
+      this.drawJson = this.draw.toJSON()
+      this.draw.destroy()
+    } catch {
+      /* chart already gone; keep the last snapshot we have */
+    }
+    this.draw = null
+  }
+
+  /**
+   * Attach the drawing tier to the current chart, fetching it on first use so a
+   * pane that never draws never pays for the bundle.
+   */
+  private async attachDrawing(): Promise<void> {
+    if (this.draw || !this.chart) return
+    const { DrawingController } = await import('openalgo-charts/draw')
+    // The await is a real suspension point: the pane can be destroyed, or the
+    // chart rebuilt again, while the tier is in flight.
+    if (this.destroyed || !this.chart || this.draw) return
+    const draw = new DrawingController(this.chart, {
+      magnet: this.drawMagnet,
+      stayInDrawingMode: false,
+    })
+    this.draw = draw
+    if (this.drawJson.length) {
+      try {
+        draw.fromJSON(this.drawJson)
+      } catch {
+        this.drawJson = [] // a shape from an older build; better empty than broken
+      }
+    }
+    if (this.drawTool) draw.setTool(this.drawTool)
+    this.chart.on('draw:tool', () => this.afterDrawChange())
+    this.chart.on('draw:select', () => this.afterDrawChange())
+    this.chart.on('draw:add', () => this.afterDrawChange())
+    this.chart.on('draw:remove', () => this.afterDrawChange())
+    this.chart.on('draw:update', () => this.afterDrawChange())
+  }
+
+  private afterDrawChange(): void {
+    if (!this.draw) return
+    this.drawTool = this.draw.activeTool()
+    this.drawJson = this.draw.toJSON()
+    this.lsSet('draw', JSON.stringify(this.drawJson))
+    this.cb.onDrawChange?.(this.drawStats())
+    this.cb.onDrawSelect?.(this.drawSelection())
+  }
+
+  /** The selected drawing's editable style, or null when nothing is selected. */
+  drawSelection(): DrawSelection | null {
+    const id = this.draw?.selected()
+    if (!this.draw || !id) return null
+    const d = this.draw.get(id)
+    if (!d) return null
+    return {
+      id: d.id,
+      tool: d.tool,
+      color: d.style.color ?? '#4f8cff',
+      lineWidth: d.style.lineWidth ?? 1.5,
+      lineStyle: d.style.lineStyle ?? 'solid',
+      locked: d.locked === true,
+    }
+  }
+
+  /** Restyle the selected drawing (colour, width, dash, lock). */
+  styleSelectedDrawing(patch: {
+    color?: string
+    lineWidth?: number
+    lineStyle?: 'solid' | 'dashed' | 'dotted'
+    locked?: boolean
+  }): void {
+    const id = this.draw?.selected()
+    if (!this.draw || !id) return
+    const { locked, ...style } = patch
+    if (Object.keys(style).length > 0) this.draw.update(id, { style })
+    if (locked !== undefined) this.draw.update(id, { locked })
+    this.afterDrawChange()
+  }
+
+  /** Arm a drawing tool, or pass null to return to the cursor. */
+  async setDrawTool(id: string | null): Promise<void> {
+    this.drawEnabled = true
+    this.drawTool = id
+    await this.attachDrawing()
+    this.draw?.setTool(id)
+    this.cb.onDrawChange?.(this.drawStats())
+  }
+
+  /** Toolbar state: counts and what is currently possible. */
+  drawStats(): DrawStats {
+    const d = this.draw
+    return {
+      count: d ? d.drawings().length : this.drawJson.length,
+      canUndo: d ? d.canUndo() : false,
+      canRedo: d ? d.canRedo() : false,
+      hasSelection: d ? d.selected() !== null : false,
+      magnet: this.drawMagnet,
+      tool: this.drawTool,
+    }
+  }
+
+  undoDraw(): void {
+    this.draw?.undo()
+    this.afterDrawChange()
+  }
+
+  redoDraw(): void {
+    this.draw?.redo()
+    this.afterDrawChange()
+  }
+
+  /** Remove the selected drawing, or every drawing when `all` is set. */
+  removeDrawings(all: boolean): void {
+    if (!this.draw) return
+    if (all) this.draw.clear()
+    else {
+      const id = this.draw.selected()
+      if (id) this.draw.remove(id)
+    }
+    this.afterDrawChange()
+  }
+
+  /** Snap drawing anchors to the hovered bar's O/H/L/C. */
+  setMagnet(on: boolean): void {
+    this.drawMagnet = on
+    this.draw?.setOptions({ magnet: on })
+    this.lsSet('magnet', on ? '1' : '0')
+    this.cb.onDrawChange?.(this.drawStats())
+  }
+
+  /* ── indicators + grid (top-menu extras) ───────────────────────────────── */
+
+  /** The registered indicator catalogue, loading the tier on first use. */
+  async indicatorCatalog(): Promise<{ id: string; name: string; category: string }[]> {
+    await this.loadIndicators()
+    const { registeredIndicators } = await import('openalgo-charts')
+    return registeredIndicators().map((d) => ({
+      id: d.id,
+      name: d.name,
+      category: d.category ?? 'Other',
+    }))
+  }
+
+  private async loadIndicators(): Promise<void> {
+    if (this.indicatorsLoaded) return
+    await import('openalgo-charts/indicators')
+    this.indicatorsLoaded = true
+  }
+
+  /** Re-add the tracked indicators to a freshly built chart. */
+  private async applyIndicators(): Promise<void> {
+    await this.loadIndicators()
+    if (this.destroyed || !this.chart) return
+    for (const rec of this.activeIndicators) {
+      try {
+        this.chart.addIndicator(rec.indicatorId, rec.settings)
+      } catch {
+        /* an id that is no longer registered — skip rather than break the chart */
+      }
+    }
+    this.cb.onIndicatorsChange?.(this.listIndicators())
+  }
+
+  /** Gather a settings form for one live indicator and hand it to the host. */
+  private async emitIndicatorSettings(instanceId: string): Promise<void> {
+    if (!this.chart || !this.cb.onIndicatorSettings) return
+    const inst = this.chart.indicators().find((i) => i.id === instanceId)
+    if (!inst) return
+    const { registeredIndicators, indicatorStyleInputs } = await import('openalgo-charts')
+    const descriptor = registeredIndicators().find((d) => d.id === inst.indicatorId)
+    if (!descriptor) return
+    // Value inputs and generated style inputs stay separate so the form can tab
+    // them the way a charting package does; one component covers every
+    // indicator without a line of indicator-specific code.
+    const toField = (f: {
+      key: string
+      type: string
+      label?: string
+      group?: string
+    }): IndicatorField => ({
+      key: f.key,
+      type: f.type,
+      label: f.label ?? f.key,
+      group: (f as { group?: string }).group,
+      options: (f as { options?: { label: string; value: unknown }[] }).options,
+      min: (f as { min?: number }).min,
+      max: (f as { max?: number }).max,
+      step: (f as { step?: number }).step,
+    })
+    this.cb.onIndicatorSettings({
+      instanceId,
+      name: inst.name,
+      values: { ...inst.settings() },
+      inputs: descriptor.inputs.map(toField),
+      styleInputs: indicatorStyleInputs(descriptor).map(toField),
+    })
+  }
+
+  /** The descriptor's default settings, for the form's Defaults action. */
+  async indicatorDefaultsFor(instanceId: string): Promise<Record<string, unknown> | null> {
+    const inst = this.chart?.indicators().find((i) => i.id === instanceId)
+    if (!inst) return null
+    const { registeredIndicators, indicatorDefaults } = await import('openalgo-charts')
+    const d = registeredIndicators().find((x) => x.id === inst.indicatorId)
+    return d ? { ...indicatorDefaults(d) } : null
+  }
+
+  /** Apply a settings patch to a live indicator. */
+  updateIndicatorSettings(instanceId: string, patch: Record<string, unknown>): void {
+    const inst = this.chart?.indicators().find((i) => i.id === instanceId)
+    if (!inst) return
+    inst.setSettings(patch)
+    const rec = this.activeIndicators.find((r) => r.indicatorId === inst.indicatorId)
+    if (rec) rec.settings = { ...rec.settings, ...patch }
+    this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+  }
+
+  /** Open the settings form for an indicator from the host's own UI. */
+  openIndicatorSettings(instanceId: string): void {
+    void this.emitIndicatorSettings(instanceId)
+  }
+
+  async addIndicatorById(indicatorId: string): Promise<void> {
+    await this.loadIndicators()
+    if (!this.chart) return
+    try {
+      this.chart.addIndicator(indicatorId, {})
+      this.activeIndicators.push({ indicatorId, settings: {} })
+      this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+      this.cb.onIndicatorsChange?.(this.listIndicators())
+    } catch (e) {
+      this.toast(this.cleanError(e), 'err')
+    }
+  }
+
+  removeIndicatorById(instanceId: string): void {
+    if (!this.chart) return
+    const inst = this.chart.indicators().find((i) => i.id === instanceId)
+    this.chart.removeIndicator(instanceId)
+    if (inst) {
+      const at = this.activeIndicators.findIndex((r) => r.indicatorId === inst.indicatorId)
+      if (at >= 0) this.activeIndicators.splice(at, 1)
+    }
+    this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+    this.cb.onIndicatorsChange?.(this.listIndicators())
+  }
+
+  listIndicators(): { id: string; name: string }[] {
+    return this.chart ? this.chart.indicators().map((i) => ({ id: i.id, name: i.name })) : []
+  }
+
+  /** Grid visibility, independently per axis. */
+  setGrid(vertical: boolean, horizontal: boolean): void {
+    this.gridV = vertical
+    this.gridH = horizontal
+    this.chart?.setGridOptions({ vertLines: vertical, horzLines: horizontal })
+    this.lsSet('grid', `${vertical ? 1 : 0}${horizontal ? 1 : 0}`)
+  }
+
+  gridState(): { vertical: boolean; horizontal: boolean } {
+    return { vertical: this.gridV, horizontal: this.gridH }
   }
 
   /* ── WS-down fallback: poll quotes so LTP + the forming candle stay live ─ */
@@ -722,8 +1118,12 @@ export class TradingTerminal {
       const u = this.builder.onTick({ time: e.timeSec || nowSec(), price: e.ltp, ltq: e.ltq })
       if (u) {
         this.liveBucket = u.bar.time
-        if (u.isNew) this.rawBars.push(u.bar)
-        else this.rawBars[this.rawBars.length - 1] = u.bar
+        // Key the upsert on time rather than the builder's isNew flag, so a
+        // builder that ever disagrees with rawBars about the current bucket
+        // overwrites that bar instead of appending a duplicate of it.
+        const last = this.rawBars[this.rawBars.length - 1]
+        if (last && last.time === u.bar.time) this.rawBars[this.rawBars.length - 1] = u.bar
+        else this.rawBars.push(u.bar)
         this.setPriceData()
       }
     }
@@ -735,6 +1135,14 @@ export class TradingTerminal {
     if (!this.ws || !this.sym) return
     const sec = intervalSeconds(this.interval)
     this.builder = sec ? new CandleBuilder({ intervalSec: sec, volumeMode: 'ltq-sum' }) : null
+    // History normally ends *inside* the bar currently forming. An unseeded
+    // builder has no current bar, so its first tick opens a second one for that
+    // same bucket -- opening at whatever tick price arrives first instead of the
+    // bucket's true open, restarting volume at 0, and leaving rawBars with two
+    // entries for one time. Seeding hands it the last bar so ticks fold into it.
+    if (this.builder && this.rawBars.length) {
+      this.builder.seed(this.rawBars[this.rawBars.length - 1])
+    }
     this.depthActive = false
     if (this.offLtp) {
       this.offLtp()
@@ -1077,6 +1485,7 @@ export class TradingTerminal {
 
   destroy() {
     this.destroyed = true
+    this.detachDrawing()
     if (this.bookTimer) clearInterval(this.bookTimer)
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
     this.stopLtpFallback()
