@@ -699,17 +699,20 @@ export class TradingTerminal {
     // Mini brand mark, bottom-left. On pane 0 now that volume is an overlay
     // there rather than a pane of its own — pane 1 only exists once an
     // indicator asks for one, so anchoring to it would have been conditional.
-    this.chart.addPrimitive(
-      new LogoWatermark({
+    const watermark = new LogoWatermark({
         src: '/images/openalgo-mark.svg',
         position: 'bottom-left',
         height: 34,
         margin: 10,
         opacity: 0.85,
-        tint: light ? undefined : '#e4e8f4',
-      }),
-      0
-    )
+        // Mark alone at rest; the wording unrolls to its right on hover, so it
+        // names itself when looked at without occupying the corner always. The
+        // mark and text share one colour, so this sets both.
+        label: 'OpenAlgo Charts',
+        labelColor: light ? '#3c4354' : '#e4e8f4',
+        href: 'https://openalgo.in',
+    })
+    this.chart.addPrimitive(watermark, 0)
 
     // inline SELL · qty · BUY panel, docked top-left below the OHLC legend.
     if (!this.sym!.quoteOnly) {
@@ -758,6 +761,14 @@ export class TradingTerminal {
       }
     )
     this.chart.subscribeClick((id) => {
+      // The canvas cannot hold an anchor, so the mark reports the hit and the
+      // host navigates. noopener/noreferrer: the opened tab must not reach back
+      // into a page holding a broker session.
+      if (id === 'watermark') {
+        const href = watermark.href()
+        if (href) window.open(href, '_blank', 'noopener,noreferrer')
+        return
+      }
       if (id === 'trade:buy') return void this.placeFromMenu('BUY', 'MARKET')
       if (id === 'trade:sell') return void this.placeFromMenu('SELL', 'MARKET')
       if (id === 'position::close') return void this.exitPosition()
