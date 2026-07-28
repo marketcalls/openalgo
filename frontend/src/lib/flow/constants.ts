@@ -13,13 +13,18 @@ export const EXCHANGES = [
   { value: 'CDS', label: 'CDS' },
   { value: 'BCD', label: 'BCD' },
   { value: 'MCX', label: 'MCX' },
+  { value: 'NCO', label: 'NCO' },
   { value: 'NSE_INDEX', label: 'NSE_INDEX' },
   { value: 'BSE_INDEX', label: 'BSE_INDEX' },
+  { value: 'MCX_INDEX', label: 'MCX_INDEX' },
+  { value: 'GLOBAL_INDEX', label: 'GLOBAL_INDEX' },
 ] as const
 
 export const INDEX_EXCHANGES = [
   { value: 'NSE_INDEX', label: 'NSE_INDEX' },
   { value: 'BSE_INDEX', label: 'BSE_INDEX' },
+  { value: 'MCX_INDEX', label: 'MCX_INDEX' },
+  { value: 'GLOBAL_INDEX', label: 'GLOBAL_INDEX' },
 ] as const
 
 // =============================================================================
@@ -174,8 +179,16 @@ export const CONDITION_OPERATORS = [
 export const PRICE_ALERT_CONDITIONS = [
   { value: 'above', label: 'Price Above', description: 'Trigger when price goes above' },
   { value: 'below', label: 'Price Below', description: 'Trigger when price goes below' },
-  { value: 'crosses_above', label: 'Crosses Above', description: 'Trigger when price crosses above' },
-  { value: 'crosses_below', label: 'Crosses Below', description: 'Trigger when price crosses below' },
+  {
+    value: 'crosses_above',
+    label: 'Crosses Above',
+    description: 'Trigger when price crosses above',
+  },
+  {
+    value: 'crosses_below',
+    label: 'Crosses Below',
+    description: 'Trigger when price crosses below',
+  },
 ] as const
 
 export const POSITION_CONDITIONS = [

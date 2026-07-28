@@ -1,7 +1,6 @@
 import { ArrowLeft, BarChart3, Bell, MessageSquare, TrendingUp, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,14 +17,15 @@ import type {
   TelegramAnalytics as TelegramAnalyticsType,
   TelegramUser,
 } from '@/types/telegram'
+import { showToast } from '@/utils/toast'
 
 export default function TelegramAnalytics() {
   const [analytics, setAnalytics] = useState<TelegramAnalyticsType | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchAnalytics should not re-run on every render
   useEffect(() => {
     fetchAnalytics()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchAnalytics = async () => {
@@ -34,7 +34,7 @@ export default function TelegramAnalytics() {
         '/telegram/api/analytics'
       )
       setAnalytics(response.data.data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load analytics', 'telegram')
     } finally {
       setIsLoading(false)

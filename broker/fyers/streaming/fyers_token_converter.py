@@ -215,11 +215,11 @@ class FyersTokenConverter:
                             if hsm_token:
                                 hsm_tokens.append(hsm_token)
                                 token_mappings[hsm_token] = symbol
-                                # self.logger.info(f"✅ Converted: {symbol} -> {hsm_token} (fytoken: {fytoken})")
+                                # self.logger.info(f"Converted: {symbol} -> {hsm_token} (fytoken: {fytoken})")
                             else:
                                 invalid_symbols.append(symbol)
                                 self.logger.warning(
-                                    f"❌ Failed to convert: {symbol} with fytoken: {fytoken}"
+                                    f"Failed to convert: {symbol} with fytoken: {fytoken}"
                                 )
 
                         # Add API invalid symbols

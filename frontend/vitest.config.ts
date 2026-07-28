@@ -4,6 +4,12 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   plugins: [react()],
+  oxc: {
+    jsx: {
+      runtime: 'automatic',
+      importSource: 'react',
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

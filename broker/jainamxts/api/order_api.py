@@ -35,9 +35,9 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     url = f"{INTERACTIVE_URL}{endpoint}"
 
-    # logger.info(f"Request URL: {url}")
-    # logger.info(f"Headers: {headers}")
-    # logger.info(f'Payload: {json.dumps(payload, indent=2) if payload else "None"}')
+    # logger.debug(f"Request URL: {url}")
+    # logger.debug(f"Headers: {headers}")
+    # logger.debug(f'Payload: {json.dumps(payload, indent=2) if payload else "None"}')
 
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -48,7 +48,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    logger.info(f"API Response: {response.text}")
+    logger.debug(f"API Response: {response.text}")
     return response.json()
 
 
@@ -132,10 +132,10 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
     net_qty = "0"
 
-    logger.info(
+    logger.debug(
         f"Looking for position: symbol={tradingsymbol}, exchange={xts_exchange}, product={producttype}"
     )
-    logger.info(f"Positions data: {positions_data}")
+    logger.debug(f"Positions data: {positions_data}")
 
     # XTS returns {"type": "success", "result": {"positionList": [...]}}
     if positions_data and positions_data.get("type") == "success":
@@ -144,7 +144,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
             pos_symbol = position.get("TradingSymbol", "")
             pos_exchange = position.get("ExchangeSegment", "")
             pos_product = position.get("ProductType", "")
-            logger.info(
+            logger.debug(
                 f"Checking position: symbol={pos_symbol}, exchange={pos_exchange}, product={pos_product}"
             )
             if (
@@ -153,7 +153,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
                 and pos_product == producttype
             ):
                 net_qty = str(position.get("Quantity", 0))
-                logger.info(f"Found matching position. Net Quantity: {net_qty}")
+                logger.debug(f"Found matching position. Net Quantity: {net_qty}")
                 break
 
     return net_qty
@@ -226,8 +226,8 @@ def place_smartorder_api(data, auth):
             get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
         )
 
-        logger.info(f"position_size : {position_size}")
-        logger.info(f"Open Position : {current_position}")
+        logger.debug(f"position_size : {position_size}")
+        logger.debug(f"Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -237,12 +237,12 @@ def place_smartorder_api(data, auth):
         if position_size == 0 and current_position == 0 and int(data["quantity"]) != 0:
             action = data["action"]
             quantity = data["quantity"]
-            # logger.info(f"action : {action}")
-            # logger.info(f"Quantity : {quantity}")
+            # logger.debug(f"action : {action}")
+            # logger.debug(f"Quantity : {quantity}")
             res, response, orderid = place_order_api(data, AUTH_TOKEN)
             _invalidate_position_cache(AUTH_TOKEN)
-            # logger.info(f"{res}")
-            # logger.info(f"{response}")
+            # logger.debug(f"{res}")
+            # logger.debug(f"{response}")
 
             return res, response, orderid
 
@@ -273,11 +273,11 @@ def place_smartorder_api(data, auth):
             if position_size > current_position:
                 action = "BUY"
                 quantity = position_size - current_position
-                # logger.info(f"smart buy quantity : {quantity}")
+                # logger.debug(f"smart buy quantity : {quantity}")
             elif position_size < current_position:
                 action = "SELL"
                 quantity = current_position - position_size
-                # logger.info(f"smart sell quantity : {quantity}")
+                # logger.debug(f"smart sell quantity : {quantity}")
 
         if action:
             # Prepare data for placing the order
@@ -285,14 +285,14 @@ def place_smartorder_api(data, auth):
             order_data["action"] = action
             order_data["quantity"] = str(quantity)
 
-            # logger.info(f"{order_data}")
+            # logger.debug(f"{order_data}")
             # Place the order
             res, response, orderid = place_order_api(order_data, auth)
             _invalidate_position_cache(AUTH_TOKEN)
-            # logger.info(f"{res}")
+            # logger.debug(f"{res}")
             logger.debug(f"Placing order with payload: {order_data}")
             logger.debug(f"API Response: {response}")
-            logger.info(f"Order ID: {orderid}")
+            logger.debug(f"Order ID: {orderid}")
 
             return res, response, orderid
 
@@ -302,7 +302,7 @@ def close_all_positions(current_api_key, auth):
     AUTH_TOKEN = auth
 
     positions_response = get_positions(AUTH_TOKEN)
-    logger.info(f"Open_positions : {positions_response}")
+    logger.debug(f"Open_positions : {positions_response}")
 
     positions_list = positions_response.get("result", {}).get("positionList", [])
     if not positions_list:
@@ -321,8 +321,8 @@ def close_all_positions(current_api_key, auth):
         exchange_segment = position["ExchangeSegment"]
         instrument_id = position["ExchangeInstrumentId"]
 
-        logger.info(f"Exchange Segment: {exchange_segment}")
-        logger.info(f"Exchange Instrument ID: {instrument_id}")
+        logger.debug(f"Exchange Segment: {exchange_segment}")
+        logger.debug(f"Exchange Instrument ID: {instrument_id}")
 
         # Prepare the order payload
         place_order_payload = {
@@ -342,9 +342,9 @@ def close_all_positions(current_api_key, auth):
         # Place the order to close the position
         res, response, orderid = place_order_api(place_order_payload, auth)
 
-        # logger.info(f"{res}")
-        # logger.info(f"{response}")
-        # logger.info(f"{orderid}")
+        # logger.debug(f"{res}")
+        # logger.debug(f"{response}")
+        # logger.debug(f"{orderid}")
 
         # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -357,7 +357,7 @@ def cancel_order(orderid, auth):
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    # logger.info(f"{orderid}")
+    # logger.debug(f"{orderid}")
     # Set up the request headers
     headers = {
         "authorization": AUTH_TOKEN,
@@ -411,7 +411,7 @@ def modify_order(data, auth):
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    logger.info(f"Response of modify order :{response.status}")
+    logger.debug(f"Response of modify order :{response.status}")
     data = json.loads(response.text)
 
     if data.get("status") == "true" or data.get("message") == "SUCCESS":
@@ -436,11 +436,11 @@ def cancel_all_orders_api(data, auth):
     orders = order_book_response.get("result", [])
 
     # Filter orders that are in 'open' or 'trigger_pending' state
-    # logger.info(f"Orders: {orders}")
+    # logger.debug(f"Orders: {orders}")
     orders_to_cancel = [
         order for order in orders if order["OrderStatus"] in ["New", "Trigger Pending"]
     ]
-    logger.info(f"Orders to cancel: {orders_to_cancel}")
+    logger.debug(f"Orders to cancel: {orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 
@@ -449,7 +449,7 @@ def cancel_all_orders_api(data, auth):
         orderid = order["AppOrderID"]
         cancel_response, status_code = cancel_order(orderid, auth)
         if status_code == 200:
-            logger.info(f"Order {orderid} canceled successfully")
+            logger.debug(f"Order {orderid} canceled successfully")
             canceled_orders.append(orderid)
         else:
             logger.error(f"Failed to cancel order {orderid}")

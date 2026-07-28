@@ -72,11 +72,11 @@ OpenAlgo provides a secure multi-step password reset flow that supports both ema
 │  │  Confirm Password: [••••••••••••••••                 ]               │   │
 │  │                                                                      │   │
 │  │  Requirements:                                                       │   │
-│  │  ✓ At least 8 characters                                            │   │
-│  │  ✓ Contains uppercase letter                                        │   │
-│  │  ✓ Contains lowercase letter                                        │   │
-│  │  ✓ Contains number                                                  │   │
-│  │  ✓ Contains special character                                       │   │
+│  │ At least 8 characters                                            │   │
+│  │ Contains uppercase letter                                        │   │
+│  │ Contains lowercase letter                                        │   │
+│  │ Contains number                                                  │   │
+│  │ Contains special character                                       │   │
 │  │                                                                      │   │
 │  │  [Reset Password]                                                    │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -551,7 +551,6 @@ function ResetPasswordForm({ token }: { token: string }) {
 | `database/user_db.py` | User model with password hash |
 | `utils/email_utils.py` | Password reset email sending |
 | `database/settings_db.py` | SMTP settings for email |
-| `frontend/src/pages/ForgotPassword.tsx` | Request form |
-| `frontend/src/pages/ResetPassword.tsx` | Reset form |
+| `frontend/src/pages/ResetPassword.tsx` | Request, TOTP, email-link, and password steps |
 
 > **Note**: Password reset logic is implemented directly in `blueprints/auth.py`. There are no separate `password_reset_db.py` or `password_reset_service.py` files. Reset tokens are stored in the session rather than a dedicated database table.

@@ -109,6 +109,15 @@ detect_uv() {
 }
 
 # Find server deployments installed via install.sh
+#
+# Two layouts are supported:
+#   1. Simple (current install.sh)   /var/python/openalgo, service "openalgo"
+#   2. Legacy multi-deploy           /var/python/openalgo-flask/<deploy>/openalgo,
+#                                    service "openalgo-<deploy>" (still produced
+#                                    by install/install-multi.sh)
+# We try the simple layout first because it's unambiguous; only fall back
+# to scanning the legacy parent dir when the simple path is absent.
+SIMPLE_PATH="/var/python/openalgo"
 DEPLOY_BASE="/var/python/openalgo-flask"
 SERVER_MODE=false
 STASHED=false
@@ -126,12 +135,23 @@ find_deployments() {
     echo "${deployments[@]}"
 }
 
-# Check for server deployments
-DEPLOYMENTS=($(find_deployments))
-
-if [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
+if [ -d "$SIMPLE_PATH/.git" ] && [ -f "$SIMPLE_PATH/.env" ]; then
     SERVER_MODE=true
-    log_message "Found ${#DEPLOYMENTS[@]} server deployment(s):" "$GREEN"
+    SELECTED_DEPLOY="openalgo"
+    BASE_PATH="$SIMPLE_PATH"
+    OPENALGO_PATH="$SIMPLE_PATH"
+    VENV_PATH="$SIMPLE_PATH/.venv"
+    SERVICE_NAME="openalgo"
+
+    log_message "Found OpenAlgo install at $SIMPLE_PATH" "$GREEN"
+    log_message "Service: $SERVICE_NAME" "$BLUE"
+else
+    DEPLOYMENTS=($(find_deployments))
+fi
+
+if [ "$SERVER_MODE" = false ] && [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
+    SERVER_MODE=true
+    log_message "Found ${#DEPLOYMENTS[@]} legacy server deployment(s):" "$GREEN"
 
     for i in "${!DEPLOYMENTS[@]}"; do
         log_message "  $((i+1)). ${DEPLOYMENTS[$i]}" "$BLUE"
@@ -153,7 +173,7 @@ if [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
         done
     fi
 
-    # Derive paths from deployment name
+    # Derive paths from deployment name (legacy multi-deploy layout)
     BASE_PATH="$DEPLOY_BASE/$SELECTED_DEPLOY"
     OPENALGO_PATH="$BASE_PATH/openalgo"
     VENV_PATH="$BASE_PATH/venv"
@@ -162,7 +182,9 @@ if [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
     log_message "\nUpdating deployment: $SELECTED_DEPLOY" "$BLUE"
     log_message "Path: $OPENALGO_PATH" "$BLUE"
     log_message "Service: $SERVICE_NAME" "$BLUE"
-else
+fi
+
+if [ "$SERVER_MODE" = false ]; then
     # Check if we're in or near an openalgo git repo (local development)
     if [ -d ".git" ] && [ -f "app.py" ]; then
         OPENALGO_PATH="$(pwd)"
@@ -338,7 +360,76 @@ elif [ ! -f "$OPENALGO_PATH/.env" ]; then
     else
         cp "$OPENALGO_PATH/.sample.env" "$OPENALGO_PATH/.env"
     fi
+
+    # Generate fresh APP_KEY and API_KEY_PEPPER and substitute the placeholders.
+    # Without this, the new .env would carry the public sample placeholder values
+    # — the app's startup check would then auto-rotate them, which works, but
+    # generating here keeps update.sh symmetric with install.sh and avoids the
+    # noisy "first-run setup" message after what the user thinks is just an update.
+    NEW_APP_KEY=$($PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))")
+    NEW_PEPPER=$($PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))")
+    if [ "$SERVER_MODE" = true ]; then
+        sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$NEW_APP_KEY|g" "$OPENALGO_PATH/.env"
+        sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$NEW_PEPPER|g" "$OPENALGO_PATH/.env"
+        sudo chmod 600 "$OPENALGO_PATH/.env"
+    else
+        sed -i.bak "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$NEW_APP_KEY|g" "$OPENALGO_PATH/.env" && rm -f "$OPENALGO_PATH/.env.bak"
+        sed -i.bak "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$NEW_PEPPER|g" "$OPENALGO_PATH/.env" && rm -f "$OPENALGO_PATH/.env.bak"
+        chmod 600 "$OPENALGO_PATH/.env"
+    fi
+    log_message "Generated fresh APP_KEY and API_KEY_PEPPER in $OPENALGO_PATH/.env" "$GREEN"
     log_message "Please edit $OPENALGO_PATH/.env with your broker credentials and settings." "$RED"
+fi
+
+# ============================================
+# Step 4b: Existing-install hardening
+# ============================================
+# Two one-time fixups for deployments that predate the v2.0.0.6 security
+# release: they may carry world-readable .env perms (the old install.sh did
+# `chmod -R 755`) and they don't have TRUST_PROXY_HEADERS set so the
+# default-secure value of FALSE would silently disable IP-based features
+# behind their nginx proxy.
+if [ -f "$OPENALGO_PATH/.env" ]; then
+    # Tighten .env to mode 0o600 if it isn't already (server mode only —
+    # the file is owned by the web user and gunicorn runs as that user, so
+    # owner-only read is correct).
+    if [ "$SERVER_MODE" = true ]; then
+        ENV_PERMS=$(stat -c '%a' "$OPENALGO_PATH/.env" 2>/dev/null || stat -f '%Lp' "$OPENALGO_PATH/.env" 2>/dev/null)
+        if [ "$ENV_PERMS" != "600" ]; then
+            sudo chmod 600 "$OPENALGO_PATH/.env"
+            log_message "Tightened .env perms: $ENV_PERMS -> 600 (owner-only)" "$GREEN"
+        fi
+    fi
+
+    # Add TRUST_PROXY_HEADERS to .env if missing. Auto-detect whether nginx
+    # is configured for this deployment so the default matches reality.
+    if ! grep -q "^TRUST_PROXY_HEADERS" "$OPENALGO_PATH/.env"; then
+        # Detect nginx in front of openalgo: any sites-enabled/ or conf.d/
+        # config that mentions a unix-socket proxy_pass or the deployment name.
+        BEHIND_NGINX="false"
+        if [ -d /etc/nginx/sites-enabled ]; then
+            if find /etc/nginx/sites-enabled -type f -o -type l 2>/dev/null | xargs grep -l "unix:.*\.sock\|openalgo\|gunicorn" 2>/dev/null | head -1 | grep -q .; then
+                BEHIND_NGINX="true"
+            fi
+        fi
+        if [ "$BEHIND_NGINX" = "false" ] && [ -d /etc/nginx/conf.d ]; then
+            if find /etc/nginx/conf.d -type f -name "*.conf" 2>/dev/null | xargs grep -l "unix:.*\.sock\|openalgo\|gunicorn" 2>/dev/null | head -1 | grep -q .; then
+                BEHIND_NGINX="true"
+            fi
+        fi
+        if [ "$BEHIND_NGINX" = "true" ]; then
+            echo "" | sudo tee -a "$OPENALGO_PATH/.env" >/dev/null
+            echo "# Auto-added by update.sh — nginx reverse proxy detected." | sudo tee -a "$OPENALGO_PATH/.env" >/dev/null
+            echo "TRUST_PROXY_HEADERS = 'TRUE'" | sudo tee -a "$OPENALGO_PATH/.env" >/dev/null
+            log_message "Added TRUST_PROXY_HEADERS=TRUE to .env (nginx reverse proxy detected)" "$GREEN"
+        else
+            echo "" | sudo tee -a "$OPENALGO_PATH/.env" >/dev/null
+            echo "# Auto-added by update.sh — set to TRUE only if behind a reverse proxy" | sudo tee -a "$OPENALGO_PATH/.env" >/dev/null
+            echo "# that strips client-supplied X-Forwarded-For / CF-Connecting-IP / X-Real-IP." | sudo tee -a "$OPENALGO_PATH/.env" >/dev/null
+            echo "TRUST_PROXY_HEADERS = 'FALSE'" | sudo tee -a "$OPENALGO_PATH/.env" >/dev/null
+            log_message "Added TRUST_PROXY_HEADERS=FALSE to .env (no proxy detected)" "$YELLOW"
+        fi
+    fi
 fi
 
 # ============================================
@@ -451,15 +542,15 @@ else
         if command -v npm >/dev/null 2>&1; then
             log_message "Building React frontend (dist/ not found)..." "$BLUE"
             cd "$OPENALGO_PATH/frontend"
-            npm install && npm run build
+            npm ci && npm run build
             if [ $? -eq 0 ]; then
                 log_message "Frontend built successfully" "$GREEN"
             else
-                log_message "Frontend build failed. Run manually: cd frontend && npm install && npm run build" "$YELLOW"
+                log_message "Frontend build failed. Run manually: cd frontend && npm ci && npm run build" "$YELLOW"
             fi
         else
             log_message "Warning: frontend/dist/ not found and Node.js is not installed." "$YELLOW"
-            log_message "Install Node.js and run: cd frontend && npm install && npm run build" "$YELLOW"
+            log_message "Install Node.js 20.20+, 22.22+, or 24.13+ and run: cd frontend && npm ci && npm run build" "$YELLOW"
         fi
     fi
 
@@ -494,7 +585,7 @@ if [ "$SERVER_MODE" = true ]; then
 else
     log_message "\nNext Steps:" "$YELLOW"
     log_message "  Start application: uv run app.py" "$BLUE"
-    log_message "  API documentation: http://127.0.0.1:5000/api/docs" "$BLUE"
+    log_message "  API documentation: https://docs.openalgo.in/api-documentation/v1" "$BLUE"
 fi
 
 if [ -n "$NEW_VARS" ]; then

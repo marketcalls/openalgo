@@ -20,7 +20,7 @@ class ZebuWebSocket:
     # Connection constants
     # Try different URL patterns based on other Noren brokers:
     # - Shoonya: wss://api.shoonya.com/NorenWSTP/
-    # - Flattrade: wss://piconnect.flattrade.in/PiConnectWSTp/
+    # - Flattrade: wss://piconnect.flattrade.in/PiConnectWSAPI/
     # - AliceBlue: wss://ws1.aliceblueonline.com/NorenWS/
     # - DefinEdge: wss://trade.definedgesecurities.com/NorenWSTRTP/
     WS_URL = "wss://go.mynt.in/NorenWSAPI/"  # Zebu OAuth WebSocket endpoint

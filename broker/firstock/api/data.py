@@ -13,6 +13,19 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def map_firstock_exchange(exchange: str) -> str:
+    """Map OpenAlgo index exchanges to the exchange code Firstock expects.
+
+    Firstock has no separate index exchange segment: NSE indices (e.g. NIFTY)
+    are quoted under "NSE" and BSE indices (e.g. SENSEX) under "BSE".
+    """
+    if exchange == "NSE_INDEX":
+        return "NSE"
+    if exchange == "BSE_INDEX":
+        return "BSE"
+    return exchange
+
+
 def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout=None):
     """
     Common function to make API calls to Firstock using shared httpx client with connection pooling
@@ -31,7 +44,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
             data["userId"] = api_key
 
         # Debug print
-        logger.info(f"Endpoint: {endpoint}")
+        logger.debug(f"Endpoint: {endpoint}")
         logger.debug(f"Payload: {json.dumps(data, indent=2)}")
 
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -169,8 +182,8 @@ class BrokerData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             payload = {
                 "userId": os.getenv("BROKER_API_KEY")[:-4],
@@ -283,12 +296,8 @@ class BrokerData:
                 )
                 continue
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = (
-                "NSE"
-                if exchange == "NSE_INDEX"
-                else ("BSE" if exchange == "BSE_INDEX" else exchange)
-            )
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             data_array.append({"exchange": firstock_exchange, "tradingSymbol": br_symbol})
 
@@ -350,8 +359,8 @@ class BrokerData:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             payload = {
                 "userId": os.getenv("BROKER_API_KEY")[:-4],
@@ -497,7 +506,7 @@ class BrokerData:
                 chunk_end_str = chunk_end.strftime("%Y-%m-%d")
                 chunk_count += 1
 
-                print(f"📊 Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}")
+                logger.info(f"Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}")
 
                 try:
                     # Fetch data for this chunk
@@ -507,23 +516,20 @@ class BrokerData:
 
                     if not chunk_data.empty:
                         all_data.append(chunk_data)
-                        print(f"✅ Chunk {chunk_count}: Retrieved {len(chunk_data)} candles")
+                        logger.info(f"Chunk {chunk_count}: Retrieved {len(chunk_data)} candles")
                     else:
-                        print(f"⚠️  Chunk {chunk_count}: No data returned")
+                        logger.warning(f"Chunk {chunk_count}: No data returned")
 
                 except Exception as e:
                     failed_chunks += 1
-                    print(
-                        f"❌ Error fetching chunk {chunk_count} ({chunk_start_str} to {chunk_end_str}): {e}"
-                    )
                     logger.error(
                         f"Error fetching chunk {chunk_count} ({chunk_start_str} to {chunk_end_str}): {e}"
                     )
 
                     # If too many chunks fail, suggest smaller chunk size
                     if failed_chunks >= 3:
-                        print(
-                            f"⚠️  Multiple chunks failing. Consider using smaller chunk size (current: {max_days} days)"
+                        logger.warning(
+                            f"Multiple chunks failing. Consider using smaller chunk size (current: {max_days} days)"
                         )
 
                     # Continue with next chunk instead of failing completely
@@ -537,13 +543,13 @@ class BrokerData:
 
             # Combine all chunks
             if not all_data:
-                print("❌ No data retrieved from any chunks")
+                logger.warning("No data retrieved from any chunks")
                 if failed_chunks > 0:
-                    print(f"All {failed_chunks} chunks failed. This might be due to:")
-                    print("1. Network connectivity issues")
-                    print("2. API rate limiting")
-                    print("3. Invalid symbol or date range")
-                    print("4. Firstock API service issues")
+                    logger.warning(
+                        f"All {failed_chunks} chunks failed. This might be due to: "
+                        "network connectivity issues, API rate limiting, invalid symbol or "
+                        "date range, or Firstock API service issues"
+                    )
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
             # Concatenate all DataFrames
@@ -558,20 +564,20 @@ class BrokerData:
             success_rate = (
                 ((chunk_count - failed_chunks) / chunk_count) * 100 if chunk_count > 0 else 0
             )
-            print(
-                f"🎉 Chunked loading complete: Retrieved {len(combined_df)} total candles from {chunk_count} chunks"
+            logger.info(
+                f"Chunked loading complete: Retrieved {len(combined_df)} total candles from {chunk_count} chunks"
             )
-            print(
-                f"📈 Success rate: {success_rate:.1f}% ({chunk_count - failed_chunks}/{chunk_count} chunks successful)"
+            logger.info(
+                f"Success rate: {success_rate:.1f}% ({chunk_count - failed_chunks}/{chunk_count} chunks successful)"
             )
 
             if failed_chunks > 0:
-                print(f"⚠️  {failed_chunks} chunks failed - data may be incomplete")
+                logger.warning(f"{failed_chunks} chunks failed - data may be incomplete")
 
             if len(combined_df) > 0:
                 start_time = datetime.fromtimestamp(combined_df["timestamp"].min())
                 end_time = datetime.fromtimestamp(combined_df["timestamp"].max())
-                print(f"📅 Final data range: {start_time} to {end_time}")
+                logger.info(f"Final data range: {start_time} to {end_time}")
 
             return combined_df
 
@@ -628,7 +634,7 @@ class BrokerData:
 
             while current_date <= end_dt:
                 date_str = current_date.strftime("%d-%m-%Y")  # Firstock uses DD-MM-YYYY format
-                logger.info(f"Processing date: {date_str}")
+                logger.debug(f"Processing date: {date_str}")
 
                 # Define trading session chunks using full day to avoid hardcoded timings
                 time_chunks = [
@@ -639,7 +645,7 @@ class BrokerData:
                     try:
                         # Prepare request for this chunk
                         br_symbol = get_br_symbol(symbol, exchange)
-                        firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+                        firstock_exchange = map_firstock_exchange(exchange)
 
                         payload = {
                             "userId": os.getenv("BROKER_API_KEY")[:-4],
@@ -651,7 +657,7 @@ class BrokerData:
                             "interval": "1mi",  # 1-minute interval
                         }
 
-                        logger.info(f"Fetching chunk: {start_time} to {end_time} on {date_str}")
+                        logger.debug(f"Fetching chunk: {start_time} to {end_time} on {date_str}")
 
                         # Make request with long timeout to prevent ReadTimeout errors
                         response = get_api_response(
@@ -689,7 +695,7 @@ class BrokerData:
 
                             if chunk_data:
                                 all_data.extend(chunk_data)
-                                logger.info(f"Retrieved {len(chunk_data)} candles for chunk")
+                                logger.debug(f"Retrieved {len(chunk_data)} candles for chunk")
                         else:
                             logger.warning(
                                 f"Failed to get data for chunk: {response.get('message', 'Unknown error')}"
@@ -825,8 +831,8 @@ class BrokerData:
                 chunk_end_str = current_end.strftime("%Y-%m-%d")
                 chunk_count += 1
 
-                logger.info(
-                    f"📊 Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}"
+                logger.debug(
+                    f"Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}"
                 )
 
                 try:
@@ -838,12 +844,12 @@ class BrokerData:
                     if not chunk_df.empty:
                         dfs.append(chunk_df)
                         successful_chunks += 1
-                        logger.info(f"✅ Chunk {chunk_count} successful: {len(chunk_df)} records")
+                        logger.debug(f"Chunk {chunk_count} successful: {len(chunk_df)} records")
                     else:
-                        logger.warning(f"⚠️ Chunk {chunk_count} returned no data")
+                        logger.warning(f"Chunk {chunk_count} returned no data")
 
                 except Exception as chunk_error:
-                    logger.error(f"❌ Chunk {chunk_count} failed: {str(chunk_error)}")
+                    logger.error(f"Chunk {chunk_count} failed: {str(chunk_error)}")
 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
@@ -870,9 +876,9 @@ class BrokerData:
             )
 
             success_rate = (successful_chunks / chunk_count) * 100 if chunk_count > 0 else 0
-            logger.info(f"🎯 Chunked loading complete: {len(combined_df)} total records")
+            logger.info(f"Chunked loading complete: {len(combined_df)} total records")
             logger.info(
-                f"📈 Success rate: {success_rate:.1f}% ({successful_chunks}/{chunk_count} chunks successful)"
+                f"Success rate: {success_rate:.1f}% ({successful_chunks}/{chunk_count} chunks successful)"
             )
 
             return combined_df
@@ -973,8 +979,8 @@ class BrokerData:
 
             logger.info(f"Getting {interval} data for {br_symbol} from {start_str} to {end_str}")
 
-            # Map exchange to Firstock format (NSE_INDEX -> NSE)
-            firstock_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
+            # Map exchange to Firstock format (NSE_INDEX -> NSE, BSE_INDEX -> BSE)
+            firstock_exchange = map_firstock_exchange(exchange)
 
             # Prepare payload according to new API format
             payload = {
@@ -1026,7 +1032,7 @@ class BrokerData:
                     # Debug logging for daily data timestamps
                     if interval == "D":
                         debug_dt = datetime.fromtimestamp(timestamp)
-                        logger.info(f"DEBUG: Daily candle timestamp: {timestamp} -> {debug_dt}")
+                        logger.debug(f"Daily candle timestamp: {timestamp} -> {debug_dt}")
 
                     # Extract OHLCV data according to new API format
                     data.append(

@@ -33,7 +33,7 @@ Host your **Python strategies directly inside OpenAlgo**, alongside strategies f
 
 ### Sandbox Testing & API Analyzer
 
-The **Analyzer Mode** works like a local sandbox—test your signals, APIs, and strategies with ₹1 Crore sandbox capital without hitting real broker servers. Validate everything before going live.
+The **Analyzer Mode** works like a local sandbox—test signals, APIs, and strategies with ₹1 Crore default sandbox capital without sending simulated orders to the broker. Market prices can still come from broker data services.
 
 | Feature | Benefit |
 |---------|---------|
@@ -41,7 +41,7 @@ The **Analyzer Mode** works like a local sandbox—test your signals, APIs, and 
 | **Real Market Prices** | Realistic simulation with live data |
 | **Margin Calculations** | Actual margin requirements enforced |
 | **Position Tracking** | Full position and holdings management |
-| **Zero Risk** | Complete isolation from live trading |
+| **Execution Isolation** | Sandbox orders stay in the separate sandbox store |
 
 ### Historical Data & Backtesting
 
@@ -52,11 +52,11 @@ The **Analyzer Mode** works like a local sandbox—test your signals, APIs, and 
 | **Bulk Downloads** | Download years of OHLCV data |
 | **DuckDB Storage** | Efficient columnar storage |
 | **Multiple Timeframes** | 1-minute to daily data |
-| **Export Options** | CSV, JSON, or direct query |
+| **Export Options** | CSV, TXT, ZIP, or Parquet |
 
 ### Multi-Broker, Multi-Platform
 
-OpenAlgo supports **29 Indian brokers** via a **unified API and WebSocket layer**. Write your strategy once, and run it across Zerodha, Angel One, Dhan, Upstox, Fyers, Flattrade, Firstock, and more—without rewriting code.
+OpenAlgo ships **34 broker plugins**: 33 securities integrations and Delta Exchange for crypto derivatives. The securities plugins share a unified API and normalized WebSocket layer, reducing broker-specific strategy code.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -67,7 +67,7 @@ OpenAlgo supports **29 Indian brokers** via a **unified API and WebSocket layer*
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   OpenAlgo Unified API                          │
-│              (Common Interface for All Brokers)                 │
+│          (Common Interface Across Broker Plugins)               │
 └───┬─────────┬─────────┬─────────┬─────────┬─────────┬──────────┘
     │         │         │         │         │         │
     ▼         ▼         ▼         ▼         ▼         ▼
@@ -86,7 +86,7 @@ With OpenAlgo's **Common Symbol Format**, you don't have to worry about broker-s
 | Angel | `SBIN-EQ` | `SBIN` |
 | Dhan | `SBIN` | `SBIN` |
 
-**One symbol format. All brokers.**
+**One OpenAlgo symbol format, subject to each plugin's exchange coverage.**
 
 ---
 
@@ -96,7 +96,7 @@ With OpenAlgo's **Common Symbol Format**, you don't have to worry about broker-s
 
 | Feature | Impact |
 |---------|--------|
-| **HTTPX Connection Pooling** | 50ms–120ms latency vs 150ms–250ms in plain scripts |
+| **HTTPX Connection Pooling** | Reuses outbound connections to reduce setup overhead |
 | **WebSocket Broadcast Layer** | One broker stream powers multiple strategies |
 | **Symbol Caching** | Instant symbol lookups without repeated API calls |
 | **Rate Limit Management** | Automatic throttling to stay within broker limits |
@@ -106,7 +106,7 @@ With OpenAlgo's **Common Symbol Format**, you don't have to worry about broker-s
 | Tool | Purpose |
 |------|---------|
 | **Latency Monitor** | Track order round-trip times |
-| **Traffic Logs** | Complete API request/response history |
+| **Traffic Logs** | Request metadata, status, and duration history |
 | **P&L Tracker** | Real-time profit/loss visualization |
 | **WebSocket Dashboard** | Monitor live data connections |
 
@@ -184,7 +184,7 @@ With direct broker APIs, you'd have to build:
 | **Trade Dashboard** | React UI, real-time updates | Full React frontend included |
 | **Log Storage** | Database, query interface | SQLite with traffic logs |
 | **Latency Tracking** | Timing, metrics, alerts | Latency monitor built-in |
-| **Multi-Broker Support** | N broker integrations | 29 brokers pre-integrated |
+| **Multi-Broker Support** | N broker integrations | 34 plugins in the repository |
 | **Security Layer** | Auth, rate limiting, CSRF | Enterprise security included |
 | **Notifications** | Telegram, alerts | Telegram bot integrated |
 

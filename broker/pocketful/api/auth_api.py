@@ -81,7 +81,7 @@ def authenticate_broker(auth_code=None, state=None):
                 error_message = error_detail.get(
                     "message", "Authentication failed. Please check your authorization code."
                 )
-            except:
+            except Exception:
                 error_message = f"Authentication failed with status code: {response.status_code}"
 
             return None, None, None, f"API error: {error_message}"

@@ -12,6 +12,14 @@
  */
 
 import {
+  ColorType,
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+  LineSeries,
+  type UTCTimestamp,
+} from 'lightweight-charts'
+import {
   Activity,
   AlertCircle,
   CheckCircle,
@@ -27,15 +35,14 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { showToast } from '@/utils/toast'
 import {
   acknowledgeAlert,
+  type CurrentMetrics,
   exportMetricsCSV,
   getActiveAlerts,
   getCurrentMetrics,
   getHealthStats,
   getMetricsHistory,
-  type CurrentMetrics,
   type HealthAlert,
   type HealthStats,
   type HistoricalMetric,
@@ -53,14 +60,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
-import {
-  ColorType,
-  createChart,
-  LineSeries,
-  type IChartApi,
-  type ISeriesApi,
-  type UTCTimestamp,
-} from 'lightweight-charts'
+import { showToast } from '@/utils/toast'
 
 const AUTO_REFRESH_INTERVAL = 10000 // 10 seconds
 const HISTORY_HOURS = 24
@@ -186,7 +186,7 @@ export default function HealthMonitor() {
       if (displayToast) {
         showToast.success('Metrics refreshed', 'monitoring')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to fetch health metrics', 'monitoring')
     } finally {
       setLoading(false)
@@ -195,11 +195,13 @@ export default function HealthMonitor() {
   }
 
   // Initial load
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchData is recreated every render but only calls module-level APIs and setters, so adding it would refire on every render.
   useEffect(() => {
     fetchData()
   }, [])
 
   // Auto-refresh
+  // biome-ignore lint/correctness/useExhaustiveDependencies: interval should be recreated only when autoRefresh/tabVisible change; fetchData is recreated every render but reads no reactive closure state, so adding it would needlessly tear down and rebuild the interval on every render.
   useEffect(() => {
     if (!autoRefresh || !tabVisible) return
 
@@ -229,8 +231,8 @@ export default function HealthMonitor() {
     // Dark mode: lighter text, subtle grid
     // Light mode: darker text, subtle grid
     const dark = isDarkMode()
-    const textColor = dark ? '#9ca3af' : '#6b7280'  // gray-400 / gray-500
-    const gridColor = dark ? '#374151' : '#e5e7eb'  // gray-700 / gray-200
+    const textColor = dark ? '#9ca3af' : '#6b7280' // gray-400 / gray-500
+    const gridColor = dark ? '#374151' : '#e5e7eb' // gray-700 / gray-200
     const borderColor = dark ? '#4b5563' : '#d1d5db' // gray-600 / gray-300
 
     // IST offset in milliseconds (5 hours 30 minutes)
@@ -250,7 +252,20 @@ export default function HealthMonitor() {
       const date = new Date(time * 1000)
       const istDate = new Date(date.getTime() + IST_OFFSET_MS)
       const day = istDate.getUTCDate().toString().padStart(2, '0')
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+      const months = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ]
       const month = months[istDate.getUTCMonth()]
       const year = istDate.getUTCFullYear().toString().slice(-2)
       const hours = istDate.getUTCHours().toString().padStart(2, '0')
@@ -340,9 +355,7 @@ export default function HealthMonitor() {
       }))
 
       const downsampleFactor =
-        rawData.length > MAX_CHART_POINTS
-          ? Math.ceil(rawData.length / MAX_CHART_POINTS)
-          : 1
+        rawData.length > MAX_CHART_POINTS ? Math.ceil(rawData.length / MAX_CHART_POINTS) : 1
 
       const fdData = []
       const memoryData = []
@@ -393,7 +406,7 @@ export default function HealthMonitor() {
       await acknowledgeAlert(alertId)
       showToast.success('Alert acknowledged', 'monitoring')
       fetchData()
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to acknowledge alert', 'monitoring')
     }
   }
@@ -422,12 +435,7 @@ export default function HealthMonitor() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchData(true)}
-            disabled={refreshing}
-          >
+          <Button variant="outline" size="sm" onClick={() => fetchData(true)} disabled={refreshing}>
             <RefreshCw className={cn('h-4 w-4 mr-2', refreshing && 'animate-spin')} />
             Refresh
           </Button>
@@ -471,10 +479,22 @@ export default function HealthMonitor() {
       {/* Metric Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <MetricCard
-          title={currentMetrics?.fd.limit == null ? "Process Handles" : "File Descriptors"}
+          title={currentMetrics?.fd.limit == null ? 'Process Handles' : 'File Descriptors'}
           icon={HardDrive}
-          value={currentMetrics ? (currentMetrics.fd.limit != null ? `${currentMetrics.fd.count} / ${currentMetrics.fd.limit}` : `${currentMetrics.fd.count}`) : '-'}
-          subtitle={currentMetrics ? (currentMetrics.fd.limit != null ? `${(currentMetrics.fd.usage_percent ?? 0).toFixed(1)}% used` : `threshold: ${currentMetrics.fd.status === 'pass' ? 'OK' : currentMetrics.fd.status}`) : undefined}
+          value={
+            currentMetrics
+              ? currentMetrics.fd.limit != null
+                ? `${currentMetrics.fd.count} / ${currentMetrics.fd.limit}`
+                : `${currentMetrics.fd.count}`
+              : '-'
+          }
+          subtitle={
+            currentMetrics
+              ? currentMetrics.fd.limit != null
+                ? `${(currentMetrics.fd.usage_percent ?? 0).toFixed(1)}% used`
+                : `threshold: ${currentMetrics.fd.status === 'pass' ? 'OK' : currentMetrics.fd.status}`
+              : undefined
+          }
           status={currentMetrics?.fd.status || 'unknown'}
           loading={!currentMetrics}
         />
@@ -482,7 +502,11 @@ export default function HealthMonitor() {
           title="Memory Usage"
           icon={MemoryStick}
           value={currentMetrics ? `${(currentMetrics.memory.rss_mb ?? 0).toFixed(1)} MB` : '-'}
-          subtitle={currentMetrics ? `${(currentMetrics.memory.percent ?? 0).toFixed(1)}% of system` : undefined}
+          subtitle={
+            currentMetrics
+              ? `${(currentMetrics.memory.percent ?? 0).toFixed(1)}% of system`
+              : undefined
+          }
           status={currentMetrics?.memory.status || 'unknown'}
           loading={!currentMetrics}
         />
@@ -498,7 +522,9 @@ export default function HealthMonitor() {
           title="WebSocket Connections"
           icon={Network}
           value={currentMetrics?.websocket.total || 0}
-          subtitle={currentMetrics ? `${currentMetrics.websocket.total_symbols} symbols` : undefined}
+          subtitle={
+            currentMetrics ? `${currentMetrics.websocket.total_symbols} symbols` : undefined
+          }
           status={currentMetrics?.websocket.status || 'unknown'}
           loading={!currentMetrics}
         />
@@ -506,7 +532,11 @@ export default function HealthMonitor() {
           title="Active Threads"
           icon={Server}
           value={currentMetrics?.threads.count || 0}
-          subtitle={currentMetrics && currentMetrics.threads.stuck > 0 ? `${currentMetrics.threads.stuck} stuck` : 'None stuck'}
+          subtitle={
+            currentMetrics && currentMetrics.threads.stuck > 0
+              ? `${currentMetrics.threads.stuck} stuck`
+              : 'None stuck'
+          }
           status={currentMetrics?.threads.status || 'unknown'}
           loading={!currentMetrics}
         />
@@ -527,7 +557,9 @@ export default function HealthMonitor() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Memory Usage (6h)</CardTitle>
-            <CardDescription>Historical memory consumption in MB over the last 6 hours</CardDescription>
+            <CardDescription>
+              Historical memory consumption in MB over the last 6 hours
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div ref={memoryChartContainerRef} className="w-full h-[300px]" />
@@ -554,15 +586,21 @@ export default function HealthMonitor() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Min / Max:</dt>
-                  <dd className="font-medium">{stats.fd.min} / {stats.fd.max}</dd>
+                  <dd className="font-medium">
+                    {stats.fd.min} / {stats.fd.max}
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Warnings:</dt>
-                  <dd className="font-medium text-yellow-600 dark:text-yellow-400">{stats.fd.warn_count}</dd>
+                  <dd className="font-medium text-yellow-600 dark:text-yellow-400">
+                    {stats.fd.warn_count}
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Failures:</dt>
-                  <dd className="font-medium text-red-600 dark:text-red-400">{stats.fd.fail_count}</dd>
+                  <dd className="font-medium text-red-600 dark:text-red-400">
+                    {stats.fd.fail_count}
+                  </dd>
                 </div>
               </dl>
             </CardContent>
@@ -584,15 +622,21 @@ export default function HealthMonitor() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Min / Max:</dt>
-                  <dd className="font-medium">{stats.memory.min_mb.toFixed(1)} / {stats.memory.max_mb.toFixed(1)} MB</dd>
+                  <dd className="font-medium">
+                    {stats.memory.min_mb.toFixed(1)} / {stats.memory.max_mb.toFixed(1)} MB
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Warnings:</dt>
-                  <dd className="font-medium text-yellow-600 dark:text-yellow-400">{stats.memory.warn_count}</dd>
+                  <dd className="font-medium text-yellow-600 dark:text-yellow-400">
+                    {stats.memory.warn_count}
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Failures:</dt>
-                  <dd className="font-medium text-red-600 dark:text-red-400">{stats.memory.fail_count}</dd>
+                  <dd className="font-medium text-red-600 dark:text-red-400">
+                    {stats.memory.fail_count}
+                  </dd>
                 </div>
               </dl>
             </CardContent>
@@ -694,7 +738,9 @@ export default function HealthMonitor() {
                 {currentMetrics.processes.map((proc) => (
                   <TableRow key={`${proc.pid}-${proc.name}`}>
                     <TableCell className="font-medium">{proc.name}</TableCell>
-                    <TableCell className="text-right font-mono text-xs">{proc.pid ?? '-'}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {proc.pid ?? '-'}
+                    </TableCell>
                     <TableCell className="text-right">{proc.rss_mb.toFixed(1)}</TableCell>
                     <TableCell className="text-right">{proc.vms_mb.toFixed(1)}</TableCell>
                     <TableCell className="text-right">{proc.memory_percent.toFixed(2)}</TableCell>
@@ -729,7 +775,9 @@ export default function HealthMonitor() {
                 {currentMetrics.threads.details.map((thread) => (
                   <TableRow key={`${thread.id}-${thread.name}`}>
                     <TableCell className="font-medium">{thread.name}</TableCell>
-                    <TableCell className="text-right font-mono text-xs">{thread.id ?? '-'}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {thread.id ?? '-'}
+                    </TableCell>
                     <TableCell className="text-right">{thread.daemon ? 'Yes' : 'No'}</TableCell>
                     <TableCell className="text-right">{thread.alive ? 'Yes' : 'No'}</TableCell>
                   </TableRow>
@@ -766,7 +814,9 @@ export default function HealthMonitor() {
                   <div className="flex items-start gap-3">
                     <StatusIcon status={alert.severity} />
                     <div>
-                      <p className="font-medium">{alert.alert_type.replace(/_/g, ' ').toUpperCase()}</p>
+                      <p className="font-medium">
+                        {alert.alert_type.replace(/_/g, ' ').toUpperCase()}
+                      </p>
                       <p className="text-sm text-muted-foreground">{alert.message}</p>
                     </div>
                   </div>
@@ -806,31 +856,34 @@ export default function HealthMonitor() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {historicalMetrics.slice(-20).reverse().map((metric, idx) => (
-                <TableRow key={idx}>
-                  <TableCell className="font-mono text-xs">
-                    {formatIstTime(metric.timestamp)}
-                  </TableCell>
-                  <TableCell className="text-right">{metric.fd_count}</TableCell>
-                  <TableCell className="text-right">{metric.memory_rss_mb.toFixed(1)}</TableCell>
-                  <TableCell className="text-right">{metric.db_connections}</TableCell>
-                  <TableCell className="text-right">{metric.ws_connections}</TableCell>
-                  <TableCell className="text-right">{metric.threads}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        metric.overall_status === 'pass'
-                          ? 'default'
-                          : metric.overall_status === 'warn'
-                            ? 'secondary'
-                            : 'destructive'
-                      }
-                    >
-                      {metric.overall_status}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {historicalMetrics
+                .slice(-20)
+                .reverse()
+                .map((metric, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell className="font-mono text-xs">
+                      {formatIstTime(metric.timestamp)}
+                    </TableCell>
+                    <TableCell className="text-right">{metric.fd_count}</TableCell>
+                    <TableCell className="text-right">{metric.memory_rss_mb.toFixed(1)}</TableCell>
+                    <TableCell className="text-right">{metric.db_connections}</TableCell>
+                    <TableCell className="text-right">{metric.ws_connections}</TableCell>
+                    <TableCell className="text-right">{metric.threads}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          metric.overall_status === 'pass'
+                            ? 'default'
+                            : metric.overall_status === 'warn'
+                              ? 'secondary'
+                              : 'destructive'
+                        }
+                      >
+                        {metric.overall_status}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
             </TableBody>
           </Table>
         </CardContent>

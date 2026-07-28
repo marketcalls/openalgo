@@ -138,12 +138,13 @@ def get_oi_data(
         Tuple of (success, response_data, status_code)
     """
     try:
-        # Fetch option chain (45 strikes around ATM)
+        # Fetch option chain (23 each side of ATM = 47 strikes, 94 symbols).
+        # Sized to fit the fyers multiquote OI bucket (<=100 symbols) so OI is populated.
         success, chain_response, status_code = get_option_chain(
             underlying=underlying,
             exchange=exchange,
             expiry_date=expiry_date,
-            strike_count=45,
+            strike_count=23,
             api_key=api_key,
         )
 

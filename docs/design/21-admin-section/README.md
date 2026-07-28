@@ -252,9 +252,10 @@ POST /settings/analyze-mode/analyze  → Switch to analyzer
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │  Security Thresholds                                       │  │
 │  │                                                            │  │
-│  │  404 Errors:  20/day  → Auto-ban for 24 hours             │  │
-│  │  API Abuse:   10/day  → Auto-ban for 48 hours             │  │
-│  │  Repeat Offender: 3 bans → Permanent                       │  │
+│  │  Automatic bans: Off by default                            │  │
+│  │  404 Errors: 100/day → 0h (permanent) when enabled        │  │
+│  │  API Abuse:  100/day → 0h (permanent) when enabled        │  │
+│  │  Repeat Offender: 2 bans → Permanent                       │  │
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -265,10 +266,10 @@ POST /settings/analyze-mode/analyze  → Switch to analyzer
 Stores banned IP addresses with expiry.
 
 #### error_404_tracker
-Tracks 404 errors per IP (threshold: 20/day).
+Tracks 404 errors per IP. The persisted default threshold is 100 per 24 hours.
 
 #### invalid_api_key_tracker
-Tracks invalid API attempts per IP (threshold: 10/day).
+Tracks invalid API attempts per IP. The persisted default threshold is 100 per 24 hours.
 
 ## Traffic Dashboard
 
@@ -383,6 +384,6 @@ GET /api/system
 | `database/market_calendar_db.py` | Holidays/timings |
 | `database/settings_db.py` | Settings table |
 | `database/traffic_db.py` | Security tables |
-| `services/security.py` | Security service |
+| `utils/security_middleware.py` | Request-time IP enforcement |
 | `frontend/src/pages/admin/` | React components |
 | `frontend/src/api/admin.ts` | API client |

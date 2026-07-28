@@ -7,16 +7,24 @@ from datetime import datetime
 import httpx
 import pandas as pd
 
+from broker.fyers.api.rate_limiter import MAX_RETRIES, apply_rate_limit, retry_delay_from_headers
 from database.token_db import get_br_symbol, get_oa_symbol
+from utils.constants import FNO_EXCHANGES
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+def get_api_response(endpoint, auth, method="GET", payload="", _retry_count=0):
     """
     Make API requests to Fyers API using shared connection pooling.
+
+    Rate limited process-wide (broker.fyers.api.rate_limiter) since Fyers
+    caps all endpoints combined at 10 req/sec per API key -- see
+    fyers-api-docs/FYERS_API_v3.md -> "Rate Limits". On HTTP 429 this retries
+    with backoff (honoring the Retry-After / X-Retry-After-Ms headers when
+    present) instead of immediately surfacing the failure to the caller.
 
     Args:
         endpoint: API endpoint (e.g., /api/v2/positions)
@@ -36,6 +44,8 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
         url = f"https://api-t1.fyers.in{endpoint}"
         headers = {"Authorization": f"{api_key}:{AUTH_TOKEN}", "Content-Type": "application/json"}
+
+        apply_rate_limit()
 
         logger.debug(f"Making {method} request to Fyers API: {url}")
 
@@ -67,6 +77,17 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         logger.debug(f"API response: {json.dumps(response_data, indent=2)}")
         return response_data
 
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429 and _retry_count < MAX_RETRIES:
+            delay = retry_delay_from_headers(e.response.headers, _retry_count)
+            logger.warning(
+                f"Fyers API rate limited (429) on {endpoint}. Retrying in "
+                f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            return get_api_response(endpoint, auth, method, payload, _retry_count + 1)
+        logger.error(f"HTTP error during API request: {str(e)}")
+        return {"s": "error", "message": f"HTTP error: {str(e)}"}
     except httpx.HTTPError as e:
         logger.error(f"HTTP error during API request: {str(e)}")
         return {"s": "error", "message": f"HTTP error: {str(e)}"}
@@ -161,7 +182,14 @@ class BrokerData:
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols with automatic batching
+        Get real-time quotes for multiple symbols with automatic batching.
+
+        OI policy: when the total request size is <= OI_THRESHOLD, OI is fetched
+        per-symbol via /data/depth for derivative exchanges only. When the total
+        exceeds OI_THRESHOLD, OI is set to 0 for every symbol — at 10 req/sec
+        the depth calls dominate latency and would push the request well past
+        a usable response time.
+
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
                      Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
@@ -170,8 +198,15 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 50  # Fyers API limit per request
+            BATCH_SIZE = 50  # Fyers /data/quotes limit per request
             RATE_LIMIT_DELAY = 0.1  # Delay in seconds between batch API calls
+            OI_THRESHOLD = 100  # Skip OI entirely when total symbols exceed this
+
+            fetch_oi = len(symbols) <= OI_THRESHOLD
+            if not fetch_oi:
+                logger.info(
+                    f"Multiquote size {len(symbols)} > {OI_THRESHOLD}: skipping OI fetch (oi=0 for all symbols)"
+                )
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -186,7 +221,7 @@ class BrokerData:
                     )
 
                     # Process this batch
-                    batch_results = self._process_quotes_batch(batch)
+                    batch_results = self._process_quotes_batch(batch, fetch_oi=fetch_oi)
                     all_results.extend(batch_results)
 
                     # Rate limit delay between batches
@@ -199,20 +234,51 @@ class BrokerData:
                 return all_results
             else:
                 # Single batch processing
-                return self._process_quotes_batch(symbols)
+                return self._process_quotes_batch(symbols, fetch_oi=fetch_oi)
 
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
 
-    def _process_quotes_batch(self, symbols: list) -> list:
+    def _fetch_oi_for_symbol(self, br_symbol: str) -> int:
         """
-        Process a single batch of symbols using quotes endpoint for accurate bid/ask data.
-        Note: Using /data/quotes instead of /data/depth for bulk requests as depth
-        returns incorrect bid/ask values when fetching multiple symbols.
+        Fetch OI for a single derivative symbol via /data/depth.
+
+        Fyers' depth endpoint accepts one symbol at a time. Rate limiting
+        (and 429 retry) is handled process-wide by get_api_response via
+        broker.fyers.api.rate_limiter, so no per-instance pacing is needed
+        here -- a new BrokerData is created per request (see
+        services/option_chain_service.py etc.), so any pacing state kept on
+        `self` would never actually be shared across concurrent requests.
+
+        Returns 0 on any error so a single bad symbol doesn't fail the batch.
+        """
+        encoded = urllib.parse.quote(br_symbol)
+        response = get_api_response(f"/data/depth?symbol={encoded}&ohlcv_flag=1", self.auth_token)
+
+        if response.get("s") != "ok":
+            logger.debug(
+                f"Depth fetch for OI failed for {br_symbol}: {response.get('message')}"
+            )
+            return 0
+
+        depth_data = response.get("d", {}).get(br_symbol, {})
+        return int(depth_data.get("oi", 0))
+
+    def _process_quotes_batch(self, symbols: list, fetch_oi: bool = True) -> list:
+        """
+        Process a single batch of symbols using the bulk /data/quotes endpoint.
+
+        OI handling: Fyers' /data/depth accepts only one symbol per call (bulk
+        returns concatenated/incorrect arrays) at a 10 req/sec rate limit. When
+        fetch_oi is True we fetch OI per-symbol for derivative exchanges only
+        (FNO_EXCHANGES); equity/index symbols always get oi=0. When fetch_oi is
+        False, all symbols get oi=0 — used by get_multiquotes when the total
+        request size exceeds the OI threshold to keep the response fast.
 
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+            fetch_oi: If False, skip /data/depth calls entirely and return oi=0
         Returns:
             list: List of quote data for the batch
         """
@@ -252,20 +318,11 @@ class BrokerData:
         symbols_param = ",".join(br_symbols)
         encoded_symbols = urllib.parse.quote(symbols_param)
 
-        # Fyers bulk depth API has a bug: bids/asks arrays are concatenated across symbols
-        # Solution: Use /data/quotes for bid/ask and /data/depth for OI
-
-        # 1. Fetch quotes for bid/ask (correct values)
+        # Bulk /data/quotes for bid/ask/OHLC/LTP/volume (OI not provided in bulk)
         quotes_response = get_api_response(
             f"/data/quotes?symbols={encoded_symbols}", self.auth_token
         )
         logger.debug(f"Fyers quotes API response: {quotes_response}")
-
-        # 2. Fetch depth for OI (bulk bid/ask is buggy, only use OI)
-        depth_response = get_api_response(
-            f"/data/depth?symbol={encoded_symbols}&ohlcv_flag=1", self.auth_token
-        )
-        logger.debug(f"Fyers depth API response: {depth_response}")
 
         # Parse quotes response - array format
         quotes_map = {}
@@ -277,41 +334,35 @@ class BrokerData:
         else:
             logger.warning(f"Quotes API error: {quotes_response.get('message', 'Unknown error')}")
 
-        # Parse depth response - dict format (only for OI)
-        depth_map = {}
-        if depth_response.get("s") == "ok":
-            depth_map = depth_response.get("d", {})
-        else:
-            logger.warning(f"Depth API error: {depth_response.get('message', 'Unknown error')}")
-
-        # Build results by merging data from both endpoints
+        # Build results from quotes data; fetch OI per-symbol for derivatives only
         results = []
         for br_symbol in br_symbols:
             quote = quotes_map.get(br_symbol, {})
-            depth = depth_map.get(br_symbol, {})
 
-            # Skip if no data from both endpoints
-            if not quote and not depth:
+            if not quote:
                 logger.warning(f"No data found for {br_symbol}")
                 continue
 
             # Look up original symbol and exchange
             original = symbol_map.get(br_symbol, {"symbol": br_symbol, "exchange": "UNKNOWN"})
 
-            # Merge: bid/ask/OHLC from quotes, OI from depth
+            oi_value = 0
+            if fetch_oi and original["exchange"] in FNO_EXCHANGES:
+                oi_value = self._fetch_oi_for_symbol(br_symbol)
+
             result_item = {
                 "symbol": original["symbol"],
                 "exchange": original["exchange"],
                 "data": {
                     "bid": quote.get("bid", 0),
                     "ask": quote.get("ask", 0),
-                    "open": quote.get("open_price", depth.get("o", 0)),
-                    "high": quote.get("high_price", depth.get("h", 0)),
-                    "low": quote.get("low_price", depth.get("l", 0)),
-                    "ltp": quote.get("lp", depth.get("ltp", 0)),
-                    "prev_close": quote.get("prev_close_price", depth.get("c", 0)),
-                    "volume": quote.get("volume", depth.get("v", 0)),
-                    "oi": int(depth.get("oi", 0)),
+                    "open": quote.get("open_price", 0),
+                    "high": quote.get("high_price", 0),
+                    "low": quote.get("low_price", 0),
+                    "ltp": quote.get("lp", 0),
+                    "prev_close": quote.get("prev_close_price", 0),
+                    "volume": quote.get("volume", 0),
+                    "oi": oi_value,
                 },
             }
             results.append(result_item)
@@ -502,8 +553,13 @@ class BrokerData:
                     else:
                         logger.debug(f"No data available for period {chunk_start} to {chunk_end}")
 
-                    # Add a small delay between chunks to avoid rate limiting
-                    time.sleep(0.5)
+                    # No inter-chunk sleep here: get_api_response already paces
+                    # every Fyers call through the process-wide apply_rate_limit
+                    # (125ms spacing) and honours Retry-After on 429s. The old
+                    # unconditional 0.5s sleep ran even after the LAST chunk,
+                    # putting a half-second floor under every history request --
+                    # a single-chunk intraday fetch spent 500ms sleeping on
+                    # 184ms of actual HTTP.
 
                     # Move to next chunk
                     current_start = current_end + pd.Timedelta(days=1)
@@ -542,6 +598,75 @@ class BrokerData:
             error_msg = f"Error fetching historical data for {exchange}:{symbol}"
             logger.exception(error_msg)
             raise Exception(f"{error_msg}: {e}")
+
+    def get_option_chain(
+        self, symbol: str, strikecount: int, timestamp: str | None = None
+    ) -> dict:
+        """
+        Fetch strikes around ATM for `symbol` in a single call via Fyers'
+        native /data/options-chain-v3 endpoint (see
+        fyers-api-docs/FYERS_API_v3.md -> "Option Chain"). This returns
+        LTP, OI, bid/ask and volume for every CE/PE strike in ONE request --
+        Fyers' bulk /data/quotes endpoint excludes OI entirely, so the
+        generic multiquote path has to fall back to one /data/depth call
+        PER symbol just to backfill it (see _fetch_oi_for_symbol), which is
+        what made large option chains take 10+ seconds.
+
+        Args:
+            symbol: Broker-format underlying symbol, e.g. "NSE:NIFTY50-INDEX"
+            strikecount: Strikes above/below ATM to fetch (Fyers hard caps
+                this at 50 -- an unbounded "entire chain" request can't be
+                served by this endpoint and must use the generic path)
+            timestamp: Optional epoch string for a historical chain snapshot
+
+        Returns:
+            dict keyed by (strike_price: float, option_type: "CE"/"PE") ->
+            {"ltp", "bid", "ask", "prev_close", "volume", "oi"}. Empty dict
+            on any error (caller falls back to the generic multiquote path).
+        """
+        strikecount = max(1, min(int(strikecount), 50))
+        encoded_symbol = urllib.parse.quote(symbol)
+        endpoint = f"/data/options-chain-v3?symbol={encoded_symbol}&strikecount={strikecount}"
+        if timestamp:
+            endpoint += f"&timestamp={timestamp}"
+
+        try:
+            response = get_api_response(endpoint, self.auth_token)
+        except Exception:
+            logger.exception(f"Error fetching option chain for {symbol}")
+            return {}
+
+        if response.get("s") == "error" or response.get("code") != 200:
+            logger.warning(
+                f"Fyers option chain fetch failed for {symbol}: "
+                f"{response.get('message', 'Unknown error')}"
+            )
+            return {}
+
+        options_chain = response.get("data", {}).get("optionsChain", [])
+        result = {}
+        for item in options_chain:
+            option_type = item.get("option_type")
+            strike = item.get("strike_price")
+            # Skip the underlying/index entry Fyers embeds in the list
+            # (option_type="", strike_price=-1) -- not an actual strike.
+            if option_type not in ("CE", "PE") or strike is None:
+                continue
+
+            ltp = item.get("ltp", 0) or 0
+            ltpch = item.get("ltpch", 0) or 0
+            result[(float(strike), option_type)] = {
+                "ltp": ltp,
+                "bid": item.get("bid", 0),
+                "ask": item.get("ask", 0),
+                # Not returned directly by this endpoint; ltpch is the
+                # change from previous close, so back it out from that.
+                "prev_close": ltp - ltpch,
+                "volume": item.get("volume", 0),
+                "oi": int(item.get("oi", 0) or 0),
+            }
+
+        return result
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """

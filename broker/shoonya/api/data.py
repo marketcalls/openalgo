@@ -71,11 +71,16 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
 
 def get_chart_api_response(endpoint, auth, method="POST", payload=None):
     """
-    Chart data endpoints (EODChartData, TPSeries) use the legacy NorenWClientTP path
-    with jKey authentication as they haven't migrated to NorenWClientAPI yet.
+    Chart data endpoints (EODChartData, TPSeries) use the legacy NorenWClientTP
+    path with jKey embedded in the form-urlencoded body (same pattern as
+    Flattrade/Finvasia chart APIs). They do not accept Authorization: Bearer
+    headers, which is why the previous implementation returned an empty body
+    and caused JSONDecodeError at line 1 col 1.
     """
     AUTH_TOKEN = auth
     full_api_key = os.getenv("BROKER_API_KEY")
+    if not full_api_key:
+        raise RuntimeError("BROKER_API_KEY is not configured")
     api_key = full_api_key.split(":::")[0]
 
     if payload is None:
@@ -84,14 +89,13 @@ def get_chart_api_response(endpoint, auth, method="POST", payload=None):
         data = payload
         data["uid"] = api_key
 
-    payload_str = "jData=" + json.dumps(data)
+    # Chart endpoints want jData=<json>&jKey=<token> form-urlencoded, NOT a
+    # Bearer header. This mirrors broker/flattrade/api/data.py:get_api_response.
+    payload_str = "jData=" + json.dumps(data) + "&jKey=" + AUTH_TOKEN
 
     client = get_httpx_client()
 
-    headers = {
-        "Content-Type": "text/plain",
-        "Authorization": f"Bearer {AUTH_TOKEN}",
-    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     url = f"https://api.shoonya.com{endpoint}"
 
     response = client.request(method, url, content=payload_str, headers=headers)
@@ -411,7 +415,17 @@ class BrokerData:
         # Step 2: Make concurrent API calls
         start_time = time.time()
 
-        if USE_ASYNC:
+        # Runtime check: even if USE_ASYNC is True, asyncio.run() will crash
+        # if called from within an already-running event loop
+        use_async = USE_ASYNC
+        if use_async:
+            try:
+                asyncio.get_running_loop()
+                use_async = False
+            except RuntimeError:
+                pass
+
+        if use_async:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
@@ -517,6 +531,30 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
+    def _get_history_chunk_seconds(self, interval: str) -> int:
+        """
+        Per-request window size for TPSeries, in seconds. Shoonya returns
+        504 Server Timeout when the range produces too many candles in a
+        single call. These values keep each request under roughly a few
+        thousand candles (empirically safe).
+        """
+        # 1m bars: ~375 per trading day -> cap at ~5 days
+        # 5m bars: ~75 per day -> ~30 days
+        # daily bars: 1 per day -> ~2 years
+        minute_windows = {
+            "1m": 5 * 24 * 3600,
+            "3m": 10 * 24 * 3600,
+            "5m": 20 * 24 * 3600,
+            "10m": 40 * 24 * 3600,
+            "15m": 60 * 24 * 3600,
+            "30m": 90 * 24 * 3600,
+            "1h": 180 * 24 * 3600,
+            "2h": 180 * 24 * 3600,
+            "4h": 365 * 24 * 3600,
+            "D": 2 * 365 * 24 * 3600,
+        }
+        return minute_windows.get(interval, 30 * 24 * 3600)
+
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
@@ -574,86 +612,111 @@ class BrokerData:
                 datetime.strptime(end_date_str + " 23:59:59", "%Y-%m-%d %H:%M:%S").timestamp()
             )
 
-            # For daily data, use EODChartData endpoint
-            if interval == "D":
-                # Format symbol for EOD data
-                sym = f"{exchange}:{br_symbol}"
+            # Use TPSeries for all intervals (including daily via intrv="D").
+            # Post-OAuth, Shoonya's /NorenWClientAPI/EODChartData returns 405
+            # Method Not Allowed — the endpoint was removed. TPSeries with
+            # intrv="D" covers daily bars, so we route everything through it.
+            # Chart endpoints require jKey in the form-urlencoded body (Bearer
+            # header alone returns an empty body).
+            #
+            # TPSeries times out (504 Server Timeout) on long ranges. Chunk
+            # the [start_ts, end_ts] window so each request stays within the
+            # broker's per-request budget. Chunk size is interval-dependent:
+            # minute/hour intervals have many more bars per day than daily.
+            chunk_seconds = self._get_history_chunk_seconds(interval)
 
-                payload = {"sym": sym, "from": str(start_ts), "to": str(end_ts)}
-
-                logger.debug(f"EOD Payload: {payload}")  # Debug print
-                try:
-                    response = get_api_response(
-                        "/NorenWClientAPI/EODChartData", self.auth_token, payload=payload
-                    )
-                    logger.debug(f"EOD Response: {response}")  # Debug print
-                except Exception as e:
-                    logger.error(f"Error in EOD request: {e}")
-                    response = []  # Continue with empty response to try quotes
-            else:
-                # For intraday data, use TPSeries endpoint
+            response_candles = []
+            chunk_start = start_ts
+            while chunk_start <= end_ts:
+                chunk_end = min(chunk_start + chunk_seconds, end_ts)
                 payload = {
                     "exch": exchange,
                     "token": token,
-                    "st": str(start_ts),
-                    "et": str(end_ts),
+                    "st": str(chunk_start),
+                    "et": str(chunk_end),
                     "intrv": self.timeframe_map[interval],
                 }
-
-                logger.debug(f"Intraday Payload: {payload}")  # Debug print
-                response = get_api_response(
-                    "/NorenWClientAPI/TPSeries", self.auth_token, payload=payload
-                )
-                logger.debug(f"Intraday Response: {response}")  # Debug print
-
-            # Convert response to DataFrame
-            data = []
-            for candle in response:
-                if isinstance(candle, str):
-                    candle = json.loads(candle)
+                logger.debug(f"TPSeries Payload: {payload}")
 
                 try:
-                    if interval == "D":
-                        # EOD data format
-                        timestamp = int(candle.get("ssboe", 0))
-                        data.append(
-                            {
-                                "timestamp": timestamp,
-                                "open": float(candle.get("into", 0)),
-                                "high": float(candle.get("inth", 0)),
-                                "low": float(candle.get("intl", 0)),
-                                "close": float(candle.get("intc", 0)),
-                                "volume": float(candle.get("intv", 0)),
-                                "oi": float(candle.get("oi", 0)),
-                            }
-                        )
-                    else:
-                        # Skip candles with all zero values
-                        if (
-                            float(candle.get("into", 0)) == 0
-                            and float(candle.get("inth", 0)) == 0
-                            and float(candle.get("intl", 0)) == 0
-                            and float(candle.get("intc", 0)) == 0
-                        ):
-                            continue
+                    chunk_response = get_chart_api_response(
+                        "/NorenWClientAPI/TPSeries", self.auth_token, payload=payload
+                    )
+                except Exception as e:
+                    logger.error(f"TPSeries chunk request failed ({chunk_start}-{chunk_end}): {e}")
+                    chunk_start = chunk_end + 1
+                    continue
 
-                        # Intraday format
+                # TPSeries normally returns a LIST of candles. On error it
+                # returns a DICT like {"stat":"Not_Ok","emsg":"..."} — detect
+                # that before iterating (the old code iterated dict keys and
+                # crashed trying to json.loads("stat")).
+                if isinstance(chunk_response, dict):
+                    emsg = chunk_response.get("emsg") or chunk_response.get("message") or "unknown"
+                    logger.warning(
+                        f"TPSeries returned error for chunk {chunk_start}-{chunk_end}: "
+                        f"stat={chunk_response.get('stat')} emsg={emsg}"
+                    )
+                    chunk_start = chunk_end + 1
+                    continue
+
+                if not isinstance(chunk_response, list):
+                    logger.warning(
+                        f"Unexpected TPSeries response type {type(chunk_response).__name__}: "
+                        f"{str(chunk_response)[:200]}"
+                    )
+                    chunk_start = chunk_end + 1
+                    continue
+
+                response_candles.extend(chunk_response)
+                chunk_start = chunk_end + 1
+
+            # Convert candles to rows. TPSeries returns both `ssboe` (epoch)
+            # and `time` (DD-MM-YYYY HH:MM:SS); prefer ssboe — it's already
+            # an integer and avoids timezone quirks.
+            data = []
+            for candle in response_candles:
+                if isinstance(candle, str):
+                    try:
+                        candle = json.loads(candle)
+                    except json.JSONDecodeError:
+                        logger.error(f"Non-JSON candle entry, skipping: {candle[:200]}")
+                        continue
+
+                if not isinstance(candle, dict):
+                    continue
+
+                try:
+                    # Skip candles with all zero OHLC (stale ticks)
+                    if (
+                        float(candle.get("into", 0)) == 0
+                        and float(candle.get("inth", 0)) == 0
+                        and float(candle.get("intl", 0)) == 0
+                        and float(candle.get("intc", 0)) == 0
+                    ):
+                        continue
+
+                    ssboe = candle.get("ssboe")
+                    if ssboe is not None:
+                        timestamp = int(ssboe)
+                    else:
                         timestamp = int(
                             datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S").timestamp()
                         )
-                        data.append(
-                            {
-                                "timestamp": timestamp,
-                                "open": float(candle.get("into", 0)),
-                                "high": float(candle.get("inth", 0)),
-                                "low": float(candle.get("intl", 0)),
-                                "close": float(candle.get("intc", 0)),
-                                "volume": float(candle.get("intv", 0)),
-                                "oi": float(candle.get("oi", 0)),
-                            }
-                        )
-                except (KeyError, ValueError):
-                    logger.error(f"Error parsing candle data: {{e}}, Candle: {candle}")
+
+                    data.append(
+                        {
+                            "timestamp": timestamp,
+                            "open": float(candle.get("into", 0)),
+                            "high": float(candle.get("inth", 0)),
+                            "low": float(candle.get("intl", 0)),
+                            "close": float(candle.get("intc", 0)),
+                            "volume": float(candle.get("intv", 0)),
+                            "oi": float(candle.get("oi", 0)),
+                        }
+                    )
+                except (KeyError, ValueError) as e:
+                    logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
 
             df = pd.DataFrame(data)

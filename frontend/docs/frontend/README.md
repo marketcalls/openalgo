@@ -31,7 +31,7 @@ npm run build
 |----------|------------|
 | Framework | React 19 |
 | Language | TypeScript |
-| Build Tool | Vite 7 |
+| Build Tool | Vite 8 |
 | Styling | Tailwind CSS 4 |
 | UI Components | Radix UI + shadcn/ui |
 | State Management | Zustand |

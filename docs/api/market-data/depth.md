@@ -20,6 +20,18 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/depth
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/depth \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbol": "SBIN",
+  "exchange": "NSE"
+}'
+```
+
 ## Sample API Response
 
 ```json
@@ -112,7 +124,7 @@ Qty     Price                        Price     Qty
 - **Bid-Ask spread** indicates liquidity (tighter = more liquid)
 - **totalbuyqty vs totalsellqty** shows demand-supply balance
 - For F&O, **oi** (open interest) is available
-- Depth data updates in real-time with each order book change
+- The REST call returns one broker snapshot. Use WebSocket Depth for continuous updates.
 
 ## Use Cases
 

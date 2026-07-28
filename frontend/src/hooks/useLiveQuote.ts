@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { tradingApi, type QuotesData, type DepthData, type DepthLevel } from '@/api/trading'
+import { type DepthData, type DepthLevel, type QuotesData, tradingApi } from '@/api/trading'
 import { useMarketData } from '@/hooks/useMarketData'
 import { useMarketStatus } from '@/hooks/useMarketStatus'
 import { useAuthStore } from '@/stores/authStore'
@@ -15,6 +15,23 @@ export interface NormalizedDepth {
 /**
  * Combined quote and depth data
  */
+/**
+ * First usable price from the given sources, treating 0 as "not available".
+ *
+ * A real traded price is never 0, so a 0 from any source means that source has
+ * nothing to say yet rather than that the instrument is worthless. Using ??
+ * here would accept the 0 and stop, which is how a WebSocket tick with no
+ * last-traded price ends up displayed as 0.00 while REST has the real number.
+ */
+function firstPrice(...values: (number | undefined | null)[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return value
+    }
+  }
+  return undefined
+}
+
 export interface LiveQuoteData {
   ltp?: number
   open?: number
@@ -125,11 +142,16 @@ export function useLiveQuote(
 
   // WebSocket subscription
   const symbols = useMemo(
-    () => hasSymbol ? [{ symbol, exchange }] : [],
+    () => (hasSymbol ? [{ symbol, exchange }] : []),
     [symbol, exchange, hasSymbol]
   )
 
-  const { data: marketData, isConnected: wsConnected, isPaused: wsPaused, isFallbackMode } = useMarketData({
+  const {
+    data: marketData,
+    isConnected: wsConnected,
+    isPaused: wsPaused,
+    isFallbackMode,
+  } = useMarketData({
     symbols,
     mode,
     enabled: enabled && hasSymbol,
@@ -142,8 +164,12 @@ export function useLiveQuote(
   const marketOpen = isMarketOpen(exchange)
 
   // Check if WebSocket data is fresh
-  const hasWsData = !!(wsConnected && wsData && wsLastUpdate &&
-    (Date.now() - wsLastUpdate < staleThreshold))
+  const hasWsData = !!(
+    wsConnected &&
+    wsData &&
+    wsLastUpdate &&
+    Date.now() - wsLastUpdate < staleThreshold
+  )
 
   // Effective live status (WebSocket connected, data fresh, market open)
   const isLive = hasWsData && marketOpen && !wsPaused
@@ -161,27 +187,27 @@ export function useLiveQuote(
 
       if (useQuotesFallback) {
         promises.push(
-          tradingApi.getQuotes(apiKey, symbol, exchange)
-            .then(response => {
+          tradingApi
+            .getQuotes(apiKey, symbol, exchange)
+            .then((response) => {
               if (response.status === 'success' && response.data) {
                 setRestQuotes(response.data)
               }
             })
-            .catch(() => {
-            })
+            .catch(() => {})
         )
       }
 
       if (useDepthFallback && mode === 'Depth') {
         promises.push(
-          tradingApi.getDepth(apiKey, symbol, exchange)
-            .then(response => {
+          tradingApi
+            .getDepth(apiKey, symbol, exchange)
+            .then((response) => {
               if (response.status === 'success' && response.data) {
                 setRestDepth(response.data)
               }
             })
-            .catch(() => {
-            })
+            .catch(() => {})
         )
       }
 
@@ -205,6 +231,7 @@ export function useLiveQuote(
     fetchRestDataRef.current = fetchRestData
   }, [enabled, hasSymbol, fetchRestData])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: symbol/exchange intentionally restart the interval + initial fetch when the watched instrument changes, even though the body reads them only via the stable fetchRestDataRef
   useEffect(() => {
     if (!enabled || !hasSymbol) return
 
@@ -221,10 +248,10 @@ export function useLiveQuote(
 
     return () => clearInterval(interval)
     // Only depend on stable values that should trigger new interval setup
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, hasSymbol, symbol, exchange, refreshInterval])
 
   // Reset state when symbol changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: symbol/exchange are the intended trigger to clear stale REST data when the watched instrument changes
   useEffect(() => {
     setRestQuotes(null)
     setRestDepth(null)
@@ -234,8 +261,8 @@ export function useLiveQuote(
   const restDepthNormalized: NormalizedDepth | undefined = useMemo(() => {
     if (!restDepth) return undefined
     return {
-      buy: restDepth.bids.map(level => ({ price: level.price, quantity: level.quantity })),
-      sell: restDepth.asks.map(level => ({ price: level.price, quantity: level.quantity })),
+      buy: restDepth.bids.map((level) => ({ price: level.price, quantity: level.quantity })),
+      sell: restDepth.asks.map((level) => ({ price: level.price, quantity: level.quantity })),
     }
   }, [restDepth])
 
@@ -245,28 +272,39 @@ export function useLiveQuote(
     const depth = wsData?.depth ?? restDepthNormalized
 
     // Determine best bid/ask from depth or quotes
-    const bidPrice = wsData?.depth?.buy?.[0]?.price ??
-                     restDepthNormalized?.buy?.[0]?.price ??
-                     wsData?.bid_price ??
-                     restQuotes?.bid
-    const askPrice = wsData?.depth?.sell?.[0]?.price ??
-                     restDepthNormalized?.sell?.[0]?.price ??
-                     wsData?.ask_price ??
-                     restQuotes?.ask
-    const bidSize = wsData?.depth?.buy?.[0]?.quantity ??
-                    restDepthNormalized?.buy?.[0]?.quantity ??
-                    wsData?.bid_size
-    const askSize = wsData?.depth?.sell?.[0]?.quantity ??
-                    restDepthNormalized?.sell?.[0]?.quantity ??
-                    wsData?.ask_size
+    const bidPrice =
+      wsData?.depth?.buy?.[0]?.price ??
+      restDepthNormalized?.buy?.[0]?.price ??
+      wsData?.bid_price ??
+      restQuotes?.bid
+    const askPrice =
+      wsData?.depth?.sell?.[0]?.price ??
+      restDepthNormalized?.sell?.[0]?.price ??
+      wsData?.ask_price ??
+      restQuotes?.ask
+    const bidSize =
+      wsData?.depth?.buy?.[0]?.quantity ??
+      restDepthNormalized?.buy?.[0]?.quantity ??
+      wsData?.bid_size
+    const askSize =
+      wsData?.depth?.sell?.[0]?.quantity ??
+      restDepthNormalized?.sell?.[0]?.quantity ??
+      wsData?.ask_size
 
-    // Merge all data with priority: WebSocket > REST depth > REST quotes
+    // Merge all data with priority: WebSocket > REST depth > REST quotes.
+    //
+    // Price fields use firstPrice, not ??. A feed can deliver a tick whose ltp
+    // is 0 -- before the first trade of the session, or when the adapter has
+    // depth but no last-traded price yet. ?? only falls through on null and
+    // undefined, so a 0 would win and pin the display at 0.00 while depth shows
+    // a real bid/ask, with the REST fallback never consulted. Treating 0 as
+    // absent lets REST fill the gap.
     return {
-      ltp: wsData?.ltp ?? restDepth?.ltp ?? restQuotes?.ltp,
-      open: wsData?.open ?? restDepth?.open ?? restQuotes?.open,
-      high: wsData?.high ?? restDepth?.high ?? restQuotes?.high,
-      low: wsData?.low ?? restDepth?.low ?? restQuotes?.low,
-      close: wsData?.close ?? restDepth?.prev_close ?? restQuotes?.prev_close,
+      ltp: firstPrice(wsData?.ltp, restDepth?.ltp, restQuotes?.ltp),
+      open: firstPrice(wsData?.open, restDepth?.open, restQuotes?.open),
+      high: firstPrice(wsData?.high, restDepth?.high, restQuotes?.high),
+      low: firstPrice(wsData?.low, restDepth?.low, restQuotes?.low),
+      close: firstPrice(wsData?.close, restDepth?.prev_close, restQuotes?.prev_close),
       volume: wsData?.volume ?? restDepth?.volume ?? restQuotes?.volume,
       oi: restDepth?.oi ?? restQuotes?.oi,
       change: wsData?.change,
@@ -283,12 +321,9 @@ export function useLiveQuote(
   const dataWithChange: LiveQuoteData = useMemo(() => {
     if (mergedData.change !== undefined) return mergedData
 
-    const change = mergedData.ltp && mergedData.close
-      ? mergedData.ltp - mergedData.close
-      : undefined
-    const changePercent = change && mergedData.close
-      ? (change / mergedData.close) * 100
-      : undefined
+    const change =
+      mergedData.ltp && mergedData.close ? mergedData.ltp - mergedData.close : undefined
+    const changePercent = change && mergedData.close ? (change / mergedData.close) * 100 : undefined
 
     return {
       ...mergedData,

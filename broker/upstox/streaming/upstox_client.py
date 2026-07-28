@@ -18,6 +18,8 @@ import requests
 import websocket
 from google.protobuf.json_format import MessageToDict
 
+from database.auth_db import get_auth_token
+
 from . import MarketDataFeedV3_pb2
 
 
@@ -40,8 +42,13 @@ class UpstoxWebSocketClient:
     HEALTH_CHECK_INTERVAL = 30
     DATA_TIMEOUT = 90
 
-    def __init__(self, auth_token: str):
+    def __init__(self, auth_token: str, user_id: str | None = None):
         self.auth_token = auth_token
+        # user_id is used on reconnect to re-read a fresh bearer token from the
+        # database. Indian broker tokens roll over daily at ~3 AM IST, so the
+        # reconnect must NOT sign the new authorize request with the dead
+        # construction-time token.
+        self.user_id = user_id
         self.ws: websocket.WebSocketApp | None = None
         self.logger = logging.getLogger("upstox_websocket")
         self._subscriptions: set = set()
@@ -50,13 +57,24 @@ class UpstoxWebSocketClient:
         self._health_check_thread: threading.Thread | None = None
         self._last_message_time: float | None = None
         self._connected = False
+
+        # Set by _force_reconnect() so _run_websocket can log the next
+        # reconnect attempt as STALL-TRIGGERED instead of looking identical
+        # to a network-induced reconnect (issue #1357).
+        self._stall_triggered_reconnect = False
         self.callbacks: dict[str, Callable | None] = {
             "on_connect": None,
             "on_message": None,
             "on_error": None,
             "on_close": None,
         }
-        self._reconnect_config = {"max_attempts": 5, "base_delay": 2, "max_delay": 30}
+        # Per-disconnection reconnect budget. The counter is reset to 0 on
+        # every successful handshake (see `_on_ws_open`) — so this value caps
+        # how many back-to-back failures we'll tolerate within one
+        # disconnection storm, not the lifetime total. 5 was too aggressive
+        # under the cold-start race + 90s data-stall watchdog combination
+        # (the watchdog reconnected 5× during a slow start, then gave up).
+        self._reconnect_config = {"max_attempts": 50, "base_delay": 2, "max_delay": 30}
 
         # SSL context
         self._ssl_context = ssl.create_default_context()
@@ -90,6 +108,8 @@ class UpstoxWebSocketClient:
             on_message=self._on_ws_message,
             on_error=self._on_ws_error,
             on_close=self._on_ws_close,
+            on_ping=self._on_ws_ping,
+            on_pong=self._on_ws_pong,
         )
 
         # Run WebSocket in a daemon thread (same pattern as Angel/Dhan)
@@ -128,8 +148,29 @@ class UpstoxWebSocketClient:
                 break
 
             delay = self._calculate_backoff_delay(self._reconnect_attempts)
-            self.logger.info(f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})...")
+            # Distinguish stall-triggered from network-triggered reconnects
+            # in the logs so operators can diagnose root cause from a single
+            # log line rather than chasing across multiple files (issue #1357).
+            if self._stall_triggered_reconnect:
+                self.logger.warning(
+                    f"Reconnecting due to DATA STALL "
+                    f"(no ticks for >{self.DATA_TIMEOUT}s) — "
+                    f"in {delay}s (attempt {self._reconnect_attempts})..."
+                )
+                self._stall_triggered_reconnect = False  # reset for next cycle
+            else:
+                self.logger.info(
+                    f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})..."
+                )
             time.sleep(delay)
+
+            # Re-read a fresh bearer token from the database before re-fetching
+            # the WebSocket URL. _get_websocket_url() signs the authorize request
+            # with self.auth_token; without this refresh a reconnect after the
+            # ~3 AM IST daily token rollover would sign with the dead
+            # construction-time token and the feed would stay dead until a
+            # process restart.
+            self._refresh_auth_token()
 
             # Re-fetch WebSocket URL for reconnection
             ws_url = self._get_websocket_url()
@@ -140,6 +181,8 @@ class UpstoxWebSocketClient:
                     on_message=self._on_ws_message,
                     on_error=self._on_ws_error,
                     on_close=self._on_ws_close,
+                    on_ping=self._on_ws_ping,
+                    on_pong=self._on_ws_pong,
                 )
 
     def subscribe(self, instrument_keys: list[str], mode: str = "ltpc") -> bool:
@@ -154,7 +197,7 @@ class UpstoxWebSocketClient:
             # await websocket.send(json.dumps(msg).encode("utf-8"))
             self.ws.send(json.dumps(message).encode("utf-8"), opcode=websocket.ABNF.OPCODE_BINARY)
             self._subscriptions.update(instrument_keys)
-            self.logger.info(f"Subscribed to {len(instrument_keys)} instruments in {mode} mode")
+            self.logger.debug(f"Subscribed to {len(instrument_keys)} instruments in {mode} mode")
             return True
         except Exception as e:
             self.logger.error(f"Subscribe error: {e}")
@@ -169,7 +212,7 @@ class UpstoxWebSocketClient:
             message = self._create_subscription_message(instrument_keys, method="unsub")
             self.ws.send(json.dumps(message).encode("utf-8"), opcode=websocket.ABNF.OPCODE_BINARY)
             self._subscriptions.difference_update(instrument_keys)
-            self.logger.info(f"Unsubscribed from {len(instrument_keys)} instruments")
+            self.logger.debug(f"Unsubscribed from {len(instrument_keys)} instruments")
             return True
         except Exception as e:
             self.logger.error(f"Unsubscribe error: {e}")
@@ -205,7 +248,7 @@ class UpstoxWebSocketClient:
     # WebSocket callbacks
     def _on_ws_open(self, ws):
         """Called when WebSocket connection is opened"""
-        self.logger.info("Upstox WebSocket connection opened")
+        self.logger.debug("Upstox WebSocket connection opened")
         self._connected = True
         self._reconnect_attempts = 0
         self._last_message_time = time.time()
@@ -216,6 +259,26 @@ class UpstoxWebSocketClient:
         # Notify adapter
         if self.callbacks.get("on_connect"):
             self.callbacks["on_connect"]()
+
+    def _on_ws_pong(self, ws, message):
+        """Treat a WebSocket pong as proof the connection is alive.
+
+        Upstox sends no application-level heartbeat, so during a quiet or
+        closed market ``_last_message_time`` would otherwise freeze and the
+        data-stall watchdog (``_health_check_loop``) would force a needless
+        reconnect every ``DATA_TIMEOUT`` seconds — looping through the whole
+        pre-open/overnight window and re-hitting the authorize endpoint on
+        every cycle. The protocol ping/pong (``ping_interval=30``) keeps the
+        socket alive regardless of market activity, so we feed the liveness
+        clock from it — exactly as Zerodha's 1-byte heartbeat feeds its
+        identical watchdog — making the watchdog fire only when the socket is
+        genuinely dead (no data AND no pong).
+        """
+        self._last_message_time = time.time()
+
+    def _on_ws_ping(self, ws, message):
+        """A server-initiated ping also proves the socket is alive."""
+        self._last_message_time = time.time()
 
     def _on_ws_message(self, ws, message):
         """Called for both binary (protobuf) and text (JSON) messages"""
@@ -263,7 +326,8 @@ class UpstoxWebSocketClient:
                 elapsed = time.time() - self._last_message_time
                 if elapsed > self.DATA_TIMEOUT:
                     self.logger.error(
-                        f"Data stall detected - no data for {elapsed:.1f}s. Forcing reconnect..."
+                        f"Data stall detected - no data for {elapsed:.1f}s "
+                        f"(threshold {self.DATA_TIMEOUT}s). Forcing reconnect..."
                     )
                     self._force_reconnect()
                     break
@@ -273,8 +337,14 @@ class UpstoxWebSocketClient:
         self.logger.debug("Health check loop exited")
 
     def _force_reconnect(self):
-        """Force reconnection by closing the current WebSocket"""
-        self.logger.info("Forcing WebSocket reconnection...")
+        """Force reconnection by closing the current WebSocket.
+
+        Sets _stall_triggered_reconnect so _run_websocket can log the
+        next reconnect attempt distinguishably from a network-induced one
+        (issue #1357).
+        """
+        self.logger.info("Forcing WebSocket reconnection (stall-triggered)...")
+        self._stall_triggered_reconnect = True
         if self.ws:
             try:
                 self.ws.close()
@@ -318,6 +388,29 @@ class UpstoxWebSocketClient:
             self.auth_token and isinstance(self.auth_token, str) and len(self.auth_token) >= 10
         )
 
+    def _refresh_auth_token(self):
+        """Re-read a fresh bearer token from the database before a reconnect.
+
+        Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
+        re-read the current token from the database (bypassing the auth cache,
+        which can hold a stale token after rollover) so the authorize request is
+        signed with the live bearer. If no fresh token is available, keep the
+        existing one rather than crashing.
+        """
+        if not self.user_id:
+            return
+        try:
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not fresh_token:
+                self.logger.warning(
+                    "No fresh auth token found on reconnect - keeping existing token"
+                )
+                return
+            self.auth_token = fresh_token
+            self.logger.info("Refreshed Upstox auth token from database for reconnect")
+        except Exception as e:
+            self.logger.error(f"Error refreshing auth token on reconnect: {e}")
+
     def _get_websocket_url(self) -> str | None:
         """Get WebSocket URL from Upstox authorization endpoint"""
         try:
@@ -329,7 +422,7 @@ class UpstoxWebSocketClient:
             auth_data = response.json()
             ws_url = auth_data.get("data", {}).get("authorized_redirect_uri")
             if ws_url:
-                self.logger.info(f"Received WebSocket URL: {ws_url}")
+                self.logger.debug(f"Received WebSocket URL: {ws_url}")
                 return ws_url
             else:
                 self.logger.error("No WebSocket URL in auth response")

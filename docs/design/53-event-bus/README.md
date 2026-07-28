@@ -1,251 +1,78 @@
 # 53 - Event Bus
 
-## Overview
+## Scope
 
-The Event Bus is a lightweight, in-process pub/sub system that decouples order side-effects (logging, SocketIO notifications, Telegram alerts) from the order execution pipeline. Services publish typed events; subscribers handle side-effects independently.
+`utils/event_bus.py` is a lightweight, **per-process** topic bus for asynchronous order side effects. It is not the cross-process market-data bus; ZeroMQ owns that job.
 
-## Architecture Diagram
+Each Flask worker that imports the global singleton has its own subscriber registry and 10-worker `ThreadPoolExecutor`. A service publishes in the process handling the request, and that process dispatches its local subscribers.
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Event Bus Architecture                                │
-└──────────────────────────────────────────────────────────────────────────────┘
+## Flow
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Publishers (Order Services)                                                 │
-│                                                                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │ place_order      │  │ basket_order    │  │ modify_order    │             │
-│  │ place_smart_order│  │ split_order     │  │ cancel_order    │             │
-│  │ options_order    │  │ multiorder      │  │ close_position  │             │
-│  └────────┬─────────┘  └────────┬────────┘  └────────┬────────┘             │
-│           │                     │                     │                      │
-│           └─────────────────────┼─────────────────────┘                      │
-│                                 │                                            │
-│                    bus.publish(TypedEvent)                                   │
-│                                 │                                            │
-└─────────────────────────────────┼────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Event Bus (utils/event_bus.py)                                              │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │  - Topic-based routing (e.g., "order.placed", "basket.completed")   │   │
-│  │  - Thread-safe subscribe/unsubscribe/publish                        │   │
-│  │  - ThreadPoolExecutor (10 workers) for async dispatch               │   │
-│  │  - Error isolation: one subscriber failure doesn't affect others    │   │
-│  │  - Global singleton instance                                        │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-│                                                                              │
-└──────────────────────────────────┬───────────────────────────────────────────┘
-                                   │
-                    ┌──────────────┼──────────────┐
-                    ▼              ▼              ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Subscribers (subscribers/)                                                  │
-│                                                                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │ Log Subscriber   │  │ SocketIO        │  │ Telegram        │             │
-│  │                  │  │ Subscriber      │  │ Subscriber      │             │
-│  │ Live mode:       │  │                 │  │                 │             │
-│  │  → order_logs    │  │ Live mode:      │  │ Calls           │             │
-│  │    (openalgo.db) │  │  → order_event  │  │ send_order_alert│             │
-│  │                  │  │  → cancel_event │  │ for all event   │             │
-│  │ Analyze mode:    │  │  → modify_event │  │ types with      │             │
-│  │  → analyzer_logs │  │                 │  │ mode awareness  │             │
-│  │    (openalgo.db) │  │ Analyze mode:   │  │                 │             │
-│  │                  │  │  → analyzer_    │  │ Future:         │             │
-│  │ Future:          │  │    update       │  │ strategy_store  │             │
-│  │ strategy_tracker │  │                 │  │ risk_manager    │             │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+```text
+order/sandbox service
+  -> typed event with topic
+  -> EventBus.publish()
+  -> shared per-process thread pool
+     -> log subscriber
+     -> Socket.IO subscriber
+     -> Telegram subscriber
+     -> WhatsApp subscriber
 ```
 
-## Event Types
+Callbacks are copied under a lock and submitted without blocking the publisher. `_safe_call` catches/logs subscriber exceptions so notification or logging failure cannot change the order response.
 
-### Base Event
+## Topics
 
-All events inherit from `OrderEvent` which carries common fields:
+| Topic | Event |
+|---|---|
+| `order.placed` | Successful single order |
+| `order.failed` | Failed order |
+| `order.no_action` | Smart order already at target |
+| `order.modified`, `order.modify_failed` | Modify result |
+| `order.cancelled`, `order.cancel_failed` | Cancel result |
+| `orders.all_cancelled` | Cancel-all summary |
+| `position.closed` | Close-position summary |
+| `basket.completed` | Basket summary |
+| `split.completed` | Split summary |
+| `options.completed` | Options-order summary |
+| `multiorder.completed` | Multi-leg summary |
+| `analyzer.error` | Analyzer validation/runtime error |
+| `sandbox.order_filled` | Engine-driven fill refresh |
+| `sandbox.auto_squareoff` | Engine-driven square-off refresh |
+| `sandbox.t1_settlement` | Engine-driven settlement refresh |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `topic` | str | Event routing key (e.g., `"order.placed"`) |
-| `mode` | str | `"live"` or `"analyze"` — subscribers branch on this |
-| `api_type` | str | Operation name (`"placeorder"`, `"cancelorder"`, etc.) |
-| `request_data` | dict | Cleaned request data (apikey stripped) for logging |
-| `response_data` | dict | Response data for logging |
-| `api_key` | str | For Telegram username resolution (never persisted to logs) |
+Batch services suppress child events and publish one summary, preventing duplicate logs/chat alerts.
 
-### Event Catalog
+## Subscribers
 
-| Event | Topic | When Fired |
-|-------|-------|------------|
-| `OrderPlacedEvent` | `order.placed` | Single order successfully placed (live or analyze) |
-| `OrderFailedEvent` | `order.failed` | Order fails (validation, broker rejection, module not found) |
-| `SmartOrderNoActionEvent` | `order.no_action` | Smart order determines no action needed |
-| `OrderModifiedEvent` | `order.modified` | Order successfully modified |
-| `OrderModifyFailedEvent` | `order.modify_failed` | Order modification fails |
-| `OrderCancelledEvent` | `order.cancelled` | Single order successfully cancelled |
-| `OrderCancelFailedEvent` | `order.cancel_failed` | Order cancellation fails |
-| `AllOrdersCancelledEvent` | `orders.all_cancelled` | Cancel-all-orders completes |
-| `PositionClosedEvent` | `position.closed` | Position(s) closed |
-| `BasketCompletedEvent` | `basket.completed` | All basket orders complete (one summary) |
-| `SplitCompletedEvent` | `split.completed` | All split sub-orders complete (one summary) |
-| `OptionsOrderCompletedEvent` | `options.completed` | Options split order completes |
-| `MultiOrderCompletedEvent` | `multiorder.completed` | Multi-leg options order completes |
-| `AnalyzerErrorEvent` | `analyzer.error` | Validation/unexpected errors |
+`subscribers/register_all()` wires log, Socket.IO, Telegram, and WhatsApp callbacks for order topics. Sandbox engine-internal topics go only to Socket.IO because they are UI refresh signals rather than user API calls; they are not duplicated into analyzer logs or chat alerts.
 
-### Batch Event Pattern
+Telegram/WhatsApp subscribers skip failure and analyzer-error chat notifications. The log and Socket.IO consumers still record/emit the applicable state.
 
-Batch operations (basket, split, options multi-order) publish ONE summary event after all sub-orders complete. Individual sub-orders do NOT publish events — this prevents N+1 notifications.
+## Event Data
 
-```
-Basket with 20 orders:
-  place_order(emit_event=False) × 20   → no events
-  BasketCompletedEvent × 1              → log + socketio + telegram fire ONCE
-```
+Order events carry mode, API type, strategy, request/response data, and fields needed for notification formatting. API keys may be passed in memory for username resolution but must be stripped from persisted request logs. Do not add broker tokens or other decrypted credentials to an event.
 
-## File Structure
+## Why Per-Process
 
-```
-utils/
-  event_bus.py              ← EventBus class (~70 lines)
+The bus decouples side effects on a single request path with minimal dependencies. It makes no durability or cross-worker delivery guarantee. Features that require cross-process delivery, replay, or durable queues need a different transport; do not infer those properties from this bus.
 
-events/
-  __init__.py               ← Re-exports all event types
-  base.py                   ← OrderEvent base dataclass
-  order_events.py           ← OrderPlaced, OrderFailed, SmartOrderNoAction, Modified, Cancelled
-  batch_events.py           ← Basket, Split, Options, MultiOrder completed
-  position_events.py        ← PositionClosed, AllOrdersCancelled
-  analyzer_events.py        ← AnalyzerError
+## Adding An Event Or Subscriber
 
-subscribers/
-  __init__.py               ← register_all() wires all subscribers at startup
-  log_subscriber.py         ← Logging (live → order_logs, analyze → analyzer_logs)
-  socketio_subscriber.py    ← SocketIO events (8 distinct event names)
-  telegram_subscriber.py    ← Telegram alerts via telegram_alert_service
-```
+1. Add a typed event under `events/` with a stable topic.
+2. Publish once at the service boundary, after the outcome is known.
+3. Add callbacks and registrations in `subscribers/__init__.py`.
+4. Keep callbacks idempotent where duplicate upstream requests are possible.
+5. Test publisher response independence and subscriber failure isolation.
 
-## How It Works
-
-### Publishing (Service Layer)
-
-```python
-from events import OrderPlacedEvent
-from utils.event_bus import bus
-
-# After successful broker call:
-bus.publish(OrderPlacedEvent(
-    mode="live",
-    api_type="placeorder",
-    strategy=order_data.get("strategy", ""),
-    symbol=order_data.get("symbol", ""),
-    orderid=str(order_id),
-    request_data=cleaned_request,
-    response_data={"status": "success", "orderid": order_id},
-    api_key=api_key,
-))
-```
-
-### Subscribing (Startup)
-
-```python
-# subscribers/__init__.py — called once from app.py
-from utils.event_bus import bus
-
-def register_all():
-    bus.subscribe("order.placed", log_subscriber.on_order_placed)
-    bus.subscribe("order.placed", socketio_subscriber.on_order_placed)
-    bus.subscribe("order.placed", telegram_subscriber.on_order_placed)
-    # ... 14 topics × 3 subscribers = 42+ registrations
-```
-
-### Mode-Aware Subscribers
-
-```python
-# subscribers/log_subscriber.py
-def _log_event(event):
-    if event.mode == "analyze":
-        async_log_analyzer(event.request_data, event.response_data, event.api_type)
-    else:
-        async_log_order(event.api_type, event.request_data, event.response_data)
-```
-
-## SocketIO Event Mapping
-
-| Bus Event | Live SocketIO Event | Analyze SocketIO Event |
-|-----------|--------------------|-----------------------|
-| `order.placed` | `order_event` | `analyzer_update` |
-| `order.no_action` | `order_notification` | `analyzer_update` |
-| `order.modified` | `modify_order_event` | `analyzer_update` |
-| `order.cancelled` | `cancel_order_event` | `analyzer_update` |
-| `orders.all_cancelled` | `cancel_order_event` (batch) | `analyzer_update` |
-| `position.closed` | `close_position_event` | `analyzer_update` |
-| `basket.completed` | `order_event` (batch) | `analyzer_update` |
-| `split.completed` | `order_event` (batch) | `analyzer_update` |
-| `options.completed` | `order_event` (batch) | `analyzer_update` |
-| `multiorder.completed` | `order_event` (batch) | `analyzer_update` |
-| `analyzer.error` | — | `analyzer_update` |
-
-## Design Decisions
-
-### Why In-Process (Not Redis/ZeroMQ)?
-
-OpenAlgo is a single-user, single-process application using SQLite. External message brokers add infrastructure complexity for zero benefit at this scale. The EventBus is ~70 lines of Python using stdlib `threading` and `concurrent.futures`.
-
-### Why ThreadPoolExecutor?
-
-Subscribers must not block the order response. The thread pool (10 workers) dispatches all callbacks asynchronously. The `_safe_call` wrapper isolates failures — one subscriber crashing doesn't affect others.
-
-### Why Typed Events (Dataclasses)?
-
-Prevents silent bugs from dict key typos. Provides autocomplete in IDEs. The event schema is the contract between publishers and subscribers.
-
-### Why Not Blinker/PyPubSub?
-
-Blinker (Flask's signal library) dispatches callbacks synchronously in the caller's thread. PyPubSub adds a dependency for what's essentially a dict of lists. Neither provides async dispatch or error isolation.
-
-## Adding a New Subscriber
-
-To add a new consumer (e.g., strategy-level position tracking):
-
-```python
-# subscribers/strategy_store.py (new file)
-def on_order_placed(event):
-    # Update strategy position from fill
-    ...
-
-def on_basket_completed(event):
-    # Update positions for all basket legs
-    ...
-```
-
-```python
-# subscribers/__init__.py — add registration
-bus.subscribe("order.placed", strategy_store.on_order_placed)
-bus.subscribe("basket.completed", strategy_store.on_basket_completed)
-```
-
-Zero changes to any order service. This is the primary architectural benefit.
-
-## Security
-
-- `api_key` is passed in events only for Telegram username resolution — never written to log databases
-- `request_data` has `apikey` stripped before event publication
-- Event bus is in-process only — no network exposure
-- Thread pool provides isolation — subscriber exceptions are caught and logged
-
-## Key Files Reference
+## Key Files
 
 | File | Purpose |
-|------|---------|
-| `utils/event_bus.py` | EventBus class (singleton) |
-| `events/__init__.py` | All event type exports |
-| `events/base.py` | OrderEvent base class |
-| `subscribers/__init__.py` | register_all() startup wiring |
-| `subscribers/log_subscriber.py` | DB logging (live + analyze) |
-| `subscribers/socketio_subscriber.py` | Real-time UI events |
+|---|---|
+| `utils/event_bus.py` | Bus and executor singleton |
+| `events/` | Typed payloads |
+| `subscribers/__init__.py` | Registration |
+| `subscribers/log_subscriber.py` | Database logging |
+| `subscribers/socketio_subscriber.py` | Browser refresh/events |
 | `subscribers/telegram_subscriber.py` | Telegram alerts |
-| `app.py` | Subscriber registration at startup |
+| `subscribers/whatsapp_subscriber.py` | WhatsApp alerts |

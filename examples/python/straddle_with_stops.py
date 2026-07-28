@@ -1,16 +1,17 @@
+import os
 import time
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from openalgo import api
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 # =====================================
 # OpenAlgo Client
 # =====================================
 client = api(
-    api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
+    api_key=os.getenv("OPENALGO_API_KEY"),
     host="http://127.0.0.1:5000",
 )
 
@@ -24,7 +25,7 @@ LOTS = 1
 def place_stoploss_order(symbol, sl_trigger, quantity):
     sl_price = round(sl_trigger + 2, 2)  # Trigger + 2 buffer for SL-LIMIT
 
-    print(f"🔻 Sending SL Order → {symbol}")
+    print(f"Sending SL Order → {symbol}")
     print(f"Trigger: {sl_trigger} | Price: {sl_price}")
 
     response = client.placeorder(
@@ -48,7 +49,7 @@ def place_stoploss_order(symbol, sl_trigger, quantity):
 # MAIN STRATEGY: ENTRY + STOPLOSS
 # =====================================
 def place_nifty_straddle_with_sl():
-    print("\n🔥 Scheduled Trigger — Placing NIFTY Straddle...")
+    print("\n Scheduled Trigger — Placing NIFTY Straddle...")
 
     # STEP 1 — Fetch NIFTY quote
     quote = client.quotes(symbol="NIFTY", exchange="NSE_INDEX")
@@ -67,7 +68,7 @@ def place_nifty_straddle_with_sl():
                 "option_type": "CE",
                 "action": "SELL",
                 "quantity": qty,
-                "expiry_date": "09DEC25",
+                "expiry_date": "30JUN26",
                 "product": "NRML",
                 "pricetype": "MARKET",
                 "splitsize": 0,
@@ -77,7 +78,7 @@ def place_nifty_straddle_with_sl():
                 "option_type": "PE",
                 "action": "SELL",
                 "quantity": qty,
-                "expiry_date": "09DEC25",
+                "expiry_date": "30JUN26",
                 "product": "NRML",
                 "pricetype": "MARKET",
                 "splitsize": 0,
@@ -121,7 +122,7 @@ def place_nifty_straddle_with_sl():
 
     place_stoploss_order(symbol=pe_symbol, sl_trigger=pe_sl_trigger, quantity=qty)
 
-    print("\n🎯 All Stoploss Orders Placed Successfully.")
+    print("\n All Stoploss Orders Placed Successfully.")
 
 
 # =====================================
@@ -141,7 +142,7 @@ def schedule_straddle():
     )
 
     scheduler.start()
-    print("✅ Scheduled NIFTY 09DEC25 Straddle + SL at 20:49 AM IST (Mon–Sun)")
+    print("Scheduled NIFTY 09DEC25 Straddle + SL at 20:49 AM IST (Mon–Sun)")
     return scheduler
 
 

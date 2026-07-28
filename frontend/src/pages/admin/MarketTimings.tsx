@@ -1,7 +1,6 @@
 import { ArrowLeft, Clock, Pencil, Save, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { adminApi } from '@/api/admin'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -16,6 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { MarketTiming, TodayTiming } from '@/types/admin'
+import { showToast } from '@/utils/toast'
 
 export default function MarketTimingsPage() {
   const [timings, setTimings] = useState<MarketTiming[]>([])
@@ -34,6 +34,7 @@ export default function MarketTimingsPage() {
   const [checkTimings, setCheckTimings] = useState<TodayTiming[] | null>(null)
   const [isChecking, setIsChecking] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of timings on mount; fetchTimings is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchTimings()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,7 +46,7 @@ export default function MarketTimingsPage() {
       setTimings(response.data)
       setTodayTimings(response.today_timings)
       setToday(response.today)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load market timings', 'admin')
     } finally {
       setIsLoading(false)
@@ -118,6 +119,7 @@ export default function MarketTimingsPage() {
       NFO: 'bg-green-500',
       BFO: 'bg-yellow-500',
       MCX: 'bg-purple-500',
+      NCO: 'bg-emerald-500',
       CDS: 'bg-orange-500',
       BCD: 'bg-pink-500',
     }

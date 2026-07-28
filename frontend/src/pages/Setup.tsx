@@ -1,7 +1,6 @@
 import { Check, Info, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
+import { showToast } from '@/utils/toast'
 
 interface PasswordRequirements {
   length: boolean
@@ -130,7 +130,7 @@ export default function Setup() {
       } else {
         setError('Setup failed. Please try again.')
       }
-    } catch (err) {
+    } catch (_err) {
       setError('Setup failed. Please check your connection and try again.')
     } finally {
       setIsLoading(false)
@@ -169,8 +169,9 @@ export default function Setup() {
               <Info className="h-5 w-5" />
               <AlertDescription>
                 <strong className="block mb-1">First Time Setup</strong>
-                This form will create the initial administrator account. You'll receive a TOTP QR
-                code for password resets after setup.
+                This form will create the initial administrator account. After signing in, open your
+                Profile and scan the TOTP QR code there to enable two-factor authentication and
+                TOTP-based password resets.
               </AlertDescription>
             </Alert>
           </div>

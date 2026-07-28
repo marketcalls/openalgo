@@ -12,7 +12,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -27,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
@@ -49,9 +49,9 @@ export default function ApiKey() {
   const [orderMode, setOrderMode] = useState<'auto' | 'semi_auto'>('auto')
   const [isTogglingMode, setIsTogglingMode] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time API key load on mount; fetchApiKeyData has no reactive inputs
   useEffect(() => {
     fetchApiKeyData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchApiKeyData = async () => {
@@ -76,7 +76,7 @@ export default function ApiKey() {
           showToast.error('Failed to load API key - please refresh', 'system')
         }
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load API key', 'system')
     } finally {
       setIsLoading(false)
@@ -123,7 +123,7 @@ export default function ApiKey() {
       } else {
         showToast.error(data.error || 'Failed to generate API key', 'system')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to generate API key', 'system')
     } finally {
       setIsRegenerating(false)
@@ -154,11 +154,14 @@ export default function ApiKey() {
 
       if (data.mode) {
         setOrderMode(data.mode)
-        showToast.success(`Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`, 'system')
+        showToast.success(
+          `Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`,
+          'system'
+        )
       } else {
         showToast.error(data.error || 'Failed to update order mode', 'system')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to update order mode', 'system')
     } finally {
       setIsTogglingMode(false)

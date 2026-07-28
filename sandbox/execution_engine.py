@@ -24,13 +24,47 @@ import pytz
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.auth_db import get_auth_token_broker
-from database.sandbox_db import SandboxOrders, SandboxPositions, SandboxTrades, db_session
+from database.sandbox_db import (
+    SandboxHoldings,
+    SandboxOrders,
+    SandboxPositions,
+    SandboxTrades,
+    db_session,
+)
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager, reconcile_margin, validate_margin_consistency
 from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def quote_looks_stale(quote) -> bool:
+    """Return True when a quote's LTP contradicts its own OHLC range.
+
+    Guards against filling at a stale last-traded price (issue #1638): for a
+    symbol that has not printed a fresh tick, the broker's REST quote can carry
+    a last_price that is days or weeks old while the same payload's day-OHLC is
+    current. Observed fill at 1047.60 against a day low of 1262 -- a fake +22%
+    P&L. An LTP outside the day's own [low, high] is the broker contradicting
+    itself, so the fill is deferred until a coherent quote arrives.
+
+    Deliberately conservative: when high/low are missing or zero (symbol has
+    not traded this session, or a WebSocket tick-built quote with no OHLC)
+    there is nothing to cross-check and this returns False -- a tick-built
+    quote is live by construction, and blocking every pre-first-trade fill
+    would stall legitimate orders. The truly-untraded stale case needs quote
+    timestamps, which the broker quote contract does not carry today.
+    """
+    try:
+        ltp = Decimal(str(quote.get("ltp", 0)))
+        high = Decimal(str(quote.get("high", 0)))
+        low = Decimal(str(quote.get("low", 0)))
+    except Exception:
+        return False
+    if ltp <= 0 or high <= 0 or low <= 0:
+        return False
+    return not (low <= ltp <= high)
 
 
 class ExecutionEngine:
@@ -48,8 +82,12 @@ class ExecutionEngine:
         Respects rate limits through batch processing
         """
         try:
-            # Get all pending orders
-            pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
+            # Get all pending orders - "open" (resting in the regular book) and
+            # "trigger pending" (SL/SL-M resting in the exchange's Stop-Loss
+            # book, not yet released) both need tick-by-tick monitoring.
+            pending_orders = SandboxOrders.query.filter(
+                SandboxOrders.order_status.in_(["open", "trigger pending"])
+            ).all()
 
             if not pending_orders:
                 logger.debug("No pending orders to process")
@@ -205,6 +243,66 @@ class ExecutionEngine:
 
         return quote_cache
 
+    def _publish_fill_event(
+        self, orderid, tradeid, symbol, exchange, action, quantity, price, product, strategy,
+        user_id=None, pricetype="", trigger_price=0.0,
+    ):
+        """Emit SandboxOrderFilledEvent so the analyzer-mode UI auto-refreshes,
+        and OrderUpdateEvent so the real-time order-update channel (socketio +
+        websocket_proxy relay) picks it up too.
+
+        Logged at INFO so it's visible in server logs and confirms the
+        event-bus path was reached (any breakage in registration or imports
+        would suppress the log too).
+        """
+        try:
+            from events import OrderUpdateEvent, SandboxOrderFilledEvent
+            from utils.event_bus import bus
+
+            bus.publish(
+                SandboxOrderFilledEvent(
+                    mode="analyze",
+                    api_type="sandbox.fill",
+                    orderid=orderid,
+                    tradeid=tradeid,
+                    symbol=symbol,
+                    exchange=exchange,
+                    action=action,
+                    quantity=quantity,
+                    price=price,
+                    product=product,
+                    strategy=strategy,
+                )
+            )
+            bus.publish(
+                OrderUpdateEvent(
+                    mode="analyze",
+                    api_type="sandbox.fill",
+                    request_data={"user_id": user_id} if user_id else {},
+                    broker="sandbox",
+                    orderid=orderid,
+                    symbol=symbol,
+                    exchange=exchange,
+                    action=action,
+                    quantity=quantity,
+                    price=price,
+                    pricetype=pricetype,
+                    trigger_price=trigger_price,
+                    product=product,
+                    order_status="complete",
+                    filled_quantity=quantity,
+                    pending_quantity=0,
+                    average_price=price,
+                )
+            )
+            logger.info(
+                f"[sandbox-fill] Published SandboxOrderFilledEvent for {orderid} "
+                f"({symbol} {action} {quantity} @ {price})"
+            )
+        except Exception as pub_err:
+            # Never let event-bus failures break order execution
+            logger.debug(f"Failed to publish SandboxOrderFilledEvent: {pub_err}")
+
     def _process_order(self, order, quote):
         """
         Process a single order based on current quote
@@ -230,6 +328,22 @@ class ExecutionEngine:
                     logger.info(
                         f"Updated order {order.orderid} status to complete (was in race condition)"
                     )
+                    # Race-condition cleanup transitions an order to complete
+                    # without going through _execute_order, so emit here too.
+                    self._publish_fill_event(
+                        orderid=order.orderid,
+                        tradeid=existing_trade.tradeid,
+                        symbol=order.symbol,
+                        exchange=order.exchange,
+                        action=order.action,
+                        quantity=int(order.quantity),
+                        price=float(existing_trade.price),
+                        product=order.product,
+                        strategy=order.strategy or "",
+                        user_id=order.user_id,
+                        pricetype=order.price_type or "",
+                        trigger_price=float(order.trigger_price or 0),
+                    )
                 return
 
             ltp = Decimal(str(quote.get("ltp", 0)))
@@ -238,6 +352,27 @@ class ExecutionEngine:
 
             if ltp <= 0:
                 logger.warning(f"Invalid LTP for order {order.orderid}: {ltp}")
+                return
+
+            # Stale-quote guard (issue #1638): defer, don't fill. The order
+            # stays open and fills on a later cycle once a coherent quote
+            # arrives. Covers every path into a fill -- immediate MARKET
+            # execution at placement and the polling loop both come through
+            # here.
+            if quote_looks_stale(quote):
+                logger.warning(
+                    f"Deferring order {order.orderid} ({order.symbol}): quote LTP {ltp} "
+                    f"is outside its own day range [{quote.get('low')}, {quote.get('high')}] "
+                    f"-- treating as stale (see issue #1638)"
+                )
+                return
+
+            # SL/SL-M orders resting in "trigger pending" (the Stop-Loss book,
+            # not the regular book) only ever get a trigger check here - never
+            # the full open-order price-type logic below, which assumes an
+            # order that is already live in the regular book.
+            if order.order_status == "trigger pending":
+                self._process_trigger_pending_order(order, ltp)
                 return
 
             # Determine if order should be executed based on price type
@@ -298,6 +433,69 @@ class ExecutionEngine:
         except Exception as e:
             logger.exception(f"Error processing order {order.orderid}: {e}")
 
+    def _process_trigger_pending_order(self, order, ltp):
+        """
+        Check an SL/SL-M order resting in "trigger pending" against the
+        current LTP and release it from the Stop-Loss book once triggered.
+
+        SL-M has no resting phase once triggered: a real exchange converts it
+        straight to a market order, so it goes directly to "complete" here.
+
+        SL only fills immediately if the limit price is ALSO satisfiable on
+        this same tick (mirrors the "trigger already met at placement" fast
+        path in order_manager.py's place_order - both places treat a
+        simultaneous trigger+limit match as an instant fill rather than an
+        observable middle state). Otherwise it transitions to "open" - now
+        resting live in the regular order book, unfilled - and the unmodified
+        SL branch in _process_order picks it up on subsequent ticks exactly
+        like any other open SL order (re-checking the trigger condition there
+        is safe: once crossed, BUY prices staying at/above trigger, or SELL
+        prices staying at/below it, keep satisfying the same comparison).
+        """
+        try:
+            trigger_met = False
+            if order.action == "BUY" and ltp >= order.trigger_price:
+                trigger_met = True
+            elif order.action == "SELL" and ltp <= order.trigger_price:
+                trigger_met = True
+
+            if not trigger_met:
+                return  # Still resting in the Stop-Loss book, nothing to do
+
+            if order.price_type == "SL-M":
+                logger.info(
+                    f"SL-M order {order.orderid} triggered at LTP {ltp} "
+                    f"(trigger={order.trigger_price}) - executing at market"
+                )
+                self._execute_order(order, ltp)
+                return
+
+            # SL: triggered - check whether the limit price is also
+            # satisfiable right now, same tick.
+            limit_met = (order.action == "BUY" and ltp <= order.price) or (
+                order.action == "SELL" and ltp >= order.price
+            )
+            if limit_met:
+                logger.info(
+                    f"SL order {order.orderid} triggered and limit satisfied at LTP {ltp} "
+                    f"(trigger={order.trigger_price}, limit={order.price}) - executing"
+                )
+                self._execute_order(order, ltp)
+                return
+
+            logger.info(
+                f"SL order {order.orderid} triggered at LTP {ltp} "
+                f"(trigger={order.trigger_price}) but limit {order.price} not yet "
+                f"satisfiable - now resting open in the regular book"
+            )
+            order.order_status = "open"
+            order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+            db_session.commit()
+            self._publish_order_update_event(order, order_status="open")
+
+        except Exception as e:
+            logger.exception(f"Error processing trigger-pending order {order.orderid}: {e}")
+
     def _execute_order(self, order, execution_price):
         """
         Execute an order - create trade, update positions, release/adjust margin
@@ -341,18 +539,73 @@ class ExecutionEngine:
 
             logger.info(f"Order {order.orderid} executed successfully. Trade ID: {tradeid}")
 
+            # Notify UI subscribers (OrderBook / TradeBook / Positions auto-refresh).
+            # Engine-internal fills don't go through the service layer, so the
+            # service-layer publish points (place_order_service etc.) never see
+            # them — without this the analyzer UI sits stale until manual refresh.
+            self._publish_fill_event(
+                orderid=order.orderid,
+                tradeid=tradeid,
+                symbol=order.symbol,
+                exchange=order.exchange,
+                action=order.action,
+                quantity=int(order.quantity),
+                price=float(execution_price),
+                product=order.product,
+                strategy=order.strategy or "",
+                user_id=order.user_id,
+                pricetype=order.price_type or "",
+                trigger_price=float(order.trigger_price or 0),
+            )
+
         except Exception as e:
             db_session.rollback()
             logger.exception(f"Error executing order {order.orderid}: {e}")
 
             # Mark order as rejected
+            rejection_reason = f"Execution error: {str(e)}"
             try:
                 order.order_status = "rejected"
-                order.rejection_reason = f"Execution error: {str(e)}"
+                order.rejection_reason = rejection_reason
                 order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
                 db_session.commit()
-            except:
+            except Exception:
                 db_session.rollback()
+
+            self._publish_order_update_event(
+                order, order_status="rejected", rejection_reason=rejection_reason
+            )
+
+    def _publish_order_update_event(self, order, order_status, rejection_reason=""):
+        """Publish OrderUpdateEvent for a sandbox order transition that isn't
+        a fill (rejection, cancellation) — mirrors _publish_fill_event's
+        never-break-the-caller error isolation.
+        """
+        try:
+            from events import OrderUpdateEvent
+            from utils.event_bus import bus
+
+            bus.publish(
+                OrderUpdateEvent(
+                    mode="analyze",
+                    api_type="sandbox.order_update",
+                    request_data={"user_id": order.user_id} if order.user_id else {},
+                    broker="sandbox",
+                    orderid=order.orderid,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    action=order.action,
+                    quantity=int(order.quantity),
+                    price=float(order.price or 0),
+                    pricetype=order.price_type or "",
+                    trigger_price=float(order.trigger_price or 0),
+                    product=order.product,
+                    order_status=order_status,
+                    rejection_reason=rejection_reason,
+                )
+            )
+        except Exception as pub_err:
+            logger.debug(f"Failed to publish OrderUpdateEvent for {order.orderid}: {pub_err}")
 
     def _update_position(self, order, execution_price):
         """
@@ -365,6 +618,24 @@ class ExecutionEngine:
         """
         try:
             fund_manager = FundManager(order.user_id)
+
+            # A CNC SELL takes the same route as every other fill: it nets
+            # against any open position and, beyond that, leaves a negative CNC
+            # carry-forward position. T+1 settlement then reduces the holding and
+            # credits the proceeds (holdings_manager.process_t1_settlement, which
+            # already handles negative positions).
+            #
+            # It deliberately does NOT reduce the holding at fill time. Real
+            # delivery selling settles on T+1, and the buy side already behaves
+            # that way. Reducing instantly made the two halves of one product
+            # disagree.
+            #
+            # Issue #1640 was the opposite failure: a short was opened for shares
+            # the user owned AND the holding was left untouched, so nothing could
+            # square it off. What makes the negative position safe now is that
+            # settlement nets it against the holding, and order validation counts
+            # the signed position so the same shares cannot be sold twice.
+            effective_qty = order.quantity
 
             # Check if position exists
             position = SandboxPositions.query.filter_by(
@@ -387,7 +658,7 @@ class ExecutionEngine:
                     symbol=order.symbol,
                     exchange=order.exchange,
                     product=order.product,
-                    quantity=order.quantity if order.action == "BUY" else -order.quantity,
+                    quantity=effective_qty if order.action == "BUY" else -effective_qty,
                     average_price=execution_price,
                     ltp=execution_price,
                     pnl=Decimal("0.00"),
@@ -404,7 +675,7 @@ class ExecutionEngine:
             else:
                 # Update existing position (netting logic)
                 old_quantity = position.quantity
-                new_quantity = order.quantity if order.action == "BUY" else -order.quantity
+                new_quantity = effective_qty if order.action == "BUY" else -effective_qty
                 final_quantity = old_quantity + new_quantity
 
                 # Special case: Reopening a closed position (old_quantity = 0)
@@ -596,6 +867,39 @@ class ExecutionEngine:
                     )
 
             db_session.commit()
+
+            # Event-driven MTM: keep the WS engine's position-feed refs in
+            # sync with the position book. After any fill, either the symbol
+            # has open quantity (subscribe so MarketDataService stays warm and
+            # the MTM loop reads ticks instead of REST) or it just went flat
+            # (release the subscription). Never allowed to break a fill.
+            try:
+                from sandbox.websocket_execution_engine import (
+                    get_websocket_execution_engine,
+                )
+
+                ws_engine = get_websocket_execution_engine()
+                if ws_engine is not None:
+                    has_open = (
+                        SandboxPositions.query.filter_by(
+                            user_id=order.user_id,
+                            symbol=order.symbol,
+                            exchange=order.exchange,
+                        )
+                        .filter(SandboxPositions.quantity != 0)
+                        .count()
+                        > 0
+                    )
+                    if has_open:
+                        ws_engine.notify_position_opened(
+                            order.user_id, order.symbol, order.exchange
+                        )
+                    else:
+                        ws_engine.notify_position_closed(
+                            order.user_id, order.symbol, order.exchange
+                        )
+            except Exception:
+                logger.debug("Position feed notify failed (non-fatal)", exc_info=True)
 
             # Validate margin consistency after position update
             is_consistent, discrepancy = validate_margin_consistency(order.user_id)

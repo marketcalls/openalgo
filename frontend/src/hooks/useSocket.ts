@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { useAlertStore, type AlertCategories } from '@/stores/alertStore'
+import { type AlertCategories, useAlertStore } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useSessionStore } from '@/stores/sessionStore'
 
@@ -65,8 +66,13 @@ const showCategoryToast = (
 }
 
 export function useSocket() {
+  const navigate = useNavigate()
   const { isAuthenticated } = useAuthStore()
   const socketRef = useRef<Socket | null>(null)
+  // Reactive copy so consumers (SocketProvider -> useOrderEventRefresh) can share
+  // this ONE connection instead of each opening their own (browser per-host
+  // connection limit is shared across tabs; extra polling sockets exhaust it).
+  const [socketInstance, setSocketInstance] = useState<Socket | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const lastAudioTimeRef = useRef<number>(0)
   const audioEnabledRef = useRef<boolean>(false)
@@ -152,6 +158,7 @@ export function useSocket() {
     })
 
     const socket = socketRef.current
+    setSocketInstance(socket)
 
     // Force logout from another device
     socket.on('force_logout', (data: { message: string }) => {
@@ -164,7 +171,7 @@ export function useSocket() {
         duration: 10000,
       })
       setTimeout(() => {
-        window.location.href = '/login'
+        navigate('/login', { replace: true })
       }, 2000)
     })
 
@@ -195,11 +202,7 @@ export function useSocket() {
     // Close position notification
     socket.on('close_position_event', (data: ClosePositionEventData) => {
       playAlertSound('orders')
-      showCategoryToast(
-        'success',
-        data.message || 'All Open Positions Squared Off',
-        'positions'
-      )
+      showCategoryToast('success', data.message || 'All Open Positions Squared Off', 'positions')
     })
 
     // Order placement notification
@@ -329,14 +332,15 @@ export function useSocket() {
 
     return () => {
       socket.disconnect()
+      setSocketInstance(null)
       ;['click', 'touchstart', 'keydown'].forEach((eventType) => {
         document.removeEventListener(eventType, handleInteraction)
       })
     }
-  }, [isAuthenticated, playAlertSound, enableAudio])
+  }, [isAuthenticated, playAlertSound, enableAudio, navigate])
 
   return {
-    socket: socketRef.current,
+    socket: socketInstance,
     playAlertSound,
   }
 }

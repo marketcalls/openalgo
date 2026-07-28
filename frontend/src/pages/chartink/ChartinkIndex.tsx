@@ -12,7 +12,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { chartinkApi } from '@/api/chartink'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -20,20 +19,24 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { ChartinkStrategy } from '@/types/chartink'
+import { showToast } from '@/utils/toast'
 
 export default function ChartinkIndex() {
   const navigate = useNavigate()
   const [strategies, setStrategies] = useState<ChartinkStrategy[]>([])
   const [loading, setLoading] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const [hostConfig, setHostConfig] = useState<{
+    host_server: string
+    is_localhost: boolean
+  } | null>(null)
 
   const fetchStrategies = async () => {
     try {
       setLoading(true)
       const data = await chartinkApi.getStrategies()
       setStrategies(data)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load Chartink strategies', 'chartink')
     } finally {
       setLoading(false)
@@ -47,17 +50,19 @@ export default function ChartinkIndex() {
         const response = await fetch('/api/config/host', { credentials: 'include' })
         const data = await response.json()
         setHostConfig(data)
-      } catch (error) {
+      } catch (_error) {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
-          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          is_localhost:
+            window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
         })
       }
     }
     fetchHostConfig()
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch of strategies on mount; fetchStrategies is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchStrategies()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -125,8 +130,8 @@ export default function ChartinkIndex() {
           <AlertDescription>
             Chartink cannot send alerts to localhost. Use <strong>ngrok</strong>,{' '}
             <strong>Cloudflare Tunnel</strong>, <strong>VS Code Dev Tunnel</strong>, or a{' '}
-            <strong>custom domain</strong> to expose your OpenAlgo instance to the internet.
-            Update <code>HOST_SERVER</code> in your <code>.env</code> file with your external URL.
+            <strong>custom domain</strong> to expose your OpenAlgo instance to the internet. Update{' '}
+            <code>HOST_SERVER</code> in your <code>.env</code> file with your external URL.
           </AlertDescription>
         </Alert>
       )}

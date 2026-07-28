@@ -4,6 +4,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 
 const tools = [
   {
+    title: 'Strategy Builder',
+    description:
+      'Build multi-leg option strategies with live Greeks, payoff diagram and what-if simulators',
+    href: '/strategybuilder',
+    color: 'bg-fuchsia-500',
+  },
+  {
+    title: 'Strategy Portfolio',
+    description: 'Saved strategies across MyTrades and Simulation watchlists',
+    href: '/strategybuilder/portfolio',
+    color: 'bg-violet-500',
+  },
+  {
     title: 'Option Chain',
     description: 'Real-time option chain with live Greeks, OI data, and quick order placement',
     href: '/optionchain',
@@ -22,6 +35,13 @@ const tools = [
     color: 'bg-blue-500',
   },
   {
+    title: 'OI Range',
+    description:
+      'Open Interest by strike for a custom range with ATM-relative quick selectors and optional 1-minute auto-refresh',
+    href: '/oirange',
+    color: 'bg-sky-500',
+  },
+  {
     title: 'Max Pain',
     description: 'Max Pain strike calculation with visual pain distribution across strikes',
     href: '/maxpain',
@@ -29,19 +49,22 @@ const tools = [
   },
   {
     title: 'Straddle Chart',
-    description: 'Dynamic ATM Straddle chart with rolling strike, Spot, and Synthetic Futures overlay',
+    description:
+      'Dynamic ATM Straddle chart with rolling strike, Spot, and Synthetic Futures overlay',
     href: '/straddle',
     color: 'bg-teal-500',
   },
   {
     title: 'Straddle PnL',
-    description: 'Simulated intraday ATM straddle P&L with automated N-point adjustments and trade log',
+    description:
+      'Simulated intraday ATM straddle P&L with automated N-point adjustments and trade log',
     href: '/straddlepnl',
     color: 'bg-orange-500',
   },
   {
     title: 'Vol Surface',
-    description: '3D Implied Volatility surface across strikes and expiries using live option chain data',
+    description:
+      '3D Implied Volatility surface across strikes and expiries using live option chain data',
     href: '/volsurface',
     color: 'bg-rose-500',
   },
@@ -50,6 +73,13 @@ const tools = [
     description: 'Gamma Exposure analysis with OI Walls, Net GEX per strike, and top gamma strikes',
     href: '/gex',
     color: 'bg-indigo-500',
+  },
+  {
+    title: 'Gamma Density',
+    description:
+      'Γ×OI density and convexity zones with intraday & to-expiry views, ATM IV, and ±1σ/±2σ expected-move bands',
+    href: '/gammadensity',
+    color: 'bg-lime-500',
   },
   {
     title: 'IV Smile',
@@ -62,6 +92,13 @@ const tools = [
     description: 'Futures candlestick with OI butterfly and daily OI change across strikes',
     href: '/oiprofile',
     color: 'bg-orange-500',
+  },
+  {
+    title: 'Arbitrage',
+    description:
+      'Realtime futures calendar-spread scanner across NFO & MCX, ranked by executable bid/ask spread % with one-click two-leg orders',
+    href: '/arbitrage',
+    color: 'bg-green-600',
   },
 ]
 
@@ -87,7 +124,10 @@ export default function Tools() {
                     className={`w-10 h-10 rounded-lg ${tool.color} flex items-center justify-center`}
                   >
                     <span className="text-white font-bold text-sm">
-                      {tool.title.split(' ').map((w) => w[0]).join('')}
+                      {tool.title
+                        .split(' ')
+                        .map((w) => w[0])
+                        .join('')}
                     </span>
                   </div>
                 </div>
@@ -98,9 +138,7 @@ export default function Tools() {
                 <CardDescription>{tool.description}</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="text-sm text-muted-foreground">
-                  Click to open {tool.title}
-                </div>
+                <div className="text-sm text-muted-foreground">Click to open {tool.title}</div>
               </CardContent>
             </Card>
           </Link>

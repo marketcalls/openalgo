@@ -3,9 +3,9 @@
  * Get market holidays for a year
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { CalendarX } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { HolidaysNodeData } from '@/types/flow'
 
@@ -16,17 +16,8 @@ interface HolidaysNodeProps {
 
 export const HolidaysNode = memo(({ data, selected }: HolidaysNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node min-w-[110px] border-l-purple-400',
-        selected && 'selected'
-      )}
-    >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+    <div className={cn('workflow-node min-w-[110px] border-l-purple-400', selected && 'selected')}>
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="flex h-5 w-5 items-center justify-center rounded bg-purple-400/20 text-purple-400">
@@ -51,11 +42,7 @@ export const HolidaysNode = memo(({ data, selected }: HolidaysNodeProps) => {
           </div>
         )}
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

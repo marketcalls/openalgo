@@ -9,11 +9,12 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.auth_db import get_auth_token
+from database.engine_factory import create_db_engine
 from database.user_db import find_user_by_username
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
@@ -23,7 +24,7 @@ logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
 
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -310,7 +311,7 @@ def process_definedge_allmaster_csv(path):
 
         # Define column names based on DefinedGe format
         # Based on the sample: ['NFO', '144537', 'ZYDUSLIFE', 'ZYDUSLIFE30SEP25P1360', 'OPTSTK', '30092025', '5', '900', 'PE', '136000', '2', '1', 'Unnamed: 12', '1.000000', 'Unnamed: 14']
-        # Format appears to be: Exchange, Token, Name, TradingSymbol, InstrumentType, Expiry, LotSize, TickSize, OptionType, StrikePrice, ...
+        # Format: Exchange, Token, Name, TradingSymbol, InstrumentType, Expiry, TickSize (paise), LotSize, OptionType, StrikePrice (paise), ...
         column_names = [
             "Exchange",
             "Token",
@@ -318,8 +319,8 @@ def process_definedge_allmaster_csv(path):
             "TradingSymbol",
             "InstrumentType",
             "Expiry",
-            "LotSize",
             "TickSize",
+            "LotSize",
             "OptionType",
             "StrikePrice",
             "Col10",
@@ -346,7 +347,9 @@ def process_definedge_allmaster_csv(path):
             pd.to_numeric(df["StrikePrice"], errors="coerce").fillna(0.0) / 100
         )  # Convert paise to rupees
         processed_df["lotsize"] = pd.to_numeric(df["LotSize"], errors="coerce").fillna(1)
-        processed_df["tick_size"] = pd.to_numeric(df["TickSize"], errors="coerce").fillna(0.05)
+        processed_df["tick_size"] = (
+            pd.to_numeric(df["TickSize"], errors="coerce").fillna(5) / 100
+        )  # Convert paise to rupees
 
         # Map instrument types based on exchange and instrument type
         processed_df["instrumenttype"] = df["InstrumentType"].fillna("EQ")
@@ -546,7 +549,7 @@ def process_definedge_allmaster_csv(path):
 
                 expiry_date = datetime.strptime(str(expiry_str), "%d%m%Y")
                 return expiry_date.strftime("%d-%b-%y").upper()
-            except:
+            except Exception:
                 return str(expiry_str)
 
         # Apply expiry formatting for derivatives
@@ -794,7 +797,7 @@ def master_contract_download():
                 "master_contract_download",
                 {"status": "success", "message": "Successfully Downloaded"},
             )
-        except:
+        except Exception:
             return True
 
     except Exception as e:
@@ -808,9 +811,9 @@ def master_contract_download():
                 return socketio.emit(
                     "master_contract_download", {"status": "error", "message": str(e)}
                 )
-            except:
+            except Exception:
                 return False
-        except:
+        except Exception:
             return False
 
 

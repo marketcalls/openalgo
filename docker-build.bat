@@ -112,9 +112,9 @@ goto :wait_loop
 REM Test Python dependencies
 echo.
 echo [7/8] Testing Python dependencies...
-docker-compose exec -T openalgo python -c "import numba; import llvmlite; import scipy; print('SUCCESS')" 2>nul | findstr "SUCCESS" >nul
+docker-compose exec -T openalgo python -c "import numba; import llvmlite; print('SUCCESS')" 2>nul | findstr "SUCCESS" >nul
 if %ERRORLEVEL% EQU 0 (
-    echo OK: numba, llvmlite, scipy imports successful
+    echo OK: numba, llvmlite imports successful
 ) else (
     echo WARNING: Failed to import dependencies - check logs
 )
@@ -124,13 +124,6 @@ if %ERRORLEVEL% EQU 0 (
     echo OK: Numba JIT compilation works
 ) else (
     echo WARNING: Numba JIT compilation test failed
-)
-
-docker-compose exec -T openalgo python -c "from scipy import stats; print('SUCCESS' if abs(stats.norm.cdf(0) - 0.5) ^< 0.001 else 'FAILED')" 2>nul | findstr "SUCCESS" >nul
-if %ERRORLEVEL% EQU 0 (
-    echo OK: SciPy operations work
-) else (
-    echo WARNING: SciPy operations test failed
 )
 
 REM Display access information

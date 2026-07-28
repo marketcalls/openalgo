@@ -1,20 +1,20 @@
+import { Columns3, GripVertical } from 'lucide-react'
 import { useState } from 'react'
-import { GripVertical, Columns3 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  DialogFooter,
-  DialogClose,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { cn } from '@/lib/utils'
 import type { ColumnKey } from '@/types/option-chain'
 import { COLUMN_DEFINITIONS } from '@/types/option-chain'
-import { cn } from '@/lib/utils'
 
 interface ColumnReorderPanelProps {
   columnOrder: ColumnKey[]
@@ -61,10 +61,12 @@ function DraggableColumn({
     >
       <GripVertical className="h-4 w-4 text-muted-foreground flex-shrink-0" />
       <span className="text-sm flex-1">{label}</span>
-      <span className={cn(
-        'text-xs px-1.5 py-0.5 rounded',
-        side === 'ce' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
-      )}>
+      <span
+        className={cn(
+          'text-xs px-1.5 py-0.5 rounded',
+          side === 'ce' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
+        )}
+      >
         {side === 'ce' ? 'CE' : 'PE'}
       </span>
     </div>
@@ -81,23 +83,23 @@ export function ColumnReorderPanel({
   const [open, setOpen] = useState(false)
 
   // Filter out strike column - it's always in the center
-  const ceColumns = localOrder.filter(key => {
-    const col = COLUMN_DEFINITIONS.find(c => c.key === key)
+  const ceColumns = localOrder.filter((key) => {
+    const col = COLUMN_DEFINITIONS.find((c) => c.key === key)
     return col?.side === 'ce'
   })
 
-  const peColumns = localOrder.filter(key => {
-    const col = COLUMN_DEFINITIONS.find(c => c.key === key)
+  const peColumns = localOrder.filter((key) => {
+    const col = COLUMN_DEFINITIONS.find((c) => c.key === key)
     return col?.side === 'pe'
   })
 
   const getColumnLabel = (key: ColumnKey): string => {
-    const col = COLUMN_DEFINITIONS.find(c => c.key === key)
+    const col = COLUMN_DEFINITIONS.find((c) => c.key === key)
     return col?.label ?? key
   }
 
   const getColumnSide = (key: ColumnKey): 'ce' | 'pe' => {
-    const col = COLUMN_DEFINITIONS.find(c => c.key === key)
+    const col = COLUMN_DEFINITIONS.find((c) => c.key === key)
     return col?.side === 'pe' ? 'pe' : 'ce'
   }
 
@@ -164,7 +166,8 @@ export function ColumnReorderPanel({
         <DialogHeader>
           <DialogTitle>Reorder Columns</DialogTitle>
           <DialogDescription>
-            Drag columns to reorder them. CE and PE columns can only be reordered within their respective sections.
+            Drag columns to reorder them. CE and PE columns can only be reordered within their
+            respective sections.
           </DialogDescription>
         </DialogHeader>
 
@@ -173,7 +176,7 @@ export function ColumnReorderPanel({
             <h4 className="text-sm font-medium mb-2 text-green-500">CALLS (CE)</h4>
             <ScrollArea className="h-64 pr-2">
               <div className="space-y-1.5">
-                {ceColumns.map(key => (
+                {ceColumns.map((key) => (
                   <DraggableColumn
                     key={key}
                     columnKey={key}
@@ -195,7 +198,7 @@ export function ColumnReorderPanel({
             <h4 className="text-sm font-medium mb-2 text-red-500">PUTS (PE)</h4>
             <ScrollArea className="h-64 pr-2">
               <div className="space-y-1.5">
-                {peColumns.map(key => (
+                {peColumns.map((key) => (
                   <DraggableColumn
                     key={key}
                     columnKey={key}

@@ -79,29 +79,29 @@ def migrate_master_contract_status_table():
                         )
                         conn.execute(alter_sql)
                         conn.commit()
-                        logger.info(f"✅ Added column: {column_name}")
+                        logger.info(f"Added column: {column_name}")
                         columns_added += 1
                     except Exception as col_error:
                         logger.warning(f"Could not add column {column_name}: {col_error}")
                 else:
-                    logger.info(f"✓ Column already exists: {column_name}")
+                    logger.info(f"Column already exists: {column_name}")
                     columns_existing += 1
 
-        logger.info("\n📊 Migration Summary:")
+        logger.info("\n Migration Summary:")
         logger.info(f"   - Columns added: {columns_added}")
         logger.info(f"   - Columns already existing: {columns_existing}")
         logger.info(f"   - Total new columns: {len(new_columns)}")
 
         if columns_added > 0:
-            logger.info("\n✅ Master contract status table migration completed!")
+            logger.info("\n Master contract status table migration completed!")
             logger.info("   Smart download tracking columns have been added.")
         else:
-            logger.info("\n✅ No migration needed - all columns already exist!")
+            logger.info("\n No migration needed - all columns already exist!")
 
         return True
 
     except Exception as e:
-        logger.error(f"❌ Error during migration: {e}")
+        logger.error(f"Error during migration: {e}")
         return False
 
 
@@ -118,7 +118,7 @@ def main():
     logger.info("-" * 60)
     if success:
         logger.info("Migration process completed!")
-        logger.info("\n📌 New Features:")
+        logger.info("\n New Features:")
         logger.info("   - Smart download: Skip if already downloaded after 8 AM IST")
         logger.info("   - Exchange stats: Track symbol counts per exchange")
         logger.info("   - Download duration: Track how long downloads take")

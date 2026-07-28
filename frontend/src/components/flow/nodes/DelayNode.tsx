@@ -3,9 +3,9 @@
  * Wait for specified duration
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Timer } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { DelayNodeData } from '@/types/flow'
 
@@ -47,11 +47,7 @@ export const DelayNode = memo(({ data, selected }: DelayNodeProps) => {
         selected && 'selected'
       )}
     >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
-      />
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
           <div className="flex h-5 w-5 items-center justify-center rounded bg-muted text-muted-foreground">
@@ -59,22 +55,14 @@ export const DelayNode = memo(({ data, selected }: DelayNodeProps) => {
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Wait Duration</div>
-            <div className="text-[9px] text-muted-foreground">
-              Delay
-            </div>
+            <div className="text-[9px] text-muted-foreground">Delay</div>
           </div>
         </div>
         <div className="rounded bg-muted/50 px-1.5 py-1 text-center">
-          <span className="mono-data text-sm font-semibold text-primary">
-            {formatDelay(data)}
-          </span>
+          <span className="mono-data text-sm font-semibold text-primary">{formatDelay(data)}</span>
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!bottom-0 !translate-y-1/2"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
     </div>
   )
 })

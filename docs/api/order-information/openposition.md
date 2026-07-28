@@ -22,6 +22,20 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/openposition
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/openposition \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "symbol": "YESBANK",
+  "exchange": "NSE",
+  "product": "MIS",
+  "strategy": "Test Strategy"
+}'
+```
+
 ## Sample API Response
 
 ```json

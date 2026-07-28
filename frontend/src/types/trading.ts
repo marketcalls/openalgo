@@ -7,8 +7,8 @@ export interface Position {
   ltp: number
   pnl: number
   pnlpercent: number
-  lot_size?: number            // contract_value multiplier (e.g. 0.01 for ETHUSD.P)
-  today_realized_pnl?: number  // Sandbox: today's realized P&L from closed partial trades
+  lot_size?: number // contract_value multiplier (e.g. 0.01 for ETHUSD.P)
+  today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
 }
 
 export interface Order {
@@ -72,6 +72,42 @@ export interface OrderStats {
   total_completed_orders: number
   total_open_orders: number
   total_rejected_orders: number
+}
+
+// -----------------------------------------------------------------------------
+// GTT (Good Till Triggered)
+// -----------------------------------------------------------------------------
+
+export interface GttLeg {
+  action: string // "BUY" | "SELL"
+  quantity: number
+  price: number
+  pricetype: string // usually "LIMIT"
+  product: string // "MIS" | "NRML" | "CNC"
+}
+
+export type GttStatus =
+  | 'active'
+  | 'triggered'
+  | 'disabled'
+  | 'expired'
+  | 'cancelled'
+  | 'rejected'
+  | 'deleted'
+  | string // broker-specific statuses passed through as-is
+
+export interface GttOrder {
+  trigger_id: string
+  trigger_type: 'single' | 'two-leg' | string
+  status: GttStatus
+  symbol: string
+  exchange: string
+  trigger_prices: number[]
+  last_price: number
+  legs: GttLeg[]
+  created_at?: string
+  updated_at?: string
+  expires_at?: string
 }
 
 export interface PlaceOrderRequest {

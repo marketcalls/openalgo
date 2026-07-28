@@ -7,9 +7,9 @@ import {
   RefreshCw,
   TrendingDown,
   TrendingUp,
+  Wallet,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { tradingApi } from '@/api/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -24,16 +24,28 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useLivePrice, calculateLiveStats } from '@/hooks/useLivePrice'
+import { PlaceOrderDialog } from '@/components/trading'
+import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+import { EmptyState } from '@/components/ui/empty-state'
 
 function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+
+// Which holding the order dialog is currently acting on, and in which
+// direction. Add buys more of the same scrip; Exit sells the full holding.
+interface HoldingOrderIntent {
+  symbol: string
+  exchange: string
+  action: 'BUY' | 'SELL'
+  quantity: number
 }
 
 export default function Holdings() {
@@ -45,6 +57,7 @@ export default function Holdings() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showStaleWarning, setShowStaleWarning] = useState(false)
+  const [orderIntent, setOrderIntent] = useState<HoldingOrderIntent | null>(null)
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -52,7 +65,11 @@ export default function Holdings() {
 
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
   // Automatically pauses when tab is hidden
-  const { data: enhancedHoldings, isLive, isPaused } = useLivePrice(holdings, {
+  const {
+    data: enhancedHoldings,
+    isLive,
+    isPaused,
+  } = useLivePrice(holdings, {
     enabled: holdings.length > 0,
     useMultiQuotesFallback: true,
     staleThreshold: 5000,
@@ -311,7 +328,7 @@ export default function Holdings() {
 
       {/* Holdings Table */}
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="py-0">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin" />
@@ -319,7 +336,11 @@ export default function Holdings() {
           ) : error ? (
             <div className="text-center py-12 text-muted-foreground">{error}</div>
           ) : holdings.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">No holdings found</div>
+            <EmptyState
+              icon={Wallet}
+              title="No holdings found"
+              description="Connect a broker to start tracking your portfolio."
+            />
           ) : (
             <div className="overflow-x-auto">
               <Table>
@@ -333,6 +354,7 @@ export default function Holdings() {
                     <TableHead>Product</TableHead>
                     <TableHead className="text-right">Profit and Loss</TableHead>
                     <TableHead className="text-right">PnL %</TableHead>
+                    <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -377,6 +399,40 @@ export default function Holdings() {
                       >
                         {formatPercent(holding.pnlpercent)}
                       </TableCell>
+                      <TableCell className="text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-3 border-green-600/40 text-green-600 hover:bg-green-600/10"
+                            onClick={() =>
+                              setOrderIntent({
+                                symbol: holding.symbol,
+                                exchange: holding.exchange,
+                                action: 'BUY',
+                                quantity: holding.quantity,
+                              })
+                            }
+                          >
+                            Add
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-3 border-red-600/40 text-red-600 hover:bg-red-600/10"
+                            onClick={() =>
+                              setOrderIntent({
+                                symbol: holding.symbol,
+                                exchange: holding.exchange,
+                                action: 'SELL',
+                                quantity: holding.quantity,
+                              })
+                            }
+                          >
+                            Exit
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -407,6 +463,8 @@ export default function Holdings() {
                     >
                       {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '-'}
                     </TableCell>
+                    {/* Keeps the footer aligned with the Actions column */}
+                    <TableCell />
                   </TableRow>
                 </TableFooter>
               </Table>
@@ -414,6 +472,30 @@ export default function Holdings() {
           )}
         </CardContent>
       </Card>
+
+      {/* Same order dialog the Option Chain uses, prefilled from the holding.
+          Exit defaults to the full held quantity; Add starts from the same
+          number so the user only has to change it when topping up. CNC is
+          forced because a holding is by definition a delivery position. */}
+      <PlaceOrderDialog
+        open={orderIntent !== null}
+        onOpenChange={(open) => {
+          if (!open) setOrderIntent(null)
+        }}
+        symbol={orderIntent?.symbol ?? ''}
+        exchange={orderIntent?.exchange ?? ''}
+        action={orderIntent?.action ?? 'BUY'}
+        quantity={orderIntent?.quantity}
+        product="CNC"
+        priceType="MARKET"
+        strategy="Holdings"
+        onSuccess={(orderId) => {
+          showToast.success(`Order ${orderId} placed`, 'orders')
+          setOrderIntent(null)
+          fetchHoldings(true)
+        }}
+        onError={(message) => showToast.error(message, 'orders')}
+      />
     </div>
   )
 }

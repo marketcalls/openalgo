@@ -330,6 +330,25 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self._reconnect_timer = None  # Track reconnection timer for cleanup
 
+        # Auth-failure retry counter - deliberately SEPARATE from and much
+        # tighter-bounded than reconnect_attempts/Config.MAX_RECONNECT_ATTEMPTS
+        # above, which are for ordinary network drops. This gives the daily
+        # ~3 AM IST token rollover a few chances to self-heal via a fresh DB
+        # read (_attempt_reconnection() already calls get_auth_token with
+        # bypass_cache=True before rebuilding the ws client - reused as-is,
+        # not duplicated here), but stops well short of the full 10-attempt
+        # generic backoff so a genuinely dead token is not hammered for many
+        # minutes against a possibly rate-limited IP (SEBI static-IP mandate,
+        # effective April 1, 2026).
+        self.auth_refresh_retries = 0
+        self.max_auth_refresh_retries = 3
+
+        # Batch subscription management - coalesce rapid subscribe calls into a
+        # single touchline/depth message to avoid hammering the WebSocket
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # 500ms window to collect subscriptions before flushing
+
     def _setup_normalizers(self):
         """Initialize data normalizers"""
         self.normalizers = {
@@ -353,7 +372,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.actid = user_id
 
         # Get auth token from database
-        self.accesstoken = get_auth_token(user_id)
+        self.accesstoken = get_auth_token(user_id, bypass_cache=True)
 
         if not self.actid or not self.accesstoken:
             self.logger.error(f"Missing Flattrade credentials for user {user_id}")
@@ -386,6 +405,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if connected:
             self.connected = True
             self.reconnect_attempts = 0
+            self.auth_refresh_retries = 0
             self.logger.info("Connected to Flattrade WebSocket successfully")
         else:
             raise ConnectionError("Failed to connect to Flattrade WebSocket")
@@ -401,6 +421,12 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer.cancel()
                 self._reconnect_timer = None
                 self.logger.debug("Cancelled pending reconnection timer")
+
+            # Cancel any pending batch subscription timer and drop queued items
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
 
             if self.ws_client:
                 self.ws_client.stop()
@@ -585,7 +611,13 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             )
 
     def _websocket_subscribe(self, subscription: dict) -> None:
-        """Handle WebSocket subscription with reference counting"""
+        """Handle WebSocket subscription with reference counting and batch queueing.
+
+        On the first reference (count 0 -> 1) the scrip is added to a batch queue
+        that flushes after self.batch_delay; subsequent references just bump the
+        counter so we never send a redundant subscribe to the server.
+        Caller must hold self.lock.
+        """
         scrip = subscription["scrip"]
         mode = subscription["mode"]
 
@@ -595,26 +627,87 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
             if self.ws_subscription_refs[scrip]["touchline_count"] == 0:
-                self.logger.info(f"First touchline subscription for {scrip}")
-                self.ws_client.subscribe_touchline(scrip)
-                self.ws_subscription_refs[scrip]["touchline_count"] = 1
-            else:
-                # Already subscribed, just increment the count
-                self.ws_subscription_refs[scrip]["touchline_count"] += 1
-                self.logger.info(
-                    f"Additional touchline subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['touchline_count']}"
-                )
+                self.logger.info(f"First touchline subscription for {scrip}, queueing for batch")
+                self._queue_subscription(scrip, "touchline")
+            self.ws_subscription_refs[scrip]["touchline_count"] += 1
+            self.logger.debug(
+                f"touchline_count for {scrip}: {self.ws_subscription_refs[scrip]['touchline_count']}"
+            )
         elif mode == Config.MODE_DEPTH:
             if self.ws_subscription_refs[scrip]["depth_count"] == 0:
-                self.logger.info(f"First depth subscription for {scrip}")
-                self.ws_client.subscribe_depth(scrip)
-                self.ws_subscription_refs[scrip]["depth_count"] = 1
-            else:
-                # Already subscribed, just increment the count
-                self.ws_subscription_refs[scrip]["depth_count"] += 1
-                self.logger.info(
-                    f"Additional depth subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['depth_count']}"
-                )
+                self.logger.info(f"First depth subscription for {scrip}, queueing for batch")
+                self._queue_subscription(scrip, "depth")
+            self.ws_subscription_refs[scrip]["depth_count"] += 1
+            self.logger.debug(
+                f"depth_count for {scrip}: {self.ws_subscription_refs[scrip]['depth_count']}"
+            )
+
+    def _queue_subscription(self, scrip: str, sub_type: str) -> None:
+        """Queue a scrip for batched subscription. Caller must hold self.lock."""
+        self.subscription_queue.append({"scrip": scrip, "type": sub_type})
+        if len(self.subscription_queue) == 1:
+            self._start_batch_timer()
+
+    def _start_batch_timer(self) -> None:
+        """(Re)start the timer that flushes queued subscriptions."""
+        if self.batch_timer:
+            self.batch_timer.cancel()
+
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Flush the queue: send one touchline and one depth message with all scrips joined by #."""
+        with self.lock:
+            self.batch_timer = None
+
+            if not self.subscription_queue:
+                return
+
+            # De-duplicate while preserving order in case the same scrip was queued twice
+            touchline_scrips: list[str] = []
+            depth_scrips: list[str] = []
+            seen_touchline: set[str] = set()
+            seen_depth: set[str] = set()
+
+            for sub in self.subscription_queue:
+                scrip = sub["scrip"]
+                if sub["type"] == "touchline":
+                    if scrip not in seen_touchline:
+                        seen_touchline.add(scrip)
+                        touchline_scrips.append(scrip)
+                else:
+                    if scrip not in seen_depth:
+                        seen_depth.add(scrip)
+                        depth_scrips.append(scrip)
+
+            self.subscription_queue.clear()
+
+            # Snapshot client; release the lock before doing network I/O
+            ws_client = self.ws_client
+            connected = self.connected
+
+        if not ws_client or not connected:
+            self.logger.warning(
+                "Skipping batch flush - WebSocket not connected; "
+                "_resubscribe_all() will handle these on reconnect"
+            )
+            return
+
+        if touchline_scrips:
+            try:
+                self.logger.info(f"Batch subscribing {len(touchline_scrips)} touchline scrips")
+                ws_client.subscribe_touchline("#".join(touchline_scrips))
+            except Exception as e:
+                self.logger.error(f"Batch touchline subscription failed: {e}")
+
+        if depth_scrips:
+            try:
+                self.logger.info(f"Batch subscribing {len(depth_scrips)} depth scrips")
+                ws_client.subscribe_depth("#".join(depth_scrips))
+            except Exception as e:
+                self.logger.error(f"Batch depth subscription failed: {e}")
 
     def _websocket_unsubscribe(self, subscription: dict) -> None:
         """Handle WebSocket unsubscription with reference counting"""
@@ -692,15 +785,68 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         )
         self.connected = False
 
+        # Drop pending batch items - _resubscribe_all() will rebuild subscriptions
+        # from self.subscriptions on reconnect, so anything still queued is stale
+        with self.lock:
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
+
         if self.running:
-            self._schedule_reconnection()
+            if self.ws_client and getattr(self.ws_client, "auth_failed", False):
+                self._handle_auth_failure(
+                    self.ws_client.auth_failure_message or "authentication rejected"
+                )
+            else:
+                self._schedule_reconnection()
 
     def _handle_websocket_error(self, error: Exception) -> None:
         """Centralized error handling for WebSocket operations"""
         self.logger.error(f"WebSocket error: {error}")
 
         if self.running:
-            self._schedule_reconnection()
+            if self.ws_client and getattr(self.ws_client, "auth_failed", False):
+                self._handle_auth_failure(
+                    self.ws_client.auth_failure_message or "authentication rejected"
+                )
+            else:
+                self._schedule_reconnection()
+
+    def _handle_auth_failure(self, reason: str) -> None:
+        """Handle an explicit auth rejection from the broker.
+
+        Separate, tighter-bounded retry path from the generic reconnect loop
+        in _schedule_reconnection()/_attempt_reconnection() - see the comment
+        on self.auth_refresh_retries in _setup_connection_management() for why.
+        Reuses the existing Timer-based reconnect machinery (_schedule_reconnection)
+        rather than duplicating it; _attempt_reconnection() already re-reads a
+        fresh token from the DB before rebuilding the ws client, which is what
+        gives a daily token rollover a chance to self-heal.
+        """
+        with self.lock:
+            if not self.running:
+                return
+
+            if self.auth_refresh_retries >= self.max_auth_refresh_retries:
+                self.logger.error(
+                    f"Auth failure retries exhausted ({self.auth_refresh_retries}/"
+                    f"{self.max_auth_refresh_retries}) - giving up. Last reason: {reason}"
+                )
+                self.running = False
+                return
+
+            self.auth_refresh_retries += 1
+            self.logger.warning(
+                f"Auth failure detected (attempt {self.auth_refresh_retries}/"
+                f"{self.max_auth_refresh_retries}): {reason}. Will retry with a fresh token."
+            )
+
+            # Don't inherit a long exponential delay meant for network blips -
+            # an auth retry should attempt again promptly.
+            self.reconnect_attempts = 0
+
+        self._schedule_reconnection()
 
     def _schedule_reconnection(self) -> None:
         """Schedule reconnection with exponential backoff"""
@@ -755,6 +901,17 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
                     self.ws_client = None
 
+                # Re-read fresh auth token from database before reconnecting.
+                # Flattrade tokens roll over daily at ~3 AM IST; reusing the
+                # construction-time token would reconnect with a dead token.
+                fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+                if fresh_token:
+                    self.accesstoken = fresh_token
+                else:
+                    self.logger.warning(
+                        "Could not fetch fresh auth token on reconnect; using existing token"
+                    )
+
                 # Recreate WebSocket client
                 self.ws_client = FlattradeWebSocket(
                     user_id=self.actid,
@@ -769,6 +926,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if self.ws_client.connect():
                     self.connected = True
                     self.reconnect_attempts = 0
+                    self.auth_refresh_retries = 0
                     self.logger.info("Reconnected successfully")
                 else:
                     self.logger.error("Reconnection failed")
@@ -1007,6 +1165,13 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     scrip_list = "#".join(depth_scrips)
                     self.logger.info(f"Unsubscribing from {len(depth_scrips)} depth scrips")
                     self.ws_client.unsubscribe_depth(scrip_list)
+
+                # Cancel any pending batch subscription timer - the items would
+                # subscribe to scrips we just cleared
+                if self.batch_timer:
+                    self.batch_timer.cancel()
+                    self.batch_timer = None
+                self.subscription_queue.clear()
 
                 # Clear all subscription tracking but keep WebSocket connection alive
                 subscription_count = len(self.subscriptions)

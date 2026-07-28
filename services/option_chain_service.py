@@ -45,10 +45,11 @@ Strike Labels (different for CE and PE):
     - Strike ABOVE ATM: CE is OTM, PE is ITM
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
+from database.token_db import get_br_symbol
 from database.token_db_enhanced import fno_search_symbols
 from services.option_symbol_service import (
     construct_option_symbol,
@@ -217,7 +218,12 @@ def get_option_symbols_for_chain(
 
 
 def get_option_chain(
-    underlying: str, exchange: str, expiry_date: str, strike_count: int, api_key: str
+    underlying: str,
+    exchange: str,
+    expiry_date: str,
+    strike_count: int,
+    api_key: str,
+    with_quotes: bool = True,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Main function to get option chain data.
@@ -228,6 +234,11 @@ def get_option_chain(
         expiry_date: Expiry date in DDMMMYY format (e.g., 28NOV25)
         strike_count: Number of strikes above and below ATM
         api_key: OpenAlgo API key
+        with_quotes: When True (default) fetch live per-strike quotes via the broker.
+            When False, build the strike ladder + ATM + symbols/lotsize/tick purely from
+            cache/DB (one underlying LTP only) and leave price fields at 0 — used by the
+            scalping ladder, which streams live prices over the WebSocket feed instead of
+            paying for a slow per-strike broker multiquote.
 
     Returns:
         Tuple of (success, response_data, status_code)
@@ -378,49 +389,101 @@ def get_option_chain(
                 404,
             )
 
-        # Step 8: Fetch quotes for all options using multiquotes
-        logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
-        if exchange.upper() in CRYPTO_EXCHANGES:
-            # Reuse _auth, _bmod, _dh already initialised in Step 3 — no second
-            # DB query or module import needed.
-            try:
-                _results = []
-                for _item in symbols_to_fetch:
-                    try:
-                        _oq = _dh.get_quotes(_item["symbol"], _item["exchange"])
-                        _results.append(
-                            {"symbol": _item["symbol"], "exchange": _item["exchange"], "data": _oq}
-                        )
-                    except Exception as _qe:
-                        logger.warning(f"[CRYPTO] Quote error for {_item['symbol']}: {_qe}")
-                        _results.append(
-                            {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
-                        )
-                quotes_response = {"status": "success", "results": _results}
-                success = True
-                status_code = 200
-            except Exception as _e:
-                return (
-                    False,
-                    {"status": "error", "message": f"Failed to fetch option quotes: {_e}"},
-                    500,
-                )
-        else:
-            success, quotes_response, status_code = get_multiquotes(
-                symbols=symbols_to_fetch, api_key=api_key
-            )
-
-        # Build quote lookup map
+        # Step 8: Fetch live quotes for all options via multiquotes. Skipped when
+        # with_quotes=False (e.g. the scalping ladder) — the structure is built from
+        # cache/DB and live prices stream over the WebSocket feed, avoiding a slow
+        # per-strike broker multiquote (e.g. Flattrade throttles to 10 quotes/sec).
         quotes_map = {}
-        if success and "results" in quotes_response:
-            for result in quotes_response["results"]:
-                symbol = result.get("symbol")
-                if symbol:
-                    # Handle both formats: direct data or nested data
-                    if "data" in result:
-                        quotes_map[symbol] = result["data"]
-                    elif "error" not in result:
-                        quotes_map[symbol] = result
+        if with_quotes:
+            logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
+            if exchange.upper() in CRYPTO_EXCHANGES:
+                # Reuse _auth, _bmod, _dh already initialised in Step 3 — no second
+                # DB query or module import needed.
+                try:
+                    _results = []
+                    for _item in symbols_to_fetch:
+                        try:
+                            _oq = _dh.get_quotes(_item["symbol"], _item["exchange"])
+                            _results.append(
+                                {"symbol": _item["symbol"], "exchange": _item["exchange"], "data": _oq}
+                            )
+                        except Exception as _qe:
+                            logger.warning(f"[CRYPTO] Quote error for {_item['symbol']}: {_qe}")
+                            _results.append(
+                                {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
+                            )
+                    quotes_response = {"status": "success", "results": _results}
+                    success = True
+                    status_code = 200
+                except Exception as _e:
+                    return (
+                        False,
+                        {"status": "error", "message": f"Failed to fetch option quotes: {_e}"},
+                        500,
+                    )
+            else:
+                # Fyers fast path: its native /data/options-chain-v3 endpoint
+                # returns every CE/PE strike (LTP, OI, bid/ask, volume) in ONE
+                # call, instead of a bulk /data/quotes call plus one
+                # /data/depth call PER symbol just to backfill OI (Fyers'
+                # bulk quotes endpoint doesn't include OI at all). The
+                # per-symbol depth fallback is what made large chains take
+                # 10+ seconds. Only usable when a bounded strike_count was
+                # requested -- Fyers caps strikecount at 50, so an
+                # unbounded "entire chain" request (strike_count=None) still
+                # needs the generic path.
+                used_fast_path = False
+                if strike_count is not None and strike_count <= 50:
+                    _auth, _, _broker = get_auth_token_broker(api_key, include_feed_token=True)
+                    if _broker == "fyers" and _auth:
+                        _bmod = import_broker_module(_broker)
+                        if _bmod is not None and hasattr(_bmod.BrokerData, "get_option_chain"):
+                            try:
+                                fyers_symbol = get_br_symbol(quote_symbol, quote_exchange)
+                                _dh = _bmod.BrokerData(_auth)
+                                # +2 buffer absorbs Fyers computing its own ATM a
+                                # strike off from ours; harmless if unused, and
+                                # still capped at Fyers' hard max of 50.
+                                fyers_chain = _dh.get_option_chain(
+                                    fyers_symbol, strikecount=min(strike_count + 2, 50)
+                                )
+                                for item in chain_symbols:
+                                    strike = item["strike"]
+                                    if item["ce"]["exists"]:
+                                        data = fyers_chain.get((strike, "CE"))
+                                        if data:
+                                            quotes_map[item["ce"]["symbol"]] = data
+                                    if item["pe"]["exists"]:
+                                        data = fyers_chain.get((strike, "PE"))
+                                        if data:
+                                            quotes_map[item["pe"]["symbol"]] = data
+                                used_fast_path = bool(fyers_chain)
+                            except Exception as _fe:
+                                logger.warning(
+                                    f"Fyers fast-path option chain failed, falling back to "
+                                    f"generic multiquotes: {_fe}"
+                                )
+                                quotes_map = {}
+
+                if not used_fast_path:
+                    success, quotes_response, status_code = get_multiquotes(
+                        symbols=symbols_to_fetch, api_key=api_key
+                    )
+
+                    # Build quote lookup map
+                    if success and "results" in quotes_response:
+                        for result in quotes_response["results"]:
+                            symbol = result.get("symbol")
+                            if symbol:
+                                # Handle both formats: direct data or nested data
+                                if "data" in result:
+                                    quotes_map[symbol] = result["data"]
+                                elif "error" not in result:
+                                    quotes_map[symbol] = result
+        else:
+            logger.info(
+                f"Structure-only option chain ({len(symbols_to_fetch)} symbols); skipping live quotes"
+            )
 
         # Step 9: Build final chain response
         chain = []
@@ -437,6 +500,8 @@ def get_option_chain(
                     "ltp": ce_quote.get("ltp", 0),
                     "bid": ce_quote.get("bid", 0),
                     "ask": ce_quote.get("ask", 0),
+                    "bid_qty": ce_quote.get("bid_qty", 0),
+                    "ask_qty": ce_quote.get("ask_qty", 0),
                     "open": ce_quote.get("open", 0),
                     "high": ce_quote.get("high", 0),
                     "low": ce_quote.get("low", 0),
@@ -459,6 +524,8 @@ def get_option_chain(
                     "ltp": pe_quote.get("ltp", 0),
                     "bid": pe_quote.get("bid", 0),
                     "ask": pe_quote.get("ask", 0),
+                    "bid_qty": pe_quote.get("bid_qty", 0),
+                    "ask_qty": pe_quote.get("ask_qty", 0),
                     "open": pe_quote.get("open", 0),
                     "high": pe_quote.get("high", 0),
                     "low": pe_quote.get("low", 0),
@@ -482,6 +549,7 @@ def get_option_chain(
                 "underlying_prev_close": underlying_prev_close,
                 "expiry_date": final_expiry,
                 "atm_strike": atm_strike,
+                "quotes_included": with_quotes,
                 "chain": chain,
             },
             200,

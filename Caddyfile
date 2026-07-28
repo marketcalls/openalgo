@@ -1,0 +1,3 @@
+openalgo.local {
+    reverse_proxy localhost:5000
+}

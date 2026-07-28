@@ -6,10 +6,11 @@ from io import StringIO
 import httpx
 import numpy as np
 import pandas as pd
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -19,7 +20,7 @@ logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
 
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -190,9 +191,9 @@ def format_openalgo_to_groww_symbol(symbol, exchange):
                         # Reconstruct date string
                         date_str = f"{day}{month}{year}"
 
-                        # Extract strike - look for numbers after the date
+                        # Extract strike - look for numbers (incl. decimals) after the date
                         date_end_pos = remaining.find(month) + len(month) + len(year)
-                        strike_match = re.search(r"\d+", remaining[date_end_pos:])
+                        strike_match = re.search(r"\d+(?:\.\d+)?", remaining[date_end_pos:])
                         if strike_match:
                             strike_str = strike_match.group(0)
 
@@ -400,9 +401,25 @@ def download_groww_instrument_data(output_path):
     file_path = os.path.join(output_path, "master.csv")
     csv_url = "https://growwapi-assets.groww.in/instruments/instrument.csv"
 
-    # Expected headers - Updated to match actual CSV structure
-    headers_csv = "exchange,exchange_token,trading_symbol,groww_symbol,name,instrument_type,segment,series,isin,underlying_symbol,underlying_exchange_token,expiry_date,strike_price,lot_size,tick_size,freeze_quantity,is_reserved,buy_allowed,sell_allowed,internal_trading_symbol,is_intraday"
-    expected_headers = headers_csv.split(",")
+    # Columns that process_groww_data() reads BY NAME. We validate these are
+    # present rather than relabelling the file by position — Groww's CSV already
+    # ships a correct header, so keeping it makes us resilient to Groww adding or
+    # reordering columns (the old code hard-required an exact 21-column count and
+    # overwrote the header, which would silently mislabel or fail on any change).
+    required_columns = {
+        "exchange",
+        "exchange_token",
+        "trading_symbol",
+        "groww_symbol",
+        "name",
+        "instrument_type",
+        "segment",
+        "underlying_symbol",
+        "expiry_date",
+        "strike_price",
+        "lot_size",
+        "tick_size",
+    }
 
     try:
         # Get the shared httpx client with connection pooling
@@ -417,18 +434,18 @@ def download_groww_instrument_data(output_path):
         if len(lines) < 2 or "," not in content:
             raise ValueError("Downloaded content does not appear to be a valid CSV.")
 
-        # Verify column count matches and replace header line directly (no pandas parse needed)
-        original_headers = lines[0].strip().split(",")
-        if len(original_headers) == len(expected_headers):
-            new_content = ",".join(expected_headers) + "\n" + lines[1]
-        else:
+        # Validate the documented columns are present (by name), then keep
+        # Groww's own header as-is.
+        original_headers = [h.strip() for h in lines[0].strip().split(",")]
+        missing = required_columns - set(original_headers)
+        if missing:
             raise ValueError(
-                f"Downloaded CSV column count ({len(original_headers)}) does not match expected ({len(expected_headers)})."
+                f"Groww instrument CSV is missing expected columns: {sorted(missing)}"
             )
 
-        # Write directly to file
+        # Write directly to file, preserving Groww's header
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+            f.write(content)
         logger.info(f"Successfully saved instruments CSV to: {file_path}")
         return [file_path]
     except Exception as e:
@@ -460,9 +477,10 @@ def reformat_symbol(row):
     elif instrument_type in ["CE", "PE"]:
         import re
 
-        # Match format like: NSE-AARTIIND-26Jun25-435-CE
+        # Match format like: NSE-AARTIIND-26Jun25-435-CE (strike may be decimal e.g. 287.5)
         match = re.match(
-            r"NSE-([A-Z0-9]+)-(\d{2})([A-Za-z]{3})(\d{2})-(\d+)-([CP]E)", row["groww_symbol"]
+            r"NSE-([A-Z0-9]+)-(\d{2})([A-Za-z]{3})(\d{2})-(\d+(?:\.\d+)?)-([CP]E)",
+            row["groww_symbol"],
         )
         if match:
             symbol, day, month, year, strike_price, opt_type = match.groups()
@@ -703,8 +721,13 @@ def process_groww_data(path):
             underlying = df_mapped.loc[fno_data_mask, "underlying"]
             base_symbol = underlying.where(underlying.notna() & (underlying != ""), df_mapped.loc[fno_data_mask, "symbol"])
 
-            # Strike as integer string
-            strike_str = df_mapped.loc[fno_data_mask, "strike"].fillna(0).astype(int).astype(str)
+            # Strike as string: preserve decimals (e.g. 287.5 for 2.5-rupee
+            # interval stocks like BANKBARODA, ADANIPOWER); collapse only
+            # whole numbers to int form (190.0 -> "190", not "190.0").
+            def _format_strike(v):
+                f = float(v)
+                return str(int(f)) if f == int(f) else str(f)
+            strike_str = df_mapped.loc[fno_data_mask, "strike"].fillna(0).apply(_format_strike)
 
             # Get instrument type from original df
             orig_inst_type = df.loc[fno_data_mask.values, "instrument_type"]
@@ -817,6 +840,26 @@ def master_contract_download():
         )
         if nfo_space_mask.any():
             token_df.loc[nfo_space_mask, "symbol"] = token_df.loc[nfo_space_mask, "brsymbol"].str.replace(" ", "", regex=False)
+
+        # Step 5b: Enforce the NOT NULL symbol/brsymbol invariant before insert.
+        # Groww's CSV occasionally ships a row with a blank trading_symbol (e.g.
+        # a stray BSE index entry), which feeds both `symbol` and `brsymbol`.
+        # pandas leaves it as NaN and the bulk insert then fails with
+        # "NOT NULL constraint failed: symtoken.symbol", which rolls back the
+        # WHOLE download and leaves the master contract empty. Normalise NaN to
+        # "", fall back brsymbol -> symbol when only brsymbol is missing, and
+        # drop any row that still has no usable symbol.
+        before = len(token_df)
+        token_df["symbol"] = token_df["symbol"].fillna("").astype(str).str.strip()
+        token_df["brsymbol"] = token_df["brsymbol"].fillna("").astype(str).str.strip()
+        br_missing = (token_df["brsymbol"] == "") & (token_df["symbol"] != "")
+        token_df.loc[br_missing, "brsymbol"] = token_df.loc[br_missing, "symbol"]
+        token_df = token_df[token_df["symbol"] != ""].copy()
+        dropped = before - len(token_df)
+        if dropped:
+            logger.warning(
+                f"Dropped {dropped} Groww instrument row(s) with empty symbol before insert"
+            )
 
         # Step 6: Insert into database
         logger.info(f"Inserting {len(token_df)} records into database")

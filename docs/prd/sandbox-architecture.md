@@ -1,6 +1,6 @@
 # Sandbox Architecture
 
-Detailed architecture documentation for the Sandbox (Analyzer Mode) paper trading system.
+Detailed architecture documentation for the Sandbox (Analyzer Mode) sandbox trading system.
 
 ## System Overview
 
@@ -8,8 +8,8 @@ Detailed architecture documentation for the Sandbox (Analyzer Mode) paper tradin
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           API LAYER                                          │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
-│  │  /api/v1/placeorder  │  /api/v1/positions  │  /api/v1/orders           ││
-│  │  /api/v1/closeposi   │  /api/v1/holdings   │  /api/v1/cancelorder      ││
+│  │  /api/v1/placeorder  │  /api/v1/positionbook │ /api/v1/orderbook       ││
+│  │  /api/v1/closeposition │ /api/v1/holdings  │  /api/v1/cancelorder      ││
 │  └─────────────────────────────────────────────────────────────────────────┘│
 │                              │ ANALYZER_MODE=True                            │
 │                              ▼                                               │
@@ -49,7 +49,7 @@ Detailed architecture documentation for the Sandbox (Analyzer Mode) paper tradin
 │  └─────────────────────────────────────────────────────────────────────────┘│
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │                Polling Execution Engine (Fallback)                       ││
-│  │  • Polls pending orders every 2 seconds                                 ││
+│  │  • Polls at order_check_interval (default 5 seconds)                    ││
 │  │  • Fetches LTP from broker API                                          ││
 │  │  • Matches orders sequentially                                          ││
 │  └─────────────────────────────────────────────────────────────────────────┘│
@@ -161,7 +161,7 @@ def calculate_mtm(position, current_ltp):
 
 ### 3. Fund Manager (`sandbox/fund_manager.py`)
 
-Tracks virtual capital with margin blocking/release.
+Tracks sandbox capital with margin blocking/release.
 
 **Fund Structure:**
 

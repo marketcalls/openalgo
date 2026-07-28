@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 
 import websocket
 
+from database.auth_db import get_auth_token
+
 
 class FyersHSMWebSocket:
     """
@@ -121,21 +123,38 @@ class FyersHSMWebSocket:
     HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
     DATA_TIMEOUT = 90  # Consider stalled if no data for 90 seconds
 
-    def __init__(self, access_token: str, log_path: str = ""):
+    def __init__(self, access_token: str, log_path: str = "", user_id: str | None = None):
         """
         Initialize HSM WebSocket client
 
         Args:
             access_token: Fyers access token in format "appid:token"
             log_path: Path for logging (optional)
+            user_id: OpenAlgo user id, used to re-read a fresh access token from
+                the database on reconnect (tokens roll over daily at ~3 AM IST)
         """
         self.access_token = access_token
+        self.user_id = user_id
         self.logger = logging.getLogger("fyers_hsm_websocket")
 
-        # Extract HSM key from token
+        # Initialize health-check stop event BEFORE the HSM key extraction so
+        # cleanup paths can reference it even when __init__ raises (the
+        # extraction call below). Without this the disconnect logged after a
+        # failed init crashes with "no attribute '_health_check_stop_event'".
+        self._health_check_stop_event = threading.Event()
+
+        # Extract HSM key from token. _extract_hsm_key returns None either when
+        # the JWT exp claim is in the past (logged as "Access token has
+        # expired") or when decoding fails. The most common cause in
+        # production is the daily token expiry, so the raised message includes
+        # auth keywords so the websocket_proxy ConnectionPool recovery (issue
+        # #1419) can detect it and rebuild the adapter with a fresh token.
         self.hsm_key = self._extract_hsm_key(access_token)
         if not self.hsm_key:
-            raise ValueError("Failed to extract HSM key from access token")
+            raise ValueError(
+                "Failed to extract HSM key from access token — "
+                "access token has expired or is invalid"
+            )
 
         self.logger.debug(f"HSM key extracted: {self.hsm_key[:20]}...")
 
@@ -150,10 +169,10 @@ class FyersHSMWebSocket:
         self.reconnect_enabled = True
         self.reconnect_attempts = 0
 
-        # Health check state
+        # Health check state. _health_check_stop_event is already initialized
+        # at the top of __init__ so cleanup-after-failed-init paths can use it.
         self._last_message_time = None
         self._health_check_thread = None
-        self._health_check_stop_event = threading.Event()  # Signal to stop health check thread
 
         # Data structures
         self.subscriptions = {}  # topic_id -> topic_name mapping
@@ -799,6 +818,24 @@ class FyersHSMWebSocket:
         else:
             self.logger.warning(f"Received unexpected text message: {message}")
 
+    def _on_ws_pong(self, ws, message):
+        """Treat a WebSocket pong as proof the connection is alive.
+
+        The HSM feed sends no application-level heartbeat, so during a quiet or
+        closed market ``_last_message_time`` would otherwise freeze and the
+        data-stall watchdog would force a needless reconnect every
+        ``DATA_TIMEOUT`` seconds. The protocol ping/pong (enabled via
+        ``ping_interval`` on ``run_forever``) keeps the socket alive regardless
+        of market activity, so we feed the liveness clock from it — making the
+        watchdog fire only when the socket is genuinely dead (no data AND no
+        pong).
+        """
+        self._last_message_time = time.time()
+
+    def _on_ws_ping(self, ws, message):
+        """A server-initiated ping also proves the socket is alive."""
+        self._last_message_time = time.time()
+
     def _on_ws_error(self, ws, error):
         """Handle WebSocket error event"""
         self.logger.error(f"HSM WebSocket error: {error}")
@@ -857,11 +894,18 @@ class FyersHSMWebSocket:
                     on_message=self._on_ws_message,
                     on_error=self._on_ws_error,
                     on_close=self._on_ws_close,
+                    on_ping=self._on_ws_ping,
+                    on_pong=self._on_ws_pong,
                     header={"Authorization": self.access_token, "User-Agent": f"{self.source}/1.0"},
                 )
 
-                # Run until disconnection
-                self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+                # Run until disconnection. Enable protocol ping/pong keepalive so
+                # the socket stays alive through idle/quiet periods and the pong
+                # feeds the data-stall watchdog's liveness clock (matches
+                # Dhan/Upstox). Without this the HSM feed had no keepalive at all.
+                self.ws.run_forever(
+                    sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=30, ping_timeout=10
+                )
 
             except Exception as e:
                 self.logger.error(f"HSM WebSocket run error: {e}")
@@ -874,10 +918,50 @@ class FyersHSMWebSocket:
                 if not self._handle_reconnect():
                     self.logger.error("Reconnection failed - stopping HSM WebSocket")
                     break
+                # Re-read a fresh access token from the database before the loop
+                # rebuilds the WebSocketApp with the Authorization header. Without
+                # this, a reconnect after the ~3 AM IST daily token rollover would
+                # reuse the dead construction-time token and the feed would stay
+                # dead until a process restart.
+                self._refresh_access_token()
             else:
                 break
 
         self.logger.debug("HSM WebSocket run loop exited")
+
+    def _refresh_access_token(self):
+        """Re-read a fresh access token from the database before a reconnect.
+
+        Indian broker tokens roll over daily at ~3 AM IST. On reconnect we must
+        re-read the current token from the database (bypassing the auth cache,
+        which can hold a stale token after rollover). For Fyers HSM the token is
+        used both in the Authorization header (self.access_token) and to derive
+        the HSM auth key (self.hsm_key), so both are refreshed. If no fresh token
+        is available or the new HSM key cannot be extracted, keep the existing
+        values rather than crashing.
+        """
+        if not self.user_id:
+            return
+        try:
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if not fresh_token:
+                self.logger.warning(
+                    "No fresh auth token found on reconnect - keeping existing token"
+                )
+                return
+            new_hsm_key = self._extract_hsm_key(fresh_token)
+            if not new_hsm_key:
+                self.logger.warning(
+                    "Could not extract HSM key from fresh token on reconnect - "
+                    "keeping existing token"
+                )
+                return
+            with self.lock:
+                self.access_token = fresh_token
+                self.hsm_key = new_hsm_key
+            self.logger.info("Refreshed Fyers access token from database for reconnect")
+        except Exception as e:
+            self.logger.error(f"Error refreshing access token on reconnect: {e}")
 
     def _handle_reconnect(self) -> bool:
         """
@@ -1093,7 +1177,7 @@ class FyersHSMWebSocket:
         sub_msg = self._create_subscription_message(hsm_symbols, channel=11)
         self.ws.send(sub_msg, opcode=websocket.ABNF.OPCODE_BINARY)
 
-        # self.logger.info(f"\n✅ Sent subscription request for {len(hsm_symbols)} HSM symbols")
+        # self.logger.info(f"\nSent subscription request for {len(hsm_symbols)} HSM symbols")
         for i, symbol in enumerate(hsm_symbols, 1):
             mapped_symbol = symbol_mappings.get(symbol, "Unknown") if symbol_mappings else "N/A"
             # self.logger.info(f"  {i}. {symbol} => {mapped_symbol}")
@@ -1147,7 +1231,7 @@ class FyersHSMWebSocket:
             if hasattr(self, "ws") and self.ws:
                 try:
                     self.ws.close()
-                except:
+                except Exception:
                     pass
                 self.ws = None
 
@@ -1167,5 +1251,5 @@ class FyersHSMWebSocket:
             if hasattr(self, "reconnect_attempts"):
                 self.reconnect_attempts = 0
 
-        except:
+        except Exception:
             pass  # Suppress all errors in force cleanup
