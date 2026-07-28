@@ -80,9 +80,26 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._max_batch_size = 100  # HSI MAX_SCRIPS limit per frame
 
     def initialize(self, broker_name: str, user_id: str, auth_data=None):
-        """Initialize adapter for a specific user/session - following AliceBlue pattern."""
+        """Initialize adapter for a specific user/session - following AliceBlue pattern.
+
+        Safe to call again on a live adapter: any existing client is closed
+        first. Without that, a re-initialisation would rebind _ws_client and
+        orphan the previous WebSocketApp with its socket and run thread still
+        alive, and nothing would ever close them.
+        """
         self._broker_name = broker_name.lower()
         self._user_id = user_id
+
+        # Close outside the adapter lock — close() joins the run thread, whose
+        # callbacks take that same lock (mirrors _attempt_reconnection).
+        old_client = self._ws_client
+        if old_client is not None:
+            logger.debug("initialize() called with an existing client — closing it first")
+            self._ws_client = None
+            try:
+                old_client.close()
+            except Exception as e:
+                logger.warning(f"Error closing previous WebSocket client on re-initialize: {e}")
 
         # Load authentication from DB
         auth_string = get_auth_token(user_id, bypass_cache=True)
