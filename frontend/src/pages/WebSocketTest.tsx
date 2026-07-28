@@ -23,8 +23,6 @@ import {
   ZapOff,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -36,8 +34,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', { credentials: 'include' })
@@ -74,6 +74,24 @@ interface SymbolData {
   data: MarketData
   subscriptions: Set<string>
   lastUpdate?: number
+}
+
+interface OrderUpdate {
+  orderid: string
+  symbol: string
+  exchange: string
+  action: string
+  quantity: number
+  pricetype: string
+  product: string
+  order_status: string
+  filled_quantity: number
+  pending_quantity: number
+  average_price: number
+  rejection_reason: string
+  broker: string
+  mode: string
+  receivedAt: number
 }
 
 interface LogEntry {
@@ -251,6 +269,10 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
   const [showRawLogs, setShowRawLogs] = useState(false)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [rawMessages, setRawMessages] = useState<string[]>([])
+
+  // Order updates (account-level stream, no symbols)
+  const [ordersSubscribed, setOrdersSubscribed] = useState(false)
+  const [orderUpdates, setOrderUpdates] = useState<OrderUpdate[]>([])
   const logContainerRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLDivElement>(null)
 
@@ -321,6 +343,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
         setIsConnected(false)
         setIsConnecting(false)
         setIsAuthenticated(false)
+        setOrdersSubscribed(false)
         logEvent(`Disconnected (code: ${event.code})`, event.wasClean ? 'info' : 'error')
 
         if (autoReconnect && !event.wasClean) {
@@ -399,19 +422,23 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
             const updated = new Map(prev)
             const newData = { ...existing.data }
 
-            if (mode === 1 || mode === 2) {
-              Object.assign(newData, {
-                ltp: marketData.ltp ?? newData.ltp,
-                open: marketData.open ?? newData.open,
-                high: marketData.high ?? newData.high,
-                low: marketData.low ?? newData.low,
-                close: marketData.close ?? newData.close,
-                volume: marketData.volume ?? newData.volume,
-                change: marketData.change ?? newData.change,
-                change_percent: marketData.change_percent ?? newData.change_percent,
-                timestamp: marketData.timestamp ?? newData.timestamp,
-              })
-            }
+            // Scalar fields (LTP/OHLC/volume/change/timestamp) may arrive in
+            // any tick mode — Kite "full", Fyers SymbolUpdate, Upstox V3, and
+            // Dhan all include LTP+OHLC in their depth-mode payloads. Merge
+            // unconditionally with `??` fallback so a client subscribed to
+            // both LTP and Depth on the same symbol still sees LTP updates
+            // after the proxy upgrades the broker subscription to mode 3.
+            Object.assign(newData, {
+              ltp: marketData.ltp ?? newData.ltp,
+              open: marketData.open ?? newData.open,
+              high: marketData.high ?? newData.high,
+              low: marketData.low ?? newData.low,
+              close: marketData.close ?? newData.close,
+              volume: marketData.volume ?? newData.volume,
+              change: marketData.change ?? newData.change,
+              change_percent: marketData.change_percent ?? newData.change_percent,
+              timestamp: marketData.timestamp ?? newData.timestamp,
+            })
 
             if (mode === 3 && marketData.depth) {
               newData.depth = marketData.depth
@@ -434,6 +461,46 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
           logEvent('Unsubscribed', 'info')
           break
 
+        case 'subscribe_orders':
+          if (data.status === 'success') {
+            setOrdersSubscribed(true)
+            logEvent('Subscribed to order updates', 'success')
+          } else {
+            logEvent(`Order sub error: ${data.message}`, 'error')
+          }
+          break
+
+        case 'unsubscribe_orders':
+          setOrdersSubscribed(false)
+          logEvent('Unsubscribed from order updates', 'info')
+          break
+
+        case 'order_update': {
+          const update: OrderUpdate = {
+            orderid: String(data.orderid ?? ''),
+            symbol: String(data.symbol ?? ''),
+            exchange: String(data.exchange ?? ''),
+            action: String(data.action ?? ''),
+            quantity: Number(data.quantity ?? 0),
+            pricetype: String(data.pricetype ?? ''),
+            product: String(data.product ?? ''),
+            order_status: String(data.order_status ?? ''),
+            filled_quantity: Number(data.filled_quantity ?? 0),
+            pending_quantity: Number(data.pending_quantity ?? 0),
+            average_price: Number(data.average_price ?? 0),
+            rejection_reason: String(data.rejection_reason ?? ''),
+            broker: String(data.broker ?? ''),
+            mode: String(data.mode ?? ''),
+            receivedAt: Date.now(),
+          }
+          setOrderUpdates((prev) => [update, ...prev].slice(0, 100))
+          logEvent(
+            `Order ${update.orderid} ${update.order_status}${update.symbol ? ` (${update.symbol})` : ''}`,
+            update.order_status === 'rejected' ? 'error' : 'data'
+          )
+          break
+        }
+
         case 'error':
           logEvent(`Error: ${data.message}`, 'error')
           break
@@ -441,6 +508,20 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
     },
     [logEvent]
   )
+
+  // Order-update stream toggle (account-level, no symbols)
+  const toggleOrderUpdates = () => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      showToast.error('Not connected')
+      return
+    }
+    const action = ordersSubscribed ? 'unsubscribe_orders' : 'subscribe_orders'
+    socketRef.current.send(JSON.stringify({ action }))
+    logEvent(
+      ordersSubscribed ? 'Unsubscribing order updates...' : 'Subscribing order updates...',
+      'info'
+    )
+  }
 
   // Subscription controls
   const subscribe = (symbol: string, exchange: string, mode: string) => {
@@ -452,7 +533,9 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
     // Build subscription message
     const subscribeMessage: Record<string, unknown> = {
       action: 'subscribe',
-      symbols: [{ symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange }],
+      symbols: [
+        { symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange },
+      ],
       mode,
     }
 
@@ -483,7 +566,13 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
     const modeMap: Record<string, number> = { LTP: 1, Quote: 2, Depth: 3 }
     const unsubscribeMessage: Record<string, unknown> = {
       action: 'unsubscribe',
-      symbols: [{ symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol, exchange, mode: modeMap[mode] }],
+      symbols: [
+        {
+          symbol: mode === 'Depth' && depthLevel === 50 ? `${symbol}:50` : symbol,
+          exchange,
+          mode: modeMap[mode],
+        },
+      ],
       mode,
     }
 
@@ -545,7 +634,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
       const data = await response.json()
       setSearchResults((data.results || []).slice(0, 8))
       setShowSearchResults(true)
-    } catch (err) {
+    } catch (_err) {
       setSearchResults([])
     } finally {
       setIsSearching(false)
@@ -640,8 +729,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
           newMap.set(key, { symbol, exchange, data: {}, subscriptions: new Set() })
         })
         setActiveSymbols(newMap)
-      } catch (err) {
-      }
+      } catch (_err) {}
     }
   }, [])
 
@@ -906,7 +994,8 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                 size="sm"
                 className="border-violet-500/30 text-violet-400 hover:bg-violet-500/10 disabled:opacity-30"
               >
-                <Layers className="w-3.5 h-3.5 mr-1.5" /> Depth {depthLevel > 5 ? depthLevel : ''} All
+                <Layers className="w-3.5 h-3.5 mr-1.5" /> Depth {depthLevel > 5 ? depthLevel : ''}{' '}
+                All
               </Button>
               <Button
                 onClick={unsubscribeAll}
@@ -926,6 +1015,141 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                 <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Clear All
               </Button>
             </div>
+          </div>
+
+          {/* Order Updates (account-level stream) */}
+          <div className="rounded-xl bg-card border border-border p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Radio className="w-4 h-4 text-cyan-400" />
+                <h2 className="text-sm font-semibold text-foreground">Order Updates</h2>
+                {ordersSubscribed && <StatusOrb status="success" size="sm" />}
+                <span className="text-xs text-muted-foreground">
+                  {ordersSubscribed
+                    ? 'Live — fills, rejections and cancels stream here'
+                    : 'Real-time order status stream (no symbols needed)'}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                {orderUpdates.length > 0 && (
+                  <Button
+                    onClick={() => setOrderUpdates([])}
+                    variant="outline"
+                    size="sm"
+                    className="border-border/50 text-muted-foreground hover:bg-muted/50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Clear
+                  </Button>
+                )}
+                <Button
+                  onClick={toggleOrderUpdates}
+                  variant="outline"
+                  disabled={!isAuthenticated}
+                  size="sm"
+                  className={cn(
+                    'disabled:opacity-30',
+                    ordersSubscribed
+                      ? 'border-rose-500/30 text-rose-400 hover:bg-rose-500/10'
+                      : 'border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10'
+                  )}
+                >
+                  {ordersSubscribed ? (
+                    <>
+                      <ZapOff className="w-3.5 h-3.5 mr-1.5" /> Unsubscribe
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 mr-1.5" /> Subscribe
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {orderUpdates.length === 0 ? (
+              <p className="text-sm text-muted-foreground/60">
+                {ordersSubscribed
+                  ? 'Waiting for order events… place, fill, reject or cancel an order to see updates.'
+                  : 'Subscribe, then order status changes (from the broker feed or analyzer mode) appear here in real time.'}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-muted-foreground border-b border-border/50">
+                      <th className="py-2 pr-3 font-medium">Time</th>
+                      <th className="py-2 pr-3 font-medium">Order ID</th>
+                      <th className="py-2 pr-3 font-medium">Symbol</th>
+                      <th className="py-2 pr-3 font-medium">Action</th>
+                      <th className="py-2 pr-3 font-medium">Type</th>
+                      <th className="py-2 pr-3 font-medium">Status</th>
+                      <th className="py-2 pr-3 font-medium text-right">Filled</th>
+                      <th className="py-2 pr-3 font-medium text-right">Avg Price</th>
+                      <th className="py-2 font-medium">Info</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderUpdates.map((u, i) => (
+                      <tr
+                        key={`${u.orderid}-${u.receivedAt}-${i}`}
+                        className="border-b border-border/30 last:border-0"
+                      >
+                        <td className="py-2 pr-3 text-muted-foreground font-mono">
+                          {new Date(u.receivedAt).toLocaleTimeString('en-IN', { hour12: false })}
+                        </td>
+                        <td className="py-2 pr-3 font-mono text-foreground/80">{u.orderid}</td>
+                        <td className="py-2 pr-3 font-semibold text-foreground">
+                          {u.symbol}
+                          {u.exchange && (
+                            <span className="ml-1 text-[10px] text-muted-foreground">
+                              {u.exchange}
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          className={cn(
+                            'py-2 pr-3 font-medium',
+                            u.action === 'BUY' && 'text-emerald-400',
+                            u.action === 'SELL' && 'text-rose-400'
+                          )}
+                        >
+                          {u.action}
+                        </td>
+                        <td className="py-2 pr-3 text-muted-foreground">
+                          {u.pricetype}
+                          {u.product && ` · ${u.product}`}
+                        </td>
+                        <td className="py-2 pr-3">
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'text-[10px] uppercase',
+                              u.order_status === 'complete' &&
+                                'border-emerald-500/30 text-emerald-400',
+                              u.order_status === 'rejected' && 'border-rose-500/30 text-rose-400',
+                              u.order_status === 'cancelled' &&
+                                'border-amber-500/30 text-amber-400',
+                              u.order_status === 'open' && 'border-cyan-500/30 text-cyan-400'
+                            )}
+                          >
+                            {u.order_status}
+                          </Badge>
+                        </td>
+                        <td className="py-2 pr-3 text-right font-mono text-foreground/80">
+                          {u.filled_quantity}/{u.quantity}
+                        </td>
+                        <td className="py-2 pr-3 text-right font-mono text-foreground/80">
+                          {u.average_price ? formatPrice(u.average_price) : '--'}
+                        </td>
+                        <td className="py-2 text-muted-foreground max-w-[200px] truncate">
+                          {u.rejection_reason || (u.mode === 'analyze' ? 'sandbox' : u.broker)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {/* Market Data Cards */}
@@ -974,7 +1198,8 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                     <div className="flex gap-1">
                       {(['LTP', 'Quote', 'Depth'] as const).map((mode) => {
                         const isActive = symbolData.subscriptions.has(mode)
-                        const displayLabel = mode === 'Depth' && depthLevel > 5 ? `D${depthLevel}` : mode
+                        const displayLabel =
+                          mode === 'Depth' && depthLevel > 5 ? `D${depthLevel}` : mode
                         return (
                           <button
                             type="button"

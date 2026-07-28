@@ -5,7 +5,7 @@ Description: Plots RELIANCE candlestick with Williams Vix Fix indicator
              Converted from Pine Script v3 to Python using OpenAlgo ta library
 """
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 from datetime import datetime
 

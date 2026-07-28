@@ -56,11 +56,17 @@ def setup():
         qr.make_image(fill_color="black", back_color="white").save(img_buffer, format="PNG")
         qr_code = base64.b64encode(img_buffer.getvalue()).decode()
 
-        # Store TOTP setup in session temporarily for later access if needed
+        # Store TOTP setup in session temporarily for later access if needed.
+        # NB: deliberately not storing the TOTP secret in the Flask session.
+        # The default session cookie is signed but NOT encrypted; placing the
+        # secret there leaks it to anyone who reads the cookie value (browser
+        # extension, HAR export, support-ticket attachment, etc.). The QR
+        # code rendered above is sufficient for the user to enrol their
+        # authenticator app; the secret then lives only in the encrypted
+        # users.totp_secret column.
         session["totp_setup"] = True
         session["username"] = username
         session["qr_code"] = qr_code
-        session["totp_secret"] = user.totp_secret
 
         # Flash message with SMTP setup info and redirect to login
         flash(

@@ -111,14 +111,17 @@ def map_order_data(order_data):
                 # Look up in database
                 from broker.groww.database.master_contract_db import SymToken, db_session
 
-                db_record = (
-                    db_session.query(SymToken)
-                    .filter_by(brsymbol=broker_symbol, brexchange=exchange)
-                    .first()
-                )
-                if db_record and db_record.symbol:
-                    openalgo_symbol = db_record.symbol
-                    logger.info(f"Found symbol in database: {broker_symbol} -> {openalgo_symbol}")
+                with db_session() as session:
+                    db_record = (
+                        session.query(SymToken)
+                        .filter_by(brsymbol=broker_symbol, brexchange=exchange)
+                        .first()
+                    )
+                    if db_record and db_record.symbol:
+                        openalgo_symbol = db_record.symbol
+                        logger.info(
+                            f"Found symbol in database: {broker_symbol} -> {openalgo_symbol}"
+                        )
             except Exception as e:
                 logger.error(f"Error looking up symbol in database: {e}")
 

@@ -1,7 +1,6 @@
 import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { adminApi } from '@/api/admin'
 import {
   AlertDialog,
@@ -43,6 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { Holiday, SpecialSessionExchange } from '@/types/admin'
+import { showToast } from '@/utils/toast'
 
 const HOLIDAY_TYPES = [
   { value: 'TRADING_HOLIDAY', label: 'Trading Holiday' },
@@ -78,6 +78,7 @@ export default function HolidaysPage() {
   const [deleteHoliday, setDeleteHoliday] = useState<Holiday | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fetch is intentionally keyed only on currentYear; fetchHolidays is recreated each render and adding it would re-run the fetch on every render
   useEffect(() => {
     fetchHolidays(currentYear)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,7 +91,7 @@ export default function HolidaysPage() {
       setHolidays(response.data)
       setYears(response.years)
       setExchanges(response.exchanges)
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load holidays', 'admin')
     } finally {
       setIsLoading(false)
@@ -100,7 +101,7 @@ export default function HolidaysPage() {
   // Convert HH:MM time string to epoch milliseconds for a given date
   const timeToEpochMs = (dateStr: string, timeStr: string): number => {
     const [hours, minutes] = timeStr.split(':').map(Number)
-    const date = new Date(dateStr + 'T00:00:00+05:30') // IST timezone
+    const date = new Date(`${dateStr}T00:00:00+05:30`) // IST timezone
     date.setHours(hours, minutes, 0, 0)
     return date.getTime()
   }
@@ -144,7 +145,8 @@ export default function HolidaysPage() {
         description: newHoliday.description,
         holiday_type: newHoliday.holiday_type,
         closed_exchanges: newHoliday.closed_exchanges,
-        open_exchanges: newHoliday.holiday_type === 'SPECIAL_SESSION' ? openExchangesWithEpoch : undefined,
+        open_exchanges:
+          newHoliday.holiday_type === 'SPECIAL_SESSION' ? openExchangesWithEpoch : undefined,
       })
 
       if (response.status === 'success') {
@@ -521,14 +523,12 @@ export default function HolidaysPage() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Set trading hours for each exchange during this special session (e.g., Muhurat Trading 18:00-19:15)
+                  Set trading hours for each exchange during this special session (e.g., Muhurat
+                  Trading 18:00-19:15)
                 </p>
                 {/* Add exchange selector */}
                 <div className="flex gap-2">
-                  <Select
-                    onValueChange={(value) => addSpecialSessionExchange(value)}
-                    value=""
-                  >
+                  <Select onValueChange={(value) => addSpecialSessionExchange(value)} value="">
                     <SelectTrigger className="flex-1">
                       <SelectValue placeholder="Select exchange to add..." />
                     </SelectTrigger>

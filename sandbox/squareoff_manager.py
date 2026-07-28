@@ -64,7 +64,29 @@ class SquareOffManager:
             current_time = now.time()
 
             # Step 1: Cancel all open MIS orders past square-off time
-            self._cancel_open_mis_orders(current_time)
+            cancelled_count = self._cancel_open_mis_orders(current_time)
+
+            # Step 1b: Cancel open orders on expired F&O contracts. Expired
+            # POSITIONS are settled by position_manager, but an unfilled
+            # LIMIT/SL order on an expired contract had no reaper: it sat
+            # "open" forever, kept its margin blocked, and its symbol -- gone
+            # from the master contract after the daily refresh -- made the
+            # WebSocket engine log token-lookup errors on every boot.
+            cancelled_count += self._cancel_expired_contract_orders()
+
+            # Step 1c: Settle positions on expired F&O contracts. Runs the
+            # same cleanup the boot catch-up uses, so expiry settlement is
+            # proactive (every minute via the backup job) instead of waiting
+            # for someone to open the positionbook. Cheap when nothing has
+            # expired: one query, no matches, return. Timing (expiry-day
+            # close vs next day) and option settlement price are governed by
+            # the expiry_settlement_timing / option_expiry_settlement configs.
+            try:
+                from sandbox.position_manager import cleanup_expired_contracts
+
+                cleanup_expired_contracts()
+            except Exception as e:
+                logger.exception(f"Error settling expired positions: {e}")
 
             # Step 2: Get all open MIS positions (quantity != 0)
             mis_positions = (
@@ -73,24 +95,22 @@ class SquareOffManager:
                 .all()
             )
 
-            if not mis_positions:
-                logger.debug("No MIS positions to square-off")
-                return
-
             positions_to_close = []
+            if mis_positions:
+                # Check each position against its exchange's square-off time
+                for position in mis_positions:
+                    exchange = position.exchange
+                    square_off_time = self.square_off_times.get(exchange)
 
-            # Check each position against its exchange's square-off time
-            for position in mis_positions:
-                exchange = position.exchange
-                square_off_time = self.square_off_times.get(exchange)
+                    if not square_off_time:
+                        logger.warning(f"No square-off time configured for exchange {exchange}")
+                        continue
 
-                if not square_off_time:
-                    logger.warning(f"No square-off time configured for exchange {exchange}")
-                    continue
-
-                # Check if current time has passed square-off time
-                if current_time >= square_off_time:
-                    positions_to_close.append(position)
+                    # Check if current time has passed square-off time
+                    if current_time >= square_off_time:
+                        positions_to_close.append(position)
+            else:
+                logger.debug("No MIS positions to square-off")
 
             if positions_to_close:
                 logger.info(f"Found {len(positions_to_close)} MIS positions to square-off")
@@ -98,22 +118,109 @@ class SquareOffManager:
             else:
                 logger.debug(f"No positions due for square-off at {current_time.strftime('%H:%M')}")
 
+            # Notify UI if anything changed. The per-position close goes through
+            # _execute_order (already publishes SandboxOrderFilledEvent), so
+            # Positions/OrderBook will refresh per-fill. But the auto-cancel
+            # path bypasses the service layer entirely, so without this emit
+            # OrderBook would miss the cancellations until manual refresh.
+            if cancelled_count or positions_to_close:
+                try:
+                    from events import SandboxAutoSquareOffEvent
+                    from utils.event_bus import bus
+
+                    bus.publish(
+                        SandboxAutoSquareOffEvent(
+                            mode="analyze",
+                            api_type="sandbox.auto_squareoff",
+                            cancelled_orders=cancelled_count,
+                            closed_positions=len(positions_to_close),
+                        )
+                    )
+                except Exception as pub_err:
+                    logger.debug(f"Failed to publish SandboxAutoSquareOffEvent: {pub_err}")
+
         except Exception as e:
             logger.exception(f"Error checking square-off conditions: {e}")
 
+    def _cancel_expired_contract_orders(self):
+        """Cancel open orders whose F&O contract has expired.
+
+        Mirrors _check_and_close_expired_positions (which settles expired
+        positions) for the order book. Cancelling via OrderManager.cancel_order
+        releases the blocked margin, exactly like the MIS auto-cancel above.
+        Equity orders (no parseable expiry) are never touched.
+
+        Returns the number of orders cancelled.
+        """
+        cancelled_count = 0
+        try:
+            from database.sandbox_db import SandboxOrders
+            from sandbox.order_manager import OrderManager
+            from sandbox.position_manager import (
+                get_contract_expiry,
+                is_contract_expired_now,
+            )
+
+            open_orders = SandboxOrders.query.filter(
+                SandboxOrders.order_status.in_(["open", "trigger pending"])
+            ).all()
+
+            for order in open_orders:
+                expiry_date = get_contract_expiry(order.symbol, order.exchange)
+                # Same timing rule as position settlement: with the default
+                # expiry_day_close config an order dies at the closing bell of
+                # expiry day, not the following midnight.
+                if not is_contract_expired_now(expiry_date, order.exchange):
+                    continue
+
+                try:
+                    order_manager = OrderManager(order.user_id)
+                    success, response, status_code = order_manager.cancel_order(order.orderid)
+                    if success:
+                        logger.info(
+                            f"Auto-cancelled order {order.orderid} for {order.symbol}: "
+                            f"contract expired {expiry_date}"
+                        )
+                        cancelled_count += 1
+                    else:
+                        logger.error(
+                            f"Failed to cancel expired-contract order {order.orderid}: "
+                            f"{response.get('message', 'Unknown error')}"
+                        )
+                except Exception as e:
+                    logger.exception(
+                        f"Error cancelling expired-contract order {order.orderid}: {e}"
+                    )
+
+            if cancelled_count > 0:
+                logger.info(
+                    f"Auto-cancelled {cancelled_count} open orders on expired contracts"
+                )
+        except Exception as e:
+            logger.exception(f"Error in _cancel_expired_contract_orders: {e}")
+
+        return cancelled_count
+
     def _cancel_open_mis_orders(self, current_time):
-        """Cancel all open MIS orders past their exchange's square-off time"""
+        """Cancel all open MIS orders past their exchange's square-off time.
+
+        Returns the number of orders successfully cancelled, so the caller
+        can decide whether to emit a UI-refresh event.
+        """
+        cancelled_count = 0
         try:
             from database.sandbox_db import SandboxOrders
             from sandbox.order_manager import OrderManager
 
-            # Get all open MIS orders
-            open_orders = SandboxOrders.query.filter_by(product="MIS", order_status="open").all()
+            # Get all open MIS orders - "open" and "trigger pending" (SL/SL-M
+            # still resting in the Stop-Loss book) both need square-off
+            open_orders = SandboxOrders.query.filter(
+                SandboxOrders.product == "MIS",
+                SandboxOrders.order_status.in_(["open", "trigger pending"]),
+            ).all()
 
             if not open_orders:
-                return
-
-            cancelled_count = 0
+                return 0
 
             for order in open_orders:
                 exchange = order.exchange
@@ -148,6 +255,8 @@ class SquareOffManager:
 
         except Exception as e:
             logger.exception(f"Error in _cancel_open_mis_orders: {e}")
+
+        return cancelled_count
 
     def _square_off_positions(self, positions):
         """Square-off a list of positions"""

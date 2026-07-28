@@ -77,7 +77,7 @@ class StageResult:
             self.details.append(msg)
 
     def summary_line(self) -> str:
-        status = green("✓") if self.failed == 0 else red("✗")
+        status = green("PASS") if self.failed == 0 else red("FAIL")
         return f"{status}  {self.name}: {self.passed} ok, {self.failed} fail"
 
 

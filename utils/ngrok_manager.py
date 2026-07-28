@@ -185,12 +185,10 @@ def start_ngrok_tunnel(port: int = 5000) -> str | None:
             _ngrok_tunnel = tunnel
 
         if ngrok_url:
-            print(f"Ngrok tunnel established: {ngrok_url}")
-            logger.debug(f"ngrok URL: {ngrok_url}")
+            logger.info(f"Ngrok tunnel established: {ngrok_url}")
             return ngrok_url
 
     except Exception as e:
-        print(f"Failed to start ngrok tunnel: {e}")
         logger.exception(f"Failed to start ngrok tunnel: {e}")
 
     return None
@@ -202,7 +200,7 @@ def get_ngrok_url() -> str | None:
     if _ngrok_tunnel:
         try:
             return _ngrok_tunnel.public_url
-        except:
+        except Exception:
             pass
     return None
 

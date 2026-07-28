@@ -77,8 +77,6 @@ interface SandboxData {
   trades: Trade[]
 }
 
-
-
 function getPnLColor(value: number): string {
   if (value > 0) return 'text-green-500'
   if (value < 0) return 'text-red-500'
@@ -92,9 +90,9 @@ export default function SandboxPnL() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('daily')
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time data load on mount; fetchData has no reactive inputs
   useEffect(() => {
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchData = async () => {
@@ -108,7 +106,7 @@ export default function SandboxPnL() {
           setData(result.data)
         }
       }
-    } catch (error) {
+    } catch (_error) {
     } finally {
       setIsLoading(false)
     }

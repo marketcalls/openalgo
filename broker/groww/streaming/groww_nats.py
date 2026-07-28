@@ -291,7 +291,7 @@ class NATSProtocol:
                     if sub.max_msgs and sub.received_msgs >= sub.max_msgs:
                         del self.subscriptions[sid]
                 else:
-                    logger.warning(f"⚠️ No subscription for SID {sid}, still adding message")
+                    logger.warning(f"No subscription for SID {sid}, still adding message")
                     messages.append(
                         {
                             "type": "MSG",

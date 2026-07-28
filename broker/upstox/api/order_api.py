@@ -178,7 +178,7 @@ def place_order_api(data, auth):
     Places an order using the Upstox API.
     Returns a tuple: (httpx.Response, response_data_dict, order_id_str)
     """
-    logger.info(f"Placing order with data: {data}")
+    logger.debug(f"Placing order with data: {data}")
     try:
         api_key = os.getenv("BROKER_API_KEY")
         if not api_key:
@@ -228,7 +228,7 @@ def place_order_api(data, auth):
 
         if response_data.get("status") == "success":
             order_id = response_data.get("data", {}).get("order_id")
-            logger.info(f"Successfully placed order. Order ID: {order_id}")
+            logger.debug(f"Successfully placed order. Order ID: {order_id}")
             return response, response_data, order_id
         else:
             error_msg = response_data.get("message", "Failed to place order.")
@@ -247,7 +247,7 @@ def place_smartorder_api(data, auth):
     """
     Places a smart order by comparing the desired position size with the current open position.
     """
-    logger.info(f"Placing smart order with data: {data}")
+    logger.debug(f"Placing smart order with data: {data}")
     try:
         symbol = data.get("symbol")
         exchange = data.get("exchange")
@@ -264,14 +264,14 @@ def place_smartorder_api(data, auth):
             )
 
             if position_size == 0 and current_position == 0 and int(data.get("quantity", 0)) != 0:
-                logger.info("No existing position and quantity is specified. Placing a new order.")
+                logger.debug("No existing position and quantity is specified. Placing a new order.")
                 return place_order_api(data, auth)
 
             if position_size == current_position:
                 msg = "No action needed. Position size matches current position."
                 if int(data.get("quantity", 0)) == 0:
                     msg = "No open position found. Not placing exit order."
-                logger.info(msg)
+                logger.debug(msg)
                 return None, {"status": "success", "message": msg}, None
 
             action, quantity = None, 0
@@ -280,7 +280,7 @@ def place_smartorder_api(data, auth):
             else:
                 action, quantity = "SELL", current_position - position_size
 
-            logger.info(f"Determined action: {action}, Quantity: {quantity}")
+            logger.debug(f"Determined action: {action}, Quantity: {quantity}")
 
             order_data = data.copy()
             order_data["action"] = action
@@ -299,11 +299,11 @@ def close_all_positions(current_api_key, auth):
     """
     Closes all open positions.
     """
-    logger.info("Attempting to close all open positions.")
+    logger.debug("Attempting to close all open positions.")
     try:
         positions_response = get_positions(auth)
         if positions_response.get("status") != "success" or not positions_response.get("data"):
-            logger.info("No open positions found to close.")
+            logger.debug("No open positions found to close.")
             return {"message": "No Open Positions Found"}, 200
 
         for position in positions_response["data"]:
@@ -332,9 +332,9 @@ def close_all_positions(current_api_key, auth):
             }
             logger.debug(f"Closing position with payload: {place_order_payload}")
             _, api_response, _ = place_order_api(place_order_payload, auth)
-            logger.info(f"Close position response for {symbol}: {api_response}")
+            logger.debug(f"Close position response for {symbol}: {api_response}")
 
-        logger.info("Successfully initiated closing of all open positions.")
+        logger.debug("Successfully initiated closing of all open positions.")
         return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
     except Exception:
@@ -346,7 +346,7 @@ def cancel_order(orderid, auth):
     """
     Cancels a specific order by its ID.
     """
-    logger.info(f"Attempting to cancel order ID: {orderid}")
+    logger.debug(f"Attempting to cancel order ID: {orderid}")
     try:
         response_data = get_api_response(
             f"/v2/order/cancel?order_id={orderid}", auth, method="DELETE"
@@ -354,7 +354,7 @@ def cancel_order(orderid, auth):
 
         if response_data.get("status") == "success":
             canceled_id = response_data.get("data", {}).get("order_id")
-            logger.info(f"Successfully canceled order ID: {canceled_id}")
+            logger.debug(f"Successfully canceled order ID: {canceled_id}")
             return {"status": "success", "orderid": canceled_id}, 200
         else:
             error_msg = response_data.get("message", "Failed to cancel order")
@@ -372,7 +372,7 @@ def modify_order(data, auth):
     """
     Modifies an existing order.
     """
-    logger.info(f"Attempting to modify order with data: {data}")
+    logger.debug(f"Attempting to modify order with data: {data}")
     try:
         transformed_order_data = transform_modify_order_data(data)
         payload = json.dumps(transformed_order_data)
@@ -382,7 +382,7 @@ def modify_order(data, auth):
 
         if response_data.get("status") == "success":
             modified_id = response_data.get("data", {}).get("order_id")
-            logger.info(f"Successfully modified order. New Order ID: {modified_id}")
+            logger.debug(f"Successfully modified order. New Order ID: {modified_id}")
             return {"status": "success", "orderid": modified_id}, 200
         else:
             error_msg = response_data.get("message", "Failed to modify order")
@@ -398,7 +398,7 @@ def cancel_all_orders_api(data, auth):
     """
     Cancels all open and trigger-pending orders.
     """
-    logger.info("Attempting to cancel all open orders.")
+    logger.debug("Attempting to cancel all open orders.")
     try:
         order_book_response = get_order_book(auth)
         if order_book_response.get("status") != "success":
@@ -414,7 +414,7 @@ def cancel_all_orders_api(data, auth):
         ]
 
         if not orders_to_cancel:
-            logger.info("No open orders to cancel.")
+            logger.debug("No open orders to cancel.")
             return [], []
 
         logger.debug(
@@ -430,7 +430,7 @@ def cancel_all_orders_api(data, auth):
             else:
                 failed_cancellations.append(orderid)
 
-        logger.info(
+        logger.debug(
             f"Canceled {len(canceled_orders)} orders. Failed to cancel {len(failed_cancellations)} orders."
         )
         return canceled_orders, failed_cancellations

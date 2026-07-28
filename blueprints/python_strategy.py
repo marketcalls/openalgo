@@ -17,6 +17,7 @@ import sys
 import threading
 from datetime import date, datetime, time
 from pathlib import Path
+from time import monotonic, sleep
 
 import psutil
 import pytz
@@ -35,7 +36,15 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from database.market_calendar_db import get_market_hours_status, is_market_holiday, is_market_open
+from database.market_calendar_db import (
+    SUPPORTED_EXCHANGES,
+    get_effective_session_window,
+    get_market_hours_status,
+    get_special_session,
+    is_market_holiday,
+    is_market_open,
+)
+from utils.constants import CRYPTO_EXCHANGES
 from utils.session import check_session_validity
 
 # Setup logging
@@ -52,7 +61,7 @@ IST = pytz.timezone("Asia/Kolkata")
 RUNNING_STRATEGIES = {}  # {strategy_id: {'process': subprocess.Popen, 'started_at': datetime}}
 STRATEGY_CONFIGS = {}  # {strategy_id: config_dict}
 SCHEDULER = None
-PROCESS_LOCK = threading.Lock()  # Thread lock for process operations
+PROCESS_LOCK = threading.RLock()  # Reentrant lock for nested process operations
 
 # SSE (Server-Sent Events) for real-time status updates
 SSE_SUBSCRIBERS = []  # List of Queue objects for SSE clients
@@ -76,7 +85,7 @@ def broadcast_status_update(strategy_id: str, status: str, message: str = None):
             try:
                 q.put_nowait(event)
                 active_subscribers.append(q)
-            except:
+            except Exception:
                 pass  # Queue full or dead, skip
         SSE_SUBSCRIBERS.clear()
         SSE_SUBSCRIBERS.extend(active_subscribers)
@@ -123,14 +132,41 @@ def init_scheduler():
         )
         logger.debug("Market hours enforcer scheduled (runs every minute)")
 
+        # Periodically reap crashed strategies so headless deployments don't
+        # accumulate stale entries in RUNNING_STRATEGIES. Without this, a
+        # strategy that exits unexpectedly stays tracked (and its parent-side
+        # resources pinned) until someone opens the /python UI.
+        SCHEDULER.add_job(
+            func=cleanup_dead_processes,
+            trigger="interval",
+            seconds=60,
+            id="reap_dead_strategies",
+            replace_existing=True,
+        )
+        logger.debug("Dead-process reaper scheduled (runs every 60 seconds)")
+
 
 def load_configs():
-    """Load strategy configurations from file"""
+    """Load strategy configurations from file. Backfills `exchange` for
+    legacy configs (default NSE) so the exchange-aware scheduler always
+    has a value to dispatch on."""
     global STRATEGY_CONFIGS
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 STRATEGY_CONFIGS = json.load(f)
+            mutated = False
+            for cfg in STRATEGY_CONFIGS.values():
+                if "exchange" not in cfg or not cfg.get("exchange"):
+                    cfg["exchange"] = "NSE"
+                    mutated = True
+                else:
+                    upper = str(cfg["exchange"]).upper()
+                    if upper != cfg["exchange"]:
+                        cfg["exchange"] = upper
+                        mutated = True
+            if mutated:
+                save_configs()
             logger.debug(f"Loaded {len(STRATEGY_CONFIGS)} strategy configurations")
         except Exception as e:
             logger.exception(f"Failed to load configs: {e}")
@@ -138,11 +174,19 @@ def load_configs():
 
 
 def save_configs():
-    """Save strategy configurations to file"""
+    """Save strategy configurations to file atomically.
+
+    Writes to a temp file and then renames into place so a kill mid-write
+    cannot leave a half-written JSON blob behind.
+    """
     try:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        tmp_path = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(STRATEGY_CONFIGS, f, indent=2, default=str, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_FILE)
         logger.debug("Configurations saved")
     except Exception as e:
         logger.exception(f"Failed to save configs: {e}")
@@ -268,7 +312,7 @@ def format_ist_time(dt):
         if isinstance(dt, str):
             try:
                 dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-            except:
+            except Exception:
                 return dt
         if not dt.tzinfo:
             dt = IST.localize(dt)
@@ -423,7 +467,7 @@ def start_strategy_process(strategy_id):
                 try:
                     # Ensure log directory is writable
                     os.chmod(log_file.parent, 0o755)
-                except:
+                except Exception:
                     pass
 
             # Check if we can write to log directory
@@ -456,6 +500,26 @@ def start_strategy_process(strategy_id):
             subprocess_args["stdout"] = log_handle
             subprocess_args["stderr"] = subprocess.STDOUT
             subprocess_args["cwd"] = str(Path.cwd())
+
+            # Inject documented strategy environment variables
+            # (per strategies/README.md: STRATEGY_ID, STRATEGY_NAME, OPENALGO_API_KEY, OPENALGO_HOST)
+            strategy_env = os.environ.copy()
+            strategy_env["STRATEGY_ID"] = strategy_id
+            strategy_env["STRATEGY_NAME"] = config.get("name", strategy_id)
+            strategy_env["OPENALGO_STRATEGY_EXCHANGE"] = normalize_exchange(
+                config.get("exchange")
+            )
+            strategy_env.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
+            try:
+                from database.auth_db import get_api_key_for_tradingview
+                user_id = config.get("user_id")
+                if user_id:
+                    _api_key = get_api_key_for_tradingview(user_id)
+                    if _api_key:
+                        strategy_env["OPENALGO_API_KEY"] = _api_key
+            except Exception as e:
+                logger.warning(f"Could not inject API key for strategy {strategy_id}: {e}")
+            subprocess_args["env"] = strategy_env
 
             # Start the process
             # Use Python unbuffered mode for real-time output
@@ -490,13 +554,23 @@ def start_strategy_process(strategy_id):
                 logger.exception(f"Unexpected error starting process: {e}")
                 return False, f"Failed to start process: {str(e)}"
 
+            # The subprocess has inherited log_handle's fd, so the child can
+            # write to the log on its own. We close the parent-side handle
+            # now to avoid pinning an extra fd for the lifetime of the
+            # strategy (multiplied by every running strategy). If closing
+            # fails we swallow the error — the child's inherited fd is the
+            # authoritative one and stays open.
+            try:
+                log_handle.close()
+            except Exception as e:
+                logger.debug(f"Error closing parent-side log handle for {strategy_id}: {e}")
+
             # Store process info
             RUNNING_STRATEGIES[strategy_id] = {
                 "process": process,
                 "pid": process.pid,
                 "started_at": ist_now,
                 "log_file": str(log_file),
-                "log_handle": log_handle,  # Keep file handle open
             }
 
             # Update config with IST time
@@ -542,7 +616,7 @@ def stop_strategy_process(strategy_id):
                         STRATEGY_CONFIGS[strategy_id]["last_stopped"] = get_ist_time().isoformat()
                         save_configs()
                         return True, "Strategy stopped"
-                    except:
+                    except Exception:
                         pass
             return False, "Strategy not running"
 
@@ -592,15 +666,13 @@ def stop_strategy_process(strategy_id):
                         except ProcessLookupError:
                             pass  # Process already dead
             elif hasattr(process, "terminate"):
-                # For psutil.Process objects
-                try:
-                    process.terminate()
-                    process.wait(timeout=5)
-                except psutil.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass  # Process already dead or no permission
+                # Restored strategies are tracked as psutil.Process objects.
+                # Do not call psutil.Process.wait(timeout): under
+                # gunicorn-eventlet on Linux, psutil's pidfd wait path needs
+                # select.poll(), which eventlet removes from the patched
+                # select module.
+                if not terminate_psutil_process_safely(process, terminate_timeout=5, kill_timeout=2):
+                    return False, f"Failed to stop strategy PID {pid}"
             else:
                 # Fallback: use PID directly
                 terminate_process_cross_platform(pid)
@@ -639,6 +711,80 @@ def stop_strategy_process(strategy_id):
             return False, f"Failed to stop strategy: {str(e)}"
 
 
+def psutil_process_has_exited(process):
+    """Return True when a psutil.Process is gone or zombie, without Process.wait()."""
+    pid = getattr(process, "pid", None)
+    if not pid:
+        return True
+
+    if not IS_WINDOWS:
+        try:
+            waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                return True
+        except ChildProcessError:
+            # Restored strategies are usually not children of this process.
+            pass
+        except OSError:
+            pass
+
+    try:
+        if not psutil.pid_exists(pid):
+            return True
+        if not process.is_running():
+            return True
+        try:
+            dead_statuses = {psutil.STATUS_ZOMBIE}
+            status_dead = getattr(psutil, "STATUS_DEAD", None)
+            if status_dead:
+                dead_statuses.add(status_dead)
+            return process.status() in dead_statuses
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return True
+        except psutil.AccessDenied:
+            return False
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return True
+    except psutil.AccessDenied:
+        return False
+
+
+def wait_for_psutil_process_exit(process, timeout):
+    """Poll for psutil.Process exit in a way that is safe under eventlet."""
+    deadline = monotonic() + timeout
+    while monotonic() < deadline:
+        if psutil_process_has_exited(process):
+            return True
+        sleep(0.1)
+    return psutil_process_has_exited(process)
+
+
+def terminate_psutil_process_safely(process, terminate_timeout=3, kill_timeout=2):
+    """Terminate a psutil.Process without using psutil's eventlet-unsafe wait path."""
+    pid = getattr(process, "pid", "unknown")
+
+    try:
+        process.terminate()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return True
+    except psutil.AccessDenied:
+        logger.warning(f"Access denied while terminating process {pid}")
+        return psutil_process_has_exited(process)
+
+    if wait_for_psutil_process_exit(process, terminate_timeout):
+        return True
+
+    try:
+        process.kill()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return True
+    except psutil.AccessDenied:
+        logger.warning(f"Access denied while killing process {pid}")
+        return psutil_process_has_exited(process)
+
+    return wait_for_psutil_process_exit(process, kill_timeout)
+
+
 def terminate_process_cross_platform(pid):
     """Terminate a process in a cross-platform way"""
     try:
@@ -655,13 +801,34 @@ def terminate_process_cross_platform(pid):
         # Terminate main process
         process.terminate()
 
-        # Wait and kill if necessary
-        gone, alive = psutil.wait_procs([process] + children, timeout=3)
+        # Wait up to 3s for graceful exit, then kill any survivors.
+        # Manual polling — psutil.wait_procs calls select.poll(), which
+        # eventlet's monkey-patched select does not expose on Linux
+        # (gunicorn-eventlet production deployment). Plain time.sleep is
+        # cooperatively patched under eventlet and is a no-op cost on
+        # Windows/Mac dev servers using standard threading.
+        all_procs = [process] + children
+        deadline = monotonic() + 3
+        alive = list(all_procs)
+        while alive and monotonic() < deadline:
+            sleep(0.1)
+            alive = []
+            for p in all_procs:
+                if not psutil_process_has_exited(p):
+                    alive.append(p)
+
         for p in alive:
             try:
                 p.kill()
             except psutil.NoSuchProcess:
                 pass
+
+        if alive:
+            kill_deadline = monotonic() + 2
+            while monotonic() < kill_deadline and any(
+                not psutil_process_has_exited(p) for p in alive
+            ):
+                sleep(0.1)
 
     except psutil.NoSuchProcess:
         pass  # Process already dead
@@ -681,7 +848,13 @@ def check_process_status(pid):
 
 
 def close_log_handle_safely(strategy_info):
-    """Safely close a log file handle, handling all edge cases"""
+    """Safely close a log file handle, handling all edge cases.
+
+    As of the FD-hygiene fix, parent-side log handles are closed immediately
+    after Popen inherits them, so ``strategy_info`` normally has no
+    ``log_handle`` key. This helper is retained for defensive compatibility
+    with older records (e.g. adopted processes, future code paths).
+    """
     if not strategy_info:
         return
     log_handle = strategy_info.get("log_handle")
@@ -714,7 +887,7 @@ def cleanup_dead_processes():
             elif hasattr(process, "is_running"):
                 # For psutil.Process objects
                 try:
-                    if not process.is_running():
+                    if psutil_process_has_exited(process):
                         is_dead = True
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     is_dead = True
@@ -724,7 +897,7 @@ def cleanup_dead_processes():
                     pid = info.get("pid")
                     if pid and not psutil.pid_exists(pid):
                         is_dead = True
-                except:
+                except Exception:
                     is_dead = True
 
             if is_dead:
@@ -768,31 +941,45 @@ def cleanup_dead_processes():
             logger.info(f"Cleaned up {len(dead_strategies)} dead processes")
 
 
-def is_trading_day() -> bool:
+DEFAULT_STRATEGY_EXCHANGE = "NSE"
+
+
+def normalize_exchange(exchange: str | None) -> str:
+    """Normalize an exchange code; fall back to DEFAULT_STRATEGY_EXCHANGE."""
+    if not exchange:
+        return DEFAULT_STRATEGY_EXCHANGE
+    exch = str(exchange).strip().upper()
+    if exch in SUPPORTED_EXCHANGES:
+        return exch
+    return DEFAULT_STRATEGY_EXCHANGE
+
+
+def is_trading_day(exchange: str = DEFAULT_STRATEGY_EXCHANGE) -> bool:
     """
-    Check if today is a valid trading day (not weekend, not holiday).
-    Uses the market calendar service for accurate holiday detection.
+    Check if today is a valid trading day for the given exchange.
 
-    When DISABLE_SESSION_EXPIRY is set to 'true' (crypto broker instances),
-    every day is a trading day since crypto markets operate 24/7.
-
-    Returns:
-        True if today is a trading day, False otherwise
+    - CRYPTO short-circuits to True (24/7).
+    - DISABLE_SESSION_EXPIRY=true (crypto broker instance) short-circuits to True.
+    - SPECIAL_SESSION rows on weekends count as trading days for the exchange.
+    - Otherwise falls back to the per-exchange holiday/weekend check.
     """
     try:
-        # Crypto broker instances run 24/7
+        exch = normalize_exchange(exchange)
+
+        if exch in CRYPTO_EXCHANGES:
+            return True
         if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
             return True
 
         today = datetime.now(IST).date()
 
-        # Check using market calendar service (includes weekend check)
-        if is_market_holiday(today, exchange="NSE"):
-            return False
+        # Special session on weekend / holiday wins.
+        if get_special_session(today, exch):
+            return True
 
-        return True
+        return not is_market_holiday(today, exchange=exch)
     except Exception as e:
-        logger.exception(f"Error checking trading day status: {e}")
+        logger.exception(f"Error checking trading day status for {exchange}: {e}")
         # On error, default to NOT running to be safe
         return False
 
@@ -813,133 +1000,172 @@ def is_within_market_hours() -> bool:
         return False
 
 
-def get_market_status() -> dict:
+def get_market_status(exchange: str = DEFAULT_STRATEGY_EXCHANGE) -> dict:
     """
-    Get detailed market status with reason for being closed.
-
-    When DISABLE_SESSION_EXPIRY is set to 'true' (crypto broker instances),
-    always returns open since crypto markets operate 24/7.
+    Get detailed market status for the given exchange.
 
     Returns:
         dict with:
-        - is_open: bool
-        - reason: str (None if open, else 'weekend', 'holiday', 'before_market', 'after_market')
-        - message: str (human readable message)
-        - next_open: str (when market opens next, if closed)
+        - is_open:    bool — currently within the effective trading window
+        - is_trading: bool — exchange has any session today (regular or special)
+        - reason:     str  — None when open; else 'weekend' | 'holiday' |
+                       'before_market' | 'after_market'
+        - message:    str  — human-readable
+        - is_special: bool — today's window comes from a SPECIAL_SESSION /
+                       partial-holiday row (e.g., MCX evening, Sunday Muhurat)
+        - session_start_ms / session_end_ms: epoch-ms of today's window (if any)
     """
     try:
-        # Crypto broker instances run 24/7
+        exch = normalize_exchange(exchange)
+
+        if exch in CRYPTO_EXCHANGES:
+            return {
+                "is_open": True,
+                "is_trading": True,
+                "reason": None,
+                "message": f"{exch} is 24/7",
+                "is_special": False,
+                "exchange": exch,
+            }
+
         if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
-            return {"is_open": True, "reason": None, "message": "Market is open (24/7 crypto)"}
+            return {
+                "is_open": True,
+                "is_trading": True,
+                "reason": None,
+                "message": "Market is open (24/7 crypto instance)",
+                "is_special": False,
+                "exchange": exch,
+            }
 
         now = datetime.now(IST)
         today = now.date()
+        now_ms = int(now.timestamp() * 1000)
 
-        # Check weekend first
-        if today.weekday() >= 5:  # Saturday = 5, Sunday = 6
-            day_name = "Saturday" if today.weekday() == 5 else "Sunday"
+        window = get_effective_session_window(today, exch)
+
+        if not window:
+            # Closed for this exchange today
+            if today.weekday() >= 5:
+                day_name = "Saturday" if today.weekday() == 5 else "Sunday"
+                return {
+                    "is_open": False,
+                    "is_trading": False,
+                    "reason": "weekend",
+                    "message": f"{exch} closed - {day_name}",
+                    "is_special": False,
+                    "exchange": exch,
+                }
             return {
                 "is_open": False,
-                "reason": "weekend",
-                "message": f"Market closed - {day_name}",
-                "day": day_name,
+                "is_trading": False,
+                "reason": "holiday",
+                "message": f"{exch} closed - Holiday",
+                "is_special": False,
+                "exchange": exch,
             }
 
-        # Check holiday
-        if is_market_holiday(today):
-            return {"is_open": False, "reason": "holiday", "message": "Market closed - Holiday"}
-
-        # Check market hours using market calendar
-        status = get_market_hours_status()
-
-        if status.get("any_market_open"):
-            return {"is_open": True, "reason": None, "message": "Market is open"}
-
-        # Market is closed - determine if before or after hours
-        current_ms = status.get("current_time_ms", 0)
-        earliest_open = status.get("earliest_open_ms", 33300000)  # Default 09:15
-        latest_close = status.get("latest_close_ms", 55800000)  # Default 15:30
-
-        if current_ms < earliest_open:
+        is_open = window["start_ms"] <= now_ms <= window["end_ms"]
+        if is_open:
             return {
-                "is_open": False,
-                "reason": "before_market",
-                "message": "Market closed - Before market hours",
-            }
-        else:
-            return {
-                "is_open": False,
-                "reason": "after_market",
-                "message": "Market closed - After market hours",
+                "is_open": True,
+                "is_trading": True,
+                "reason": None,
+                "message": (
+                    f"{exch} special session in progress"
+                    if window.get("is_special")
+                    else f"{exch} is open"
+                ),
+                "is_special": bool(window.get("is_special")),
+                "session_start_ms": window["start_ms"],
+                "session_end_ms": window["end_ms"],
+                "exchange": exch,
             }
 
-    except Exception as e:
-        logger.exception(f"Error getting market status: {e}")
+        # Has a session today, but not right now
+        reason = "before_market" if now_ms < window["start_ms"] else "after_market"
         return {
             "is_open": False,
+            "is_trading": True,
+            "reason": reason,
+            "message": (
+                f"{exch} closed - {'before' if reason == 'before_market' else 'after'} session"
+            ),
+            "is_special": bool(window.get("is_special")),
+            "session_start_ms": window["start_ms"],
+            "session_end_ms": window["end_ms"],
+            "exchange": exch,
+        }
+
+    except Exception as e:
+        logger.exception(f"Error getting market status for {exchange}: {e}")
+        return {
+            "is_open": False,
+            "is_trading": False,
             "reason": "error",
             "message": f"Error checking market status: {str(e)}",
+            "is_special": False,
+            "exchange": normalize_exchange(exchange),
         }
 
 
 def scheduled_start_strategy(strategy_id: str):
     """
-    Wrapper function for scheduled strategy start.
-    Respects user's schedule_days - if today is in schedule, it runs.
-    Only blocks on non-trading days if the day is NOT explicitly scheduled.
-    Respects manual stop - won't auto-start until user manually starts again.
+    Exchange-aware wrapper invoked when the cron fires for this strategy.
+
+    Decision flow:
+      1. Skip if manually stopped (user must explicitly resume).
+      2. Skip if today is not in the user's schedule_days (defensive — cron
+         shouldn't have fired on this day).
+      3. Skip if the strategy's exchange is closed today (weekend without
+         special session, or full holiday). CRYPTO bypasses this.
+      4. Otherwise start the strategy (the time-window intersection is
+         enforced on each tick by `is_within_schedule_time`).
     """
     config = STRATEGY_CONFIGS.get(strategy_id, {})
+    if not config:
+        return
+
     now = datetime.now(IST)
     day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     today_day = day_names[now.weekday()]
 
-    # Check if strategy was manually stopped - respect user's decision permanently
-    # User must manually start the strategy to resume auto-scheduling
     if config.get("manually_stopped"):
         logger.info(
-            f"Strategy {strategy_id} was manually stopped - skipping scheduled auto-start (start manually to resume)"
+            f"Strategy {strategy_id} manually stopped - skipping scheduled auto-start"
         )
         return
 
-    # Check if today is explicitly in the user's schedule_days
-    # If yes, trust the user's decision and skip trading day checks
-    schedule_days = config.get("schedule_days", [])
-    today_in_schedule = today_day in [d.lower() for d in schedule_days]
-
-    if today_in_schedule:
-        logger.info(
-            f"Strategy {strategy_id} is explicitly scheduled for {today_day.capitalize()} - skipping trading day check"
-        )
-    else:
-        # Today is NOT in schedule_days - this shouldn't happen normally
-        # (scheduler only triggers on scheduled days), but check anyway
+    schedule_days = [d.lower() for d in config.get("schedule_days", [])]
+    if schedule_days and today_day not in schedule_days:
         logger.warning(
-            f"Strategy {strategy_id} scheduled start called but {today_day.capitalize()} not in schedule_days"
+            f"Strategy {strategy_id} scheduled start fired but {today_day.capitalize()} "
+            f"not in schedule_days {schedule_days}"
         )
         return
 
-    # Check for market holidays (weekdays only) - weekends are handled by schedule_days
-    if is_trading_day_enforcement_enabled() and now.weekday() < 5:
-        # It's a weekday - check if it's a market holiday
-        if not is_trading_day():
-            reason = "holiday"
-            message = "Market closed - Holiday"
-            logger.warning(f"Strategy {strategy_id} scheduled start BLOCKED - {message}")
+    exch = normalize_exchange(config.get("exchange"))
 
-            # Store the blocked reason
-            if strategy_id in STRATEGY_CONFIGS:
-                STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
-                STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
-                save_configs()
+    if is_trading_day_enforcement_enabled():
+        status = get_market_status(exch)
+        if not status.get("is_trading"):
+            reason = status.get("reason") or "holiday"
+            message = status.get("message", f"{exch} closed today")
+            logger.warning(
+                f"Strategy {strategy_id} ({exch}) scheduled start BLOCKED - {message}"
+            )
+            STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
+            STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
+            save_configs()
             return
 
     # Clear any previous paused reason
-    if strategy_id in STRATEGY_CONFIGS:
-        STRATEGY_CONFIGS[strategy_id].pop("paused_reason", None)
-        STRATEGY_CONFIGS[strategy_id].pop("paused_message", None)
+    STRATEGY_CONFIGS[strategy_id].pop("paused_reason", None)
+    STRATEGY_CONFIGS[strategy_id].pop("paused_message", None)
 
-    logger.info(f"All checks passed - proceeding to start strategy {strategy_id}")
+    logger.info(
+        f"Strategy {strategy_id} ({exch}) - all checks passed, starting"
+    )
     start_strategy_process(strategy_id)
 
 
@@ -962,68 +1188,57 @@ def is_trading_day_enforcement_enabled() -> bool:
     return True
 
 
+def _is_strategy_running(strategy_id: str, config: dict) -> bool:
+    """True if the strategy's process is alive (in-memory or by stored PID)."""
+    if strategy_id in RUNNING_STRATEGIES:
+        return True
+    pid = config.get("pid")
+    if pid and check_process_status(pid):
+        return True
+    return False
+
+
 def daily_trading_day_check():
     """
-    Daily check that runs at 00:01 IST to stop scheduled strategies on non-trading days.
-    This ensures strategies started on Friday don't keep running through the weekend.
+    00:01 IST daily check. Stops each scheduled strategy whose exchange has
+    no session today. Exchange-aware: an MCX strategy keeps running on an
+    NSE holiday; an NSE strategy stops; a CRYPTO strategy never stops.
     """
     try:
         if not is_trading_day_enforcement_enabled():
-            logger.debug("Market hours enforcement is disabled - skipping daily check")
+            logger.debug("Market hours enforcement disabled - skipping daily check")
             return
-
-        market_status = get_market_status()
-
-        if market_status["is_open"]:
-            logger.debug("Daily check: Market is open - no cleanup needed")
-            return
-
-        reason = market_status["reason"]
-        message = market_status["message"]
-
-        logger.info(f"Daily check: {message} - checking for running scheduled strategies")
-
-        # Get today's day name to check if strategies are scheduled for today
-        now = datetime.now(IST)
-        day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-        today_day = day_names[now.weekday()]
 
         stopped_count = 0
         for strategy_id, config in list(STRATEGY_CONFIGS.items()):
-            # Only stop strategies that are:
-            # 1. Currently running (check config AND verify process is alive)
-            # 2. Scheduled (not manually started)
             if not config.get("is_scheduled"):
                 continue
 
-            # Skip if strategy is explicitly scheduled for today (e.g., special Saturday session)
-            schedule_days = config.get("schedule_days", [])
-            if today_day in [d.lower() for d in schedule_days]:
-                logger.debug(f"Strategy {strategy_id} scheduled for {today_day} - not stopping")
+            exch = normalize_exchange(config.get("exchange"))
+            status = get_market_status(exch)
+
+            # Exchange has a session today (regular or special) -> leave running
+            if status.get("is_trading"):
                 continue
 
-            # Check if strategy is running - either in memory dict or by PID
-            is_running = strategy_id in RUNNING_STRATEGIES
-            if not is_running and config.get("is_running"):
-                # Config says running but not in memory - check if process is alive
-                pid = config.get("pid")
-                if pid and check_process_status(pid):
-                    is_running = True
+            if not _is_strategy_running(strategy_id, config):
+                continue
 
-            if is_running:
-                logger.info(f"Stopping scheduled strategy {strategy_id} - {message}")
-                stop_strategy_process(strategy_id)
-
-                # Store the pause reason in config
-                STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
-                STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
-                stopped_count += 1
+            reason = status.get("reason") or "holiday"
+            message = status.get("message", f"{exch} closed today")
+            logger.info(
+                f"Daily check: stopping {strategy_id} ({exch}) - {message}"
+            )
+            stop_strategy_process(strategy_id)
+            STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
+            STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
+            stopped_count += 1
 
         if stopped_count > 0:
             save_configs()
-            logger.info(f"Daily cleanup: Stopped {stopped_count} scheduled strategies ({message})")
+            logger.info(f"Daily cleanup: stopped {stopped_count} strategies")
         else:
-            logger.debug("Daily cleanup: No scheduled strategies were running")
+            logger.debug("Daily cleanup: no strategies needed stopping")
 
     except Exception as e:
         logger.exception(f"Error in daily trading day check: {e}")
@@ -1031,38 +1246,68 @@ def daily_trading_day_check():
 
 def is_within_schedule_time(strategy_id: str) -> bool:
     """
-    Check if current time is within the strategy's scheduled time range.
+    Check if current time is within the strategy's effective trading window.
 
-    Args:
-        strategy_id: The strategy ID to check
+    The effective window is the intersection of:
+      - the user's schedule_start..schedule_stop, and
+      - the exchange's session today (handles MCX evening on holidays,
+        Sat/Sun Muhurat / DR-drill special sessions, etc.).
 
-    Returns:
-        True if current time is between schedule_start and schedule_stop
+    For CRYPTO the exchange session is 24/7, so only the user's window
+    constrains. If the user leaves schedule_start blank for CRYPTO, the
+    window is treated as 24/7.
     """
     try:
         config = STRATEGY_CONFIGS.get(strategy_id, {})
+        exch = normalize_exchange(config.get("exchange"))
         schedule_start = config.get("schedule_start")
         schedule_stop = config.get("schedule_stop")
 
-        if not schedule_start:
-            return False
-
         now = datetime.now(IST)
-        current_time = now.time()
+        now_ms = int(now.timestamp() * 1000)
 
-        # Parse start time
-        start_hour, start_min = map(int, schedule_start.split(":"))
-        start_time = time(start_hour, start_min)
+        # Resolve the user's window for today (epoch-ms)
+        midnight_ist = IST.localize(
+            datetime.combine(now.date(), datetime.min.time())
+        )
+        midnight_ms = int(midnight_ist.timestamp() * 1000)
 
-        # Parse stop time (if provided)
-        if schedule_stop:
-            stop_hour, stop_min = map(int, schedule_stop.split(":"))
-            stop_time = time(stop_hour, stop_min)
+        if schedule_start:
+            try:
+                sh, sm = map(int, schedule_start.split(":"))
+                user_start_ms = midnight_ms + (sh * 3600 + sm * 60) * 1000
+            except (ValueError, AttributeError):
+                logger.warning(f"Bad schedule_start for {strategy_id}: {schedule_start}")
+                return False
         else:
-            stop_time = time(23, 59)  # Default to end of day
+            # No user start: only valid for CRYPTO (treat as 00:00)
+            if exch not in CRYPTO_EXCHANGES:
+                return False
+            user_start_ms = midnight_ms
 
-        # Check if current time is within range
-        return start_time <= current_time <= stop_time
+        if schedule_stop:
+            try:
+                eh, em = map(int, schedule_stop.split(":"))
+                user_end_ms = midnight_ms + (eh * 3600 + em * 60) * 1000
+            except (ValueError, AttributeError):
+                user_end_ms = midnight_ms + 86_399_000
+        else:
+            user_end_ms = midnight_ms + 86_399_000
+
+        # Exchange-aware: intersect with today's effective session window
+        if exch in CRYPTO_EXCHANGES:
+            effective_start, effective_end = user_start_ms, user_end_ms
+        else:
+            window = get_effective_session_window(now.date(), exch)
+            if not window:
+                return False  # exchange closed today
+            effective_start = max(user_start_ms, window["start_ms"])
+            effective_end = min(user_end_ms, window["end_ms"])
+            if effective_start > effective_end:
+                # User's window doesn't overlap today's session
+                return False
+
+        return effective_start <= now_ms <= effective_end
 
     except Exception as e:
         logger.exception(f"Error checking schedule time for {strategy_id}: {e}")
@@ -1071,111 +1316,86 @@ def is_within_schedule_time(strategy_id: str) -> bool:
 
 def market_hours_enforcer():
     """
-    Periodic check that runs every minute to enforce TRADING DAYS only.
+    Per-minute exchange-aware enforcer. For each scheduled strategy:
 
-    NOTE: We only enforce trading days (weekends/holidays), NOT specific market hours.
-    Reasons:
-    1. Different exchanges have different hours (NSE: 9:15-15:30, MCX: 9:00-23:55)
-    2. We don't know which exchange a strategy trades on
-    3. The scheduler's start/stop times handle hour-based execution
-
-    This enforcer only stops strategies on non-trading days (weekends/holidays).
+    - If the strategy's exchange has no session today (closed weekend / full
+      holiday) -> stop running, mark paused.
+    - If the strategy's exchange has a session today and the strategy was
+      previously paused, try to resume (only if today is in schedule_days
+      and current time falls inside the effective schedule window).
+    - We do NOT stop on time-of-day boundaries — that is the scheduled stop
+      cron's job and the user's schedule_stop. This avoids fighting users
+      who deliberately leave a strategy running across the bell.
     """
     try:
         if not is_trading_day_enforcement_enabled():
             return
 
-        today_is_trading_day = is_trading_day()
+        now = datetime.now(IST)
+        day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        today_day = day_names[now.weekday()]
 
-        # If it's a trading day, clear paused reasons and START strategies that were blocked
-        if today_is_trading_day:
-            started_count = 0
-            cleared_any = False
+        stopped_count = 0
+        started_count = 0
+        cleared_any = False
 
-            for strategy_id, config in list(STRATEGY_CONFIGS.items()):
-                paused_reason = config.get("paused_reason")
+        for strategy_id, config in list(STRATEGY_CONFIGS.items()):
+            if not config.get("is_scheduled"):
+                continue
 
-                # If strategy was paused due to weekend/holiday, try to start it
-                # (only start if the scheduler's time range would be active)
-                if paused_reason in ("weekend", "holiday") and config.get("is_scheduled"):
-                    # Only start if not already running
-                    is_running = strategy_id in RUNNING_STRATEGIES
-                    if not is_running and config.get("pid"):
-                        is_running = check_process_status(config.get("pid"))
+            exch = normalize_exchange(config.get("exchange"))
+            status = get_market_status(exch)
+            schedule_days = [d.lower() for d in config.get("schedule_days", [])]
 
-                    if not is_running:
-                        # Check if current time is within scheduler's time range
-                        if is_within_schedule_time(strategy_id):
-                            logger.info(
-                                f"Trading day enforcer: Starting paused strategy {strategy_id} (was: {paused_reason})"
-                            )
-                            success, message = start_strategy_process(strategy_id)
-                            if success:
-                                started_count += 1
-                            else:
-                                logger.warning(f"Failed to start {strategy_id}: {message}")
+            if status.get("is_trading"):
+                # Exchange tradeable today — clear any stale pause reason
+                if config.get("paused_reason") in ("weekend", "holiday", "before_market", "after_market"):
+                    paused_reason = config.get("paused_reason")
+                    is_running = _is_strategy_running(strategy_id, config)
+                    if (
+                        not is_running
+                        and not config.get("manually_stopped")
+                        and (not schedule_days or today_day in schedule_days)
+                        and is_within_schedule_time(strategy_id)
+                    ):
+                        logger.info(
+                            f"Enforcer: resuming paused strategy {strategy_id} ({exch}) "
+                            f"(was: {paused_reason})"
+                        )
+                        success, msg = start_strategy_process(strategy_id)
+                        if success:
+                            started_count += 1
+                        else:
+                            logger.warning(f"Failed to resume {strategy_id}: {msg}")
 
-                # Clear paused reasons (it's a trading day now)
                 if "paused_reason" in config:
                     del config["paused_reason"]
                     cleared_any = True
                 if "paused_message" in config:
                     del config["paused_message"]
                     cleared_any = True
-
-            if cleared_any or started_count > 0:
-                save_configs()
-                if started_count > 0:
-                    logger.info(f"Trading day enforcer: Started {started_count} paused strategies")
-            return
-
-        # Not a standard trading day - but check if strategy is scheduled for today
-        now = datetime.now(IST)
-        day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-        today_day = day_names[now.weekday()]
-
-        if now.weekday() >= 5:
-            reason = "weekend"
-            day_name = "Saturday" if now.weekday() == 5 else "Sunday"
-            message = f"Market closed - {day_name}"
-        else:
-            reason = "holiday"
-            message = "Market closed - Holiday"
-
-        stopped_count = 0
-        for strategy_id, config in list(STRATEGY_CONFIGS.items()):
-            # Only stop strategies that are:
-            # 1. Currently running (check config AND verify process is alive)
-            # 2. Scheduled (not manually started)
-            if not config.get("is_scheduled"):
                 continue
 
-            # Skip if strategy is explicitly scheduled for today (e.g., special Saturday session)
-            schedule_days = config.get("schedule_days", [])
-            if today_day in [d.lower() for d in schedule_days]:
-                logger.debug(f"Strategy {strategy_id} scheduled for {today_day} - not stopping")
+            # Exchange closed today — stop the strategy if it's running
+            if not _is_strategy_running(strategy_id, config):
                 continue
 
-            # Check if strategy is running - either in memory dict or by PID
-            is_running = strategy_id in RUNNING_STRATEGIES
-            if not is_running and config.get("is_running"):
-                # Config says running but not in memory - check if process is alive
-                pid = config.get("pid")
-                if pid and check_process_status(pid):
-                    is_running = True
+            reason = status.get("reason") or "holiday"
+            message = status.get("message", f"{exch} closed today")
+            logger.info(
+                f"Enforcer: stopping {strategy_id} ({exch}) - {message}"
+            )
+            stop_strategy_process(strategy_id)
+            STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
+            STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
+            stopped_count += 1
 
-            if is_running:
-                logger.info(f"Trading day enforcer: Stopping {strategy_id} - {message}")
-                stop_strategy_process(strategy_id)
-
-                # Store the pause reason in config
-                STRATEGY_CONFIGS[strategy_id]["paused_reason"] = reason
-                STRATEGY_CONFIGS[strategy_id]["paused_message"] = message
-                stopped_count += 1
-
-        if stopped_count > 0:
+        if stopped_count or started_count or cleared_any:
             save_configs()
-            logger.info(f"Trading day enforcer: Stopped {stopped_count} strategies ({message})")
+            if stopped_count:
+                logger.info(f"Enforcer: stopped {stopped_count} strategies (exchange closed)")
+            if started_count:
+                logger.info(f"Enforcer: resumed {started_count} strategies (exchange reopened)")
 
     except Exception as e:
         logger.exception(f"Error in trading day enforcer: {e}")
@@ -1459,7 +1679,7 @@ def new_strategy():
             if not IS_WINDOWS:
                 try:
                     os.chmod(file_path, 0o755)
-                except:
+                except Exception:
                     pass
 
             # Get form data - sanitize strategy name
@@ -1467,34 +1687,39 @@ def new_strategy():
             # Allow more characters in display name but strip dangerous ones
             strategy_name = raw_strategy_name.strip()[:100]  # Limit length
 
-            # Get mandatory schedule fields with defaults
-            schedule_start = request.form.get("schedule_start", "09:00")
-            schedule_stop = request.form.get("schedule_stop", "16:00")
+            # Exchange (drives holiday/session awareness)
+            exchange = normalize_exchange(request.form.get("exchange"))
+            is_crypto = exchange in CRYPTO_EXCHANGES
+
+            # Get mandatory schedule fields with exchange-aware defaults
+            default_start = "00:00" if is_crypto else "09:00"
+            default_stop = "23:59" if is_crypto else "16:00"
+            default_days = (
+                ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                if is_crypto
+                else ["mon", "tue", "wed", "thu", "fri"]
+            )
+
+            schedule_start = request.form.get("schedule_start") or default_start
+            schedule_stop = request.form.get("schedule_stop") or default_stop
             schedule_days_json = request.form.get(
-                "schedule_days", '["mon","tue","wed","thu","fri"]'
+                "schedule_days", json.dumps(default_days)
             )
 
             # Parse schedule days from JSON
             try:
                 schedule_days = json.loads(schedule_days_json)
-                if not isinstance(schedule_days, list):
-                    schedule_days = ["mon", "tue", "wed", "thu", "fri"]
+                if not isinstance(schedule_days, list) or not schedule_days:
+                    schedule_days = default_days
             except (json.JSONDecodeError, TypeError):
-                schedule_days = ["mon", "tue", "wed", "thu", "fri"]
-
-            # Validate schedule fields
-            if not schedule_start:
-                schedule_start = "09:00"
-            if not schedule_stop:
-                schedule_stop = "16:00"
-            if not schedule_days:
-                schedule_days = ["mon", "tue", "wed", "thu", "fri"]
+                schedule_days = default_days
 
             # Save configuration with schedule (schedule is mandatory and always enabled)
             STRATEGY_CONFIGS[strategy_id] = {
                 "name": strategy_name,
                 "file_path": str(file_path),
                 "file_name": f"{strategy_id}.py",
+                "exchange": exchange,
                 "is_running": False,
                 "is_scheduled": True,  # Always enabled by default
                 "created_at": ist_now.isoformat(),
@@ -1597,8 +1822,10 @@ def start_strategy(strategy_id):
         except (ValueError, AttributeError) as e:
             logger.warning(f"Could not parse schedule times for {strategy_id}: {e}")
 
-    # Check if today is a market holiday (but allow weekends if scheduled)
-    is_holiday = not is_trading_day() and now.weekday() < 5
+    # Exchange-aware holiday check: an MCX strategy isn't blocked by NSE
+    # being closed; an NSE strategy isn't blocked from a Muhurat Sunday.
+    exch = normalize_exchange(config.get("exchange"))
+    is_holiday = not is_trading_day(exchange=exch)
 
     # If outside schedule (wrong day, wrong time, or holiday), just arm it for scheduled start
     if not is_scheduled_day or not is_within_hours or is_holiday:
@@ -1609,7 +1836,7 @@ def start_strategy(strategy_id):
         elif not is_scheduled_day:
             reason = f"Today ({today_day.capitalize()}) is not in schedule"
             # Find next scheduled day
-            next_days = [d for d in schedule_days]
+            next_days = list(schedule_days)
             next_start = f"next scheduled day ({', '.join(next_days)}) at {schedule_start} IST"
         else:
             reason = f"Outside schedule hours ({schedule_start} - {schedule_stop} IST)"
@@ -1702,13 +1929,19 @@ def schedule_strategy_route(strategy_id):
     start_time = data.get("start_time")
     stop_time = data.get("stop_time")
     days = data.get("days", ["mon", "tue", "wed", "thu", "fri"])
+    exchange_in = data.get("exchange")
 
     if not start_time:
         return jsonify({"status": "error", "message": "Start time is required"}), 400
 
     try:
+        # Update exchange first if provided so smart-default behavior applies
+        if exchange_in is not None:
+            STRATEGY_CONFIGS[strategy_id]["exchange"] = normalize_exchange(exchange_in)
         schedule_strategy(strategy_id, start_time, stop_time, days)
-        schedule_info = f"Scheduled at {start_time} IST"
+        save_configs()
+        exch = STRATEGY_CONFIGS[strategy_id].get("exchange", DEFAULT_STRATEGY_EXCHANGE)
+        schedule_info = f"[{exch}] Scheduled at {start_time} IST"
         if stop_time:
             schedule_info += f" - {stop_time} IST"
         return jsonify({"status": "success", "message": schedule_info})
@@ -1859,7 +2092,7 @@ def clear_logs(strategy_id):
         for log_file in log_files:
             try:
                 total_size += log_file.stat().st_size
-            except:
+            except Exception:
                 pass
 
         # Strategy not running, safe to delete all log files
@@ -2018,10 +2251,10 @@ def get_schedule_status(config):
     if config.get("manually_stopped"):
         return "manually_stopped", "Manually stopped - click Start to resume"
 
-    # Check for market holiday (only on weekdays)
+    # Exchange-aware pause: any non-trading day for the strategy's exchange
     paused_reason = config.get("paused_reason")
-    if paused_reason == "holiday":
-        return "paused", config.get("paused_message", "Market Holiday")
+    if paused_reason in ("holiday", "weekend"):
+        return "paused", config.get("paused_message", "Exchange closed today")
 
     # Strategy is armed (not manually stopped) - show "Scheduled" with context
     # Check if today is in schedule days
@@ -2067,6 +2300,7 @@ def api_get_strategies():
                 "id": strategy_id,
                 "name": config.get("name", ""),
                 "file_name": config.get("file_name", ""),
+                "exchange": normalize_exchange(config.get("exchange")),
                 "status": status,
                 "status_message": status_message,
                 "is_running": config.get("is_running", False),
@@ -2089,8 +2323,14 @@ def api_get_strategies():
 
 
 @python_strategy_bp.route("/api/events")
+@check_session_validity
 def api_strategy_events():
-    """SSE endpoint for real-time strategy status updates"""
+    """SSE endpoint for real-time strategy status updates.
+
+    Authenticated-only — broadcasts strategy start/stop/error events and
+    would otherwise let any network client enumerate the user's running
+    strategies and their lifecycle timestamps.
+    """
 
     def event_stream():
         # Create a queue for this subscriber
@@ -2157,6 +2397,7 @@ def api_get_strategy(strategy_id):
                 "manually_stopped": config.get("manually_stopped", False),
                 "name": config.get("name", ""),
                 "file_name": config.get("file_name", ""),
+                "exchange": normalize_exchange(config.get("exchange")),
                 "status": status,
                 "is_running": config.get("is_running", False),
                 "is_scheduled": config.get("is_scheduled", False),
@@ -2474,7 +2715,7 @@ def cleanup_on_exit():
         for strategy_id in list(RUNNING_STRATEGIES.keys()):
             try:
                 stop_strategy_process(strategy_id)
-            except:
+            except Exception:
                 pass
     logger.info("Cleanup complete")
 
@@ -2485,6 +2726,57 @@ import atexit
 atexit.register(cleanup_on_exit)
 
 
+def restore_running_strategy_process(strategy_id, config):
+    """Adopt a still-live strategy process from persisted config."""
+    pid = config.get("pid")
+    if not pid:
+        return False
+
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+
+        process = psutil.Process(pid)
+        if psutil_process_has_exited(process):
+            return False
+
+        strategy_file = config.get("file_path", "")
+        cmdline = " ".join(process.cmdline())
+
+        if not strategy_file or strategy_file not in cmdline:
+            logger.debug(f"PID {pid} exists but not our strategy process")
+            return False
+
+        ist_now = get_ist_time()
+
+        # Find the current log file
+        log_pattern = f"{strategy_id}_*_IST.log"
+        log_files = list(LOGS_DIR.glob(log_pattern))
+        current_log = max(log_files, key=lambda f: f.stat().st_mtime) if log_files else None
+
+        RUNNING_STRATEGIES[strategy_id] = {
+            "process": process,
+            "pid": pid,
+            "started_at": datetime.fromisoformat(config.get("last_started", ist_now.isoformat())),
+            "log_file": str(current_log) if current_log else None,
+            "log_handle": None,  # We can't restore the file handle
+        }
+
+        logger.info(f"Restored running strategy {strategy_id} (PID: {pid})")
+        return True
+
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        logger.debug(f"Process {pid} for strategy {strategy_id} no longer exists")
+    except psutil.AccessDenied:
+        logger.warning(
+            f"Cannot inspect process {pid} for strategy {strategy_id}; preserving existing state"
+        )
+    except Exception as e:
+        logger.exception(f"Error checking process {pid} for strategy {strategy_id}: {e}")
+
+    return False
+
+
 def restore_strategy_states():
     """Restore strategy states on startup - restart running strategies or mark as error"""
     logger.debug("Restoring strategy states from previous session...")
@@ -2493,10 +2785,22 @@ def restore_strategy_states():
     # since the session might not be fully initialized yet
     contracts_ready, contract_message = check_master_contract_ready(skip_on_startup=False)
 
+    restored_count = 0
+    error_count = 0
+
+    for strategy_id, config in STRATEGY_CONFIGS.items():
+        if (
+            config.get("is_running")
+            and config.get("pid")
+            and restore_running_strategy_process(strategy_id, config)
+        ):
+            restored_count += 1
+
     # If we can't determine the broker (no active auth), delay strategy restoration
     if "No broker" in contract_message:
         logger.info("No active broker found during startup - delaying strategy restoration")
-        # Don't mark as error yet, wait for proper session initialization
+        if restored_count:
+            logger.info(f"Restored {restored_count} live strategies while broker is unavailable")
         return
 
     if not contracts_ready:
@@ -2504,8 +2808,12 @@ def restore_strategy_states():
             f"Master contracts not ready - strategies will remain in error state until contracts are downloaded: {contract_message}"
         )
         # Mark all running strategies as error state due to master contract dependency
-        for strategy_id, config in STRATEGY_CONFIGS.items():
+        for config in STRATEGY_CONFIGS.values():
             if config.get("is_running"):
+                if config.get("pid") and check_process_status(config.get("pid")):
+                    # A live strategy is already running. Keep its state intact
+                    # so a later master-contract refresh cannot start a duplicate.
+                    continue
                 config["is_running"] = False
                 config["is_error"] = True
                 config["error_message"] = "Waiting for master contracts to be downloaded"
@@ -2514,55 +2822,9 @@ def restore_strategy_states():
         save_configs()
         return
 
-    restored_count = 0
-    error_count = 0
-    cleaned_count = 0
-
     for strategy_id, config in STRATEGY_CONFIGS.items():
         if config.get("is_running") and config.get("pid"):
-            pid = config.get("pid")
-            strategy_restored = False
-
-            try:
-                # Check if process is still running
-                if psutil.pid_exists(pid):
-                    process = psutil.Process(pid)
-
-                    # Check if it's actually our strategy process
-                    cmdline = " ".join(process.cmdline())
-                    strategy_file = config.get("file_path", "")
-
-                    if strategy_file and strategy_file in cmdline:
-                        # Process is still running, restore it to RUNNING_STRATEGIES
-                        ist_now = get_ist_time()
-
-                        # Find the current log file
-                        log_pattern = f"{strategy_id}_*_IST.log"
-                        log_files = list(LOGS_DIR.glob(log_pattern))
-                        current_log = (
-                            max(log_files, key=lambda f: f.stat().st_mtime) if log_files else None
-                        )
-
-                        RUNNING_STRATEGIES[strategy_id] = {
-                            "process": process,
-                            "pid": pid,
-                            "started_at": datetime.fromisoformat(
-                                config.get("last_started", ist_now.isoformat())
-                            ),
-                            "log_file": str(current_log) if current_log else None,
-                            "log_handle": None,  # We can't restore the file handle
-                        }
-
-                        logger.info(f"Restored running strategy {strategy_id} (PID: {pid})")
-                        restored_count += 1
-                        strategy_restored = True
-                    else:
-                        logger.debug(f"PID {pid} exists but not our strategy process")
-
-            except psutil.NoSuchProcess:
-                logger.debug(f"Process {pid} for strategy {strategy_id} no longer exists")
-            except Exception as e:
-                logger.exception(f"Error checking process {pid} for strategy {strategy_id}: {e}")
+            strategy_restored = strategy_id in RUNNING_STRATEGIES
 
             # If strategy wasn't restored, try to restart it automatically
             if not strategy_restored:

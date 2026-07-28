@@ -76,3 +76,122 @@ class OrderCancelFailedEvent(OrderEvent):
     topic: str = "order.cancel_failed"
     orderid: str = ""
     error_message: str = ""
+
+
+@dataclass
+class OrderUpdateEvent(OrderEvent):
+    """Fired for asynchronous order status changes that happen after the
+    original placing HTTP call returns — broker-side fills/rejections/status
+    changes (live, via postback or a dedicated order-update WebSocket) or
+    sandbox engine-internal transitions (analyze).
+
+    Unlike OrderPlacedEvent/OrderModifiedEvent/OrderCancelledEvent, this event
+    is not tied to a user-driven API call — it is a push notification about
+    order state observed after the fact. mode="live" or "analyze" (inherited
+    from OrderEvent) distinguishes broker-sourced from sandbox-sourced updates.
+    """
+
+    topic: str = "order.update"
+    orderid: str = ""
+    symbol: str = ""
+    exchange: str = ""
+    action: str = ""
+    quantity: int = 0
+    price: float = 0.0
+    trigger_price: float = 0.0
+    pricetype: str = ""
+    product: str = ""
+    order_status: str = ""
+    filled_quantity: int = 0
+    pending_quantity: int = 0
+    average_price: float = 0.0
+    rejection_reason: str = ""
+    broker: str = ""
+
+
+# -----------------------------------------------------------------------------
+# GTT (Good Till Triggered) events
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class GTTPlacedEvent(OrderEvent):
+    """Fired when a GTT trigger is successfully placed (live or analyze)."""
+
+    topic: str = "gtt.placed"
+    strategy: str = ""
+    symbol: str = ""
+    exchange: str = ""
+    trigger_type: str = ""  # "single" or "two-leg"
+    trigger_id: str = ""
+    trigger_prices: list = field(default_factory=list)
+
+
+@dataclass
+class GTTFailedEvent(OrderEvent):
+    """Fired when GTT placement fails (broker rejection, validation, module missing)."""
+
+    topic: str = "gtt.failed"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_type: str = ""
+    error_message: str = ""
+
+
+@dataclass
+class GTTModifiedEvent(OrderEvent):
+    """Fired when an active GTT is successfully modified."""
+
+    topic: str = "gtt.modified"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_id: str = ""
+
+
+@dataclass
+class GTTModifyFailedEvent(OrderEvent):
+    """Fired when a GTT modification fails."""
+
+    topic: str = "gtt.modify_failed"
+    symbol: str = ""
+    trigger_id: str = ""
+    error_message: str = ""
+
+
+@dataclass
+class GTTCancelledEvent(OrderEvent):
+    """Fired when an active GTT is successfully cancelled."""
+
+    topic: str = "gtt.cancelled"
+    trigger_id: str = ""
+    status: str = ""
+
+
+@dataclass
+class GTTCancelFailedEvent(OrderEvent):
+    """Fired when a GTT cancellation fails."""
+
+    topic: str = "gtt.cancel_failed"
+    trigger_id: str = ""
+    error_message: str = ""
+
+
+@dataclass
+class GTTTriggeredEvent(OrderEvent):
+    """Fired when a GTT trigger condition is met and the underlying order is placed."""
+
+    topic: str = "gtt.triggered"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_id: str = ""
+    triggered_order_id: str = ""
+
+
+@dataclass
+class GTTExpiredEvent(OrderEvent):
+    """Fired when a GTT expires without firing (beyond expires_at)."""
+
+    topic: str = "gtt.expired"
+    symbol: str = ""
+    exchange: str = ""
+    trigger_id: str = ""

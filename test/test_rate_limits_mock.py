@@ -110,12 +110,12 @@ def test_endpoint(api, endpoint, expected_limit, description):
 
         if status == 200:
             success_count += 1
-            print("✓", end="", flush=True)
+            print(".", end="", flush=True)
         elif status == 429:
             rate_limited_count += 1
-            print("⚠", end="", flush=True)
+            print("!", end="", flush=True)
         else:
-            print("✗", end="", flush=True)
+            print("x", end="", flush=True)
 
         # Small delay between requests
         if i < expected_limit - 1:
@@ -127,10 +127,10 @@ def test_endpoint(api, endpoint, expected_limit, description):
 
     # Verify rate limit was enforced
     if success_count == expected_limit and rate_limited_count == total_requests - expected_limit:
-        print(f"  ✅ Rate limit correctly enforced at {expected_limit} requests")
+        print(f"Rate limit correctly enforced at {expected_limit} requests")
         return True
     else:
-        print("  ❌ Rate limit not properly enforced")
+        print("Rate limit not properly enforced")
         return False
 
 
@@ -146,9 +146,9 @@ def test_rate_limit_reset(api, endpoint, limit):
     # This should be rate limited
     status, _ = api.make_request(endpoint)
     if status == 429:
-        print("✓ Rate limit enforced after reaching limit")
+        print("Rate limit enforced after reaching limit")
     else:
-        print("✗ Rate limit not enforced")
+        print("Rate limit not enforced")
         return False
 
     # Wait for rate limit to reset (1.1 seconds for per-second limits)
@@ -158,10 +158,10 @@ def test_rate_limit_reset(api, endpoint, limit):
     # This should succeed now
     status, _ = api.make_request(endpoint)
     if status == 200:
-        print("✅ Rate limit reset successfully")
+        print("Rate limit reset successfully")
         return True
     else:
-        print("❌ Rate limit did not reset")
+        print("Rate limit did not reset")
         return False
 
 
@@ -181,10 +181,10 @@ def test_multiple_clients(api, endpoint, limit):
     status2, _ = api.make_request(endpoint, client_ip="192.168.1.2")
 
     if status1 == 429 and status2 == 200:
-        print("✅ Different clients have separate rate limits")
+        print("Different clients have separate rate limits")
         return True
     else:
-        print("❌ Rate limits not properly separated by client")
+        print("Rate limits not properly separated by client")
         return False
 
 
@@ -233,7 +233,7 @@ def main():
     # Summary
     print("\n" + "=" * 60)
     if all_passed:
-        print("✅ All mock tests PASSED!")
+        print("All mock tests PASSED!")
         print("\nRate limiting is correctly configured:")
         print("- Order APIs: 10 requests/second")
         print("- Smart Order API: 2 requests/second")
@@ -241,7 +241,7 @@ def main():
         print("- Webhook APIs: 100 requests/minute")
         print("- Strategy APIs: 200 requests/minute")
     else:
-        print("❌ Some tests FAILED!")
+        print("Some tests FAILED!")
     print("=" * 60)
 
     return 0 if all_passed else 1

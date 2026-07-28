@@ -16,6 +16,10 @@ from services.option_greeks_service import (
     DEFAULT_INTEREST_RATES,
     parse_option_symbol,
 )
+from services.strategy_chart_service import (
+    _cap_last_n_trading_dates,
+    _resolve_trading_window,
+)
 from services.option_symbol_service import (
     construct_crypto_option_symbol,
     construct_option_symbol,
@@ -28,8 +32,7 @@ from services.quotes_service import get_quotes
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
-# py_vollib is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data()
-# to avoid loading scipy/numba/llvmlite at startup
+# opengreeks is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data().
 
 logger = get_logger(__name__)
 
@@ -152,28 +155,22 @@ def get_iv_chart_data(
         Tuple of (success, response_dict, status_code)
     """
     try:
-        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
+        from opengreeks.black76 import implied_volatility as black_iv  # noqa: F401
     except ImportError:
         return (
             False,
             {
                 "status": "error",
-                "message": "py_vollib library required for IV calculation. Install with: pip install py_vollib",
+                "message": "opengreeks library required for IV calculation. Install with: pip install opengreeks",
             },
             500,
         )
 
     try:
         ist = pytz.timezone("Asia/Kolkata")
-        today = datetime.now(ist).date()
-        # If today is a weekend (Saturday=5, Sunday=6), use last Friday
-        weekday = today.weekday()
-        if weekday == 5:  # Saturday
-            today = today - timedelta(days=1)
-        elif weekday == 6:  # Sunday
-            today = today - timedelta(days=2)
-        end_date_str = today.strftime("%Y-%m-%d")
-        start_date_str = (today - timedelta(days=max(1, days) - 1)).strftime("%Y-%m-%d")
+        # Generous calendar window; the returned IV series is post-filtered
+        # to the last N distinct trading dates that actually have data.
+        start_date_str, end_date_str = _resolve_trading_window(days, ist)
 
         # Step 1: Determine quote exchange and options exchange
         base_symbol = underlying.upper()
@@ -335,6 +332,14 @@ def get_iv_chart_data(
                 404,
             )
 
+        # Trim each leg's iv_data to the last N distinct trading dates with
+        # data. Using the same helper as strategy-chart / straddle keeps the
+        # "last 3 days = last 3 trading days with data" behaviour consistent
+        # across every /tools page.
+        for entry in series_results:
+            if "iv_data" in entry and isinstance(entry["iv_data"], list):
+                entry["iv_data"] = _cap_last_n_trading_dates(entry["iv_data"], days, ist)
+
         return (
             True,
             {
@@ -372,11 +377,13 @@ def _calculate_iv_series(df_option, df_underlying, strike, expiry_dt, flag, inte
     Returns:
         List of dicts with time (unix seconds), iv, option_price, underlying_price
     """
-    from py_vollib.black.greeks.analytical import delta as black_delta
-    from py_vollib.black.greeks.analytical import gamma as black_gamma
-    from py_vollib.black.greeks.analytical import theta as black_theta
-    from py_vollib.black.greeks.analytical import vega as black_vega
-    from py_vollib.black.implied_volatility import implied_volatility as black_iv
+    from opengreeks.black76 import (
+        delta as black_delta,
+        gamma as black_gamma,
+        implied_volatility as black_iv,
+        theta as black_theta,
+        vega as black_vega,
+    )
 
     iv_data = []
 

@@ -8,6 +8,7 @@ The key fixes are in the _handle_ticks method for proper topic generation.
 """
 import json
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -19,6 +20,13 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
 # Import the WebSocket client
 from .zerodha_websocket import ZerodhaWebSocket
+
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 
 class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -36,7 +44,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = "zerodha"
         self.running = False
         self.connected = False
-        self.lock = threading.Lock()
+        self.lock = _real_threading.Lock()
         self.subscribed_symbols = {}  # {symbol: {exchange, token, mode}}
         self.token_to_symbol = {}  # {token: (symbol, exchange)}
 
@@ -76,8 +84,13 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.api_key:
                 return {"status": "error", "message": "API key not found in environment variables"}
 
-            # Get auth token from database
-            auth_token = get_auth_token(user_id)
+            # Get auth token from database. bypass_cache=True so the initial
+            # connect reads the current token straight from the DB rather than a
+            # possibly-stale auth cache. Under Docker the WS proxy runs as a
+            # separate process with its own cache that is only synced via a
+            # best-effort ZMQ broadcast, so a stale entry here would otherwise
+            # build the adapter with yesterday's dead token and 403 (#1419).
+            auth_token = get_auth_token(user_id, bypass_cache=True)
             if not auth_token:
                 return {"status": "error", "message": "Authentication token not found"}
 
@@ -94,9 +107,14 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.access_token:
                 return {"status": "error", "message": "Invalid access token"}
 
-            # Initialize WebSocket client
+            # Initialize WebSocket client. Pass user_id so the client can
+            # re-read a fresh access token from the database on reconnect
+            # (tokens roll over daily at ~3 AM IST).
             self.ws_client = ZerodhaWebSocket(
-                api_key=self.api_key, access_token=self.access_token, on_ticks=self._handle_ticks
+                api_key=self.api_key,
+                access_token=self.access_token,
+                on_ticks=self._handle_ticks,
+                user_id=user_id,
             )
 
             # Set up WebSocket callbacks
@@ -104,7 +122,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.ws_client.on_disconnect = self._on_disconnect
             self.ws_client.on_error = self._on_error
 
-            self.logger.info(f"✅ Zerodha adapter initialized for user {user_id}")
+            self.logger.info(f"Zerodha adapter initialized for user {user_id}")
             return {"status": "success", "message": "Adapter initialized successfully"}
 
         except Exception as e:
@@ -126,15 +144,15 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.running = True
 
                     # Wait for connection to establish with the client's built-in method
-                    self.logger.info("⏳ Waiting for WebSocket connection...")
+                    self.logger.info("Waiting for WebSocket connection...")
                     if self.ws_client.wait_for_connection(timeout=15.0):
                         self.connected = True
-                        self.logger.info("✅ WebSocket connected successfully")
+                        self.logger.info("WebSocket connected successfully")
                         return {"status": "success", "message": "Connected successfully"}
                     else:
                         # Check if at least the client started
                         if self.ws_client.running:
-                            self.logger.warning("⚠️ Client started but connection timeout")
+                            self.logger.warning("Client started but connection timeout")
                             return {
                                 "status": "success",
                                 "message": "Client started, connection in progress",
@@ -153,7 +171,9 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.batch_timer:
             self.batch_timer.cancel()
 
-        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer = _real_threading.Timer(
+            self.batch_delay, self._process_batch_subscriptions
+        )
         self.batch_timer.start()
 
     def _process_batch_subscriptions(self):
@@ -188,10 +208,10 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Subscribe in batches by mode
         for mode, tokens in mode_groups.items():
             try:
-                self.logger.info(f"📦 Batch subscribing {len(tokens)} tokens in {mode} mode")
+                self.logger.info(f"Batch subscribing {len(tokens)} tokens in {mode} mode")
                 self.ws_client.subscribe_tokens(tokens, mode)
             except Exception as e:
-                self.logger.error(f"❌ Batch subscription failed for {mode} mode: {e}")
+                self.logger.error(f"Batch subscription failed for {mode} mode: {e}")
 
     def disconnect(self) -> dict[str, Any]:
         """
@@ -215,7 +235,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.connected = False
                     self.reconnect_attempts = 0  # Reset reconnect attempts
 
-                    self.logger.info("✅ WebSocket disconnected")
+                    self.logger.info("WebSocket disconnected")
 
                     # Reset subscriptions tracking
                     self.subscribed_symbols.clear()
@@ -284,12 +304,9 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except ValueError:
                 return {"status": "error", "message": f"Invalid token format: {token}"}
 
-            # Map mode to Zerodha format
-            zerodha_mode = self.mode_map.get(mode, ZerodhaWebSocket.MODE_QUOTE)
-
             # Check if WebSocket is actually connected
             if not self.ws_client.is_connected():
-                self.logger.warning("⚠️ WebSocket not connected, waiting for connection...")
+                self.logger.warning("WebSocket not connected, waiting for connection...")
                 # Try to wait for connection
                 if not self.ws_client.wait_for_connection(timeout=10.0):
                     return {"status": "error", "message": "WebSocket connection timeout"}
@@ -297,26 +314,15 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Track subscription with mapped exchange for consistency
             subscription_exchange = "NSE" if exchange == "NSE_INDEX" else exchange
 
-            # Add to queue for batch processing
             with self.lock:
-                self.subscription_queue.append(
-                    {
-                        "token": token,
-                        "mode": zerodha_mode,
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "subscription_exchange": subscription_exchange,
-                        "mode_int": mode,
-                    }
-                )
-
-                # If this is the first subscription in queue, start the batch timer
-                if len(self.subscription_queue) == 1:
-                    self._start_batch_timer()
-
-            # Immediately track subscription (even before actual WebSocket subscription)
-            with self.lock:
-                self.subscribed_symbols[f"{exchange}:{symbol}"] = {
+                # Per-mode subscription tracking (issue #1664). The protocol
+                # subscribes/unsubscribes per (symbol, mode) -- a client can
+                # legitimately hold LTP and Depth on the same symbol at once.
+                # The old symbol-only key made the second mode overwrite the
+                # first, so _handle_ticks stopped publishing the overwritten
+                # mode's topic and LTP consumers (the /trading chart) froze
+                # while depth kept flowing.
+                self.subscribed_symbols[f"{exchange}:{symbol}:{mode}"] = {
                     "exchange": exchange,  # Original exchange for unsubscribe
                     "symbol": symbol,
                     "token": token,
@@ -325,8 +331,35 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 }
                 self.token_to_symbol[token] = (symbol, exchange)
 
+                # The kite stream itself carries ONE mode per token, so request
+                # the highest subscribed mode -- its payload is a superset of
+                # the lower modes and _handle_ticks fans it out per mode.
+                # Without the max(), a later LTP subscribe would downgrade an
+                # active full-depth stream at the broker.
+                highest_mode = max(
+                    info["mode"]
+                    for info in self.subscribed_symbols.values()
+                    if info["token"] == token
+                )
+                zerodha_mode = self.mode_map.get(highest_mode, ZerodhaWebSocket.MODE_QUOTE)
+
+                self.subscription_queue.append(
+                    {
+                        "token": token,
+                        "mode": zerodha_mode,
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "subscription_exchange": subscription_exchange,
+                        "mode_int": highest_mode,
+                    }
+                )
+
+                # If this is the first subscription in queue, start the batch timer
+                if len(self.subscription_queue) == 1:
+                    self._start_batch_timer()
+
             self.logger.info(
-                f"✅ Subscribed to {exchange}:{symbol} (token: [REDACTED], mode: {zerodha_mode})"
+                f"Subscribed to {exchange}:{symbol} (token: [REDACTED], mode: {zerodha_mode})"
             )
             return {"status": "success", "message": f"Subscribed to {symbol}"}
 
@@ -346,24 +379,39 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             depth_level: Optional depth level parameter (for compatibility)
         """
         try:
-            key = f"{exchange}:{symbol}"
-
             with self.lock:
-                if key not in self.subscribed_symbols:
+                # Per-mode keys (issue #1664). A mode-specific unsubscribe
+                # removes only that mode; mode=None (legacy callers) removes
+                # every mode for the symbol.
+                prefix = f"{exchange}:{symbol}:"
+                if mode is not None:
+                    keys = [k for k in self.subscribed_symbols if k == f"{prefix}{mode}"]
+                else:
+                    keys = [k for k in self.subscribed_symbols if k.startswith(prefix)]
+
+                if not keys:
                     return {"status": "error", "message": f"Not subscribed to {symbol}"}
 
-                subscription = self.subscribed_symbols[key]
-                token = subscription["token"]
+                token = self.subscribed_symbols[keys[0]]["token"]
+                for k in keys:
+                    del self.subscribed_symbols[k]
 
-                # Unsubscribe using WebSocket client
-                if self.ws_client:
-                    self.ws_client.unsubscribe([token])
+                # Only drop the kite-level stream when NO mode still needs the
+                # token. If lower modes remain we keep the existing (possibly
+                # higher-mode) stream -- its payload is a superset, and
+                # _handle_ticks fans out per remaining mode.
+                still_needed = any(
+                    info["token"] == token for info in self.subscribed_symbols.values()
+                )
+                if not still_needed:
+                    if self.ws_client:
+                        self.ws_client.unsubscribe([token])
+                    self.token_to_symbol.pop(token, None)
 
-                # Remove from tracking
-                del self.subscribed_symbols[key]
-                self.token_to_symbol.pop(token, None)
-
-            self.logger.info(f"✅ Unsubscribed from {exchange}:{symbol}")
+            self.logger.info(
+                f"Unsubscribed from {exchange}:{symbol}"
+                f"{f' (mode {mode})' if mode is not None else ''}"
+            )
             return {"status": "success", "message": f"Unsubscribed from {symbol}"}
 
         except Exception as e:
@@ -388,7 +436,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Generate topic for market data publishing.
         Uses original exchange format for maximum client compatibility.
         """
-        # ✅ FIXED: Keep original exchange format for client compatibility
+        # Keep original exchange format for client compatibility
         return f"{subscription_exchange}_{symbol}_{mode_str}"
 
     def _map_data_exchange(self, subscription_exchange: str) -> str:
@@ -402,10 +450,8 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Mapped exchange for data field
         """
         # Map index exchanges to their base exchanges for data consistency
-        if subscription_exchange == "NSE_INDEX":
-            return "NSE_INDEX"  # ✅ Keep NSE_INDEX in data for client filtering
-        elif subscription_exchange == "BSE_INDEX":
-            return "BSE_INDEX"  # ✅ Keep BSE_INDEX in data for client filtering
+        if subscription_exchange in ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX"):
+            return subscription_exchange  # Keep index exchange in data for client filtering
         else:
             return subscription_exchange  # Keep as-is for regular exchanges
 
@@ -428,7 +474,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                     # Get subscription info to determine exchange and subscribed modes
                     with self.lock:
-                        for key, sub_info in self.subscribed_symbols.items():
+                        for _key, sub_info in self.subscribed_symbols.items():
                             if sub_info["token"] == token:
                                 # Found a subscription for this token
                                 subscription_exchange = sub_info["exchange"]
@@ -449,7 +495,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         depth_tick = transformed_tick.copy()
                         depth_tick["mode"] = "full"
                         depth_topic = self._generate_topic(symbol, subscription_exchange, "DEPTH")
-                        self.logger.debug(f"📊 Publishing DEPTH data to topic: {depth_topic}")
+                        self.logger.debug(f"Publishing DEPTH data to topic: {depth_topic}")
                         self.publish_market_data(depth_topic, depth_tick)
 
                         # If subscribed to Quote (mode 2), publish quote data
@@ -462,7 +508,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             quote_topic = self._generate_topic(
                                 symbol, subscription_exchange, "QUOTE"
                             )
-                            self.logger.debug(f"📊 Publishing QUOTE data to topic: {quote_topic}")
+                            self.logger.debug(f"Publishing QUOTE data to topic: {quote_topic}")
                             self.publish_market_data(quote_topic, quote_tick)
 
                         # If subscribed to LTP (mode 1), publish LTP data
@@ -477,23 +523,41 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 ),
                             }
                             ltp_topic = self._generate_topic(symbol, subscription_exchange, "LTP")
-                            self.logger.debug(f"📊 Publishing LTP data to topic: {ltp_topic}")
+                            self.logger.debug(f"Publishing LTP data to topic: {ltp_topic}")
                             self.publish_market_data(ltp_topic, ltp_tick)
                             self.logger.debug(
-                                f"📊 LTP Data should be available for polling: {subscription_exchange}:{symbol}"
+                                f"LTP Data should be available for polling: {subscription_exchange}:{symbol}"
                             )
                     else:
-                        # For non-full modes, just publish as-is
+                        # For non-full modes, publish as-is
                         mode_str = {"ltp": "LTP", "quote": "QUOTE", "full": "DEPTH"}.get(
                             original_tick_mode, "LTP"
                         )
 
                         topic = self._generate_topic(symbol, subscription_exchange, mode_str)
-                        self.logger.debug(f"📊 Publishing to topic: {topic}")
-                        self.logger.debug(f"📊 Data structure: {transformed_tick}")
+                        self.logger.debug(f"Publishing to topic: {topic}")
+                        self.logger.debug(f"Data structure: {transformed_tick}")
 
                         # Publish to ZeroMQ
                         self.publish_market_data(topic, transformed_tick)
+
+                        # Quote ticks are a superset of LTP: when the kite
+                        # stream runs in quote mode because modes 1 and 2 are
+                        # both subscribed, fan the LTP topic out too --
+                        # otherwise the mode-1 subscriber starves exactly like
+                        # the depth case above (issue #1664).
+                        if original_tick_mode == "quote" and 1 in subscribed_modes:
+                            ltp_tick = {
+                                "symbol": symbol,
+                                "exchange": data_exchange,
+                                "mode": "ltp",
+                                "ltp": transformed_tick.get("ltp", 0),
+                                "timestamp": transformed_tick.get(
+                                    "timestamp", int(time.time() * 1000)
+                                ),
+                            }
+                            ltp_topic = self._generate_topic(symbol, subscription_exchange, "LTP")
+                            self.publish_market_data(ltp_topic, ltp_tick)
 
         except Exception as e:
             self.logger.error(f"Error handling ticks: {e}")
@@ -515,7 +579,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             mode = tick.get("mode", "ltp")
 
             # Check if this is an index based on exchange
-            is_index = exchange in ["NSE_INDEX", "BSE_INDEX"]
+            is_index = exchange in ["NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX"]
 
             # Transform based on whether it's an index or regular instrument
             if is_index:
@@ -531,14 +595,14 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _transform_index_tick(self, tick: dict, symbol: str, exchange: str, mode: str) -> dict:
         """Transform index tick data to match Angel adapter format exactly"""
-        # ✅ Keep original exchange in data - don't remap here since _handle_ticks will handle it
+        # Keep original exchange in data - don't remap here since _handle_ticks will handle it
         # Make sure we're using NSE_INDEX explicitly
 
         if mode == "ltp":
             # Index LTP mode - match Angel adapter structure exactly
             transformed = {
                 "symbol": symbol,
-                "exchange": "NSE_INDEX",  # ✅ Use NSE_INDEX explicitly
+                "exchange": exchange,  # Preserve index exchange (NSE_INDEX/BSE_INDEX/MCX_INDEX/GLOBAL_INDEX)
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
                 "ltt": tick.get(
@@ -551,7 +615,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Index Quote/Full mode - comprehensive data like Angel adapter
             transformed = {
                 "symbol": symbol,
-                "exchange": exchange,  # ✅ Keep original exchange
+                "exchange": exchange,  # Keep original exchange
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
                 "ltt": tick.get(
@@ -593,7 +657,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Fallback for index - minimal like Angel
             transformed = {
                 "symbol": symbol,
-                "exchange": exchange,  # ✅ Keep original exchange
+                "exchange": exchange,  # Keep original exchange
                 "mode": mode,
                 "ltp": tick.get("last_traded_price", tick.get("last_price", 0)),
                 "ltt": tick.get("timestamp", int(time.time() * 1000)),
@@ -700,12 +764,12 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Handle WebSocket connection"""
         self.connected = True
         self.reconnect_attempts = 0
-        self.logger.info("✅ WebSocket connected")
+        self.logger.info("WebSocket connected")
 
     def _on_disconnect(self):
         """Handle WebSocket disconnection"""
         self.connected = False
-        self.logger.warning("❌ WebSocket disconnected")
+        self.logger.warning("WebSocket disconnected")
 
     def _on_error(self, error):
         """Handle WebSocket errors"""
@@ -742,7 +806,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Clean up ZMQ resources using base class method
             self.cleanup_zmq()
 
-            self.logger.info("✅ Zerodha adapter cleaned up completely")
+            self.logger.info("Zerodha adapter cleaned up completely")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
             # Try one last time to clean up ZMQ resources

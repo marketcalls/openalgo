@@ -43,7 +43,14 @@ class MotilalWebSocket:
     # WebSocket version
     WEBSOCKET_VERSION = "1.0.0"
 
-    def __init__(self, client_id: str, auth_token: str, api_key: str, use_uat: bool = False):
+    def __init__(
+        self,
+        client_id: str,
+        auth_token: str,
+        api_key: str,
+        use_uat: bool = False,
+        token_provider=None,
+    ):
         """
         Initialize the Motilal Oswal WebSocket client.
 
@@ -52,10 +59,14 @@ class MotilalWebSocket:
             auth_token (str): Authentication token obtained from login
             api_key (str): API key (BROKER_API_SECRET)
             use_uat (bool): Whether to use UAT environment (default: False)
+            token_provider (callable): Optional zero-arg callable returning a fresh
+                auth token from the database. Invoked before each reconnect attempt
+                so daily token rollover (~3 AM IST) does not leave the feed dead.
         """
         self.client_id = client_id
         self.auth_token = auth_token
         self.api_key = api_key
+        self.token_provider = token_provider
         self.ws_url = self.UAT_URL if use_uat else self.PRIMARY_URL
 
         # Connection state
@@ -80,6 +91,15 @@ class MotilalWebSocket:
         self._connect_thread = None
         self._stop_event = threading.Event()
         self._heartbeat_thread = None
+        # Pending delayed_reconnect daemons spawned from on_close(); tracked so
+        # disconnect() can wait for them and so they exit early when _stop_event fires.
+        self._reconnect_threads = []
+        self._reconnect_threads_lock = threading.Lock()
+        # Flag set while we are intentionally closing a stale WebSocketApp inside
+        # the retry loop. The resulting on_close() callback must NOT spawn a
+        # delayed_reconnect — the retry loop is already about to create a fresh
+        # connection, and racing two connect()s corrupts subscription state.
+        self._closing_old_ws = False
 
     def connect(self):
         """
@@ -106,10 +126,42 @@ class MotilalWebSocket:
         """
         attempt = 0
 
+        # Indian broker tokens roll over daily (~3 AM IST). Re-read a fresh token
+        # from the database before connecting so a reconnect after rollover uses
+        # a live token instead of the dead construction-time one. Keep the
+        # existing token if the provider returns nothing.
+        if self.token_provider is not None:
+            try:
+                fresh_token = self.token_provider()
+                if fresh_token:
+                    self.auth_token = fresh_token
+                else:
+                    logger.warning(
+                        "Motilal token_provider returned no token; keeping existing auth token"
+                    )
+            except Exception as token_err:
+                logger.warning(
+                    f"Motilal token_provider failed; keeping existing auth token: {token_err}"
+                )
+
         while not self._stop_event.is_set() and attempt < self.MAX_RECONNECT_ATTEMPTS:
             try:
                 logger.info(f"Connecting to Motilal Oswal WebSocket: {self.ws_url}")
                 websocket.enableTrace(False)
+
+                # Close the previous WebSocketApp before overwriting self.ws so
+                # the underlying socket fd is released on retry attempts. Set
+                # _closing_old_ws first so the on_close callback knows not to
+                # schedule another reconnect (this loop already will).
+                old_ws = self.ws
+                if old_ws is not None:
+                    self._closing_old_ws = True
+                    try:
+                        old_ws.close()
+                    except Exception as close_err:
+                        logger.debug(f"Error closing stale WebSocketApp: {close_err}")
+                    finally:
+                        self._closing_old_ws = False
 
                 self.ws = websocket.WebSocketApp(
                     self.ws_url,
@@ -144,7 +196,9 @@ class MotilalWebSocket:
             logger.debug(
                 f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS} failed. Retrying in {sleep_time}s"
             )
-            time.sleep(sleep_time)
+            # Interruptible backoff so disconnect() doesn't wait out the full delay.
+            if self._stop_event.wait(timeout=sleep_time):
+                break
 
         if attempt >= self.MAX_RECONNECT_ATTEMPTS and not self.is_connected:
             logger.error(
@@ -157,9 +211,19 @@ class MotilalWebSocket:
         """
         self._stop_event.set()
 
-        # Stop heartbeat thread
-        if self._heartbeat_thread:
-            self._heartbeat_thread = None
+        # Stop heartbeat thread (currently disabled in _start_heartbeat, but
+        # join here so re-enabling it later doesn't silently leak a thread).
+        if (
+            self._heartbeat_thread
+            and self._heartbeat_thread.is_alive()
+            and self._heartbeat_thread is not threading.current_thread()
+        ):
+            self._heartbeat_thread.join(timeout=2)
+            if self._heartbeat_thread.is_alive():
+                logger.warning(
+                    "Motilal heartbeat thread did not exit within 2s of disconnect"
+                )
+        self._heartbeat_thread = None
 
         if self.ws:
             logger.info("Closing Motilal WebSocket connection")
@@ -173,6 +237,34 @@ class MotilalWebSocket:
             self.ws.close()
 
         self.is_connected = False
+
+        # Wait for any pending delayed_reconnect daemons to exit. _stop_event was
+        # set above, so they short-circuit on _stop_event.wait() and return quickly.
+        with self._reconnect_threads_lock:
+            pending = [t for t in self._reconnect_threads if t.is_alive()]
+            self._reconnect_threads = []
+        for t in pending:
+            t.join(timeout=2)
+            if t.is_alive():
+                logger.warning("Motilal delayed_reconnect thread did not exit within 2s")
+
+        # Join the connect thread so run_forever() actually unwinds before we
+        # declare the adapter disconnected. Without this the thread leaks one
+        # OS thread per session teardown. Skip the join if disconnect() is
+        # being invoked from within the connect thread itself (e.g. via an
+        # on_close callback) to avoid a self-join deadlock.
+        if (
+            self._connect_thread
+            and self._connect_thread.is_alive()
+            and self._connect_thread is not threading.current_thread()
+        ):
+            self._connect_thread.join(timeout=5)
+            if self._connect_thread.is_alive():
+                logger.warning(
+                    "Motilal connect thread did not exit within 5s of disconnect"
+                )
+        self._connect_thread = None
+
         logger.info("Motilal WebSocket disconnected")
 
     def on_open(self, ws):
@@ -244,7 +336,7 @@ class MotilalWebSocket:
 
             # Motilal sends BINARY data, not JSON
             if isinstance(message, bytes):
-                logger.debug(f"✓ Received binary message: {len(message)} bytes")
+                logger.debug(f"Received binary message: {len(message)} bytes")
                 logger.debug(f"Binary data (hex): {message.hex()}")
 
                 # Mark as connected when we receive first message (login response)
@@ -252,7 +344,7 @@ class MotilalWebSocket:
                     with self.lock:
                         self.is_connected = True
                     logger.info(
-                        "✓ Motilal WebSocket connection authenticated (received binary response)"
+                        "Motilal WebSocket connection authenticated (received binary response)"
                     )
 
                     # Resubscribe to any previous subscriptions
@@ -328,7 +420,7 @@ class MotilalWebSocket:
 
                 # Log what we're parsing
                 logger.debug(
-                    f"📊 Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}"
+                    f"Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}"
                 )
 
                 # Detailed logging for subscribed scrips to analyze unknown packets
@@ -336,7 +428,7 @@ class MotilalWebSocket:
                 with self.lock:
                     if subscription_key_check in self.subscriptions:
                         logger.debug(
-                            f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}"
+                            f"SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}"
                         )
 
                 # Parse based on message type
@@ -345,20 +437,20 @@ class MotilalWebSocket:
                 if msgtype in ["B", "C", "D", "E", "F"]:  # Market Depth levels 1-5
                     level = ord(msgtype) - ord("B") + 1  # B=1, C=2, D=3, E=4, F=5
                     logger.debug(
-                        f"✓ Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}"
+                        f"Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}"
                     )
                     self._parse_depth_level_packet(body, key, symbol, level)
                 elif msgtype == "A":  # LTP
-                    logger.debug(f"✓ Parsing LTP packet for {key}")
+                    logger.debug(f"Parsing LTP packet for {key}")
                     self._parse_ltp_packet(body, key, symbol)
                 elif msgtype == "G":  # Day OHLC
-                    logger.debug(f"✓ Parsing OHLC packet for {key}")
+                    logger.debug(f"Parsing OHLC packet for {key}")
                     self._parse_ohlc_packet(body, key, symbol)
                 elif msgtype == "H":  # Index data
-                    logger.debug(f"✓ Parsing INDEX packet for {key}")
+                    logger.debug(f"Parsing INDEX packet for {key}")
                     self._parse_index_packet(body, key, symbol)
                 elif msgtype == "m":  # Open Interest
-                    logger.debug(f"✓ Parsing OI packet for {key}")
+                    logger.debug(f"Parsing OI packet for {key}")
                     self._parse_oi_packet(body, key, symbol)
                 elif msgtype == "W":  # DPR (circuit limits)
                     logger.debug(f"Skipping DPR packet for {key}")
@@ -367,14 +459,14 @@ class MotilalWebSocket:
                 elif msgtype == "X":  # Unknown - need to investigate
                     logger.debug(f"Received message type 'X' for {key} - investigating")
                 elif msgtype == "g":  # Lowercase 'g' - possibly alternate OHLC or tick data
-                    logger.debug(f"📦 Packet 'g' for {key}: {body.hex()}")
+                    logger.debug(f"Packet 'g' for {key}: {body.hex()}")
                 elif msgtype == "z":  # Lowercase 'z' - unknown supplementary data
-                    logger.debug(f"📦 Packet 'z' for {key}: {body.hex()}")
+                    logger.debug(f"Packet 'z' for {key}: {body.hex()}")
                 elif msgtype == "Y":  # Uppercase 'Y' - exchange-specific data
-                    logger.debug(f"📦 Packet 'Y' for {key}: {body.hex()}")
+                    logger.debug(f"Packet 'Y' for {key}: {body.hex()}")
                 else:
                     logger.warning(
-                        f"❌ Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}"
+                        f"Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}"
                     )
 
         except Exception as e:
@@ -435,7 +527,7 @@ class MotilalWebSocket:
                     self.last_depth[key]["bids"][level_index] = bid_data
                     self.last_depth[key]["asks"][level_index] = ask_data
                     logger.debug(
-                        f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}"
+                        f"Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}"
                     )
 
         except Exception as e:
@@ -547,9 +639,9 @@ class MotilalWebSocket:
             symbol = None
             if original_instrument and hasattr(original_instrument, "symbol"):
                 symbol = original_instrument.symbol
-                logger.debug(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
+                logger.debug(f"Using subscription symbol: {symbol} for {subscription_key}")
             else:
-                logger.warning(f"✗ No subscription symbol found for {subscription_key}")
+                logger.warning(f"No subscription symbol found for {subscription_key}")
 
             # Process DayOHLC data
             if "Open" in data or "High" in data or "Low" in data or "PrevDayClose" in data:
@@ -627,7 +719,7 @@ class MotilalWebSocket:
                 self.last_quotes[key].update(ltp_data)
 
             logger.debug(
-                f"✓ Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}"
+                f"Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}"
             )
         except Exception as e:
             logger.error(f"Error processing LTP data: {str(e)}")
@@ -697,7 +789,7 @@ class MotilalWebSocket:
                 self.last_depth[key]["time"] = data.get("Time", "")
                 self.last_depth[key]["timestamp"] = datetime.now().isoformat()
 
-            logger.debug(f"✓ Updated market depth level {level} for {key} - Symbol: {symbol}")
+            logger.debug(f"Updated market depth level {level} for {key} - Symbol: {symbol}")
         except Exception as e:
             logger.error(f"Error processing market depth data: {str(e)}")
 
@@ -773,7 +865,13 @@ class MotilalWebSocket:
 
         logger.debug(f"Motilal WebSocket connection closed: {close_status_code}, {close_msg}")
 
-        # Only attempt to reconnect if we didn't explicitly stop
+        # Skip reconnect if we explicitly stopped, or if this on_close was
+        # triggered by the retry loop intentionally closing a stale WebSocketApp
+        # (in which case the retry loop is about to open a fresh one itself).
+        if self._closing_old_ws:
+            logger.debug("on_close from stale WebSocketApp closure; skipping reconnect")
+            return
+
         if not self._stop_event.is_set():
             self.reconnect_count += 1
 
@@ -782,11 +880,20 @@ class MotilalWebSocket:
             logger.info(f"Attempting to reconnect in {sleep_time} seconds")
 
             def delayed_reconnect():
-                time.sleep(sleep_time)
-                if not self._stop_event.is_set():
-                    self.connect()
+                # wait() returns True if the stop event fires during the backoff,
+                # so we abort instead of racing a fresh connect() against disconnect().
+                if self._stop_event.wait(timeout=sleep_time):
+                    return
+                self.connect()
 
-            threading.Thread(target=delayed_reconnect, daemon=True).start()
+            t = threading.Thread(target=delayed_reconnect, daemon=True)
+            with self._reconnect_threads_lock:
+                # prune dead refs to keep the list bounded
+                self._reconnect_threads = [
+                    th for th in self._reconnect_threads if th.is_alive()
+                ]
+                self._reconnect_threads.append(t)
+            t.start()
 
     def register_scrip(
         self, exchange: str, exchange_type: str, scrip_code: int, symbol: str = None
@@ -1109,7 +1216,7 @@ class MotilalWebSocket:
         with self.lock:
             depth = self.last_depth.get(key)
             logger.debug(
-                f"🔍 Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}"
+                f"Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}"
             )
 
             if depth:
@@ -1124,7 +1231,7 @@ class MotilalWebSocket:
 
                 # Log detailed depth summary
                 logger.debug(
-                    f"✓ Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels"
+                    f"Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels"
                 )
                 for i, bid in enumerate(bids_filtered, 1):
                     logger.debug(
@@ -1142,7 +1249,7 @@ class MotilalWebSocket:
                 # Return filtered depth
                 return {"bids": bids_filtered, "asks": asks_filtered, "symbol": depth.get("symbol")}
             else:
-                logger.warning(f"❌ No depth data found for key '{key}'")
+                logger.warning(f"No depth data found for key '{key}'")
                 logger.debug(f"No market depth data available for {key}")
                 logger.debug(f"Available depth keys: {list(self.last_depth.keys())}")
                 return None

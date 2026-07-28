@@ -460,14 +460,19 @@ def bulk_export():
         else:
             base_name = f"historify_export_{timestamp_str}"
 
-        # Check if any interval requires aggregation from 1m data (custom intervals)
+        # Force ZIP format when:
+        # 1. Multiple intervals are selected (single-table formats can't carry
+        #    per-interval files), OR
+        # 2. A computed interval is requested in CSV/TXT — those exporters still
+        #    do direct WHERE interval = ? queries and would return empty for
+        #    5m/15m/30m/1h/custom-intraday/W/M/Q/Y. Parquet's exporter aggregates
+        #    on the fly so it no longer needs the override (#917).
         from database.historify_db import is_custom_interval
 
-        # Force ZIP format if:
-        # 1. Multiple intervals selected, OR
-        # 2. Any computed/custom interval is selected (since only ZIP supports aggregation)
         has_computed = intervals and any(is_custom_interval(i) for i in intervals)
-        if (intervals and len(intervals) > 1) or has_computed:
+        if intervals and len(intervals) > 1:
+            format_type = "zip"
+        elif has_computed and format_type in ("csv", "txt"):
             format_type = "zip"
 
         # Create temp file path

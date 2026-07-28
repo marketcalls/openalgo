@@ -3,9 +3,9 @@
  * Check position status before action
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Briefcase } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { PositionCheckNodeData } from '@/types/flow'
 
@@ -25,12 +25,7 @@ const conditionLabels: Record<string, string> = {
 
 export const PositionCheckNode = memo(({ data, selected }: PositionCheckNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node node-condition min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
+    <div className={cn('workflow-node node-condition min-w-[120px]', selected && 'selected')}>
       <Handle
         type="target"
         position={Position.Top}
@@ -43,9 +38,7 @@ export const PositionCheckNode = memo(({ data, selected }: PositionCheckNodeProp
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Position</div>
-            <div className="text-[9px] text-muted-foreground">
-              Check
-            </div>
+            <div className="text-[9px] text-muted-foreground">Check</div>
           </div>
         </div>
         <div className="space-y-1">

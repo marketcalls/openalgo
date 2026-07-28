@@ -4,6 +4,7 @@ export interface PythonStrategy {
   id: string
   name: string
   file_name: string
+  exchange: string
   status: 'stopped' | 'running' | 'error' | 'scheduled' | 'paused' | 'manually_stopped'
   status_message?: string
   process_id: number | null
@@ -52,7 +53,24 @@ export interface ScheduleConfig {
   start_time: string
   stop_time: string
   days: string[]
+  exchange?: string
 }
+
+// Exchanges that drive the strategy's calendar/holiday awareness in /python.
+// Labels show the default daily window only; per-date overrides (e.g. partial
+// holidays, Muhurat sessions) come from the market calendar DB.
+export const STRATEGY_EXCHANGES = [
+  { value: 'NSE', label: 'NSE — Equity (09:15-15:30)' },
+  { value: 'BSE', label: 'BSE — Equity (09:15-15:30)' },
+  { value: 'NFO', label: 'NFO — NSE F&O (09:15-15:30)' },
+  { value: 'BFO', label: 'BFO — BSE F&O (09:15-15:30)' },
+  { value: 'CDS', label: 'CDS — NSE Currency (09:00-17:00)' },
+  { value: 'BCD', label: 'BCD — BSE Currency (09:00-17:00)' },
+  { value: 'MCX', label: 'MCX — Commodity (09:00-23:55)' },
+  { value: 'CRYPTO', label: 'CRYPTO — 24/7' },
+] as const
+
+export const CRYPTO_EXCHANGE_VALUE = 'CRYPTO'
 
 export interface MasterContractStatus {
   ready: boolean

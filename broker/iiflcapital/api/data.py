@@ -1,14 +1,29 @@
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pandas as pd
 
+from broker.iiflcapital.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from broker.iiflcapital.baseurl import BASE_URL
-from database.token_db import get_token
+from broker.iiflcapital.streaming.iiflcapital_mapping import supports_open_interest
+from database.token_db import get_brexchange, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# IIFL exposes OI on a separate single-mode endpoint, so an option chain
+# pull does N HTTP roundtrips. The shared httpx client allows up to 100
+# concurrent connections; cap fanout at 32 so a 60-leg chain finishes in
+# ~2 batches (~400 ms) instead of the previous 8-worker loop (~1.6 s).
+_OI_MAX_WORKERS = 32
 
 
 def _try_json(value: Any) -> Any:
@@ -48,6 +63,13 @@ def _to_int(value: Any, default: int = 0) -> int:
 
 def _safe_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def _short_text(value: str, limit: int = 300) -> str:
+    text = " ".join((value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
 
 
 def _first(value: dict, keys: tuple[str, ...], default=None):
@@ -101,6 +123,9 @@ def _looks_like_market_row(value: Any) -> bool:
             "close",
             "tradedVolume",
             "volume",
+            "bestBidPrice",
+            "bestAskPrice",
+            "besAskPrice",
             "marketDepth",
             "depth",
             "instrumentId",
@@ -175,9 +200,9 @@ def _normalize_exchange(exchange: str) -> str:
         "CDS": "NSECURR",
         "BCD": "BSECURR",
         "MCX": "MCXCOMM",
-        "NSE_INDEX": "INDICES",
-        "BSE_INDEX": "INDICES",
-        "MCX_INDEX": "INDICES",
+        "NSE_INDEX": "NSEEQ",
+        "BSE_INDEX": "BSEEQ",
+        "MCX_INDEX": "MCXCOMM",
     }
     return mapping.get(exchange, exchange)
 
@@ -209,7 +234,7 @@ def _parse_quote_row(row: dict) -> dict:
         "ask": _to_float(
             _first(
                 row,
-                ("ask", "askPrice", "bestAsk", "bestAskPrice"),
+                ("ask", "askPrice", "bestAsk", "bestAskPrice", "besAskPrice"),
                 _first(ask_info, ("Price", "price"), _first(ask_level_1, ("price", "Price"), 0)),
             )
         ),
@@ -293,10 +318,57 @@ def _parse_depth_levels(levels: Any) -> list[dict]:
     return normalized
 
 
+def _top_five_depth_levels(levels: Any) -> list[dict]:
+    normalized = _parse_depth_levels(levels)[:5]
+    while len(normalized) < 5:
+        normalized.append({"price": 0.0, "quantity": 0, "orders": 0})
+    return normalized
+
+
+def _parse_candle_sequence(row: Any) -> dict | None:
+    if not isinstance(row, (list, tuple)) or len(row) < 6:
+        return None
+
+    timestamp = row[0]
+    if isinstance(timestamp, str) and not timestamp.isdigit():
+        parsed = pd.to_datetime(timestamp, errors="coerce")
+        timestamp = int(parsed.timestamp()) if not pd.isna(parsed) else 0
+    else:
+        timestamp = _to_int(timestamp)
+        if timestamp > 10**12:
+            timestamp = timestamp // 1000
+
+    return {
+        "timestamp": timestamp,
+        "open": _to_float(row[1]),
+        "high": _to_float(row[2]),
+        "low": _to_float(row[3]),
+        "close": _to_float(row[4]),
+        "volume": _to_int(row[5]),
+        "oi": _to_int(row[6]) if len(row) > 6 else 0,
+    }
+
+
 def _parse_history_rows(rows: list) -> pd.DataFrame:
     candles = []
 
     for row in rows:
+        row = _try_json(row)
+
+        if isinstance(row, dict):
+            nested_candles = _try_json(_first(row, ("candles", "Candles"), []))
+            if isinstance(nested_candles, list):
+                for candle_row in nested_candles:
+                    candle = _parse_candle_sequence(candle_row)
+                    if candle:
+                        candles.append(candle)
+                continue
+
+        candle = _parse_candle_sequence(row)
+        if candle:
+            candles.append(candle)
+            continue
+
         # Pipe-delimited fallback: timestamp|open|high|low|close|volume|oi
         if isinstance(row, str) and "|" in row:
             for candle_str in row.split(","):
@@ -352,24 +424,45 @@ def _parse_history_rows(rows: list) -> pd.DataFrame:
     return df[["timestamp", "open", "high", "low", "close", "volume", "oi"]]
 
 
+def _format_iifl_date(value: str) -> str:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return value
+    return parsed.strftime("%d-%b-%Y")
+
+
 class BrokerData:
     def __init__(self, auth_token, feed_token=None, user_id=None):
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
         self.timeframe_map = {
-            "1m": "ONE_MINUTE",
-            "2m": "TWO_MINUTE",
-            "3m": "THREE_MINUTE",
-            "5m": "FIVE_MINUTE",
-            "10m": "TEN_MINUTE",
-            "15m": "FIFTEEN_MINUTE",
-            "30m": "THIRTY_MINUTE",
-            "60m": "SIXTY_MINUTE",
-            "D": "ONE_DAY",
+            "1m": "1 minute",
+            "5m": "5 minutes",
+            "10m": "10 minutes",
+            "15m": "15 minutes",
+            "30m": "30 minutes",
+            "60m": "60 minutes",
+            "1h": "60 minutes",
+            "D": "1 day",
+            "W": "weekly",
+            "M": "monthly",
         }
 
-    def _post(self, endpoint: str, payload: Any) -> Any:
+    def _post(self, endpoint: str, payload: Any, _retry_count: int = 0) -> Any:
+        """
+        POST to an IIFL Capital data endpoint through the shared connection pool.
+
+        This is the single choke point every data.py HTTP call goes through
+        (get_quotes, get_multiquotes, get_depth, get_history, and the OI
+        fetches used by option-chain/OI-tracker/GEX tools), so pacing it with
+        apply_rate_limit() paces all of them -- including the up-to-32-way
+        concurrent fanout in _fetch_openinterest_map -- against IIFL's
+        documented per-category caps (see broker.iiflcapital.api.rate_limiter).
+        On a rate-limit rejection (HTTP 429, detected primarily; a generic
+        retry-hint message as fallback) this retries with backoff instead of
+        surfacing the failure immediately.
+        """
         client = get_httpx_client()
         headers = {
             "Authorization": f"Bearer {self.auth_token}",
@@ -377,11 +470,17 @@ class BrokerData:
             "Accept": "application/json",
         }
 
+        apply_rate_limit()
+
         response = client.post(f"{BASE_URL}{endpoint}", headers=headers, json=payload)
         try:
             data = response.json()
         except Exception as exc:
-            raise Exception(f"Invalid broker response: HTTP {response.status_code}") from exc
+            body = _short_text(response.text)
+            message = f"Invalid broker response: HTTP {response.status_code}"
+            if body:
+                message = f"{message}: {body}"
+            raise Exception(message) from exc
 
         if not _is_success(response.status_code, data):
             message = (
@@ -391,34 +490,77 @@ class BrokerData:
             ) or (
                 data.get("error") if isinstance(data, dict) else None
             ) or f"Request failed with HTTP {response.status_code}"
+
+            if is_rate_limited(response.status_code, message) and _retry_count < MAX_RETRIES:
+                delay = retry_delay_from_headers(response.headers, _retry_count)
+                logger.warning(
+                    f"IIFL Capital data API rate limited on {endpoint}. Retrying in "
+                    f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+                )
+                time.sleep(delay)
+                return self._post(endpoint, payload, _retry_count + 1)
+
             raise Exception(message)
 
         return data
 
     def _fetch_marketquote_rows(self, instruments: list[dict]) -> list:
-        errors = []
-        payload_variants = [
-            instruments,
-            {"instruments": instruments},
-        ]
+        response = self._post("/marketdata/marketquotes", instruments)
+        rows = _extract_rows(response)
+        if rows:
+            return rows
 
-        for payload in payload_variants:
-            try:
-                response = self._post("/marketdata/marketquotes", payload)
-            except Exception as exc:
-                errors.append(str(exc))
-                continue
+        raise Exception("No quote rows in broker response")
 
-            rows = _extract_rows(response)
-            if rows:
-                return rows
+    def _fetch_openinterest(self, instrument: dict) -> int:
+        """
+        Fetch open interest for one F&O instrument.
 
-            errors.append("No quote rows in broker response")
+        IIFL's /marketdata/openinterest is single-mode only and lives on a
+        separate endpoint from marketquotes (which never returns OI). Best
+        effort — returns 0 on any failure so a flaky OI call never blocks
+        the quote/option-chain response.
+        """
+        try:
+            response = self._post("/marketdata/openinterest", instrument)
+        except Exception as exc:
+            logger.debug(f"IIFL OI fetch failed for {instrument}: {exc}")
+            return 0
 
-        if errors:
-            raise Exception(errors[-1])
+        if not isinstance(response, dict):
+            return 0
 
-        raise Exception("No quote data received from broker")
+        result = response.get("result", response)
+        if isinstance(result, list) and result:
+            result = result[0]
+        if not isinstance(result, dict):
+            return 0
+
+        return _to_int(_first(result, ("openInterest", "oi"), 0))
+
+    def _fetch_openinterest_map(self, instruments: list[dict]) -> dict[str, int]:
+        """
+        Concurrently fetch OI for many instruments. Keyed by 'exchange:instrumentId'.
+        IIFL doesn't support batch OI, so option chains require one HTTP call per
+        leg — fanout capped at _OI_MAX_WORKERS.
+        """
+        if not instruments:
+            return {}
+
+        oi_map: dict[str, int] = {}
+        with ThreadPoolExecutor(max_workers=min(_OI_MAX_WORKERS, len(instruments))) as pool:
+            futures = {
+                pool.submit(self._fetch_openinterest, inst): (
+                    f"{str(inst['exchange']).upper()}:{inst['instrumentId']}"
+                )
+                for inst in instruments
+            }
+            for future, key in futures.items():
+                try:
+                    oi_map[key] = future.result()
+                except Exception:
+                    oi_map[key] = 0
+        return oi_map
 
     def _resolve_token(self, symbol: str, exchange: str) -> str:
         token = get_token(symbol, exchange)
@@ -427,13 +569,18 @@ class BrokerData:
         return str(token)
 
     def _instrument(self, symbol: str, exchange: str) -> dict:
+        broker_exchange = (get_brexchange(symbol, exchange) or "").upper()
+        if not broker_exchange or broker_exchange == "INDICES":
+            broker_exchange = _normalize_exchange(exchange)
+
         return {
-            "exchange": _normalize_exchange(exchange),
+            "exchange": broker_exchange,
             "instrumentId": self._resolve_token(symbol, exchange),
         }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
-        rows = self._fetch_marketquote_rows([self._instrument(symbol, exchange)])
+        instrument = self._instrument(symbol, exchange)
+        rows = self._fetch_marketquote_rows([instrument])
         if not rows:
             raise Exception("No quote data received from broker")
 
@@ -448,12 +595,14 @@ class BrokerData:
         if not _looks_like_market_row(row):
             raise Exception("No quote data received from broker")
 
-        return _parse_quote_row(row)
+        parsed = _parse_quote_row(row)
+        if supports_open_interest(str(exchange).upper()):
+            parsed["oi"] = self._fetch_openinterest(instrument)
+        return parsed
 
     def get_multiquotes(self, symbols: list) -> list:
         instruments = []
         valid_symbols = []
-        identity_map: dict[str, dict] = {}
         skipped = []
 
         for item in symbols:
@@ -473,15 +622,13 @@ class BrokerData:
             try:
                 instrument = self._instrument(symbol, exchange)
                 instruments.append(instrument)
-                valid_symbols.append({"symbol": symbol, "exchange": exchange})
-                identity_map[f"{instrument['exchange']}:{instrument['instrumentId']}"] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                }
-                identity_map[f"{exchange.upper()}:{instrument['instrumentId']}"] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                }
+                valid_symbols.append(
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "instrument": instrument,
+                    }
+                )
             except Exception as exc:
                 skipped.append(
                     {
@@ -497,25 +644,52 @@ class BrokerData:
 
         rows = self._fetch_marketquote_rows(instruments)
 
-        results = []
-        for idx, row in enumerate(rows):
+        # IIFL OI lives on a separate single-mode endpoint. Fetch concurrently
+        # for F&O legs only (cash equities have no OI) and merge by identity.
+        oi_instruments = [
+            v["instrument"]
+            for v in valid_symbols
+            if supports_open_interest(str(v["exchange"]).upper())
+        ]
+        oi_map = self._fetch_openinterest_map(oi_instruments)
+
+        parsed_rows = []
+        rows_by_identity: dict[str, dict] = {}
+
+        for row in rows:
             row = _try_json(row)
             if isinstance(row, str):
                 continue
             row = _safe_dict(row)
+            parsed_rows.append(row)
 
             row_exchange = str(_first(row, ("exchange", "exchangeSegment"), "")).upper()
             row_token = str(_first(row, ("instrumentId", "token", "exchangeInstrumentID"), ""))
-            original = identity_map.get(f"{row_exchange}:{row_token}")
+            if row_exchange and row_token:
+                rows_by_identity[f"{row_exchange}:{row_token}"] = row
 
-            # Fallback to request order when identity is not present in response payload.
-            if not original and idx < len(valid_symbols):
-                original = {
-                    "symbol": valid_symbols[idx]["symbol"],
-                    "exchange": valid_symbols[idx]["exchange"],
-                }
+        use_identity_lookup = bool(rows_by_identity)
+        results = []
 
-            if not original:
+        for idx, original in enumerate(valid_symbols):
+            instrument = original["instrument"]
+            identity_key = f"{instrument['exchange']}:{instrument['instrumentId']}"
+            original_exchange_key = f"{original['exchange'].upper()}:{instrument['instrumentId']}"
+
+            if use_identity_lookup:
+                row = rows_by_identity.get(identity_key) or rows_by_identity.get(original_exchange_key)
+            else:
+                row = parsed_rows[idx] if idx < len(parsed_rows) else None
+
+            if not row:
+                results.append(
+                    {
+                        "symbol": original["symbol"],
+                        "exchange": original["exchange"],
+                        "data": None,
+                        "error": "No quote data available",
+                    }
+                )
                 continue
 
             row_error = _extract_row_error(row)
@@ -530,18 +704,24 @@ class BrokerData:
                 )
                 continue
 
+            parsed = _parse_quote_row(row)
+            oi_key = f"{str(instrument['exchange']).upper()}:{instrument['instrumentId']}"
+            if oi_key in oi_map:
+                parsed["oi"] = oi_map[oi_key]
+
             results.append(
                 {
                     "symbol": original["symbol"],
                     "exchange": original["exchange"],
-                    "data": _parse_quote_row(row),
+                    "data": parsed,
                 }
             )
 
         return skipped + results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
-        payload = {"instruments": [self._instrument(symbol, exchange)], "depthLevel": 5}
+        instrument = self._instrument(symbol, exchange)
+        payload = instrument
         response = self._post("/marketdata/marketdepth", payload)
 
         rows = _extract_rows(response)
@@ -555,16 +735,33 @@ class BrokerData:
         row = _safe_dict(row)
 
         depth = _safe_dict(_first(row, ("depth", "marketDepth", "Depth"), {}))
-        buy = _parse_depth_levels(_first(depth, ("buy", "bids", "Buy"), []))
-        sell = _parse_depth_levels(_first(depth, ("sell", "asks", "Sell"), []))
+        buy = _top_five_depth_levels(_first(depth, ("buy", "bids", "Buy"), []))
+        sell = _top_five_depth_levels(_first(depth, ("sell", "asks", "Sell"), []))
 
         ltp = _to_float(_first(row, ("ltp", "lastTradedPrice"), 0))
+        ltq = _to_int(_first(row, ("ltq", "lastTradedQuantity", "lastTradeQty"), 0))
         open_price = _to_float(_first(row, ("open", "openPrice"), 0))
         high_price = _to_float(_first(row, ("high", "highPrice"), 0))
         low_price = _to_float(_first(row, ("low", "lowPrice"), 0))
         prev_close = _to_float(_first(row, ("close", "previousClose"), 0))
         volume = _to_int(_first(row, ("volume", "tradedVolume"), 0))
         oi = _to_int(_first(row, ("oi", "openInterest"), 0))
+        if oi == 0 and supports_open_interest(str(exchange).upper()):
+            oi = self._fetch_openinterest(instrument)
+        total_buy_qty = _to_int(
+            _first(
+                row,
+                ("totalBidQuantity", "totalBuyQuantity", "totBuyQuan", "totalbuyqty"),
+                sum(level.get("quantity", 0) for level in buy),
+            )
+        )
+        total_sell_qty = _to_int(
+            _first(
+                row,
+                ("totalAskQuantity", "totalSellQuantity", "totSellQuan", "totalsellqty"),
+                sum(level.get("quantity", 0) for level in sell),
+            )
+        )
 
         return {
             "bids": buy,
@@ -577,10 +774,11 @@ class BrokerData:
             "high": high_price,
             "low": low_price,
             "prev_close": prev_close,
+            "ltq": ltq,
             "volume": volume,
             "oi": oi,
-            "totalbuyqty": sum(level.get("quantity", 0) for level in buy),
-            "totalsellqty": sum(level.get("quantity", 0) for level in sell),
+            "totalbuyqty": total_buy_qty,
+            "totalsellqty": total_sell_qty,
         }
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str):
@@ -588,14 +786,13 @@ class BrokerData:
         if not broker_interval:
             raise Exception(f"Unsupported timeframe: {interval}")
 
-        start_ts = f"{start_date} 00:00:00"
-        end_ts = f"{end_date} 23:59:59"
+        instrument = self._instrument(symbol, exchange)
         payload = {
-            "exchange": _normalize_exchange(exchange),
-            "instrumentId": self._resolve_token(symbol, exchange),
+            "exchange": instrument["exchange"],
+            "instrumentId": instrument["instrumentId"],
             "interval": broker_interval,
-            "fromDate": start_ts,
-            "toDate": end_ts,
+            "fromDate": _format_iifl_date(start_date),
+            "toDate": _format_iifl_date(end_date),
         }
 
         response = self._post("/marketdata/historicaldata", payload)

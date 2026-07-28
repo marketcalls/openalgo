@@ -1,7 +1,11 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Motilal Oswal Parameters - See Motilal_Oswal.md documentation
 
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_symbol_info
+from utils.logging import get_logger
+from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+
+logger = get_logger(__name__)
 
 
 def map_exchange(exchange):
@@ -40,29 +44,122 @@ def reverse_map_exchange(exchange):
     return reverse_exchange_mapping.get(exchange, exchange)
 
 
-def transform_data(data, token):
+def transform_data(data, token, auth_token=None):
     """
     Transforms the OpenAlgo API request structure to Motilal Oswal expected structure.
+
+    Motilal blocks MARKET / SL-M orders on vendor (algo) channels with errorcode M01108
+    ("Cannot place Market orders for Algo Orders"). To keep order intent intact we apply
+    Market Price Protection (MPP) and convert:
+        MARKET -> LIMIT  at LTP +/- slab%
+        SL-M   -> STOPLOSS (SL) at trigger +/- slab%
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
     openalgo_exchange = data["exchange"]
     motilal_exchange = map_exchange(openalgo_exchange)
+    action = data["action"].upper()
+    pricetype = data["pricetype"]
+
+    price = data.get("price", "0")
+    trigger_price = data.get("trigger_price", "0")
+    order_type = map_order_type(pricetype)
+
+    # MPP for MARKET orders: fetch LTP, compute protected limit price
+    if pricetype == "MARKET":
+        logger.info(
+            f"MPP: MARKET order detected for Symbol={data['symbol']}, "
+            f"Exchange={openalgo_exchange}, Action={action}"
+        )
+        try:
+            if auth_token:
+                from broker.motilal.api.data import BrokerData
+
+                broker_data = BrokerData(auth_token)
+                quote_data = broker_data.get_quotes(data["symbol"], openalgo_exchange)
+                ltp = float(quote_data.get("ltp", 0)) if quote_data else 0
+
+                if ltp > 0:
+                    instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                    tick_size = None
+                    symbol_info = get_symbol_info(data["symbol"], openalgo_exchange)
+                    if symbol_info and symbol_info.tick_size:
+                        tick_size = symbol_info.tick_size
+
+                    protected_price = calculate_protected_price(
+                        price=ltp,
+                        action=action,
+                        symbol=data["symbol"],
+                        instrument_type=instrument_type,
+                        tick_size=tick_size,
+                    )
+                    price = str(protected_price)
+                    order_type = "LIMIT"
+                    logger.info(
+                        f"MPP Conversion Complete: Symbol={data['symbol']}, "
+                        f"OrderType=MARKET->LIMIT, FinalPrice={protected_price}"
+                    )
+                else:
+                    logger.warning(
+                        f"MPP: LTP unavailable for {data['symbol']}, sending MARKET as-is"
+                    )
+            else:
+                logger.warning(
+                    f"MPP: No auth_token for {data['symbol']}, cannot fetch LTP"
+                )
+        except Exception as e:
+            logger.error(
+                f"MPP Error for MARKET {data['symbol']}: {e}. Sending MARKET as-is"
+            )
+
+    # MPP for SL-M orders: convert to STOPLOSS with protected limit price
+    elif pricetype == "SL-M":
+        try:
+            tp = float(trigger_price)
+        except (TypeError, ValueError):
+            tp = 0.0
+        if tp > 0:
+            try:
+                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                tick_size = None
+                symbol_info = get_symbol_info(data["symbol"], openalgo_exchange)
+                if symbol_info and symbol_info.tick_size:
+                    tick_size = symbol_info.tick_size
+
+                protected_price = calculate_protected_price(
+                    price=tp,
+                    action=action,
+                    symbol=data["symbol"],
+                    instrument_type=instrument_type,
+                    tick_size=tick_size,
+                )
+                price = str(protected_price)
+                order_type = "STOPLOSS"
+                logger.info(
+                    f"MPP Conversion Complete: Symbol={data['symbol']}, "
+                    f"OrderType=SL-M->STOPLOSS, Trigger={tp}, LimitPrice={protected_price}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"MPP Error for SL-M {data['symbol']}: {e}. Sending SL-M as-is"
+                )
+        else:
+            logger.warning(
+                f"MPP: trigger_price=0 for SL-M {data['symbol']}, sending as-is"
+            )
 
     # Basic mapping for Motilal Oswal
     transformed = {
         "apikey": data["apikey"],
         "symboltoken": token,
-        "buyorsell": data[
-            "action"
-        ].upper(),  # Motilal uses 'buyorsell' instead of 'transactiontype'
+        "buyorsell": action,  # Motilal uses 'buyorsell' instead of 'transactiontype'
         "exchange": motilal_exchange,
-        "ordertype": map_order_type(data["pricetype"]),
+        "ordertype": order_type,
         "producttype": map_product_type(
             data["product"], openalgo_exchange
         ),  # Pass OpenAlgo exchange for context
         "orderduration": "DAY",  # Motilal uses 'orderduration' instead of 'duration'
-        "price": data.get("price", "0"),
-        "triggerprice": data.get("trigger_price", "0"),
+        "price": price,
+        "triggerprice": trigger_price,
         "disclosedquantity": data.get("disclosed_quantity", "0"),
         "quantity": data["quantity"],
         "amoorder": "N",  # AMO-Order (Y or N)

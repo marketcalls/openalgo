@@ -44,7 +44,7 @@ OPENALGO_DIR="$SCRIPT_DIR"
 XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
 
 # Valid brokers list
-VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 
 # Banner
 echo ""
@@ -175,12 +175,29 @@ do_setup() {
     log_info "Updating configuration with secure keys..."
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS sed syntax
-        sed -i '' "s/3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84/$APP_KEY/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i '' "s/a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
+        sed -i '' "s/OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE/$APP_KEY/g" "$OPENALGO_DIR/$ENV_FILE"
+        sed -i '' "s/OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
     else
         # Linux sed syntax
-        sed -i "s/3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84/$APP_KEY/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i "s/a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
+        sed -i "s/OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE/$APP_KEY/g" "$OPENALGO_DIR/$ENV_FILE"
+        sed -i "s/OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
+    fi
+    # .env is now bind-mounted read+write into the container so auto-rotation
+    # of compromised APP_KEY/API_KEY_PEPPER (utils/env_check.py) can run.
+    # Container runs as appuser (UID 1000); chown UID 1000 + chmod 600 gives
+    # appuser read+write while keeping the file private on the host.
+    # On Linux this needs sudo if the script wasn't run as root; on macOS
+    # Docker Desktop handles UID mapping in its VM so chown is a no-op.
+    if [ "$(uname)" = "Linux" ]; then
+        if [ "$EUID" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+            sudo chown 1000:1000 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+            sudo chmod 600 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+        else
+            chown 1000:1000 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+            chmod 600 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
+        fi
+    else
+        chmod 600 "$OPENALGO_DIR/$ENV_FILE" 2>/dev/null || true
     fi
     log_ok "Secure keys generated and saved."
 
@@ -191,11 +208,11 @@ do_setup() {
     echo -e "${BLUE}  ========================================${NC}"
     echo ""
     echo "  Valid brokers:"
-    echo "  fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,"
+    echo "  fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge,"
     echo "  definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,"
-    echo "  groww, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,"
+    echo "  groww, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,"
     echo "  mstock, nubra, paytm, pocketful, rmoney, samco, shoonya,"
-    echo "  tradejini, upstox, wisdom, zebu, zerodha"
+    echo "  tradejini, tradesmart, upstox, wisdom, zebu, zerodha"
     echo ""
 
     # Get broker name with validation
@@ -428,7 +445,7 @@ do_start() {
         -v "$OPENALGO_DIR/log:/app/log" \
         -v "$OPENALGO_DIR/keys:/app/keys" \
         -v "$OPENALGO_DIR/tmp:/app/tmp" \
-        -v "$OPENALGO_DIR/.env:/app/.env:ro" \
+        -v "$OPENALGO_DIR/.env:/app/.env" \
         --restart unless-stopped \
         "$IMAGE"; then
 

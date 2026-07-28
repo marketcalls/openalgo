@@ -25,6 +25,23 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/placeorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/placeorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "Python",
+  "symbol": "NHPC",
+  "action": "BUY",
+  "exchange": "NSE",
+  "pricetype": "MARKET",
+  "product": "MIS",
+  "quantity": "1"
+}'
+```
+
 ## Sample API Response
 
 ```json
@@ -86,10 +103,10 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/placeorder
 | strategy | Strategy identifier for tracking | Mandatory | - |
 | symbol | Trading symbol (e.g., RELIANCE, NIFTY30JAN25FUT) | Mandatory | - |
 | action | Order action: BUY or SELL | Mandatory | - |
-| exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Mandatory | - |
-| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Mandatory | - |
-| product | Product type: MIS, CNC, NRML | Mandatory | - |
-| quantity | Order quantity | Mandatory | - |
+| exchange | Exchange code accepted by the shared validation constants | Mandatory | - |
+| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Optional | MARKET |
+| product | Product type: MIS, CNC, NRML | Optional | MIS |
+| quantity | Positive numeric order quantity | Mandatory | - |
 | price | Order price (required for LIMIT and SL orders) | Optional | 0 |
 | trigger_price | Trigger price (required for SL and SL-M orders) | Optional | 0 |
 | disclosed_quantity | Disclosed quantity for iceberg orders | Optional | 0 |
@@ -114,6 +131,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/placeorder
   - Futures: `NIFTY30JAN25FUT`
   - Options: `NIFTY30JAN2525000CE`
 - Use **MIS** for intraday, **CNC** for equity delivery, **NRML** for F&O overnight positions
+- Fractional quantities are accepted only when `exchange` is `CRYPTO`. Other exchanges reject fractional values during schema validation.
 
 ---
 

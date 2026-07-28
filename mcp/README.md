@@ -2,6 +2,17 @@
 
 This is a Model Context Protocol (MCP) server that provides trading and market data functionality through the OpenAlgo platform. It enables AI assistants to execute trades, manage positions, and retrieve market data directly from supported brokers.
 
+## Two transports
+
+| Transport | Audience | Status |
+|---|---|---|
+| **stdio** (this guide) | Claude Desktop, Cursor, Windsurf — local processes spawning `mcp/mcpserver.py` | shipped, stable |
+| **HTTP / SSE with OAuth** | claude.ai, chatgpt.com, claude mobile — hosted clients reaching your install over HTTPS | available on the `remotemcp` branch — see [`install/Remote-MCP-readme.md`](../install/Remote-MCP-readme.md) |
+
+Both transports share the same tool registry. Enabling the remote
+transport does not change anything about the local stdio setup
+documented below.
+
 ## Prerequisites
 
 ### 1. OpenAlgo Server Setup
@@ -156,8 +167,9 @@ The MCP server provides the following categories of tools:
 - `get_openalgo_version` - Check OpenAlgo version
 - `validate_order_constants` - Display valid order parameters
 - `send_telegram_alert` - Send Telegram notifications
-- `get_holidays` - Get trading holidays for a year
-- `get_timings` - Get exchange trading timings for a date
+- `get_holidays` - Get trading holidays for a year (year is optional — defaults to current year)
+- `get_timings` - Get exchange trading timings for a date (date is optional — defaults to today)
+- `check_holiday` - Quick pre-trade check: is a given date a holiday on a specific exchange?
 - `analyzer_status` - Get current analyzer mode status
 - `analyzer_toggle` - Toggle between analyze (simulated) and live trading mode
 - `calculate_margin` - Calculate margin requirements for positions
@@ -176,8 +188,10 @@ Once configured, you can ask your AI assistant to:
 - "Calculate the synthetic future price for NIFTY 25NOV25 expiry"
 - "Get option Greeks for NIFTY 26000 CE expiring on 25NOV25"
 - "Show me the option chain for NIFTY with 30DEC25 expiry"
-- "What are the trading holidays in 2025?"
+- "What are the trading holidays in 2026?"
 - "What are the market timings for today?"
+- "Is 2026-01-26 a holiday on NSE?"
+- "Get the last 5 days of NIFTY 1m candles from the local Historify DB" (uses `source='db'`)
 - "Get all instruments for NSE"
 
 ## Supported Exchanges
@@ -193,7 +207,7 @@ Once configured, you can ask your AI assistant to:
 
 ## Security Note
 
-⚠️ **Important**: This server is designed for local use. For production environments, consider implementing additional security measures such as environment variables for sensitive data and restricting network access.
+**Important**: This server is designed for local use. For production environments, consider implementing additional security measures such as environment variables for sensitive data and restricting network access.
 
 ## Troubleshooting
 

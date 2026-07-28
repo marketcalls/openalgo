@@ -1,7 +1,6 @@
 import { ArrowLeft, Clock, FileCode, Info, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -9,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { SCHEDULE_DAYS } from '@/types/python-strategy'
+import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS, STRATEGY_EXCHANGES } from '@/types/python-strategy'
+import { showToast } from '@/utils/toast'
 
 const EXAMPLE_STRATEGY = `"""
 Example OpenAlgo Strategy
@@ -58,15 +58,39 @@ export default function NewPythonStrategy() {
   const [showExample, setShowExample] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
+  // Exchange drives the holiday/session calendar
+  const [exchange, setExchange] = useState<string>('NSE')
+
   // Schedule fields with defaults (Mon-Fri, 9:00 AM - 4:00 PM IST)
   const [startTime, setStartTime] = useState('09:00')
   const [stopTime, setStopTime] = useState('16:00')
   const [selectedDays, setSelectedDays] = useState<string[]>(['mon', 'tue', 'wed', 'thu', 'fri'])
 
+  const isCrypto = exchange === CRYPTO_EXCHANGE_VALUE
+
+  // When exchange changes, apply sensible defaults (idempotent for explicit edits)
+  const handleExchangeChange = (value: string) => {
+    setExchange(value)
+    if (value === CRYPTO_EXCHANGE_VALUE) {
+      // CRYPTO: 24/7, all days
+      setStartTime('00:00')
+      setStopTime('23:59')
+      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+    } else if (value === 'MCX') {
+      // MCX: full session including evening
+      setStartTime('09:00')
+      setStopTime('23:55')
+      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri'])
+    } else {
+      // NSE/BSE/NFO/BFO equity defaults
+      setStartTime('09:15')
+      setStopTime('15:30')
+      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri'])
+    }
+  }
+
   const handleDayToggle = (day: string) => {
-    setSelectedDays((prev) =>
-      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
-    )
+    setSelectedDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]))
   }
 
   const validateForm = () => {
@@ -139,6 +163,7 @@ export default function NewPythonStrategy() {
         start_time: startTime,
         stop_time: stopTime,
         days: selectedDays,
+        exchange,
       })
 
       if (response.status === 'success') {
@@ -247,6 +272,30 @@ export default function NewPythonStrategy() {
               {errors.file && <p className="text-sm text-red-500">{errors.file}</p>}
             </div>
 
+            {/* Exchange Section */}
+            <div className="space-y-2 border-t pt-6">
+              <Label htmlFor="exchange">Exchange</Label>
+              <select
+                id="exchange"
+                value={exchange}
+                onChange={(e) => handleExchangeChange(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {STRATEGY_EXCHANGES.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Drives the holiday calendar and effective trading window for this strategy. Each
+                exchange has its own holiday list and per-date session timings (e.g. MCX may run a
+                partial 17:00-23:55 session on a date when NSE/BSE are fully closed — the host
+                follows whatever the calendar DB says, not a hardcoded "evening" rule). CRYPTO
+                ignores holidays entirely.
+              </p>
+            </div>
+
             {/* Schedule Section */}
             <div className="space-y-4 border-t pt-6">
               <div className="flex items-center gap-2">
@@ -254,7 +303,9 @@ export default function NewPythonStrategy() {
                 <h3 className="font-medium">Schedule</h3>
               </div>
               <p className="text-sm text-muted-foreground">
-                Configure when this strategy should run. All times are in IST.
+                {isCrypto
+                  ? 'CRYPTO runs 24/7. The schedule below limits when this script is allowed to run.'
+                  : 'Configure when this strategy should run. All times are in IST.'}
               </p>
 
               {/* Time Inputs */}
@@ -298,13 +349,21 @@ export default function NewPythonStrategy() {
                       }`}
                       onClick={() => handleDayToggle(day.value)}
                     >
-                      <div className={`h-4 w-4 rounded border flex items-center justify-center ${
-                        selectedDays.includes(day.value)
-                          ? 'bg-primary-foreground border-primary-foreground'
-                          : 'border-current'
-                      }`}>
+                      <div
+                        className={`h-4 w-4 rounded border flex items-center justify-center ${
+                          selectedDays.includes(day.value)
+                            ? 'bg-primary-foreground border-primary-foreground'
+                            : 'border-current'
+                        }`}
+                      >
                         {selectedDays.includes(day.value) && (
-                          <svg className="h-3 w-3 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                          <svg
+                            className="h-3 w-3 text-primary"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                          >
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         )}
@@ -315,7 +374,8 @@ export default function NewPythonStrategy() {
                 </div>
                 {errors.days && <p className="text-sm text-red-500">{errors.days}</p>}
                 <p className="text-xs text-muted-foreground">
-                  Select the days when this strategy should run. Weekends can be enabled for special trading sessions.
+                  Select the days when this strategy should run. Weekends can be enabled for special
+                  trading sessions.
                 </p>
               </div>
             </div>

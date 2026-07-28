@@ -10,7 +10,7 @@ This audit examines the WebSocket implementation in OpenAlgo's React frontend, f
 
 ## Implementation Status (2026-02-03)
 
-### ✅ Completed Items
+### Completed Items
 
 | Feature | Description | Files |
 |---------|-------------|-------|
@@ -457,21 +457,21 @@ function Positions() {
 
 ## 7. Action Items
 
-### 7.1 Immediate (P0) - ✅ COMPLETED
+### 7.1 Immediate (P0) - COMPLETED
 
 | # | Task | Status | Files Modified |
 |---|------|--------|----------------|
-| 1 | Create `usePageVisibility` hook | ✅ Done | `/hooks/usePageVisibility.ts` |
-| 2 | Integrate visibility check in `useMarketData` auto-reconnect | ✅ Done | `/hooks/useMarketData.ts` |
-| 3 | Add `pauseWhenHidden` option to `useMarketData` | ✅ Done | `/hooks/useMarketData.ts` |
+| 1 | Create `usePageVisibility` hook | Done | `/hooks/usePageVisibility.ts` |
+| 2 | Integrate visibility check in `useMarketData` auto-reconnect | Done | `/hooks/useMarketData.ts` |
+| 3 | Add `pauseWhenHidden` option to `useMarketData` | Done | `/hooks/useMarketData.ts` |
 
-### 7.2 Short-term (P1) - ✅ PARTIALLY COMPLETED
+### 7.2 Short-term (P1) - PARTIALLY COMPLETED
 
 | # | Task | Status | Files Modified |
 |---|------|--------|----------------|
 | 4 | Create centralized `WebSocketService` with Zustand | Pending | - |
-| 5 | Add stale data indicator to Positions/Holdings pages | ✅ Done | `/pages/Positions.tsx`, `/pages/Holdings.tsx` |
-| 6 | Implement visibility-aware polling in all data-fetching pages | ✅ Done (Positions/Holdings) | `/pages/Positions.tsx`, `/pages/Holdings.tsx` |
+| 5 | Add stale data indicator to Positions/Holdings pages | Done | `/pages/Positions.tsx`, `/pages/Holdings.tsx` |
+| 6 | Implement visibility-aware polling in all data-fetching pages | Done (Positions/Holdings) | `/pages/Positions.tsx`, `/pages/Holdings.tsx` |
 
 ### 7.3 Medium-term (P2)
 

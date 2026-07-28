@@ -2,43 +2,43 @@
 // Left sidebar with draggable node items organized by category
 
 import {
-  Clock,
-  ShoppingCart,
-  Zap,
-  TrendingUp,
-  XCircle,
-  Square,
-  Briefcase,
-  Wallet,
-  Send,
+  BarChart3,
   Bell,
-  Timer,
+  Briefcase,
+  Calculator,
+  Calendar,
+  CalendarX,
+  ClipboardList,
+  Clock,
+  FileSearch,
+  FileText,
+  Globe,
+  Grid3X3,
+  Group,
   Hourglass,
   Layers,
-  Package,
-  Split,
-  Pencil,
-  FileSearch,
-  BarChart3,
   Layers3,
-  Calendar,
-  Variable,
-  FileText,
-  Group,
-  Webhook,
-  Globe,
-  Tag,
-  Target,
-  ClipboardList,
-  Receipt,
-  Calculator,
-  Grid3X3,
-  CalendarX,
+  Package,
+  Pencil,
   Radio,
   RadioTower,
-  WifiOff,
+  Receipt,
+  Send,
   Shield,
+  ShoppingCart,
   Sigma,
+  Split,
+  Square,
+  Tag,
+  Target,
+  Timer,
+  TrendingUp,
+  Variable,
+  Wallet,
+  Webhook,
+  WifiOff,
+  XCircle,
+  Zap,
 } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -64,12 +64,7 @@ function NodeItem({ type, label, description, icon, color, onDragStart }: NodeIt
       )}
     >
       <div className="flex items-center gap-2.5">
-        <div
-          className={cn(
-            'flex h-7 w-7 items-center justify-center rounded-md',
-            color
-          )}
-        >
+        <div className={cn('flex h-7 w-7 items-center justify-center rounded-md', color)}>
           {icon}
         </div>
         <div className="min-w-0 flex-1">
@@ -472,9 +467,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
     <div className="flex h-full flex-col border-r border-border bg-card">
       <div className="shrink-0 border-b border-border p-3">
         <h2 className="text-sm font-semibold">Nodes</h2>
-        <p className="text-[10px] text-muted-foreground">
-          Drag nodes to the canvas
-        </p>
+        <p className="text-[10px] text-muted-foreground">Drag nodes to the canvas</p>
       </div>
       <Tabs defaultValue="triggers" className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0 border-b border-border px-1 py-1.5">
@@ -504,11 +497,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {triggers.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
                 ))}
               </div>
             </ScrollArea>
@@ -517,11 +506,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {actions.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
                 ))}
               </div>
             </ScrollArea>
@@ -530,11 +515,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {data.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
                 ))}
               </div>
             </ScrollArea>
@@ -543,11 +524,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {streaming.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
                 ))}
               </div>
             </ScrollArea>
@@ -556,11 +533,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {conditions.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
                 ))}
               </div>
             </ScrollArea>
@@ -569,11 +542,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {utilities.map((node) => (
-                  <NodeItem
-                    key={node.type}
-                    {...node}
-                    onDragStart={onDragStart}
-                  />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
                 ))}
               </div>
             </ScrollArea>

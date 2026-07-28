@@ -1,7 +1,6 @@
 import { ArrowLeft, FileText, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -45,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import type { Strategy, StrategySymbolMapping, SymbolSearchResult } from '@/types/strategy'
 import { EXCHANGES, getProductTypes } from '@/types/strategy'
+import { showToast } from '@/utils/toast'
 
 export default function ConfigureSymbols() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -77,16 +77,16 @@ export default function ConfigureSymbols() {
       const data = await strategyApi.getStrategy(Number(strategyId))
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategy', 'strategy')
     } finally {
       setLoading(false)
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchStrategy should not re-run on every render
   useEffect(() => {
     fetchStrategy()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Debounced symbol search
@@ -100,7 +100,7 @@ export default function ConfigureSymbols() {
         setSearchLoading(true)
         const results = await strategyApi.searchSymbols(query, exchange || undefined)
         setSearchResults(results)
-      } catch (error) {
+      } catch (_error) {
       } finally {
         setSearchLoading(false)
       }
@@ -167,7 +167,7 @@ export default function ConfigureSymbols() {
       } else {
         showToast.error(response.message || 'Failed to add symbol', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to add symbol', 'strategy')
     } finally {
       setSubmitting(false)
@@ -188,13 +188,16 @@ export default function ConfigureSymbols() {
 
       if (response.status === 'success') {
         const { added = 0, failed = 0 } = response.data || {}
-        showToast.success(`Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`, 'strategy')
+        showToast.success(
+          `Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`,
+          'strategy'
+        )
         setCsvData('')
         fetchStrategy()
       } else {
         showToast.error(response.message || 'Failed to add symbols', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to add symbols', 'strategy')
     } finally {
       setSubmitting(false)
@@ -212,7 +215,7 @@ export default function ConfigureSymbols() {
       } else {
         showToast.error(response.message || 'Failed to remove symbol', 'strategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to remove symbol', 'strategy')
     } finally {
       setDeleteDialogOpen(false)
@@ -478,6 +481,7 @@ export default function ConfigureSymbols() {
                           setMappingToDelete(mapping.id)
                           setDeleteDialogOpen(true)
                         }}
+                        aria-label="Delete symbol mapping"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

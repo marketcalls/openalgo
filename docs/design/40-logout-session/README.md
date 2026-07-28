@@ -1,320 +1,57 @@
-# 40 - Logout & Session Expiry
+# 40 - Logout And Session Lifecycle
 
-## Overview
+## Session Types
 
-OpenAlgo implements automatic session expiry at a configurable time daily (default 3:00 AM IST) to ensure security and force re-authentication. When a session expires or user logs out, multiple caches are cleared and tokens are revoked.
+OpenAlgo maintains separate but related state:
 
-## Session Expiry Flow
+| State | Meaning |
+|---|---|
+| Flask app session | Browser is authenticated to the local application |
+| Active-session row | Device/IP/login/last-seen audit for the app session |
+| Broker auth row | Installation's current broker and encrypted auth/feed tokens |
+| OpenAlgo API key | External/internal service authentication that resolves the broker row |
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Session Expiry Architecture                           │
-└──────────────────────────────────────────────────────────────────────────────┘
+Multiple app devices share one broker auth row and one server-side broker market-data feed.
 
-                         Every Request
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      @app.before_request                                     │
-│                      check_session_expiry()                                  │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Skip for:                                                           │   │
-│  │  - Static files (/static/)                                           │   │
-│  │  - API endpoints (/api/)                                             │   │
-│  │  - Public routes (/, /auth/login, /setup, etc.)                      │   │
-│  │  - OAuth callbacks (/auth/broker/)                                   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                               │
-│                              ▼                                               │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  is_session_valid()?                                                 │   │
-│  │                                                                      │   │
-│  │  1. Check session['logged_in'] exists                                │   │
-│  │  2. Check session['login_time'] exists                               │   │
-│  │  3. Compare current time with SESSION_EXPIRY_TIME                    │   │
-│  │     - If now > expiry_time AND login_time < expiry_time → EXPIRED   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                               │
-│                    ┌─────────┴─────────┐                                    │
-│                    │                   │                                    │
-│                 Valid              Expired                                   │
-│                    │                   │                                    │
-│                    ▼                   ▼                                    │
-│              Continue            revoke_user_tokens()                       │
-│              Request             session.clear()                            │
-│                                  Redirect to login                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+## Login And Heartbeat
 
-## Session Expiry Logic
+Successful app/broker login assigns `session_id` and registers an `active_sessions` row. The database caps the user at five rows, replaces an existing same-user/same-IP row, and removes the oldest at the cap.
 
-**Location:** `utils/session.py`
+The React app reads `/auth/session-status`. For logged-in sessions, that request touches `last_seen` at most once per 30 seconds using a timestamp in the signed Flask session. This makes the security dashboard liveness field meaningful without writing on every poll.
 
-### Configuration
+## Broker Token Rollover
 
-```bash
-# .env
-SESSION_EXPIRY_TIME=03:00  # 3:00 AM IST (24-hour format)
-```
+The default daily expiry time is 03:00 IST. `DISABLE_SESSION_EXPIRY=true` supports 24/7 crypto deployments. Request guards apply expiry and revoke broker access according to this policy.
 
-### Expiry Check
+Broker expiry does not necessarily invalidate the local app session. When `/auth/session-status` finds an authenticated browser but no usable broker token, it preserves `logged_in` and returns `broker_session_expired: true`. The UI can then render broker reconnect and `/auth/broker` can admit the user.
 
-```python
-def is_session_valid():
-    """Check if the current session is valid"""
-    if not session.get('logged_in'):
-        return False
+## Multi-Device Resume
 
-    if 'login_time' not in session:
-        return False
+On resume, `upsert_auth()` compares decrypted broker/feed tokens plus broker and revoke state. If nothing material changed, it does not publish a teardown invalidation. This prevents a second browser login from disconnecting the feed used by the first device.
 
-    now_ist = datetime.now(pytz.timezone('Asia/Kolkata'))
-    login_time = datetime.fromisoformat(session['login_time'])
+If tokens materially change or are revoked, cache/feed invalidation remains required.
 
-    # Get configured expiry time (default 03:00)
-    expiry_time = os.getenv('SESSION_EXPIRY_TIME', '03:00')
-    hour, minute = map(int, expiry_time.split(':'))
+## Explicit Logout
 
-    # Today's expiry time
-    daily_expiry = now_ist.replace(hour=hour, minute=minute, second=0)
+Logout removes the current active-session row, clears the Flask session, and follows the route's broker-token policy. The route is explicitly CSRF-exempt in app registration because both supported logout forms must work; other session-changing routes retain CSRF protection.
 
-    # Expired if: current time > expiry AND login was before expiry
-    if now_ist > daily_expiry and login_time < daily_expiry:
-        return False
+## Account Security Events
 
-    return True
-```
+- Password change clears all active-session rows, emits `force_logout`, and clears the current cookie.
+- Password reset and setup-sensitive flows clear or revoke session state according to their route logic.
+- Active-session APIs under auth and security are read-only; there is no documented endpoint for remotely revoking one selected device.
 
-### Visual Timeline
+## Frontend Behavior
 
-```
-Day 1                                           Day 2
-  │                                               │
-  │  Login at                                     │
-  │  10:00 AM                                     │
-  │     │                                         │
-  │     ▼                                         │
-  │  ───────────────────────────────────────────  │
-  │                           │                   │
-  │                        3:00 AM                │
-  │                     (Expiry Time)             │
-  │                           │                   │
-  │                           ▼                   │
-  │                    SESSION EXPIRED            │
-  │                           │                   │
-  │                    Must re-login              │
-  │                                               │
-```
+`AuthSync` restores user, broker, API key, app mode, capabilities, and active-session count. A normal unauthenticated response clears the Zustand stores. Network errors preserve existing state for the current render rather than forcing a false logout.
 
-## Token Revocation Process
-
-When session expires or user logs out, these cleanup actions occur:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    revoke_user_tokens()                          │
-└─────────────────────────────────────────────────────────────────┘
-
-                         User Session
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  1. Clear Auth Cache                                             │
-│     auth_cache[f"auth-{username}"] → delete                     │
-│     feed_token_cache[f"feed-{username}"] → delete               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  2. Clear Symbol Cache                                           │
-│     clear_cache_on_logout()                                      │
-│     - Remove BrokerSymbolCache for user                         │
-│     - Free memory from 100K+ symbols                            │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  3. Clear Settings Cache                                         │
-│     clear_settings_cache()                                       │
-│     - Remove user preferences from memory                       │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  4. Clear Strategy Cache                                         │
-│     clear_strategy_cache()                                       │
-│     - Remove strategy configurations                            │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  5. Clear Telegram Cache                                         │
-│     clear_telegram_cache()                                       │
-│     - Remove bot configurations                                 │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  6. Revoke Auth Token in Database                                │
-│     upsert_auth(username, "", "", revoke=True)                  │
-│     - Set is_revoked = True                                     │
-│     - Encrypted token becomes invalid                           │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Implementation
-
-### revoke_user_tokens Function
-
-```python
-def revoke_user_tokens():
-    """Revoke auth tokens for the current user when session expires"""
-    if 'user' in session:
-        username = session.get('user')
-
-        # 1. Clear auth caches
-        cache_key_auth = f"auth-{username}"
-        cache_key_feed = f"feed-{username}"
-        if cache_key_auth in auth_cache:
-            del auth_cache[cache_key_auth]
-        if cache_key_feed in feed_token_cache:
-            del feed_token_cache[cache_key_feed]
-
-        # 2. Clear symbol cache
-        from database.master_contract_cache_hook import clear_cache_on_logout
-        clear_cache_on_logout()
-
-        # 3. Clear settings cache
-        from database.settings_db import clear_settings_cache
-        clear_settings_cache()
-
-        # 4. Clear strategy cache
-        from database.strategy_db import clear_strategy_cache
-        clear_strategy_cache()
-
-        # 5. Clear telegram cache
-        from database.telegram_db import clear_telegram_cache
-        clear_telegram_cache()
-
-        # 6. Revoke in database
-        upsert_auth(username, "", "", revoke=True)
-```
-
-## Session Decorator
-
-```python
-def check_session_validity(f):
-    """Decorator to check session validity before executing route"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not is_session_valid():
-            # Revoke tokens before clearing session
-            revoke_user_tokens()
-            session.clear()
-
-            # Handle AJAX vs browser requests
-            if is_ajax_request():
-                return jsonify({
-                    'status': 'error',
-                    'error': 'session_expired',
-                    'message': 'Your session has expired. Please log in again.'
-                }), 401
-
-            return redirect(url_for('auth.login'))
-
-        return f(*args, **kwargs)
-    return decorated_function
-```
-
-## Manual Logout
-
-When user clicks logout:
-
-```python
-# blueprints/auth.py
-@auth_bp.route('/logout')
-def logout():
-    """Handle user logout"""
-    if 'user' in session:
-        username = session.get('user')
-
-        # Revoke tokens
-        revoke_user_tokens()
-
-        # Clear session
-        session.clear()
-
-        flash('You have been logged out successfully', 'success')
-
-    return redirect(url_for('auth.login'))
-```
-
-## What Gets Cleared
-
-| Cache/Data | Location | Purpose | Cleared On |
-|------------|----------|---------|------------|
-| Auth Token Cache | `auth_cache` (TTLCache) | Broker auth tokens | Logout/Expiry |
-| Feed Token Cache | `feed_token_cache` (TTLCache) | WebSocket tokens | Logout/Expiry |
-| Symbol Cache | `BrokerSymbolCache` | 100K+ symbols | Logout/Expiry |
-| Settings Cache | `settings_cache` | User preferences | Logout/Expiry |
-| Strategy Cache | `strategy_cache` | Strategy configs | Logout/Expiry |
-| Telegram Cache | `telegram_cache` | Bot settings | Logout/Expiry |
-| Database Token | `auth` table | `is_revoked=True` | Logout/Expiry |
-| Flask Session | Server-side | All session data | Logout/Expiry |
-
-## Why 3:00 AM IST?
-
-The default expiry time is set to 3:00 AM IST for several reasons:
-
-1. **Market Closed**: Indian markets are closed (NSE: 9:15 AM - 3:30 PM)
-2. **Low Activity**: Minimal user activity during this time
-3. **Daily Reset**: Forces fresh authentication each trading day
-4. **Security**: Limits exposure if credentials are compromised
-5. **Token Refresh**: Ensures broker tokens are refreshed daily
-
-## Configuration Options
-
-```bash
-# .env configuration
-SESSION_EXPIRY_TIME=03:00    # Default: 3:00 AM IST
-
-# Alternative configurations
-SESSION_EXPIRY_TIME=03:30    # 3:30 AM IST (after broker token refresh)
-SESSION_EXPIRY_TIME=00:00    # Midnight
-SESSION_EXPIRY_TIME=15:45    # After market close
-```
-
-## Session Lifetime Calculation
-
-```python
-def get_session_expiry_time():
-    """Get session expiry time set to configured time next occurrence"""
-    now_ist = datetime.now(pytz.timezone('Asia/Kolkata'))
-
-    # Get configured expiry time
-    expiry_time = os.getenv('SESSION_EXPIRY_TIME', '03:00')
-    hour, minute = map(int, expiry_time.split(':'))
-
-    target_time_ist = now_ist.replace(hour=hour, minute=minute, second=0)
-
-    # If current time is past target, set to next day
-    if now_ist > target_time_ist:
-        target_time_ist += timedelta(days=1)
-
-    remaining_time = target_time_ist - now_ist
-    return remaining_time
-```
-
-## Key Files Reference
+## Key Files
 
 | File | Purpose |
-|------|---------|
-| `utils/session.py` | Session validation and token revocation |
-| `blueprints/auth.py` | Login/logout endpoints |
-| `app.py` | `check_session_expiry` before_request hook |
-| `database/auth_db.py` | Auth token storage |
-| `database/master_contract_cache_hook.py` | Symbol cache clearing |
-| `database/settings_db.py` | Settings cache |
-| `database/strategy_db.py` | Strategy cache |
-| `database/telegram_db.py` | Telegram cache |
+|---|---|
+| `blueprints/auth.py` | Session status, heartbeat, login, logout, password change |
+| `database/auth_db.py` | ActiveSession model, cap, last-seen, token upsert/revocation |
+| `app.py` | Daily expiry request guard and CSRF exemptions |
+| `utils/session.py` | Protected blueprint checks |
+| `frontend/src/components/auth/AuthSync.tsx` | SPA session restoration |
+| `frontend/src/stores/sessionStore.ts` | Active-session count |

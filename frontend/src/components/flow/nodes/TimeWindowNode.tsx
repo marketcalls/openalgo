@@ -3,9 +3,9 @@
  * Check if current time is within specified range
  */
 
-import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { Clock } from 'lucide-react'
+import { memo } from 'react'
 import { cn } from '@/lib/utils'
 import type { TimeWindowNodeData } from '@/types/flow'
 
@@ -16,12 +16,7 @@ interface TimeWindowNodeProps {
 
 export const TimeWindowNode = memo(({ data, selected }: TimeWindowNodeProps) => {
   return (
-    <div
-      className={cn(
-        'workflow-node node-condition min-w-[120px]',
-        selected && 'selected'
-      )}
-    >
+    <div className={cn('workflow-node node-condition min-w-[120px]', selected && 'selected')}>
       <Handle
         type="target"
         position={Position.Top}
@@ -34,9 +29,7 @@ export const TimeWindowNode = memo(({ data, selected }: TimeWindowNodeProps) => 
           </div>
           <div>
             <div className="text-xs font-medium leading-tight">Time</div>
-            <div className="text-[9px] text-muted-foreground">
-              Window
-            </div>
+            <div className="text-[9px] text-muted-foreground">Window</div>
           </div>
         </div>
         <div className="space-y-1">
@@ -49,9 +42,7 @@ export const TimeWindowNode = memo(({ data, selected }: TimeWindowNodeProps) => 
             <span className="mono-data text-[10px] font-medium">{data.endTime || '15:30'}</span>
           </div>
           {data.invertCondition && (
-            <div className="text-center text-[9px] text-muted-foreground">
-              Outside window
-            </div>
+            <div className="text-center text-[9px] text-muted-foreground">Outside window</div>
           )}
         </div>
         {/* Handle labels */}

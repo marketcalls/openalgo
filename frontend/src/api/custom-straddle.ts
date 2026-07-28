@@ -92,7 +92,10 @@ export const customStraddleApi = {
     return response.data
   },
 
-  getLotSize: async (underlying: string, exchange: string): Promise<{ status: string; lotsize: number | null }> => {
+  getLotSize: async (
+    underlying: string,
+    exchange: string
+  ): Promise<{ status: string; lotsize: number | null }> => {
     const response = await webClient.get<{ status: string; lotsize: number | null }>(
       `/straddlepnl/api/lotsize?underlying=${underlying}&exchange=${exchange}`
     )

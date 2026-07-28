@@ -35,14 +35,14 @@ def debug_smtp_connection():
         smtp_password = smtp_settings["smtp_password"]
         use_tls = smtp_settings.get("smtp_use_tls", True)
 
-        details.append(f"🔧 SMTP Server: {smtp_server}")
-        details.append(f"🔧 SMTP Port: {smtp_port}")
-        details.append(f"🔧 Username: {smtp_username}")
+        details.append(f"SMTP Server: {smtp_server}")
+        details.append(f"SMTP Port: {smtp_port}")
+        details.append(f"Username: {smtp_username}")
         details.append(
-            f"🔧 Password: {'*' * min(len(smtp_password), 16) if smtp_password else 'Not set'}"
+            f"Password: {'*' * min(len(smtp_password), 16) if smtp_password else 'Not set'}"
         )
-        details.append(f"🔧 Use TLS: {use_tls}")
-        details.append(f"🔧 HELO Hostname: {smtp_settings.get('smtp_helo_hostname') or 'default'}")
+        details.append(f"Use TLS: {use_tls}")
+        details.append(f"HELO Hostname: {smtp_settings.get('smtp_helo_hostname') or 'default'}")
 
         # Check for missing required settings
         if not smtp_server or not smtp_username or not smtp_password:
@@ -53,10 +53,10 @@ def debug_smtp_connection():
                 missing.append("Username")
             if not smtp_password:
                 missing.append("Password")
-            details.append(f"❌ Missing required settings: {', '.join(missing)}")
-            details.append("💡 Please save your SMTP settings first, then try again.")
+            details.append(f"Missing required settings: {', '.join(missing)}")
+            details.append("Please save your SMTP settings first, then try again.")
             details.append(
-                "💡 If settings don't persist after save, run: python upgrade/migrate_smtp_simple.py"
+                "If settings don't persist after save, run: python upgrade/migrate_smtp_simple.py"
             )
             return {
                 "success": False,
@@ -69,68 +69,68 @@ def debug_smtp_connection():
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
 
-        details.append("🔒 SSL Context created (hostname verification disabled)")
+        details.append("SSL Context created (hostname verification disabled)")
 
         # Choose connection method based on port
         if smtp_port == 465:
-            details.append("📡 Using SMTP_SSL (port 465)")
+            details.append("Using SMTP_SSL (port 465)")
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=context)
         else:
-            details.append(f"📡 Using SMTP with STARTTLS (port {smtp_port})")
+            details.append(f"Using SMTP with STARTTLS (port {smtp_port})")
             server = smtplib.SMTP(smtp_server, smtp_port)
 
             if use_tls:
-                details.append("🔒 Starting TLS...")
+                details.append("Starting TLS...")
                 server.starttls(context=context)
-                details.append("✅ TLS started successfully")
+                details.append("TLS started successfully")
 
-        details.append("🔌 Connection established")
+        details.append("Connection established")
 
         # Enable debug output
         server.set_debuglevel(1)
 
         # Test authentication
-        details.append("🔐 Attempting authentication...")
+        details.append("Attempting authentication...")
         server.login(smtp_username, smtp_password)
-        details.append("✅ Authentication successful")
+        details.append("Authentication successful")
 
         # Get server capabilities
         try:
             capabilities = server.ehlo_or_helo_if_needed()
             if hasattr(server, "ehlo_resp"):
-                details.append(f"📋 Server capabilities: {server.ehlo_resp.decode('utf-8')}")
+                details.append(f"Server capabilities: {server.ehlo_resp.decode('utf-8')}")
         except Exception as e:
-            details.append(f"⚠️ Could not get server capabilities: {e}")
+            details.append(f"Could not get server capabilities: {e}")
 
         server.quit()
-        details.append("✅ Connection closed successfully")
+        details.append("Connection closed successfully")
 
         success = True
         error_message = "Connection test successful"
 
     except smtplib.SMTPAuthenticationError as e:
         error_message = f"Authentication failed: {e}"
-        details.append(f"❌ Authentication error: {e}")
-        details.append("💡 Try using App Password for Gmail")
+        details.append(f"Authentication error: {e}")
+        details.append("Try using App Password for Gmail")
 
     except smtplib.SMTPServerDisconnected as e:
         error_message = f"Server disconnected: {e}"
-        details.append(f"❌ Server disconnected: {e}")
-        details.append("💡 Try different port (465 for SSL, 587 for STARTTLS)")
+        details.append(f"Server disconnected: {e}")
+        details.append("Try different port (465 for SSL, 587 for STARTTLS)")
 
     except smtplib.SMTPConnectError as e:
         error_message = f"Connection failed: {e}"
-        details.append(f"❌ Connection error: {e}")
-        details.append("💡 Check server address and port")
+        details.append(f"Connection error: {e}")
+        details.append("Check server address and port")
 
     except ssl.SSLError as e:
         error_message = f"SSL error: {e}"
-        details.append(f"❌ SSL error: {e}")
-        details.append("💡 Try toggling TLS setting or different port")
+        details.append(f"SSL error: {e}")
+        details.append("Try toggling TLS setting or different port")
 
     except Exception as e:
         error_message = f"Unexpected error: {e}"
-        details.append(f"❌ Unexpected error: {e}")
+        details.append(f"Unexpected error: {e}")
 
     return {"success": success, "message": error_message, "details": details}
 
@@ -167,7 +167,7 @@ def test_gmail_configurations():
     results = []
 
     for config in configurations:
-        results.append(f"\n🧪 Testing {config['name']}:")
+        results.append(f"\n Testing {config['name']}:")
         results.append(f"   Server: {config['server']}:{config['port']}")
         results.append(f"   Mode: {config['ssl_mode']}")
 
@@ -188,17 +188,17 @@ def test_gmail_configurations():
             server.login(smtp_settings["smtp_username"], smtp_settings["smtp_password"])
             server.quit()
 
-            results.append("   ✅ SUCCESS!")
+            results.append("SUCCESS!")
 
         except Exception as e:
-            results.append(f"   ❌ Failed: {e}")
+            results.append(f"Failed: {e}")
 
     return "\n".join(results)
 
 
 if __name__ == "__main__":
     # Can be run standalone for debugging
-    print("🔍 SMTP Debug Information")
+    print("SMTP Debug Information")
     print("=" * 50)
 
     result = debug_smtp_connection()
@@ -208,5 +208,5 @@ if __name__ == "__main__":
         print(f"  {detail}")
 
     if not result["success"]:
-        print("\n🧪 Testing different Gmail configurations:")
+        print("\n Testing different Gmail configurations:")
         print(test_gmail_configurations())

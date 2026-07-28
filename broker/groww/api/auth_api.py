@@ -75,7 +75,7 @@ def get_access_token_via_checksum(api_key, api_secret):
                 try:
                     error_data = response.json()
                     return None, f"HTTP error {response.status_code}: {error_data}"
-                except:
+                except Exception:
                     return None, f"HTTP error {response.status_code}: {response.text}"
 
         except Exception as e:

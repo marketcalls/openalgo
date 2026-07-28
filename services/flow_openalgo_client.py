@@ -324,7 +324,7 @@ class FlowOpenAlgoClient:
         self, symbol: str, exchange: str, product_type: str = None
     ) -> dict[str, Any]:
         """Get open position for a specific symbol.
-        Returns quantity matching standard OpenAlgo API response.
+        Returns quantity and pnl from the matching position in positionbook.
         """
         result = self.positionbook()
         if result.get("status") != "success":
@@ -332,7 +332,7 @@ class FlowOpenAlgoClient:
 
         positions = result.get("data", [])
         if not positions:
-            return {"status": "success", "quantity": 0}
+            return {"status": "success", "quantity": 0, "pnl": 0}
 
         for pos in positions:
             if pos.get("symbol") == symbol and pos.get("exchange") == exchange:
@@ -340,9 +340,13 @@ class FlowOpenAlgoClient:
                 pos_product = pos.get("product") or pos.get("product_type")
                 if product_type and pos_product != product_type:
                     continue
-                return {"status": "success", "quantity": pos.get("quantity", 0)}
+                return {
+                    "status": "success",
+                    "quantity": pos.get("quantity", 0),
+                    "pnl": pos.get("pnl", 0),
+                }
 
-        return {"status": "success", "quantity": 0}
+        return {"status": "success", "quantity": 0, "pnl": 0}
 
     # --- Options Operations ---
 
@@ -526,9 +530,16 @@ class FlowOpenAlgoClient:
         from datetime import datetime
 
         from database.telegram_db import get_telegram_user_by_username
-        from services.telegram_alert_service import telegram_alert_service
+        from services.telegram_alert_service import alert_executor, telegram_alert_service
 
         try:
+            # Respect the Telegram bot's on/off state. A running Flow strategy
+            # must not keep emitting alerts after the bot has been stopped
+            # (GitHub issue #1577).
+            if not telegram_alert_service.is_bot_active():
+                logger.info("Telegram bot is stopped; skipping Flow alert")
+                return {"status": "error", "error": "Telegram bot is stopped"}
+
             # Get username from API key
             from database.auth_db import verify_api_key
 
@@ -554,13 +565,11 @@ class FlowOpenAlgoClient:
             # Format the message with timestamp
             timestamp = datetime.now().strftime("%H:%M:%S")
             formatted_message = (
-                f"📢 *Flow Alert*\n─────────────────────\n{message}\n\n⏰ Time: {timestamp}"
+                f"*Flow Alert*\n─────────────────────\n{message}\n\nTime: {timestamp}"
             )
 
-            # Send alert using existing send_alert_sync method
-            from concurrent.futures import ThreadPoolExecutor
-
-            alert_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flow_telegram")
+            # Submit to the shared telegram_alert_service thread pool (non-blocking).
+            # Reuses the module-level executor instead of creating a per-call pool.
             alert_executor.submit(
                 telegram_alert_service.send_alert_sync, telegram_id, formatted_message
             )

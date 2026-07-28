@@ -14,10 +14,10 @@ RUN pip install --no-cache-dir uv && \
     rm -rf /root/.cache
 
 # ------------------------------ Frontend Builder Stage --------------------- #
-FROM node:20-bullseye-slim AS frontend-builder
+FROM node:22-bullseye-slim AS frontend-builder
 WORKDIR /app
 COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm install
+RUN cd frontend && npm ci
 COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
 
@@ -39,8 +39,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
-# 1 – user & workdir
-RUN useradd --create-home appuser
+# 1 – user & workdir.
+#     Pin appuser to UID/GID 1000 explicitly. install-docker.sh and
+#     install-docker-multi-custom-ssl.sh chown the host's .env to UID 1000
+#     before bind-mounting it into the container; if the container's
+#     appuser ends up at a different UID (which can happen on ARM64 base
+#     images that already have system users at low UIDs, or if the base
+#     image bumps its useradd defaults), the bind-mounted .env becomes
+#     unwritable to the running process. See marketcalls/openalgo#1394.
+RUN groupadd --gid 1000 appuser && \
+    useradd --create-home --uid 1000 --gid 1000 appuser
 WORKDIR /app
 # 2 – copy the ready-made venv and source with correct ownership
 COPY --from=python-builder --chown=appuser:appuser /app/.venv /app/.venv
@@ -49,7 +57,16 @@ COPY --chown=appuser:appuser . .
 COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
 # 4 – create required directories with proper ownership and permissions
 #     Also create empty .env file with write permissions for Railway deployment
+#
+#     NOTE: chown /app itself (not just its contents). WORKDIR creates /app
+#     as root:root mode 755, and that ownership persists even after we
+#     COPY --chown=appuser:appuser into it. Without this chown the running
+#     appuser process can read/execute /app but cannot create new files
+#     there — which breaks any atomic-write helper that needs to put a
+#     temp file in /app (e.g. utils/env_check.py rotating FERNET_SALT in
+#     /app/.env). See marketcalls/openalgo#1394.
 RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache /app/tmp/matplotlib /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys && \
+    chown appuser:appuser /app && \
     chown -R appuser:appuser /app/log /app/db /app/tmp /app/strategies /app/keys && \
     chmod -R 755 /app/strategies /app/log /app/tmp && \
     chmod 700 /app/keys && \

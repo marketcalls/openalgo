@@ -10,7 +10,6 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +24,7 @@ import {
 import { PythonEditor } from '@/components/ui/python-editor'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { PythonStrategy, PythonStrategyContent } from '@/types/python-strategy'
+import { showToast } from '@/utils/toast'
 
 export default function EditPythonStrategy() {
   const { strategyId } = useParams<{ strategyId: string }>()
@@ -58,7 +58,7 @@ export default function EditPythonStrategy() {
       setContent(contentData)
       setCode(contentData.content || '')
       setOriginalCode(contentData.content || '')
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to load strategy', 'pythonStrategy')
       navigate('/python')
     } finally {
@@ -66,9 +66,9 @@ export default function EditPythonStrategy() {
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-time fetch on mount; fetchData should not re-run on every render
   useEffect(() => {
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleSave = useCallback(async () => {
@@ -88,7 +88,7 @@ export default function EditPythonStrategy() {
       } else {
         showToast.error(response.message || 'Failed to save strategy', 'pythonStrategy')
       }
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to save strategy', 'pythonStrategy')
     } finally {
       setSaving(false)
@@ -135,7 +135,7 @@ export default function EditPythonStrategy() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       showToast.success('Strategy exported', 'pythonStrategy')
-    } catch (error) {
+    } catch (_error) {
       showToast.error('Failed to export strategy', 'pythonStrategy')
     }
   }

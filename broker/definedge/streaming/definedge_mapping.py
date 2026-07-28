@@ -1,4 +1,3 @@
-import logging
 
 
 class DefinedgeExchangeMapper:

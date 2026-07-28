@@ -1,5 +1,5 @@
 """
-🔁 OpenAlgo Python Bot is running.
+OpenAlgo Python Bot is running.
 """
 
 import time
@@ -62,16 +62,16 @@ def wait_for_execution():
         if order_status == "complete":
             entry_price = float(data["price"])
             stoploss_price = round(entry_price - STOPLOSS_BUFFER, 1)
-            print("✅ Order completed!")
-            print(f"🔹 Entry Price : {entry_price}")
-            print(f"🔸 Stoploss    : {stoploss_price}")
+            print("Order completed!")
+            print(f"Entry Price : {entry_price}")
+            print(f"Stoploss    : {stoploss_price}")
             return True
         elif order_status == "rejected":
-            print("❌ Order was rejected. Exiting.")
+            print("Order was rejected. Exiting.")
             exit(1)
         time.sleep(1)
 
-    print("❌ Order not completed in time. Exiting.")
+    print("Order not completed in time. Exiting.")
     exit(1)
 
 
@@ -84,7 +84,7 @@ def on_data_received(data):
         print(f"LTP {EXCHANGE}:{SYMBOL}: {ltp} | Time: {timestamp}")
         if not ltp_hit and ltp <= stoploss_price:
             ltp_hit = True
-            print(f"🛑 Stoploss hit at LTP {ltp}. Sending exit order...")
+            print(f"Stoploss hit at LTP {ltp}. Sending exit order...")
             send_exit_order()
 
 
@@ -104,21 +104,21 @@ def send_exit_order():
 
 # === Main Execution ===
 if __name__ == "__main__":
-    print("🔁 OpenAlgo Python Bot is running.")
+    print("OpenAlgo Python Bot is running.")
 
     if place_entry_order() and wait_for_execution():
         try:
             client.connect()
             client.subscribe_ltp([{"exchange": EXCHANGE, "symbol": SYMBOL}], on_data_received)
 
-            print("📡 Monitoring LTP for stoploss...")
+            print("Monitoring LTP for stoploss...")
             while not ltp_hit:
                 time.sleep(1)
 
         except KeyboardInterrupt:
-            print("🛑 CTRL+C received. Shutting down gracefully...")
+            print("CTRL+C received. Shutting down gracefully...")
 
         finally:
             client.unsubscribe_ltp([{"exchange": EXCHANGE, "symbol": SYMBOL}])
             client.disconnect()
-            print("🔌 Disconnected from WebSocket.")
+            print("Disconnected from WebSocket.")

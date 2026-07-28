@@ -29,6 +29,27 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/placesmartorder
 }
 ```
 
+## Sample cURL Request
+
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/placesmartorder \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "apikey": "<your_app_apikey>",
+  "strategy": "Test Strategy",
+  "exchange": "NSE",
+  "symbol": "IDEA",
+  "action": "BUY",
+  "product": "MIS",
+  "pricetype": "MARKET",
+  "quantity": "1",
+  "position_size": "5",
+  "price": "0",
+  "trigger_price": "0",
+  "disclosed_quantity": "0"
+}'
+```
+
 ## Sample API Response
 
 ```json
@@ -89,9 +110,9 @@ PlaceSmartOrder API function allows traders to build intelligent trading systems
   - Negative values = Short position
   - Zero = Flat (no position)
 - If current position already matches target, no order is placed
-- Smart orders have a configurable delay (default 0.5 seconds) to allow previous orders to fill
 - Works across all exchanges and product types
-- **Rate Limit**: 2 requests per second (more restrictive due to complexity)
+- Fractional quantities are accepted only for `CRYPTO`; non-crypto quantities must be whole numbers.
+- **Rate limit**: `SMART_ORDER_RATE_LIMIT`, default 10 requests per second
 
 ---
 

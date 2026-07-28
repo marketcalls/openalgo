@@ -169,7 +169,14 @@ def apply_csp_middleware(app):
                 if os.getenv("CSP_REPORT_ONLY", "FALSE").upper() == "TRUE":
                     header_type = "Content-Security-Policy-Report-Only"
 
-                response.headers[header_type] = csp_header
+                # Respect a CSP header already set by the route handler.
+                # The OAuth /authorize consent page sets a per-response
+                # CSP that includes the registered redirect_uri origin
+                # in form-action so the browser allows the OAuth code
+                # redirect chain. Overwriting that here would block
+                # the legitimate flow.
+                if header_type not in response.headers:
+                    response.headers[header_type] = csp_header
 
         # Add other security headers
         security_headers = get_security_headers()

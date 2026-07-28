@@ -45,7 +45,7 @@ def test_order_execution():
         try:
             order_data = json.loads(order.order_data)
             print(f"Order Data: {json.dumps(order_data, indent=2)}")
-        except:
+        except Exception:
             print(f"Order Data (raw): {order.order_data}")
 
         print("-" * 80)
@@ -59,7 +59,7 @@ def test_order_execution():
 
     try:
         order_id = int(order_id_to_test)
-    except:
+    except Exception:
         print("Invalid order ID")
         return
 
@@ -85,7 +85,7 @@ def test_order_execution():
         print("Failed to approve order")
         return
 
-    print("✓ Order approved successfully")
+    print("Order approved successfully")
     print()
     print("Attempting execution...")
     print()
@@ -101,14 +101,14 @@ def test_order_execution():
 
         if success:
             print()
-            print("✓ ORDER EXECUTED SUCCESSFULLY!")
+            print("ORDER EXECUTED SUCCESSFULLY!")
         else:
             print()
-            print("✗ ORDER EXECUTION FAILED")
+            print("ORDER EXECUTION FAILED")
             print(f"  Error: {response_data.get('message', 'Unknown error')}")
 
     except Exception as e:
-        print("✗ EXCEPTION DURING EXECUTION:")
+        print("EXCEPTION DURING EXECUTION:")
         print(f"  {type(e).__name__}: {str(e)}")
         import traceback
 

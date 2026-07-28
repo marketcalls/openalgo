@@ -42,7 +42,7 @@ User clicks "Connect Broker"
   → User is redirected to dashboard
 ```
 
-All brokers are **dynamically discovered** at startup by `utils/plugin_loader.py`, which scans `broker/*/api/auth_api.py` for an `authenticate_broker` function and registers it as `{broker_name}_auth`.
+Broker directories are discovered at startup by `utils/plugin_loader.py`. Capability metadata is cached from `broker/*/plugin.json`, while authentication modules are imported lazily from `broker.<name>.api.auth_api` when their `{broker_name}_auth` entry is first requested.
 
 ---
 
@@ -405,7 +405,7 @@ def get_holdings(auth):
 
 ### API Response Helper Pattern
 
-All brokers use a helper function for authenticated HTTP requests:
+Broker adapters should use the shared HTTPX client and may wrap it in a broker-specific authenticated request helper:
 
 ```python
 def get_api_response(endpoint, auth, method="GET", payload=None):
@@ -719,7 +719,7 @@ Broker WebSocket API
 
 Your adapter **must** extend `BaseBrokerWebSocketAdapter`, which provides:
 
-- **ZeroMQ PUB socket** — automatically created and bound to a port
+- **ZeroMQ PUB socket** — connects to the fixed endpoint bound by the proxy SUB socket
 - **Connection pooling** — managed via `websocket_proxy/connection_manager.py`
 - **Auth token helpers** — `get_auth_token_for_user()`, `get_fresh_auth_token()`, `clear_auth_cache_for_user()`
 - **Stale token retry** — `handle_auth_error_and_retry()`, `is_auth_error()`
@@ -1008,7 +1008,7 @@ A new broker must be registered in **all** of the following locations:
 Add your broker to the "Supported Brokers" section (alphabetical order):
 
 ```markdown
-## Supported Brokers (24+)
+## Supported Brokers (34 plugins)
 
 <details>
 <summary>View All Supported Brokers</summary>
@@ -1395,7 +1395,7 @@ These formats are validated at startup by `utils/env_check.py::load_and_check_en
    - [ ] Subscribe/unsubscribe working
    - [ ] Reconnection handling
 
-8. **API Endpoints** (test at `/api/docs`)
+8. **API Endpoints** (test with the requests documented in `docs/api/README.md`; Swagger is disabled)
    - [ ] All REST API endpoints work with the new broker
 
 ### Automated Tests
@@ -1440,36 +1440,43 @@ Study these implementations for the pattern closest to your broker:
 
 ---
 
-## Appendix: Complete List of Supported Brokers (29)
+## Appendix: Complete Plugin Inventory (34)
 
-| # | Broker | Directory | Auth Pattern | Extra Credentials |
-|---|--------|-----------|-------------|-------------------|
-| 1 | 5paisa | `fivepaisa` | TOTP | Compound API key |
-| 2 | 5paisa XTS | `fivepaisaxts` | XTS | MARKET keys |
-| 3 | AliceBlue | `aliceblue` | Encryption Key | — |
-| 4 | AngelOne | `angel` | TOTP | — |
-| 5 | CompositEdge | `compositedge` | XTS/OAuth | MARKET keys |
-| 6 | Definedge | `definedge` | OTP | — |
-| 7 | Dhan | `dhan` | OAuth Consent | Compound API key |
-| 8 | Dhan Sandbox | `dhan_sandbox` | Direct Token | — |
-| 9 | Firstock | `firstock` | TOTP | — |
-| 10 | Flattrade | `flattrade` | OAuth2 | Compound API key |
-| 11 | Fyers | `fyers` | OAuth2 | — |
-| 12 | Groww | `groww` | Direct Token | — |
-| 13 | iBulls | `ibulls` | XTS | MARKET keys |
-| 14 | IIFL | `iifl` | XTS | MARKET keys |
-| 15 | IndMoney | `indmoney` | Direct Token | — |
-| 16 | Jainam XTS | `jainamxts` | XTS | MARKET keys |
-| 17 | Kotak | `kotak` | TOTP + MPIN | — |
-| 18 | Motilal Oswal | `motilal` | TOTP + DOB | — |
-| 19 | mStock | `mstock` | TOTP | — |
-| 20 | Nubra | `nubra` | TOTP | — |
-| 21 | Paytm | `paytm` | OAuth2 | — |
-| 22 | Pocketful | `pocketful` | OAuth2 | — |
-| 23 | Samco | `samco` | YOB verification | — |
-| 24 | Shoonya | `shoonya` | TOTP | — |
-| 25 | TradeJini | `tradejini` | TOTP | — |
-| 26 | Upstox | `upstox` | OAuth2 | — |
-| 27 | Wisdom Capital | `wisdom` | XTS | MARKET keys |
-| 28 | Zebu | `zebu` | TOTP | — |
-| 29 | Zerodha | `zerodha` | OAuth2 | — |
+This inventory is derived from `broker/*/plugin.json`. Authentication requirements must be read from the adapter and the broker's current developer instructions rather than copied from a static cross-broker table.
+
+| # | Directory | Type |
+|---:|---|---|
+| 1 | `aliceblue` | Securities |
+| 2 | `angel` | Securities |
+| 3 | `arrow` | Securities |
+| 4 | `compositedge` | Securities |
+| 5 | `definedge` | Securities |
+| 6 | `deltaexchange` | Crypto derivatives |
+| 7 | `dhan` | Securities |
+| 8 | `dhan_sandbox` | Securities sandbox |
+| 9 | `firstock` | Securities |
+| 10 | `fivepaisa` | Securities |
+| 11 | `fivepaisaxts` | Securities |
+| 12 | `flattrade` | Securities |
+| 13 | `fyers` | Securities |
+| 14 | `groww` | Securities |
+| 15 | `ibulls` | Securities |
+| 16 | `iifl` | Securities |
+| 17 | `iiflcapital` | Securities |
+| 18 | `indmoney` | Securities |
+| 19 | `jainamxts` | Securities |
+| 20 | `kotak` | Securities |
+| 21 | `motilal` | Securities |
+| 22 | `mstock` | Securities |
+| 23 | `nubra` | Securities |
+| 24 | `paytm` | Securities |
+| 25 | `pocketful` | Securities |
+| 26 | `rmoney` | Securities |
+| 27 | `samco` | Securities |
+| 28 | `shoonya` | Securities |
+| 29 | `tradejini` | Securities |
+| 30 | `tradesmart` | Securities |
+| 31 | `upstox` | Securities |
+| 32 | `wisdom` | Securities |
+| 33 | `zebu` | Securities |
+| 34 | `zerodha` | Securities |

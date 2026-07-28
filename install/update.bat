@@ -12,7 +12,7 @@ REM Prerequisites:
 REM   - Python 3.12+
 REM   - uv package manager (pip install uv)
 REM   - Git
-REM   - Node.js 20+ (optional, for frontend build)
+REM   - Node.js 20.20+, 22.22+, or 24.13+ (optional, for frontend build)
 REM
 REM ============================================================================
 
@@ -210,6 +210,17 @@ if not exist "%OPENALGO_DIR%\.env" (
     echo   [WARNING] No .env file found. Creating from .sample.env...
     if exist "%OPENALGO_DIR%\.sample.env" (
         copy /y "%OPENALGO_DIR%\.sample.env" "%OPENALGO_DIR%\.env" >nul
+
+        REM Generate fresh APP_KEY and API_KEY_PEPPER. Without this, the new .env
+        REM would carry the public sample placeholders — the app's startup check
+        REM would then auto-rotate them, but generating here keeps update.bat
+        REM symmetric with the other install scripts.
+        for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set NEW_APP_KEY=%%i
+        for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set NEW_PEPPER=%%i
+        powershell -Command "(Get-Content '%OPENALGO_DIR%\.env') -replace 'OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE', '!NEW_APP_KEY!' | Set-Content '%OPENALGO_DIR%\.env'"
+        powershell -Command "(Get-Content '%OPENALGO_DIR%\.env') -replace 'OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE', '!NEW_PEPPER!' | Set-Content '%OPENALGO_DIR%\.env'"
+        echo   [OK] Generated fresh APP_KEY and API_KEY_PEPPER in .env
+
         echo   [ACTION REQUIRED] Please edit .env with your broker credentials and settings.
     ) else (
         echo   [ERROR] .sample.env not found. Cannot create .env.
@@ -263,18 +274,18 @@ if not exist "%OPENALGO_DIR%\frontend\dist\" (
     if not errorlevel 1 (
         echo [OPTIONAL] Building React frontend (dist\ not found)...
         pushd "%OPENALGO_DIR%\frontend"
-        call npm install
+        call npm ci
         call npm run build
         if errorlevel 1 (
             echo   [WARNING] Frontend build failed.
-            echo   Run manually: cd frontend ^&^& npm install ^&^& npm run build
+            echo   Run manually: cd frontend ^&^& npm ci ^&^& npm run build
         ) else (
             echo   [OK] Frontend built successfully.
         )
         popd
     ) else (
         echo [NOTE] frontend\dist\ not found and Node.js is not installed.
-        echo   Install Node.js and run: cd frontend ^&^& npm install ^&^& npm run build
+        echo   Install Node.js 20.20+, 22.22+, or 24.13+ and run: cd frontend ^&^& npm ci ^&^& npm run build
     )
     echo.
 )

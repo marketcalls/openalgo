@@ -3,11 +3,19 @@ React Frontend Serving Blueprint
 Serves the pre-built React app for migrated routes.
 """
 
+import mimetypes
 from pathlib import Path
 
-from flask import Blueprint, send_file, send_from_directory
+from flask import Blueprint, request, send_file, send_from_directory
 
 react_bp = Blueprint("react", __name__)
+
+# Pre-compressed encodings to negotiate, in preference order (best ratio first).
+# The Vite build (vite-plugin-compression2) emits <asset>.br and <asset>.gz next
+# to each hashed asset; CI commits them with frontend/dist/. Serving these lets
+# no-nginx (laptop) installs ship compressed bytes with zero per-request CPU,
+# and nginx-fronted servers pass the Content-Encoding through untouched.
+_PRECOMPRESSED_ENCODINGS = ((".br", "br"), (".gz", "gzip"))
 
 # Path to the pre-built React frontend
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -41,7 +49,14 @@ npm run build</pre>
         )
 
     index_path = FRONTEND_DIST / "index.html"
-    return send_file(index_path, mimetype="text/html")
+    response = send_file(index_path, mimetype="text/html")
+    # index.html references content-hashed asset URLs, so it must always be
+    # revalidated — otherwise a browser could serve a stale shell pointing at
+    # chunks that no longer exist after an update. "no-cache" means
+    # revalidate-before-use (not "don't store"); this is what lets 180k users
+    # pick up frontend updates without ever clearing their cache.
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 # ============================================================
@@ -136,6 +151,12 @@ def react_holdings():
     return serve_react_app()
 
 
+# Scalping Terminal
+@react_bp.route("/scalping", strict_slashes=False)
+def react_scalping():
+    return serve_react_app()
+
+
 # Search pages
 @react_bp.route("/search/token")
 def react_search_token():
@@ -153,6 +174,12 @@ def react_search():
 # Playground
 @react_bp.route("/playground")
 def react_playground():
+    return serve_react_app()
+
+
+# Charting terminal (line-based chart trading, powered by openalgo-charts)
+@react_bp.route("/trading", strict_slashes=False)
+def react_trading():
     return serve_react_app()
 
 
@@ -203,6 +230,13 @@ def react_oitracker():
     return serve_react_app()
 
 
+# Chart test page (dev/testing only) - 1m history + live forming candle.
+# Intentionally not linked from any menu; reachable only by direct URL.
+@react_bp.route("/chart/test")
+def react_chart_test():
+    return serve_react_app()
+
+
 # Max Pain analysis
 @react_bp.route("/maxpain")
 def react_maxpain():
@@ -236,6 +270,12 @@ def react_ivsmile():
 # OI Profile - Open Interest Profile with futures candles
 @react_bp.route("/oiprofile")
 def react_oiprofile():
+    return serve_react_app()
+
+
+# Arbitrage - Futures calendar-spread scanner
+@react_bp.route("/arbitrage")
+def react_arbitrage():
     return serve_react_app()
 
 
@@ -515,13 +555,37 @@ def react_flow_editor(workflow_id):
 
 @react_bp.route("/assets/<path:filename>")
 def serve_assets(filename):
-    """Serve static assets with long cache headers."""
+    """Serve static assets with long cache headers.
+
+    Negotiates pre-compressed variants: if the client advertises ``br``/``gzip``
+    and a ``<filename>.br``/``.gz`` exists, serve that with the matching
+    ``Content-Encoding`` and the original file's ``Content-Type``. Otherwise
+    fall back to the raw asset (i.e. worst case == previous behavior). All paths
+    go through ``send_from_directory`` so traversal protection is preserved.
+    """
     assets_dir = FRONTEND_DIST / "assets"
     if not assets_dir.exists():
         return "Assets not found", 404
 
-    response = send_from_directory(assets_dir, filename)
-    # Cache assets for 1 year (they have content hashes in filenames)
+    accept_encoding = request.headers.get("Accept-Encoding", "")
+    response = None
+    for ext, encoding in _PRECOMPRESSED_ENCODINGS:
+        if encoding in accept_encoding and (assets_dir / (filename + ext)).is_file():
+            response = send_from_directory(assets_dir, filename + ext)
+            response.headers["Content-Encoding"] = encoding
+            # Type must reflect the ORIGINAL asset, not the .br/.gz wrapper.
+            content_type = mimetypes.guess_type(filename)[0]
+            if content_type:
+                response.headers["Content-Type"] = content_type
+            # Caches must key on encoding so a br copy is never sent to a
+            # client that only speaks gzip (or none).
+            response.headers["Vary"] = "Accept-Encoding"
+            break
+    if response is None:
+        response = send_from_directory(assets_dir, filename)
+
+    # Cache assets for 1 year — safe because filenames are content-hashed, so a
+    # new build produces new URLs and users never need to clear their cache.
     response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return response
 

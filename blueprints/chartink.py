@@ -90,7 +90,9 @@ def process_orders():
 
                 try:
                     response = requests.post(
-                        f"{BASE_URL}/api/v1/placesmartorder", json=smart_order["payload"]
+                        f"{BASE_URL}/api/v1/placesmartorder",
+                        json=smart_order["payload"],
+                        timeout=30,
                     )
                     if response.ok:
                         logger.info(
@@ -126,7 +128,9 @@ def process_orders():
 
                     try:
                         response = requests.post(
-                            f"{BASE_URL}/api/v1/placeorder", json=regular_order["payload"]
+                            f"{BASE_URL}/api/v1/placeorder",
+                            json=regular_order["payload"],
+                            timeout=30,
                         )
                         if response.ok:
                             logger.info(
@@ -923,7 +927,14 @@ def webhook(webhook_id):
                 payload.update({"quantity": str(mapping.quantity)})
                 endpoint = "placeorder"
 
-            logger.info(f"Queueing {endpoint} with payload: {payload}")
+            logger.info(
+                "Queueing %s symbol=%s exchange=%s action=%s qty=%s",
+                endpoint,
+                payload.get("symbol"),
+                payload.get("exchange"),
+                payload.get("action"),
+                payload.get("quantity"),
+            )
 
             # Queue the order instead of executing directly
             queue_order(endpoint, payload)
