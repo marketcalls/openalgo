@@ -247,8 +247,9 @@ MARKET/LIMIT/SL/SL-M, `product` CNC/NRML/MIS; `order_status` is lowercase
 rejected; `mode` is `live` (broker) or `analyze` (sandbox).
 
 Sources: dedicated broker order feeds (Zerodha, Dhan, Fyers, Upstox,
-AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow), REST-orderbook
-polling for brokers without push (Groww), and `/postback/<broker>` HTTPS
+AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow, IIFL Capital, Kotak),
+REST-orderbook polling for brokers without push (Groww), and
+`/postback/<broker>` HTTPS
 webhooks on production deployments. If both a broker feed and a postback are
 configured, deduplicate on `orderid` + `order_status` + `filled_quantity`.
 

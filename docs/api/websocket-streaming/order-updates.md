@@ -111,8 +111,9 @@ A live rejection example (pushed by the broker's own order feed):
 ## Sources and Broker Coverage
 
 - **Dedicated order feed / ticker postback**: Zerodha, Dhan, Fyers, Upstox,
-  AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow stream natively via
-  each broker's push channel (`broker/*/streaming/*_order_adapter.py`).
+  AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow, IIFL Capital, Kotak
+  stream natively via each broker's push channel
+  (`broker/*/streaming/*_order_adapter.py`).
 - **REST polling fallback**: brokers with no push mechanism (e.g. Groww) are
   covered by server-side orderbook polling (`ORDER_POLL_INTERVAL`, default 5s).
 - **HTTPS postbacks**: `/postback/<broker>` webhook receivers feed the same
