@@ -1,4 +1,4 @@
-# Version 2.0.1.17 Released
+# Version 2.0.1.7 Released
 
 **Date: 28th July 2026**
 
@@ -33,9 +33,9 @@ This release spans 47 commits since v2.0.1.6. The bulk of the work continues bui
 
 **Configuration changes**
 
-`utils/version.py`: `VERSION = "2.0.1.17"`
+`utils/version.py`: `VERSION = "2.0.1.7"`
 
-`pyproject.toml`: `version = "2.0.1.17"` (`uv.lock` regenerated).
+`pyproject.toml`: `version = "2.0.1.7"` (`uv.lock` regenerated).
 
 No database schema changes in this release.
 
