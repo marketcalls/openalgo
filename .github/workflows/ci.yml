@@ -46,7 +46,7 @@ jobs:
         run: |
           uv run pytest test/test_log_location.py test/test_navigation_update.py \
             test/test_python_editor.py test/test_rate_limits_simple.py \
-            test/test_logout_csrf.py -v --timeout=60
+            test/test_logout_csrf.py test/test_basket_order_service.py -v --timeout=60
 
   # Frontend linting
   frontend-lint:
