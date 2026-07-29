@@ -46,6 +46,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.engine_factory import create_db_engine
+from utils.env_config import env_int
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +57,15 @@ logger = get_logger(__name__)
 # because draining a buffered fill re-enters apply_fill. Production is a single
 # worker, so an in-process lock is sufficient.
 _fill_lock = threading.RLock()
+
+# Set once the tables exist. Reads must fail loudly rather than report an empty
+# book: a strategy P&L of zero is indistinguishable from "flat and fine" to an
+# exit trigger, so an uninitialized book must never be reported as one.
+_initialized = False
+
+
+class StrategyBookUnavailable(RuntimeError):
+    """The per-strategy book could not be read, so its figures are unknown."""
 
 engine = create_db_engine()
 
@@ -138,16 +148,23 @@ class StrategyPosition(Base):
 
 def init_strategy_book_db() -> None:
     """Create tables if absent, then apply column migrations. Idempotent."""
+    global _initialized
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
     _prune_old_tags()
+    _initialized = True
     logger.info("Strategy book DB initialized")
+
+
+def is_initialized() -> bool:
+    """Whether the book is usable. False means its figures are unknown."""
+    return _initialized
 
 
 # One tag row exists per order, forever, and the key space is every order ever
 # placed - so it needs a retention bound. An order cannot report new fills days
 # after the fact, making anything past this window safe to drop.
-_TAG_RETENTION = timedelta(days=int(os.getenv("STRATEGY_TAG_RETENTION_DAYS", "30")))
+_TAG_RETENTION = timedelta(days=env_int("STRATEGY_TAG_RETENTION_DAYS", 30, minimum=1))
 
 
 def _prune_old_tags() -> None:
@@ -213,9 +230,23 @@ def _session_date() -> str:
 def record_order_tag(
     orderid: str, user_id: str, strategy: str, symbol: str, exchange: str, product: str
 ) -> bool:
-    """Remember which strategy placed an order. Ignores duplicates."""
+    """Remember which strategy placed an order. Ignores duplicates.
+
+    Takes the same lock as apply_fill. Serializing only fill application is not
+    enough: a fill could find no tag, then the tag could be written and its
+    (still empty) buffer drained, and only then would the fill be buffered -
+    leaving it orphaned until it expired. Holding one lock across both makes
+    the two orderings the only possible ones, and both are handled.
+    """
     if not orderid or not strategy:
         return False
+    with _fill_lock:
+        return _record_order_tag_locked(orderid, user_id, strategy, symbol, exchange, product)
+
+
+def _record_order_tag_locked(
+    orderid: str, user_id: str, strategy: str, symbol: str, exchange: str, product: str
+) -> bool:
     try:
         existing = db_session.query(StrategyOrderTag).filter_by(orderid=str(orderid)).one_or_none()
         if existing:
@@ -304,7 +335,7 @@ def _buffer_fill(orderid: str, filled_quantity: float, average_price: float, act
 
 # A tag that is going to arrive arrives within milliseconds - the buffer only
 # has to survive the publish race, never a session.
-_PENDING_FILL_TTL = timedelta(minutes=int(os.getenv("STRATEGY_PENDING_FILL_TTL_MIN", "10")))
+_PENDING_FILL_TTL = timedelta(minutes=env_int("STRATEGY_PENDING_FILL_TTL_MIN", 10, minimum=1))
 
 
 def _prune_pending_fills() -> None:
@@ -453,7 +484,18 @@ def _apply_fill_locked(
 
 
 def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -> list[dict]:
-    """Every tracked leg, optionally narrowed to one user and/or strategy."""
+    """Every tracked leg, optionally narrowed to one user and/or strategy.
+
+    Raises:
+        StrategyBookUnavailable: the book is not initialized or cannot be read.
+            Returning an empty list here would be reported as a P&L of zero,
+            which an exit trigger cannot distinguish from a flat, healthy
+            strategy - so an unknown book is raised, never rendered as zero.
+    """
+    if not _initialized:
+        raise StrategyBookUnavailable(
+            "Strategy book is not initialized; per-strategy P&L is unavailable"
+        )
     # Same boundary the write path stamps, so a leg booked at 02:00 IST is not
     # read back as belonging to a different day.
     today = _session_date()
@@ -482,10 +524,10 @@ def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -
             }
             for r in query.all()
         ]
-    except Exception:
+    except Exception as exc:
         db_session.rollback()
         logger.exception("Could not read strategy legs")
-        return []
+        raise StrategyBookUnavailable("Could not read the strategy book") from exc
 
 
 def list_strategies(user_id: str | None = None) -> list[str]:

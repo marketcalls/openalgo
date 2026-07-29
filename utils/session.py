@@ -94,11 +94,16 @@ def is_session_valid():
     return True
 
 
-def _todays_rollover_boundary():
+def _todays_rollover_boundary(now_ist=None):
     """Return today's session-expiry boundary (default 03:00 IST) as a
     timezone-aware IST datetime. Mirrors the boundary used by is_session_valid().
+
+    Accepts an existing IST snapshot so a caller that already read the clock
+    compares against the same instant its date was derived from, rather than
+    two reads that could straddle the boundary.
     """
-    now_ist = datetime.now(pytz.timezone("UTC")).astimezone(pytz.timezone("Asia/Kolkata"))
+    if now_ist is None:
+        now_ist = datetime.now(pytz.timezone("UTC")).astimezone(pytz.timezone("Asia/Kolkata"))
     expiry_time = os.getenv("SESSION_EXPIRY_TIME", "03:00")
     hour, minute = map(int, expiry_time.split(":"))
     return now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -115,7 +120,7 @@ def get_trading_session_date():
     at all on a host outside India.
     """
     now_ist = datetime.now(pytz.timezone("UTC")).astimezone(pytz.timezone("Asia/Kolkata"))
-    boundary = _todays_rollover_boundary()
+    boundary = _todays_rollover_boundary(now_ist)
     if now_ist < boundary:
         return (now_ist - timedelta(days=1)).date().isoformat()
     return now_ist.date().isoformat()

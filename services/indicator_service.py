@@ -22,6 +22,7 @@ import pandas as pd
 from cachetools import TTLCache
 from openalgo import ta
 
+from utils.env_config import env_int
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -42,7 +43,7 @@ logger = get_logger(__name__)
 # Bounded via maxsize so it cannot grow without limit in a long-lived worker
 # (see the FD/memory hygiene rules in CLAUDE.md).
 _HISTORY_CACHE_TTL = float(os.getenv("FLOW_HISTORY_CACHE_TTL", "30"))
-_HISTORY_CACHE_MAXSIZE = int(os.getenv("FLOW_HISTORY_CACHE_MAXSIZE", "256"))
+_HISTORY_CACHE_MAXSIZE = env_int("FLOW_HISTORY_CACHE_MAXSIZE", 256, minimum=1)
 _history_cache: TTLCache = TTLCache(
     maxsize=max(_HISTORY_CACHE_MAXSIZE, 1), ttl=max(_HISTORY_CACHE_TTL, 0.001)
 )
@@ -187,14 +188,14 @@ def clear_history_cache() -> None:
 # not only when trimming the response, so the oversized fetch never happens
 # in the first place. Raise FLOW_MAX_HISTORY_BARS if a strategy genuinely
 # needs more depth.
-MAX_HISTORY_BARS = max(int(os.getenv("FLOW_MAX_HISTORY_BARS", "200")), 1)
+MAX_HISTORY_BARS = env_int("FLOW_MAX_HISTORY_BARS", 200, minimum=1)
 
 # Absolute ceiling on the calendar span of any single request. The bar count
 # alone is not enough: 200 quarterly bars is a 54-year range and 200 yearly
 # bars is 219 years - spans no broker will serve sensibly, and which can make
 # an adapter fall back to dumping daily rows. ~11 years keeps weekly at its
 # full 200 bars while bounding the long-period aggregates.
-MAX_HISTORY_CALENDAR_DAYS = max(int(os.getenv("FLOW_MAX_HISTORY_CALENDAR_DAYS", "4000")), 1)
+MAX_HISTORY_CALENDAR_DAYS = env_int("FLOW_MAX_HISTORY_CALENDAR_DAYS", 4000, minimum=1)
 
 # Extra rows fed to an indicator beyond its requested lookback, so recursive
 # indicators (EMA/MACD/ATR) have settled by the time the reported window

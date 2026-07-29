@@ -12,7 +12,7 @@ has no app context and no teardown, so it must call
 ``remove_all_scoped_sessions()`` itself when it finishes.
 """
 
-import importlib
+import sys
 
 from utils.logging import get_logger
 
@@ -54,11 +54,18 @@ def remove_all_scoped_sessions() -> None:
     error must not mask the original outcome.
     """
     for module_name, session_attr in SCOPED_SESSION_MODULES:
+        # sys.modules, not import_module: a module that was never imported has
+        # no session bound to this thread, and importing it here just to clean
+        # it would create the engine it was avoiding.
+        mod = sys.modules.get(module_name)
+        if mod is None:
+            continue
+        session = getattr(mod, session_attr, None)
+        if session is None:
+            continue
         try:
-            mod = importlib.import_module(module_name)
-            session = getattr(mod, session_attr, None)
-            if session is not None:
-                session.remove()
+            session.remove()
         except Exception:
-            # A module that failed to import has no session to release.
-            pass
+            # Swallowed so one bad session cannot strand the rest, but logged:
+            # a silent failure here is exactly how a descriptor leak hides.
+            logger.exception(f"Could not release scoped session {module_name}.{session_attr}")

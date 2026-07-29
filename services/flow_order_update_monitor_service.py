@@ -13,13 +13,13 @@ see docs/prompt/websockets-format.md "Order Updates") instead of running its
 own polling thread.
 """
 
-import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+from utils.env_config import env_int
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 # holding DB sessions and broker calls. A module-level pool caps that
 # concurrency and reuses its threads for the life of the worker.
 _WORKFLOW_POOL = ThreadPoolExecutor(
-    max_workers=max(int(os.getenv("FLOW_ORDER_UPDATE_WORKERS", "4")), 1),
+    max_workers=env_int("FLOW_ORDER_UPDATE_WORKERS", 4, minimum=1),
     thread_name_prefix="flow-order-update",
 )
 
