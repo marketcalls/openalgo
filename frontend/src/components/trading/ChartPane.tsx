@@ -28,7 +28,7 @@ import { DrawingTextDialog } from './DrawingTextDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
-/** TradingView-style camera (screenshot) glyph. */
+/** Camera (screenshot) glyph. */
 function CameraIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -385,7 +385,7 @@ export function ChartPane({
           so the view actions stay beside the instrument controls instead of
           dropping to a second row and eating chart height. */}
       <div className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5">
-        {/* Symbol pill — opens the TradingView-style search modal for this pane */}
+        {/* Symbol pill — opens the search modal for this pane */}
         <Button
           variant="outline"
           size="sm"

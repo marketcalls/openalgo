@@ -1,5 +1,5 @@
 /**
- * Chart-type catalogue for the trading terminal: the TradingView-style dropdown
+ * Chart-type catalogue for the trading terminal: the dropdown
  * groups, each type's icon, its underlying openalgo-charts series, and (for
  * movement-driven types) a transform factory. Kagi and Point & Figure are
  * intentionally omitted for now.
