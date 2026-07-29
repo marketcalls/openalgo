@@ -644,7 +644,10 @@ export const DEFAULT_NODE_DATA = {
   orderUpdateTrigger: {
     orderId: '',
     symbol: '',
-    exchange: 'NSE',
+    // Empty, not 'NSE': the UI presents this filter as optional, so defaulting
+    // it to a real exchange would silently stop an order-ID-only watch from
+    // matching fills on any other segment (NFO, MCX, ...).
+    exchange: '',
     status: 'complete' as const,
     trigger: 'once' as const,
   },

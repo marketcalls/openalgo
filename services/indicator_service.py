@@ -12,15 +12,86 @@ is left untouched; this is a fresh, reusable implementation of the same idea.
 """
 
 import inspect
+import os
+import threading
 from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
+from cachetools import TTLCache
 from openalgo import ta
 
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# --- Shared history cache -------------------------------------------------
+#
+# Broker data APIs are rate limited far more tightly than a node-graph makes
+# obvious: Dhan allows 5 req/s on history and only 1 req/s on quotes (error
+# 805 on breach), Flattrade 10 req/s, some Zerodha paths 1 req/s, and
+# services/history_service.py serializes every broker history call behind a
+# process-wide ~350ms gate. A single strategy asking for RSI + SMA + ATR +
+# previous-day levels on one symbol would otherwise issue four *identical*
+# history requests per run, each waiting on that gate.
+#
+# Nodes therefore share one short-TTL cache keyed by the exact request. This
+# collapses repeated fetches within a run (and across back-to-back runs)
+# without hiding new bars: the default TTL is well under a one-minute candle.
+# Bounded via maxsize so it cannot grow without limit in a long-lived worker
+# (see the FD/memory hygiene rules in CLAUDE.md).
+_HISTORY_CACHE_TTL = float(os.getenv("FLOW_HISTORY_CACHE_TTL", "30"))
+_HISTORY_CACHE_MAXSIZE = int(os.getenv("FLOW_HISTORY_CACHE_MAXSIZE", "256"))
+_history_cache: TTLCache = TTLCache(
+    maxsize=max(_HISTORY_CACHE_MAXSIZE, 1), ttl=max(_HISTORY_CACHE_TTL, 0.001)
+)
+_history_cache_lock = threading.Lock()
+
+
+def fetch_history_cached(
+    client,
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+    source: str = "api",
+) -> dict[str, Any]:
+    """Fetch OHLCV history through a short-TTL, process-wide cache.
+
+    Only successful, non-empty responses are cached — an error or an empty
+    range must stay retryable rather than being pinned for the whole TTL.
+    Set FLOW_HISTORY_CACHE_TTL=0 to effectively disable caching.
+    """
+    key = (symbol, exchange, interval, start_date, end_date, source)
+
+    if _HISTORY_CACHE_TTL > 0:
+        with _history_cache_lock:
+            hit = _history_cache.get(key)
+        if hit is not None:
+            logger.debug(f"History cache hit: {symbol} {interval} ({source})")
+            return hit
+
+    result = client.get_history(
+        symbol=symbol,
+        exchange=exchange,
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+    )
+
+    if _HISTORY_CACHE_TTL > 0 and (result or {}).get("data"):
+        with _history_cache_lock:
+            _history_cache[key] = result
+    return result
+
+
+def clear_history_cache() -> None:
+    """Drop all cached history (test/administrative helper)."""
+    with _history_cache_lock:
+        _history_cache.clear()
+
 
 # Every ta function names its OHLCV-series parameters consistently
 # (open_prices/open, high, low, close, data, volume) and always lists them
@@ -98,6 +169,14 @@ _BARS_PER_DAY = {
     "week": 0.2,
     "m": 0.05,
     "month": 0.05,
+    # Historify advertises quarterly/yearly aggregates. Without entries here
+    # they fall back to the intraday default (75 bars/day) and the computed
+    # window spans only days, yielding at most one bar - so every indicator
+    # returns null.
+    "q": 0.016,
+    "quarter": 0.016,
+    "y": 0.004,
+    "year": 0.004,
 }
 
 
@@ -194,7 +273,13 @@ def _parse_timestamp(value: Any) -> datetime:
         return datetime.fromtimestamp(float(text))
     except (TypeError, ValueError):
         pass
-    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is not None:
+        # Convert to server-local wall time and drop tzinfo. Callers subtract
+        # these from a naive datetime.now() (see _drop_forming_bar), which
+        # raises TypeError on an aware operand.
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
 
 
 def _timestamp_series(df: pd.DataFrame) -> pd.Series:
@@ -302,7 +387,11 @@ def prior_period_ohlc(
             for r in records
             if _parse_timestamp(r.get("timestamp")).strftime("%Y-%m-%d %H") != current_bucket
         ]
-        row = closed[-1] if closed else records[-1]
+        if not closed:
+            # Falling back to records[-1] here would hand back the current,
+            # still-forming candle as "previous hour" - wrong PDH/PDL/PDC.
+            raise ValueError("not enough history to determine previous_hour")
+        row = closed[-1]
         return {
             "period": period,
             "date": _parse_timestamp(row.get("timestamp")).strftime("%Y-%m-%d %H:%M"),
@@ -320,7 +409,11 @@ def prior_period_ohlc(
             for r in records
             if _parse_timestamp(r.get("timestamp")).strftime("%Y-%m-%d") != today_str
         ]
-        row = closed[-1] if closed else records[-1]
+        if not closed:
+            # Same reasoning as previous_hour: never pass today's in-progress
+            # candle off as the previous day's settled OHLC.
+            raise ValueError("not enough history to determine previous_day")
+        row = closed[-1]
         return {
             "period": period,
             "date": _parse_timestamp(row.get("timestamp")).strftime("%Y-%m-%d"),

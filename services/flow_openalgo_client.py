@@ -281,6 +281,14 @@ class FlowOpenAlgoClient:
         """
         from services.history_service import get_history
 
+        if source == "db" and not (start_date and end_date):
+            # get_history_from_db feeds these straight into datetime.strptime,
+            # which raises TypeError on None and surfaces as an opaque 500.
+            return {
+                "status": "error",
+                "error": "source='db' requires both start_date and end_date (YYYY-MM-DD)",
+            }
+
         success, response, status_code = get_history(
             symbol=symbol,
             exchange=exchange,

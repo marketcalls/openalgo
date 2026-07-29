@@ -43,10 +43,16 @@ export const VarConditionNode = memo(({ data, selected }: VarConditionNodeProps)
           </div>
         </div>
         <div className="rounded bg-muted/50 px-1.5 py-1 text-center">
-          <span className="mono-data text-[9px] font-medium">
-            {data.leftValue ? data.leftValue.slice(0, 14) : 'left'}{' '}
-            {operatorLabels[data.operator] || '>'}{' '}
-            {data.rightValue ? data.rightValue.slice(0, 14) : 'right'}
+          {/* Truncate via CSS, not slice(): a hard cut renders two distinct
+              operands sharing a prefix as the same incomplete token. */}
+          <span
+            className="mono-data block truncate text-[9px] font-medium"
+            title={`${data.leftValue || 'left'} ${operatorLabels[data.operator] || '>'} ${
+              data.rightValue || 'right'
+            }`}
+          >
+            {data.leftValue || 'left'} {operatorLabels[data.operator] || '>'}{' '}
+            {data.rightValue || 'right'}
           </span>
         </div>
         <div className="mt-2 flex justify-between px-1 text-[8px]">

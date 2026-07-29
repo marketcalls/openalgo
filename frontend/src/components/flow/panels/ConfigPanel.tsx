@@ -658,10 +658,15 @@ export function ConfigPanel() {
                   <Label className="text-xs">Order ID (optional)</Label>
                   <Input
                     className="h-8"
-                    placeholder="{{ceLong.orderid}}"
+                    placeholder="240221025997024"
                     value={(nodeData.orderId as string) || ''}
                     onChange={(e) => handleDataChange('orderId', e.target.value)}
                   />
+                  <p className="text-[10px] text-muted-foreground">
+                    A literal broker order id. {'{{variable}}'} references are not supported
+                    here - a trigger has no upstream node to resolve them from. To react to
+                    an order this workflow placed, filter by Symbol instead.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Symbol (optional)</Label>
@@ -679,13 +684,14 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Exchange (optional)</Label>
                   <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
+                    value={(nodeData.exchange as string) || 'ANY'}
+                    onValueChange={(v) => handleDataChange('exchange', v === 'ANY' ? '' : v)}
                   >
                     <SelectTrigger className="h-8">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="ANY">Any exchange</SelectItem>
                       {EXCHANGES.map((e) => (
                         <SelectItem key={e.value} value={e.value}>
                           {e.label}
