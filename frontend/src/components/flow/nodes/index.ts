@@ -67,6 +67,7 @@ import { WebhookTriggerNode } from './WebhookTriggerNode'
 import { IndicatorNode } from './IndicatorNode'
 import { VarConditionNode } from './VarConditionNode'
 import { PriorPeriodOhlcNode } from './PriorPeriodOhlcNode'
+import { StrategyPnlNode } from './StrategyPnlNode'
 import { BarOffsetNode } from './BarOffsetNode'
 import { OrderUpdateTriggerNode } from './OrderUpdateTriggerNode'
 import { WhatsappAlertNode } from './WhatsappAlertNode'
@@ -111,6 +112,7 @@ export {
   HistoryNode,
   IndicatorNode,
   PriorPeriodOhlcNode,
+  StrategyPnlNode,
   BarOffsetNode,
   OpenPositionNode,
   ExpiryNode,
@@ -189,6 +191,7 @@ export const nodeTypes = {
   history: HistoryNode,
   indicator: IndicatorNode,
   priorPeriodOhlc: PriorPeriodOhlcNode,
+  strategyPnl: StrategyPnlNode,
   barOffset: BarOffsetNode,
   openPosition: OpenPositionNode,
   expiry: ExpiryNode,
