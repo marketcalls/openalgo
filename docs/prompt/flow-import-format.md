@@ -170,6 +170,7 @@ Six node types fan out into a TRUE branch and a FALSE branch:
 | `positionCheck` | `"true"` / `"false"` |
 | `fundCheck` | `"true"` / `"false"` |
 | `priceCondition` | `"true"` / `"false"` |
+| `varCondition` | `"true"` / `"false"` |
 | `timeWindow` | `"true"` / `"false"` |
 | `timeCondition` | `"yes"` / `"no"` |
 | `notGate` | `"yes"` / `"no"` |
@@ -181,6 +182,20 @@ to use the vocabulary native to each node so saved workflows match the UI.
 Edges that source from a condition node and **do not** specify a `sourceHandle`
 are followed unconditionally on every run (use this for "fire-and-forget" log
 or telegram nodes that want to see every result).
+
+**Gate wiring matters.** Feeding a gate through `sourceHandle: "true"` edges
+means the gate is only reached when that condition is true, so the gate can
+never evaluate to false and **its `false` branch is unreachable**. Use
+pass-through wiring (only `targetHandle`, no `sourceHandle`) whenever the
+gate needs a working else-branch:
+
+```json
+{ "id": "e3", "source": "c1", "target": "gate", "targetHandle": "input-0" }
+{ "id": "e4", "source": "c2", "target": "gate", "targetHandle": "input-1" }
+```
+
+Gates wait until every wired input has been evaluated, then fire exactly
+once per run.
 
 `andGate` / `orGate` source handles are not bool branches — they emit a single
 `condition` value to whatever connects to them downstream. Their **incoming**
@@ -210,8 +225,8 @@ the `nodes` array.
 ### 7.1 Trigger nodes
 
 A workflow must contain exactly one trigger node, and that node must be one
-of: `start`, `priceAlert`, `webhookTrigger`. Every other path of execution
-flows from there.
+of: `start`, `priceAlert`, `webhookTrigger`, `orderUpdateTrigger`. Every
+other path of execution flows from there.
 
 #### start — Schedule Trigger
 
@@ -300,6 +315,34 @@ nodes (e.g. `{{webhook.action}}`, `{{webhook.qty}}`, `{{webhook.strike}}`).
     "symbol": "NIFTY",
     "exchange": "NFO"
   }
+}
+```
+
+#### orderUpdateTrigger — Order Update Trigger
+
+Fires when an order changes status (fill, rejection, cancellation), pushed
+from the account order-update stream — no polling.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `orderId` | string | — | Literal broker order id. **`{{variable}}` references are rejected** — a trigger has no upstream node to resolve them. |
+| `symbol` | string | — | OpenAlgo symbol. |
+| `exchange` | string | `""` | Empty = any exchange. An explicit value must match. |
+| `status` | `"any"` \| `"open"` \| `"trigger pending"` \| `"complete"` \| `"rejected"` \| `"cancelled"` | `"complete"` | |
+| `trigger` | `"once"` \| `"every_time"` | `"once"` | |
+
+At least one of `orderId` / `symbol` is required; an unfiltered watch would
+fire on every order in the account. The event is exposed to downstream nodes
+as `{{webhook.orderid}}`, `{{webhook.symbol}}`, `{{webhook.order_status}}`,
+`{{webhook.filled_quantity}}`, `{{webhook.average_price}}`,
+`{{webhook.rejection_reason}}`.
+
+```json
+{
+  "id": "node_1",
+  "type": "orderUpdateTrigger",
+  "position": { "x": 100, "y": 100 },
+  "data": { "symbol": "NIFTY04AUG2624250CE", "exchange": "NFO", "status": "complete", "trigger": "once" }
 }
 ```
 
@@ -620,6 +663,31 @@ Result: `condition=True` if the rule matches the live position.
 }
 ```
 
+#### varCondition — Compare Any Two Values
+
+Generic counterpart to `priceCondition`. Compares two **interpolated** values
+— an indicator output, a prior-period level, a workflow variable, or a
+literal — instead of always re-fetching a live quote field.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `leftValue` | string | `""` | Supports `{{vars}}`. |
+| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | |
+| `rightValue` | string | `"0"` | Supports `{{vars}}`. |
+
+Uses `"true"`/`"false"` handles. **If either operand does not resolve to a
+number the node errors and takes neither branch** — an unresolved variable
+cannot silently route the else-path into a trade.
+
+```json
+{
+  "id": "node_3",
+  "type": "varCondition",
+  "position": { "x": 100, "y": 200 },
+  "data": { "leftValue": "{{rsi.latest.value}}", "operator": "<", "rightValue": "30" }
+}
+```
+
 #### timeWindow — Time Window
 
 | Field | Type | Default | Notes |
@@ -752,6 +820,94 @@ schemas.
     "endDate": "2026-04-29",
     "outputVariable": "ohlcv"
   }
+}
+```
+
+#### indicator — Technical Indicator
+
+Runs any of 118 `openalgo.ta` indicators over a symbol's history, or over
+another indicator's output series.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol`, `exchange` | string | — | Not needed in nested mode. |
+| `interval` | string | `"D"` | **Free text**, not an enum — any interval the broker supports. Use the `intervals` node to discover them. |
+| `source` | `"api"` \| `"db"` | `"api"` | `"db"` reads Historify and resamples locally (2m/3m/25m/2h from stored 1m; W/M/Q/Y from D). |
+| `indicatorName` | string | `"sma"` | Lowercase function name. |
+| `params` | string | `"{}"` | JSON object of the indicator's own args, e.g. `"{\"period\": 14}"`. |
+| `lookbackBars` | int | `100` | Capped at 200. |
+| `tailBars` | int | `5` | Length of the returned `series` array. |
+| `offsetBars` | int | `0` | Which bar `at_offset` reads. 0 = latest closed. |
+| `sourceSeries` | string | — | Nest over another series, e.g. `{{rsi.series}}` or a raw `{{h.data}}`. |
+| `sourceField` | string | `""` | Field to read per `sourceSeries` row. Blank = auto (`value`, `out0`, `close`). |
+| `outputVariable` | string | — | |
+
+Exposes `{{name.latest.*}}`, `{{name.previous.*}}`, `{{name.at_offset.*}}`,
+`{{name.series}}`, `{{name.outputs}}`, `{{name.bars_used}}`. Single-output
+indicators use `value`; multi-output use `out0`, `out1`, … (macd: line/signal/
+histogram; supertrend: level/direction; bbands: upper/middle/lower).
+
+`crossover`, `crossunder`, `cross`, `correlation`, `beta` are **not
+available** — they need two independent series. Build a crossover from two
+`indicator` nodes plus an `andGate`. Only single-series indicators (sma, ema,
+rsi, wma, stdev, highest, lowest, …) can be nested via `sourceSeries`.
+
+```json
+{
+  "id": "node_2",
+  "type": "indicator",
+  "position": { "x": 100, "y": 100 },
+  "data": {
+    "symbol": "RELIANCE", "exchange": "NSE", "interval": "D", "source": "api",
+    "indicatorName": "rsi", "params": "{\"period\": 14}",
+    "lookbackBars": 100, "tailBars": 5, "offsetBars": 0,
+    "outputVariable": "rsi"
+  }
+}
+```
+
+#### priorPeriodOhlc — Previous Period OHLC
+
+Last fully-closed hour/day/week/month candle. Never returns a still-forming
+candle; raises if history is too short.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol`, `exchange` | string | — | |
+| `period` | `"previous_hour"` \| `"previous_day"` \| `"previous_week"` \| `"previous_month"` | `"previous_day"` | |
+| `source` | `"api"` \| `"db"` | `"api"` | |
+| `outputVariable` | string | — | |
+
+Exposes `{{name.open/high/low/close/volume}}` plus aliases `{{name.pdh}}`,
+`{{name.pdl}}`, `{{name.pdc}}` and `{{name.date}}`.
+
+```json
+{
+  "id": "node_2",
+  "type": "priorPeriodOhlc",
+  "position": { "x": 100, "y": 100 },
+  "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "period": "previous_day", "source": "api", "outputVariable": "pd" }
+}
+```
+
+#### barOffset — OHLCV N Bars Back
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol`, `exchange` | string | — | |
+| `interval` | string | `"D"` | Free text. |
+| `source` | `"api"` \| `"db"` | `"api"` | |
+| `offsetBars` | int | `0` | 0 = most recent **closed** bar; today's forming candle is excluded. Counts bars, not calendar days. |
+| `outputVariable` | string | — | |
+
+Exposes `{{name.open/high/low/close/volume/timestamp}}`.
+
+```json
+{
+  "id": "node_2",
+  "type": "barOffset",
+  "position": { "x": 100, "y": 100 },
+  "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "interval": "D", "source": "api", "offsetBars": 5, "outputVariable": "bar5" }
 }
 ```
 
@@ -935,6 +1091,25 @@ settings.
     "username": "rajandran",
     "message": "Order placed: {{buyOrder.orderid}} for {{buyOrder.symbol}}"
   }
+}
+```
+
+#### whatsappAlert — WhatsApp Alert
+
+Sends a WhatsApp message via the paired bot device. Requires pairing from the
+`/whatsapp` page first.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `to` | string | `""` | Phone digits, e.g. `919876543210`. Blank sends to the paired device itself. |
+| `message` | string | — | Supports `{{vars}}`. |
+
+```json
+{
+  "id": "node_3",
+  "type": "whatsappAlert",
+  "position": { "x": 100, "y": 300 },
+  "data": { "to": "", "message": "Order placed: {{ord.orderid}}" }
 }
 ```
 
@@ -1629,6 +1804,20 @@ positionBook (outputVariable=positions)
   month). The `expiry` node returns `"30-DEC-25"` (with hyphens) — pass that
   through `_format_expiry_for_api` if hand-converting, or use `expiryType`
   presets which the executor resolves automatically.
+- **History is capped at 200 bars.** Every history-reading node
+  (`history`, `indicator`, `barOffset`, `priorPeriodOhlc`) requests at most
+  the latest 200 bars for the chosen interval, and the cap is applied when
+  sizing the request window - a 10-year 1-minute range (~900k rows) never
+  reaches the broker. Tunable via `FLOW_MAX_HISTORY_BARS`.
+- **Identical history requests are cached** for a short TTL and collapse to
+  one broker call, so several indicators on the same symbol/interval do not
+  multiply rate-limit pressure. Distinct requests still cost a call each.
+- **`interval` is free text, not an enum.** Broker support varies; use the
+  `intervals` node to discover it, or `source: "db"` to resample locally
+  from Historify regardless of broker capability.
+- **Unresolved operands in `varCondition` take neither branch.** Unlike other
+  interpolation (which passes `{{...}}` through as literal text), this node
+  refuses to evaluate so a typo cannot route a trade.
 - **Lot size handling differs per node.** `optionsOrder` and
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`
