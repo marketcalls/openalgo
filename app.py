@@ -959,6 +959,7 @@ def shutdown_database_sessions(exception=None):
         ("database.market_calendar_db", "db_session"),
         ("database.telegram_db", "db_session"),
         ("database.symbol", "db_session"),
+        ("database.strategy_book_db", "db_session"),
     ]
 
     for module_name, session_attr in _sessions:
