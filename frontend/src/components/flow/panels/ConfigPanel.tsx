@@ -1309,6 +1309,38 @@ export function ConfigPanel() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Price Type</Label>
+                  <Select
+                    value={(nodeData.priceType as string) || 'MARKET'}
+                    onValueChange={(v) => handleDataChange('priceType', v)}
+                  >
+                    <SelectTrigger className="h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="MARKET">MARKET</SelectItem>
+                      <SelectItem value="LIMIT">LIMIT</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {(nodeData.priceType as string) === 'LIMIT' && (
+                  <div className="space-y-2">
+                    <Label className="text-xs">Limit Price</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.05"
+                      className="h-8"
+                      value={(nodeData.price as number) ?? 0}
+                      onChange={(e) => handleDataChange('price', parseFloat(e.target.value) || 0)}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Applied to every generated leg. A LIMIT order without a positive price is
+                      rejected rather than sent at market.
+                    </p>
+                  </div>
+                )}
                 {/* Strategy Legs Preview */}
                 <div className="rounded-lg border bg-muted/30 p-2">
                   <p className="text-[10px] font-medium mb-1.5">Strategy Legs:</p>

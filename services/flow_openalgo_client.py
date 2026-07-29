@@ -419,9 +419,10 @@ class FlowOpenAlgoClient:
         price_type: str = "MARKET",
         product: str = "NRML",
         price: float = 0,
-        trigger_price: float = 0,
         splitsize: int = 0,
         strategy: str = "flow_workflow",
+        # Appended last so existing positional callers keep working.
+        trigger_price: float = 0,
     ) -> dict[str, Any]:
         """Place an options order with ATM/ITM/OTM offset resolution
 

@@ -11,6 +11,7 @@ Run: uv run python scripts/generate_indicator_reference.py
 """
 
 import inspect
+import json
 import pathlib
 import sys
 
@@ -22,6 +23,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from openalgo import ta  # noqa: E402
 
 from services.indicator_service import (  # noqa: E402
+    _REQUIRED_PARAM_DEFAULTS,
     _SERIES_PARAM_TO_COLUMN,
     compute_indicator,
     list_supported_indicators,
@@ -62,8 +64,20 @@ def describe(name: str, records: list[dict]) -> dict | None:
             inputs.append(_SERIES_PARAM_TO_COLUMN[param.name])
         elif param.default is not inspect.Parameter.empty:
             params.append((param.name, param.default))
+        else:
+            # Required, no default. Omitting these produced call examples like
+            # `ta.sma(close)` that raise TypeError when run directly, and implied
+            # no configuration was needed. The service supplies a value from
+            # _REQUIRED_PARAM_DEFAULTS; show what it actually uses.
+            supplied = _REQUIRED_PARAM_DEFAULTS.get(name, {}).get(param.name)
+            params.append((param.name, supplied if supplied is not None else "required"))
 
-    result = compute_indicator(records, name, {})
+    try:
+        result = compute_indicator(records, name, {})
+    except Exception:
+        # One indicator with an unexpected required parameter must not take the
+        # whole reference down with it.
+        return None
     if result.get("status") != "success":
         return None
     return {

@@ -325,11 +325,37 @@ class NodeExecutor:
         "SENSEX50": 25,
     }
 
-    def _resolve_lot_size(self, underlying: str, fo_exchange: str) -> int:
-        """Lot size for an underlying, preferring the master contract."""
-        try:
-            from database.symbol import SymToken, db_session
+    @staticmethod
+    def _invalid_price_reason(price_type: str, price: float, trigger_price: float) -> str | None:
+        """Why this price type cannot be sent, or None when it is usable.
 
+        A LIMIT or SL order whose price never reached the broker executes at an
+        unintended level, so it is refused rather than sent with a zero.
+        """
+        price_type = (price_type or "MARKET").upper()
+        if price_type in ("LIMIT", "SL") and price <= 0:
+            return f"{price_type} order needs a positive price, got {price}"
+        if price_type in ("SL", "SL-M") and trigger_price <= 0:
+            return f"{price_type} order needs a positive trigger price, got {trigger_price}"
+        return None
+
+    class LotSizeUnavailable(RuntimeError):
+        """The lot size could not be determined, so quantity cannot be computed."""
+
+    def _resolve_lot_size(self, underlying: str, fo_exchange: str) -> int:
+        """Lot size for an underlying, from the master contract.
+
+        Fails closed. A lookup error means the lot size is *unknown*, and
+        guessing it sizes a real order wrongly - the fallback table is used only
+        when the master contract is genuinely unseeded for this exchange, and
+        only for an underlying whose lot size we ship.
+
+        Raises:
+            LotSizeUnavailable: the lot size cannot be established.
+        """
+        from database.symbol import SymToken, db_session
+
+        try:
             row = (
                 db_session.query(SymToken.lotsize)
                 .filter(
@@ -342,15 +368,42 @@ class NodeExecutor:
             )
             if row and row[0]:
                 return int(row[0])
-            self.log(
-                f"No master-contract lot size for {underlying} on {fo_exchange}; "
-                "using the built-in fallback",
-                "warning",
+            # Distinguish "this exchange has no contracts loaded" from "this
+            # underlying is not one of them". Only the former is a fallback case.
+            exchange_seeded = (
+                db_session.query(SymToken.id).filter(SymToken.exchange == fo_exchange).first()
+                is not None
             )
-        except Exception:
-            logger.exception(f"Lot size lookup failed for {underlying}")
-            self.log(f"Lot size lookup failed for {underlying}; using fallback", "warning")
-        return self._FALLBACK_LOT_SIZES.get(underlying, 75)
+        except Exception as exc:
+            db_session.rollback()
+            logger.exception(f"Lot size lookup failed for {underlying} on {fo_exchange}")
+            raise self.LotSizeUnavailable(
+                f"Could not read the lot size for {underlying} on {fo_exchange}. "
+                "Refusing to size an order on a guess."
+            ) from exc
+        finally:
+            # Flow runs in background threads with no Flask app context, so the
+            # per-request teardown never fires and this session would stay bound
+            # to the thread holding its connection.
+            db_session.remove()
+
+        if exchange_seeded:
+            raise self.LotSizeUnavailable(
+                f"{underlying} has no contract on {fo_exchange} in the master contract. "
+                "Check the symbol, or re-download the master contract."
+            )
+        fallback = self._FALLBACK_LOT_SIZES.get(underlying)
+        if fallback is None:
+            raise self.LotSizeUnavailable(
+                f"The master contract has no {fo_exchange} contracts loaded and no "
+                f"built-in lot size for {underlying}. Download the master contract first."
+            )
+        self.log(
+            f"Master contract has no {fo_exchange} contracts loaded; using the built-in "
+            f"lot size {fallback} for {underlying}",
+            "warning",
+        )
+        return fallback
 
     def execute_options_order(self, node_data: dict) -> dict:
         """Execute Options Order node"""
@@ -366,24 +419,10 @@ class NodeExecutor:
         price = self.get_float(node_data, "price", 0.0)
         trigger_price = self.get_float(node_data, "triggerPrice", 0.0)
 
-        # A LIMIT/SL order whose price never reached the broker would silently
-        # execute at an unintended level, so refuse rather than send a zero.
-        if price_type in ("LIMIT", "SL") and price <= 0:
-            error_result = {
-                "status": "error",
-                "message": f"{price_type} options order needs a positive price, got {price}",
-            }
-            self.log(f"Options order failed: {error_result['message']}", "error")
-            return error_result
-        if price_type in ("SL", "SL-M") and trigger_price <= 0:
-            error_result = {
-                "status": "error",
-                "message": (
-                    f"{price_type} options order needs a positive trigger price, "
-                    f"got {trigger_price}"
-                ),
-            }
-            self.log(f"Options order failed: {error_result['message']}", "error")
+        invalid = self._invalid_price_reason(price_type, price, trigger_price)
+        if invalid:
+            error_result = {"status": "error", "message": invalid}
+            self.log(f"Options order failed: {invalid}", "error")
             return error_result
 
         self.log(f"Placing options order: {underlying} {option_type} {offset}")
@@ -396,7 +435,12 @@ class NodeExecutor:
             underlying_exchange = "NSE_INDEX"
             fo_exchange = "NFO"
 
-        lot_size = self._resolve_lot_size(underlying, fo_exchange)
+        try:
+            lot_size = self._resolve_lot_size(underlying, fo_exchange)
+        except self.LotSizeUnavailable as exc:
+            error_result = {"status": "error", "message": str(exc)}
+            self.log(f"Options order failed: {exc}", "error")
+            return error_result
         total_quantity = quantity * lot_size
         self.log(f"Lot size for {underlying}: {lot_size} -> {quantity} lot(s) = {total_quantity}")
 
@@ -469,19 +513,19 @@ class NodeExecutor:
             underlying_exchange = "NSE_INDEX"
             fo_exchange = "NFO"
 
-        # Get lot size for quantity calculation
-        lot_sizes = {
-            "NIFTY": 65,
-            "BANKNIFTY": 30,
-            "FINNIFTY": 65,
-            "MIDCPNIFTY": 120,
-            "NIFTYNXT50": 25,
-            "SENSEX": 20,
-            "BANKEX": 30,
-            "SENSEX50": 25,
-        }
-        lot_size = lot_sizes.get(underlying, 65)
+        # Same master-contract lookup the single-leg options node uses. A second
+        # hardcoded table here drifted the same way the first one had: it still
+        # claimed FINNIFTY was 65 where the contract says 60.
+        try:
+            lot_size = self._resolve_lot_size(underlying, fo_exchange)
+        except self.LotSizeUnavailable as exc:
+            error_result = {"status": "error", "message": str(exc)}
+            self.log(f"Options multi-order failed: {exc}", "error")
+            return error_result
         total_quantity = quantity_lots * lot_size
+        self.log(
+            f"Lot size for {underlying}: {lot_size} -> {quantity_lots} lot(s) = {total_quantity}"
+        )
 
         # Resolve expiry date
         expiry_date = self._resolve_expiry_date(underlying, fo_exchange, expiry_type)
@@ -501,19 +545,38 @@ class NodeExecutor:
             # Use custom legs from node data
             for leg in legs_data:
                 leg_qty = self.get_int(leg, "quantity", 1)
+                leg_price_type = self.get_str(leg, "priceType", multi_price_type).upper()
+                leg_price = self.get_float(leg, "price", multi_price)
+                leg_trigger = self.get_float(leg, "triggerPrice", 0.0)
                 leg_entry = {
                     "offset": self.get_str(leg, "offset", "ATM"),
                     "option_type": self.get_str(leg, "optionType", "CE"),
                     "action": self.get_str(leg, "action", "BUY"),
                     "quantity": leg_qty * lot_size,
-                    "pricetype": self.get_str(leg, "priceType", "MARKET"),
+                    "pricetype": leg_price_type,
                     "product": self.get_str(leg, "product", product),
-                    "price": self.get_float(leg, "price", 0),
+                    "price": leg_price,
+                    "trigger_price": leg_trigger,
                     "splitsize": self.get_int(leg, "splitSize", 0),
                 }
+                invalid = self._invalid_price_reason(leg_price_type, leg_price, leg_trigger)
+                if invalid:
+                    error_result = {
+                        "status": "error",
+                        "message": f"Leg {len(legs) + 1}: {invalid}",
+                    }
+                    self.log(f"Options multi-order failed: {error_result['message']}", "error")
+                    return error_result
                 legs.append(leg_entry)
         else:
             # Generate legs from predefined strategy type
+            # A generated strategy shares one price type across its legs, so
+            # validate it once before building them.
+            invalid = self._invalid_price_reason(multi_price_type, multi_price, 0.0)
+            if invalid:
+                error_result = {"status": "error", "message": invalid}
+                self.log(f"Options multi-order failed: {invalid}", "error")
+                return error_result
             legs = self._generate_strategy_legs(
                 strategy_type,
                 action,
@@ -1438,14 +1501,26 @@ class NodeExecutor:
             raw = [raw]
         if not isinstance(raw, list) or not raw:
             return None
-        return [p for p in raw if isinstance(p, dict)] or None
+        if any(not isinstance(entry, dict) for entry in raw):
+            # Dropping the bad entries would quietly price part of the basket
+            # and report it as the whole estimate.
+            raise ValueError(
+                "Margin positions must all be objects; the basket contains a "
+                "non-object entry."
+            )
+        return raw or None
 
     def execute_margin(self, node_data: dict) -> dict:
         """Execute Margin node - calculate margin requirements"""
         # The panel can supply a whole basket as positionsJson; a single
         # position is the fallback. Ignoring positionsJson silently priced only
         # the first leg of a multi-leg estimate.
-        positions = self._parse_margin_positions(node_data)
+        try:
+            positions = self._parse_margin_positions(node_data)
+        except ValueError as exc:
+            error_result = {"status": "error", "message": str(exc)}
+            self.log(f"Margin failed: {exc}", "error")
+            return error_result
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
         quantity = self.get_int(node_data, "quantity", 1)
@@ -1815,7 +1890,21 @@ class NodeExecutor:
         `operator`/`threshold` (never written by the UI), so it always
         defaulted to `available > 0` and ignored `minAvailable`.
         """
-        min_available = self.get_float(node_data, "minAvailable", 0.0)
+        # A node saved before minAvailable existed carries the old
+        # operator/threshold pair. Reading only minAvailable would silently
+        # treat those as a minimum of zero, so the guard would pass on any
+        # balance - the exact bypass this field was added to prevent.
+        if "minAvailable" in node_data:
+            min_available = self.get_float(node_data, "minAvailable", 0.0)
+        elif "threshold" in node_data:
+            min_available = self.get_float(node_data, "threshold", 0.0)
+            self.log(
+                f"Fund Check is using its legacy threshold of {min_available}. "
+                "Re-save the node to store it as Minimum Available.",
+                "warning",
+            )
+        else:
+            min_available = 0.0
 
         self.log("Checking funds")
         result = self.client.funds()

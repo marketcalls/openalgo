@@ -130,3 +130,78 @@ def test_errors_carry_a_path_and_a_code():
 
 def test_trigger_types_are_registered_node_types():
     assert TRIGGER_NODE_TYPES <= VALID_NODE_TYPES
+
+
+def test_detects_a_cycle():
+    """A cycle burns the executor's visit budget instead of reporting a loop."""
+    wf = _wf(
+        [_node("t", "start"), _node("a"), _node("b")],
+        [
+            {"id": "e1", "source": "t", "target": "a"},
+            {"id": "e2", "source": "a", "target": "b"},
+            {"id": "e3", "source": "b", "target": "a"},
+        ],
+    )
+    assert any(e["code"] == "cycle" for e in validate_workflow(wf))
+
+
+def test_detects_unreachable_nodes():
+    wf = _wf(
+        [_node("t", "start"), _node("a"), _node("orphan")],
+        [{"id": "e1", "source": "t", "target": "a"}],
+    )
+    assert any(e["code"] == "unreachable" for e in validate_workflow(wf))
+
+
+@pytest.mark.parametrize(
+    "source_type,handle,expected_error",
+    [
+        ("varCondition", "maybe", True),
+        ("varCondition", "true", False),
+        ("varCondition", "no", False),
+        ("getQuote", "true", True),
+    ],
+)
+def test_validates_source_handles(source_type, handle, expected_error):
+    """A handle the source node cannot emit silently drops that branch."""
+    wf = _wf(
+        [
+            _node("t", "start"),
+            _node("c", source_type, symbol="X", exchange="NSE", leftValue="{{x}}", operator=">"),
+            _node("a"),
+        ],
+        [
+            {"id": "e1", "source": "t", "target": "c"},
+            {"id": "e2", "source": "c", "target": "a", "sourceHandle": handle},
+        ],
+    )
+    found = any(e["code"] == "invalid_source_handle" for e in validate_workflow(wf))
+    assert found is expected_error
+
+
+def test_requires_order_fields():
+    wf = _wf(
+        [_node("t", "start"), _node("o", "placeOrder", exchange="NSE", action="BUY")],
+        [{"id": "e1", "source": "t", "target": "o"}],
+    )
+    assert any(e["code"] == "missing_required_field" for e in validate_workflow(wf))
+
+
+def test_rejects_a_workflow_with_no_nodes():
+    assert any(e["code"] == "no_trigger" for e in validate_workflow(_wf([])))
+
+
+def test_partial_graphs_stay_savable():
+    """The editor saves while a graph is still being wired.
+
+    Structure is always enforced; completeness only at import and activation.
+    """
+    half = _wf([_node("t", "start"), _node("o", "placeOrder")], [])
+    assert validate_workflow(half, require_name=False, strict=False) == []
+    assert validate_workflow(half) != []
+
+
+def test_corrupt_graphs_are_rejected_even_when_saving():
+    corrupt = _wf([{"id": "a", "type": "NotReal", "position": {"x": 0, "y": 0}, "data": {}}])
+    errors = validate_workflow(corrupt, require_name=False, strict=False)
+    assert any(e["code"] == "unknown_node_type" for e in errors)
