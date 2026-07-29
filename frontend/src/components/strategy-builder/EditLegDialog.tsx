@@ -50,6 +50,18 @@ export interface EditLegDialogProps {
   onDelete: (id: string) => void
 }
 
+export function invalidateIvWhenContractChanges(
+  original: StrategyLeg,
+  updated: StrategyLeg
+): StrategyLeg {
+  const contractChanged =
+    original.expiry !== updated.expiry ||
+    original.segment !== updated.segment ||
+    original.strike !== updated.strike ||
+    original.optionType !== updated.optionType
+  return contractChanged ? { ...updated, iv: 0 } : updated
+}
+
 export function EditLegDialog({
   open,
   onOpenChange,
@@ -173,7 +185,7 @@ export function EditLegDialog({
       updated.strike = strike ?? leg.strike
       updated.optionType = optionType
     }
-    onSave(updated)
+    onSave(invalidateIvWhenContractChanges(leg, updated))
   }
 
   return (
